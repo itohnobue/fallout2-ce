@@ -695,7 +695,7 @@ static bool _item_identical(Object* item1, Object* item2)
         return false;
     }
 
-    // empty weapons of the same types are always the considered the same even the ammo was originally different
+    // empty weapons of the same types are always considered the same even the ammo was originally different
     if (proto->item.type == ITEM_TYPE_WEAPON && item1->data.item.weapon.ammoQuantity < 1 && item2->data.item.weapon.ammoQuantity < 1) {
         return true;
     }
