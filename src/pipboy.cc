@@ -1236,7 +1236,7 @@ static void pipboyWindowQuestList(int selectedLocationIndex)
             validQuestLocationCount += 1;
 
             // Skip quests in the same location
-            for (; index < gQuestsCount; index++) {
+            for (; index < gQuestsCount - 1; index++) {
                 if (gQuestDescriptions[index].location != gQuestDescriptions[index + 1].location) {
                     break;
                 }

@@ -776,6 +776,7 @@ int automapSaveCurrent()
 
         if (automapSaveEntry(stream2) == -1) {
             fileClose(stream1);
+            fileClose(stream2);
             internal_free(gAutomapEntry.data);
             internal_free(gAutomapEntry.compressedData);
             return -1;
@@ -835,6 +836,7 @@ int automapSaveCurrent()
 
         if (automapSaveHeader(stream2) == -1) {
             fileClose(stream1);
+            fileClose(stream2);
             internal_free(gAutomapEntry.data);
             internal_free(gAutomapEntry.compressedData);
             return -1;
@@ -880,6 +882,7 @@ int automapSaveCurrent()
         }
 
         if (automapSaveEntry(stream1) == -1) {
+            fileClose(stream1);
             internal_free(gAutomapEntry.data);
             internal_free(gAutomapEntry.compressedData);
             return -1;
@@ -889,6 +892,7 @@ int automapSaveCurrent()
         gAutomapHeader.dataSize += gAutomapEntry.dataSize + 5;
 
         if (automapSaveHeader(stream1) == -1) {
+            fileClose(stream1);
             internal_free(gAutomapEntry.data);
             internal_free(gAutomapEntry.compressedData);
             return -1;

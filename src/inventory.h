@@ -29,6 +29,7 @@ void inventoryOpen();
 int inventoryGetInvenApCost();
 void inventorySetInvenApCost(int cost);
 void inventoryResetInvenApCost();
+void inventorySetQuickPocketsApCostReduction(int reduction);
 void adjustCritterStatsOnArmorChange(Object* critter, Object* oldArmor, Object* newArmor);
 int inventoryComputeCritterFid(Object* critter, int basePid, Object* rightHandItem, Object* leftHandItem, Object* armor, int activeHand, int anim, int rotation);
 void inventoryOpenUseItemOn(Object* targetObj);

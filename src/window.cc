@@ -473,8 +473,8 @@ void _doRegionFunc(Region* region, int mouseEvent)
     }
 
     if (mouseEvent < 4) {
-        if (region->program != nullptr && region->rightProcs[mouseEvent] != 0) {
-            programExecuteProcedureAsync(region->program, region->rightProcs[mouseEvent]);
+        if (region->program != nullptr && region->procs[mouseEvent] != 0) {
+            programExecuteProcedureAsync(region->program, region->procs[mouseEvent]);
         }
     }
 }
@@ -1143,7 +1143,7 @@ char** windowWordWrap(char* string, int maxLength, int indent, int* substringLis
             width += fontGetLetterSpacing();
             pch++;
         } else {
-            while (width > maxLength) {
+            while (width > maxLength && pch > start) {
                 width -= fontGetCharacterWidth(*pch);
                 pch--;
             }
@@ -1367,6 +1367,33 @@ bool scriptWindowDisplay(char* fileName, int x, int y, int width, int height)
 bool scriptWindowDisplayBuf(unsigned char* src, int srcWidth, int srcHeight, int destX, int destY, int destWidth, int destHeight)
 {
     ManagedWindow* managedWindow = &(gManagedWindows[gCurrentManagedWindowIndex]);
+
+    if (destX < 0) {
+        destWidth += destX;
+        destX = 0;
+    }
+
+    if (destY < 0) {
+        destHeight += destY;
+        destY = 0;
+    }
+
+    if (destX >= managedWindow->width || destY >= managedWindow->height) {
+        return false;
+    }
+
+    if (destX + destWidth > managedWindow->width) {
+        destWidth = managedWindow->width - destX;
+    }
+
+    if (destY + destHeight > managedWindow->height) {
+        destHeight = managedWindow->height - destY;
+    }
+
+    if (destWidth <= 0 || destHeight <= 0) {
+        return false;
+    }
+
     unsigned char* windowBuffer = windowGetBuffer(managedWindow->window);
 
     blitBufferToBuffer(src,
@@ -2053,8 +2080,8 @@ bool scriptWindowAddButtonTextWithOffsets(const char* buttonName, const char* te
 
             blitBufferToBufferTrans(buffer,
                 pressedImageWidth,
-                normalImageHeight,
-                normalImageWidth,
+                pressedImageHeight,
+                pressedImageWidth,
                 managedButton->pressed + managedButton->width * pressedImageY + pressedImageX,
                 managedButton->width);
 

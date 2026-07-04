@@ -466,6 +466,8 @@ int lsgSaveGame(int mode)
             int v7 = lsgPerformSaveGame();
             if (v7 != -1) {
                 v6 = v7;
+            } else {
+                v6 = -1;
             }
         }
 
@@ -1933,7 +1935,11 @@ static int lsgPerformSaveGame()
     if (_flptr != nullptr) {
         bool saved = sfallSaveGameData(_flptr);
         fileClose(_flptr);
+        _flptr = nullptr;
         if (!saved) {
+            snprintf(_gmpath, sizeof(_gmpath), "%s\\%s%.2d\\", "SAVEGAME", "SLOT", _slot_cursor + 1);
+            strcat(_gmpath, "sfallgv.sav");
+            compat_remove(_gmpath);
             return -1;
         }
     }
@@ -2034,6 +2040,7 @@ static int lsgLoadGameInSlot(int slot)
         bool loaded = sfallLoadGameData(_flptr);
         fileClose(_flptr);
         if (!loaded) {
+            _loadingGame = false;
             return -1;
         }
     }

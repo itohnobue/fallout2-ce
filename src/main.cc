@@ -59,7 +59,7 @@ static bool mainTryParseDevLoadGameSlot(const char* value, int* slotPtr);
 static void mainLoop();
 static void showDeath();
 static void _main_death_voiceover_callback();
-static int _mainDeathGrabTextFile(const char* fileName, char* dest);
+static int _mainDeathGrabTextFile(const char* fileName, char* dest, int destSize);
 static int _mainDeathWordWrap(char* text, int width, short* beginnings, short* count);
 
 // 0x5194C8 mainMap
@@ -467,7 +467,7 @@ static void showDeath()
 
             if (settings.preferences.subtitles) {
                 char text[512];
-                if (_mainDeathGrabTextFile(deathFileName, text) == 0) {
+                if (_mainDeathGrabTextFile(deathFileName, text, sizeof(text)) == 0) {
                     debugPrint("\n((ShowDeath)): %s\n", text);
 
                     short beginnings[WORD_WRAP_MAX_COUNT];
@@ -557,7 +557,7 @@ static void _main_death_voiceover_callback()
 // Read endgame subtitle.
 //
 // 0x4814B4
-static int _mainDeathGrabTextFile(const char* fileName, char* dest)
+static int _mainDeathGrabTextFile(const char* fileName, char* dest, int destSize)
 {
     const char* p = strrchr(fileName, '\\');
     if (p == nullptr) {
@@ -572,7 +572,8 @@ static int _mainDeathGrabTextFile(const char* fileName, char* dest)
         return -1;
     }
 
-    while (true) {
+    int written = 0;
+    while (written < destSize - 1) {
         int c = fileReadChar(stream);
         if (c == -1) {
             break;
@@ -582,12 +583,12 @@ static int _mainDeathGrabTextFile(const char* fileName, char* dest)
             c = ' ';
         }
 
-        *dest++ = (c & 0xFF);
+        dest[written++] = (c & 0xFF);
     }
 
     fileClose(stream);
 
-    *dest = '\0';
+    dest[written] = '\0';
 
     return 0;
 }

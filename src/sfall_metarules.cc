@@ -212,8 +212,6 @@ const MetaruleInfo kMetarules[] = {
 };
 const std::size_t kMetarulesCount = sizeof(kMetarules) / sizeof(kMetarules[0]);
 
-constexpr int kMetarulesMax = sizeof(kMetarules) / sizeof(kMetarules[0]);
-
 enum class InterfaceWindowLookupResult {
     Found,
     Missing,
@@ -462,7 +460,9 @@ void mf_critter_inven_obj2(OpcodeContext& ctx)
         ctx.setReturn(obj->data.inventory.length);
         break;
     default:
-        programFatalError("mf_critter_inven_obj2: invalid type");
+        ctx.printError("%s() - invalid slot: %d, valid values are 0, 1, 2, or -2", ctx.name(), slot);
+        ctx.setReturn(0);
+        break;
     }
 }
 
@@ -531,10 +531,23 @@ void mf_get_object_data(OpcodeContext& ctx)
     // TODO: only allow to modify a set of whitelisted object types
     // TODO: map offsets to fields to avoid potential alignment, 64bit issues!
     Object* ptr = ctx.arg(0).asObject();
-    size_t offset = static_cast<size_t>(ctx.arg(1).asInt());
+    int rawOffset = ctx.arg(1).asInt();
 
-    if (offset % 4 != 0) {
-        programFatalError("mf_get_object_data: bad offset %d", offset);
+    if (rawOffset < 0 || rawOffset % 4 != 0) {
+        ctx.printError("%s(): bad offset %d", ctx.name(), rawOffset);
+        ctx.setReturn(-1);
+        return;
+    }
+
+    size_t offset = static_cast<size_t>(rawOffset);
+
+    // Bounds check: refuse reads beyond the Object struct boundary.
+    // This prevents unbounded heap reads when scripts call get_object_data
+    // with an arbitrary pointer (e.g. Attack* from HOOK_COMBATDAMAGE arg12).
+    if (offset + sizeof(int) > sizeof(Object)) {
+        ctx.printError("%s(): offset %d exceeds Object struct bounds (%zu bytes)", ctx.name(), rawOffset, sizeof(Object));
+        ctx.setReturn(-1);
+        return;
     }
 
     int value = *reinterpret_cast<int*>(reinterpret_cast<unsigned char*>(ptr) + offset);
@@ -839,7 +852,7 @@ void mf_metarule_exist(OpcodeContext& ctx)
 {
     const char* metarule = ctx.stringArg(0);
 
-    for (int index = 0; index < kMetarulesMax; index++) {
+    for (int index = 0; index < (int)kMetarulesCount; index++) {
         if (strcmp(kMetarules[index].name, metarule) == 0) {
             ctx.setReturn(1);
             return;
@@ -1452,7 +1465,7 @@ void sfall_metarule(Program* program, int args)
     const char* metarule = programGetString(program, metaruleName.opcode, metaruleName.integerValue);
 
     const MetaruleInfo* metaruleInfo = nullptr;
-    for (int index = 0; index < kMetarulesMax; index++) {
+    for (int index = 0; index < (int)kMetarulesCount; index++) {
         if (strcmp(kMetarules[index].name, metarule) == 0) {
             metaruleInfo = &kMetarules[index];
             break;

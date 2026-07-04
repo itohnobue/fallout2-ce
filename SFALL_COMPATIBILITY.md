@@ -38,6 +38,25 @@ The following settings were moved into [`fallout2.cfg`](files/fallout2.cfg) inst
 | `Misc` | `UseWalkDistance` | `qol` | `use_walk_distance` |
 | `Misc` | `AutoOpenDoors` | `qol` | `auto_open_doors` |
 
+### Speed Control (`[Speed]` section of `ddraw.ini`)
+
+CE supports sfall's game speed multiplier via the `[Speed]` section of `ddraw.ini`:
+
+| Key | Default | Description |
+| --- | --- | --- |
+| `SpeedMultiInitial` | 100 | Initial speed multiplier percentage. Preferred key; falls back to `SpeedMulti` if absent. |
+| `SpeedMulti` | 100 | Fallback speed multiplier. Used if `SpeedMultiInitial` is not present. |
+
+**How it works:**
+
+- On game init, the speed value is read from `ddraw.ini [Speed]` and stored in sfall global variable 0 (`src/game.cc:373-386`).
+- The global speed multiplier is applied in `animationComputeTicksPerFrame()` at `src/animation.cc:3350-3364`, after combat speed adjustments and before the FPS-to-milliseconds conversion.
+- The multiplier affects ALL animation types (walks, idles, attacks, etc.) — not just combat movement.
+- Scripts can change it at runtime via `set_sfall_global(0, value)` and read it via `get_sfall_global_int(0)`.
+- On game reset (`gameReset`), the value is re-initialized from `ddraw.ini` to match sfall behavior (`src/sfall_callbacks.cc:43-56`).
+- Values ≤ 0 are clamped to 100 to prevent game freeze.
+- SpeedMulti is independent of the FPS limiter (`fps_limiter.cc`) — it controls animation speed, not rendering frame rate.
+
 ## Opcodes / Metarules
 
 See [`https://sfall-team.github.io/sfall/`](https://sfall-team.github.io/sfall/) for documentation on specific functions.
@@ -57,7 +76,7 @@ See [`https://sfall-team.github.io/sfall/`](https://sfall-team.github.io/sfall/)
 | Maps and encounters / Worldmap | get_world_map_x/y_pos<br>set_world_map_pos | ✅ | - |
 | Audio | play_sfall_sound<br>stop_sfall_sound | ✅ | `play_sfall_sound` currently supports `.acm`, `.wav`, `.ogg` formats, and can load from `.dat` archives. `.mp3` is not yet supported. |
 | Combat / Weapons and ammo | get/set_weapon_ammo_pid<br>get/set_weapon_ammo_count | ✅ | - |
-| Sfall / Version | sfall_ver_major<br>sfall_ver_minor<br>sfall_ver_build | ✅ | CE currently reports `4.3.4` |
+| Sfall / Version | sfall_ver_major<br>sfall_ver_minor<br>sfall_ver_build | ✅ | CE currently reports `4.4.9` |
 | Utility / Math | log, exponent, round, sqrt, abs, sin, cos, tan, arctan, ceil, ^, floor2, div | ✅ | - |
 | Keyboard and mouse | key_pressed<br>tap_key<br>get_mouse_x/y<br>get_mouse_buttons | ✅ | - |
 | Lists | list_begin<br>list_next<br>list_end<br>list_as_array<br>party_member_list | ✅ | - |
@@ -104,7 +123,7 @@ See [`https://sfall-team.github.io/sfall/`](https://sfall-team.github.io/sfall/)
 | FindTarget | `HOOK_FINDTARGET` | 🚫 | (maybe) |
 | UseObjOn | `HOOK_USEOBJON` | ✅ | - |
 | UseObj | `HOOK_USEOBJ` | ✅ | CE notes an sfall-matching inconsistency around return code `2` behavior between interface contexts. |
-| RemoveInvenObj | `HOOK_REMOVEINVENOBJ` | 🚫 | - |
+| RemoveInvenObj | `HOOK_REMOVEINVENOBJ` | 🚫 | Deliberately absent: requires RMOBJ_* constants and destination object tracking not present in CE's itemRemove. Would require significant refactoring of the item removal code path. |
 | BarterPrice | `HOOK_BARTERPRICE` | ✅ | - |
 | ItemDamage | `HOOK_ITEMDAMAGE` | ✅ | - |
 | MoveCost | `HOOK_MOVECOST` | ✅ | - |
@@ -120,23 +139,23 @@ See [`https://sfall-team.github.io/sfall/`](https://sfall-team.github.io/sfall/)
 | CombatTurn | `HOOK_COMBATTURN` | ✅ | - |
 | StdProcedure | `HOOK_STDPROCEDURE` | ✅ | - |
 | StdProcedureEnd | `HOOK_STDPROCEDURE_END` | ✅ | - |
-| CarTravel | `HOOK_CARTRAVEL` | 🚫 | - |
-| SetGlobalVar | `HOOK_SETGLOBALVAR` | 🚫 | - |
+| CarTravel | `HOOK_CARTRAVEL` | ✅ | Fires once per worldmap tick during car travel. Speed is CE step count (3-8) matching sfall scale (3-8); fuel default is 100/tick. Override via ret0 (steps, -1 to keep) and ret1 (fuel, -1 to keep). |
+| SetGlobalVar | `HOOK_SETGLOBALVAR` | ✅ | Fires on op_set_global_var for integer values only (not pointer/string values). ret0 overrides the stored value. |
 | RestTimer | `HOOK_RESTTIMER` | ✅ | CE is slightly more strict: only `ret0 == 1` interrupts. Ticks wrap every 6.8y; do not rely on them for absolute game time. |
 | GameModeChange | `HOOK_GAMEMODECHANGE` | ✅ | - |
-| UseAnimObj | `HOOK_USEANIMOBJ` | 🚫 | Et tu; (maybe) |
+| UseAnimObj | `HOOK_USEANIMOBJ` | ✅ | Fires on animate_stand_obj and animate_stand_reverse_obj |
 | ExplosiveTimer | `HOOK_EXPLOSIVETIMER` | ✅ | - |
-| DescriptionObj | `HOOK_DESCRIPTIONOBJ` | 🚫 | Et tu |
+| DescriptionObj | `HOOK_DESCRIPTIONOBJ` | ✅ | Supports sfall 4.4.0+ direct string return for description override |
 | UseSkillOn | `HOOK_USESKILLON` | ✅ | - |
 | OnExplosion | `HOOK_ONEXPLOSION` | 🚫 | (maybe) |
 | SubCombatDamage | `HOOK_SUBCOMBATDAMAGE` | 🚫 | (maybe) |
-| SetLighting | `HOOK_SETLIGHTING` | 🚫 | Et tu; (maybe) |
-| Sneak | `HOOK_SNEAK` | 🚫 | - |
+| SetLighting | `HOOK_SETLIGHTING` | ✅ | Fires on objectSetLight for per-object lighting changes |
+| Sneak | `HOOK_SNEAK` | ✅ | Fires after each sneak check (via sneakEventProcess). arg0=result (1 success, 0 failure), arg1=duration in ticks, arg2=critter. ret0 overrides result, ret1 overrides duration. |
 | TargetObject | `HOOK_TARGETOBJECT` | 🚫 | (maybe) |
 | Encounter | `HOOK_ENCOUNTER` | ✅ | - |
 | AdjustPoison | `HOOK_ADJUSTPOISON` | 🚫 | (maybe) |
 | AdjustRads | `HOOK_ADJUSTRADS` | 🚫 | (maybe) |
-| RollCheck | `HOOK_ROLLCHECK` | 🚫 | - |
-| BestWeapon | `HOOK_BESTWEAPON` | 🚫 | - |
+| RollCheck | `HOOK_ROLLCHECK` | 🚫 | Deliberately absent: randomRoll() has 30+ call sites with no event_type context. Adding context to every call site is too invasive; pass-through hook on every roll would be too expensive. |
+| BestWeapon | `HOOK_BESTWEAPON` | 🚫 | Deliberately absent: _ai_best_weapon() has 10+ return points with complex comparison logic. Object lifetime concerns with return value override. |
 | CanUseWeapon | `HOOK_CANUSEWEAPON` | ✅ | - |
-| BuildSfxWeapon | `HOOK_BUILDSFXWEAPON` | 🚫 | - |
+| BuildSfxWeapon | `HOOK_BUILDSFXWEAPON` | 🚫 | Deliberately absent: sfxBuildWeaponName() returns char* to static buffer (_sfx_file_name). String return from scripts requires buffer management and lifetime semantics. |

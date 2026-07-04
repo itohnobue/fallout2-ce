@@ -560,9 +560,9 @@ static Object* _stack[10];
 // 0x59E894 mt_wid
 static int _mt_wid;
 
-// Note: Sfall also has InventoryApCost and QuickPocketsApCostReduction settings which we don't look at
+// Note: Sfall also has InventoryApCost and QuickPocketsApCostReduction settings
 static constexpr int kDefaultInventoryApCost = 4;
-static constexpr int kQuickPocketsApCostReduction = 2;
+static int kQuickPocketsApCostReduction = 2;
 
 // Current inventory AP cost
 static int gInventoryApCost = kDefaultInventoryApCost;
@@ -1063,6 +1063,11 @@ void inventorySetInvenApCost(int cost)
 void inventoryResetInvenApCost()
 {
     gInventoryApCost = kDefaultInventoryApCost;
+}
+
+void inventorySetQuickPocketsApCostReduction(int reduction)
+{
+    kQuickPocketsApCostReduction = reduction;
 }
 
 // inven_set_dude
@@ -2660,7 +2665,7 @@ static void _adjust_fid()
         interfaceGetCurrentHand(),
         0,
         0);
-    gInventoryWindowDudeFid = scriptHooks_AdjustFid(fid, fid);
+    gInventoryWindowDudeFid = scriptHooks_AdjustFid(gInventoryWindowDudeFid, fid);
 }
 
 // 0x4717E4 use_inventory_on

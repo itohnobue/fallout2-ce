@@ -295,7 +295,7 @@ static PerkRankData* perkGetRankData(Object* critter)
 
     debugPrint("\nError: perkGetLevelData: Can't find party member match!");
 
-    return gPartyMemberPerkRanks;
+    return nullptr;
 }
 
 // 0x49680C perk_can_add
@@ -312,7 +312,7 @@ static bool perkCanAdd(Object* critter, int perk)
     }
 
     PerkRankData* ranksData = perkGetRankData(critter);
-    if (ranksData->ranks[perk] >= perkDescription->maxRank) {
+    if (ranksData != nullptr && ranksData->ranks[perk] >= perkDescription->maxRank) {
         return false;
     }
 
@@ -442,6 +442,10 @@ int perkAdd(Object* critter, int perk)
     }
 
     PerkRankData* ranksData = perkGetRankData(critter);
+    if (ranksData == nullptr) {
+        return -1;
+    }
+
     ranksData->ranks[perk] += 1;
 
     perkAddEffect(critter, perk);
@@ -458,6 +462,10 @@ int perkAddForce(Object* critter, int perk)
     }
 
     PerkRankData* ranksData = perkGetRankData(critter);
+    if (ranksData == nullptr) {
+        return -1;
+    }
+
     int value = ranksData->ranks[perk];
 
     int maxRank = gPerkDescriptions[perk].maxRank;
@@ -482,6 +490,10 @@ int perkRemove(Object* critter, int perk)
     }
 
     PerkRankData* ranksData = perkGetRankData(critter);
+    if (ranksData == nullptr) {
+        return -1;
+    }
+
     int value = ranksData->ranks[perk];
 
     if (value < 1) {
@@ -519,6 +531,10 @@ int perkGetRank(Object* critter, int perk)
     }
 
     PerkRankData* ranksData = perkGetRankData(critter);
+    if (ranksData == nullptr) {
+        return 0;
+    }
+
     return ranksData->ranks[perk];
 }
 
@@ -571,6 +587,10 @@ void perkAddEffect(Object* critter, int perk)
 
     if (perk == PERK_HERE_AND_NOW) {
         PerkRankData* ranksData = perkGetRankData(critter);
+        if (ranksData == nullptr) {
+            return;
+        }
+
         ranksData->ranks[PERK_HERE_AND_NOW] -= 1;
 
         int level = pcGetStat(PC_STAT_LEVEL);

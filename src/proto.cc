@@ -215,6 +215,9 @@ int _proto_list_str(int pid, char* proto_path)
     strcat(path, ".lst");
 
     File* stream = fileOpen(path, "rt");
+    if (stream == nullptr) {
+        return -1;
+    }
 
     int i = 1;
     char string[256];
@@ -1301,8 +1304,7 @@ int protoGetDataMember(int pid, int member, ProtoDataMemberValue* value)
         case MISC_DATA_MEMBER_DESCRIPTION:
             // NOTE: Uninline.
             value->stringValue = protoGetDescription(proto->misc.pid);
-            // FIXME: Errornously report type as int, should be string.
-            return PROTO_DATA_MEMBER_TYPE_INT;
+            return PROTO_DATA_MEMBER_TYPE_STRING;
         case MISC_DATA_MEMBER_FID:
             value->integerValue = proto->misc.fid;
             return 1;
@@ -1890,6 +1892,8 @@ static int protoWrite(Proto* proto, File* stream)
         if (fileWriteInt32(stream, proto->scenery.material) == -1) return -1;
         if (fileWriteUInt8(stream, proto->scenery.soundId) == -1) return -1;
         if (protoSceneryDataWrite(&(proto->scenery.data), proto->scenery.type, stream) == -1) return -1;
+
+        return 0;
     case OBJ_TYPE_WALL:
         if (fileWriteInt32(stream, proto->wall.lightDistance) == -1) return -1;
         if (_db_fwriteLong(stream, proto->wall.lightIntensity) == -1) return -1;
@@ -1991,7 +1995,7 @@ static int _proto_find_free_subnode(int type, Proto** protoPtr)
     if (protoList->head != nullptr) {
         if (protoListExtent->length == PROTO_LIST_EXTENT_SIZE) {
             ProtoListExtent* newExtent = protoListExtent->next = (ProtoListExtent*)internal_malloc(sizeof(ProtoListExtent));
-            if (protoListExtent == nullptr) {
+            if (newExtent == nullptr) {
                 internal_free(proto);
                 *protoPtr = nullptr;
                 return -1;

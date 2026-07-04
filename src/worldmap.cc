@@ -1120,6 +1120,7 @@ int wmWorldMap_save(File* stream)
     if (fileWriteInt32(stream, wmGenData.currentCarAreaId) == -1) return -1;
     if (fileWriteInt32(stream, wmGenData.carFuel) == -1) return -1;
     if (fileWriteInt32(stream, wmMaxAreaNum) == -1) return -1;
+    if (fileWriteFloat(stream, gScriptWorldMapMulti) == -1) return -1;
 
     for (int areaIdx = 0; areaIdx < wmMaxAreaNum; areaIdx++) {
         CityInfo* cityInfo = &(wmAreaInfoList[areaIdx]);
@@ -1206,6 +1207,12 @@ int wmWorldMap_load(File* stream)
             numCities, wmMaxAreaNum);
     }
 
+    if (numCities > wmMaxAreaNum) {
+        numCities = wmMaxAreaNum;
+    }
+
+    if (fileReadFloat(stream, &gScriptWorldMapMulti) == -1) return -1;
+
     for (int areaIdx = 0; areaIdx < numCities; areaIdx++) {
         CityInfo* city = &(wmAreaInfoList[areaIdx]);
 
@@ -1219,6 +1226,10 @@ int wmWorldMap_load(File* stream)
             return -1;
         }
 
+        if (entranceCount > city->entrancesLength) {
+            entranceCount = city->entrancesLength;
+        }
+
         for (int entranceIdx = 0; entranceIdx < entranceCount; entranceIdx++) {
             EntranceInfo* entrance = &(city->entrances[entranceIdx]);
 
@@ -1230,6 +1241,10 @@ int wmWorldMap_load(File* stream)
 
     int numTiles;
     if (fileReadInt32(stream, &numTiles) == -1) return -1;
+
+    if (numTiles > wmMaxTileNum) {
+        numTiles = wmMaxTileNum;
+    }
 
     int numHorizontalTiles;
     if (fileReadInt32(stream, &numHorizontalTiles) == -1) return -1;
@@ -1254,9 +1269,19 @@ int wmWorldMap_load(File* stream)
         int encounterTableEntryIdx;
 
         if (fileReadInt32(stream, &encounterTableIdx) == -1) return -1;
+
+        if (encounterTableIdx < 0 || encounterTableIdx >= wmMaxEncounterInfoTables) {
+            return -1;
+        }
+
         EncounterTable* encounterTable = &(wmEncounterTableList[encounterTableIdx]);
 
         if (fileReadInt32(stream, &encounterTableEntryIdx) == -1) return -1;
+
+        if (encounterTableEntryIdx < 0 || encounterTableEntryIdx >= encounterTable->entriesLength) {
+            return -1;
+        }
+
         EncounterTableEntry* encounterTableEntry = &(encounterTable->entries[encounterTableEntryIdx]);
 
         if (fileReadInt32(stream, &(encounterTableEntry->counter)) == -1) return -1;
@@ -3071,21 +3096,26 @@ static int wmWorldMapFunc(int a1)
             wmPartyWalkingStep();
 
             if (wmGenData.isInCar) {
-                wmPartyWalkingStep();
-                wmPartyWalkingStep();
-                wmPartyWalkingStep();
+                // Compute car speed (steps per tick) and fuel consumption.
+                int carSteps = 3;
+                int carFuel = 100;
 
                 if (gameGetGlobalVar(GVAR_CAR_BLOWER)) {
-                    wmPartyWalkingStep();
+                    carSteps++;
                 }
 
                 if (gameGetGlobalVar(GVAR_NEW_RENO_CAR_UPGRADE)) {
-                    wmPartyWalkingStep();
+                    carSteps++;
                 }
 
                 if (gameGetGlobalVar(GVAR_NEW_RENO_SUPER_CAR)) {
-                    wmPartyWalkingStep();
-                    wmPartyWalkingStep();
+                    carSteps += 3;
+                }
+
+                // HOOK_CARTRAVEL: allow mods to override speed and fuel.
+                scriptHooks_CarTravel(&carSteps, &carFuel);
+
+                for (int i = 0; i < carSteps; i++) {
                     wmPartyWalkingStep();
                 }
 
@@ -3094,7 +3124,7 @@ static int wmWorldMapFunc(int a1)
                     wmGenData.carImageCurrentFrameIndex = 0;
                 }
 
-                wmCarUseGas(100);
+                wmCarUseGas(carFuel);
 
                 if (wmGenData.carFuel <= 0) {
                     wmGenData.walkDestinationX = 0;
@@ -4291,7 +4321,17 @@ static bool wmGameTimeIncrement(int ticksToAdd)
     while (ticksToAdd != 0) {
         unsigned int gameTime = gameTimeGetTime();
         unsigned int nextEventTime = queueGetNextEventTime();
-        int ticksToNextEvent = nextEventTime >= gameTime ? ticksToAdd : nextEventTime - gameTime;
+
+        int ticksToNextEvent;
+        if (nextEventTime < gameTime) {
+            ticksToNextEvent = ticksToAdd;
+        } else {
+            ticksToNextEvent = nextEventTime - gameTime;
+            if (ticksToNextEvent > ticksToAdd) {
+                ticksToNextEvent = ticksToAdd;
+            }
+        }
+
         ticksToAdd -= ticksToNextEvent;
 
         gameTimeAddTicks(ticksToNextEvent);
@@ -4333,6 +4373,8 @@ static int wmGrabTileWalkMask(int tileIdx)
 
     File* stream = fileOpen(path, "rb");
     if (stream == nullptr) {
+        internal_free(tileInfo->walkMaskData);
+        tileInfo->walkMaskData = nullptr;
         return -1;
     }
 
@@ -4443,7 +4485,7 @@ static void wmPartyWalkingStep()
                 wmGenData.walkDestinationX = 0;
                 wmGenData.walkDestinationY = 0;
                 wmGenData.isWalking = false;
-                wmMatchWorldPosToArea(wmGenData.worldPosX, wmGenData.worldPosX, &(wmGenData.currentAreaId));
+                wmMatchWorldPosToArea(wmGenData.worldPosX, wmGenData.worldPosY, &(wmGenData.currentAreaId));
                 wmGenData.walkDistance = 0;
                 return;
             }
@@ -4463,7 +4505,7 @@ static void wmPartyWalkingStep()
                 wmGenData.walkDestinationX = 0;
                 wmGenData.walkDestinationY = 0;
                 wmGenData.isWalking = false;
-                wmMatchWorldPosToArea(wmGenData.worldPosX, wmGenData.worldPosX, &(wmGenData.currentAreaId));
+                wmMatchWorldPosToArea(wmGenData.worldPosX, wmGenData.worldPosY, &(wmGenData.currentAreaId));
                 wmGenData.walkDistance = 0;
                 return;
             }

@@ -571,10 +571,13 @@ int _preloadBuffers(Sound* sound)
 
     buf = (unsigned char*)gSoundMallocProc(size);
     bytes_read = sound->io.read(sound->io.fd, buf, size);
+    if (bytes_read < 0) {
+        bytes_read = 0;
+    }
     if (bytes_read != size) {
         if ((sound->soundFlags & SOUND_LOOPING) == 0 || (sound->soundFlags & SOUND_FLAG_0x100) != 0) {
             memset(buf + bytes_read, 0, size - bytes_read);
-        } else {
+        } else if (bytes_read > 0) {
             v14 = buf + bytes_read;
             v15 = bytes_read;
             while (size - v15 > bytes_read) {

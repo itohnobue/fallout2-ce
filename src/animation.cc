@@ -29,6 +29,7 @@
 #include "random.h"
 #include "scripts.h"
 #include "settings.h"
+#include "sfall_global_vars.h"
 #include "stat.h"
 #include "svga.h"
 #include "text_object.h"
@@ -3316,6 +3317,9 @@ static int _check_gravity(int tile, int elevation)
         tileToScreenXY(tile, &x, &y);
 
         int squareTile = squareTileFromScreenXY(x + 2, y + 8, elevation);
+        if (squareTile == -1) {
+            break;
+        }
         int fid = buildFid(OBJ_TYPE_TILE, _square[elevation]->field_0[squareTile] & 0xFFF, 0, 0, 0);
         if (fid != buildFid(OBJ_TYPE_TILE, 1, 0, 0, 0)) {
             break;
@@ -3342,6 +3346,22 @@ static unsigned int animationComputeTicksPerFrame(Object* object, int fid)
         if (FID_ANIM_TYPE(fid) == ANIM_WALK) {
             if (object != gDude || settings.preferences.player_speedup) {
                 fps += settings.preferences.combat_speed;
+            }
+        }
+    }
+
+    // SFALL: Apply SpeedMulti to global game speed.
+    // sfall global var 0 holds the speed multiplier as a percentage (default 100).
+    // Scripts can change it at runtime via set_sfall_global(0, value).
+    // SpeedMulti differs from combat_speed: combat_speed only affects walk
+    // animations during combat, while SpeedMulti affects global animation speed.
+    {
+        int speedMulti = 100;
+        sfall_gl_vars_fetch(0, speedMulti);
+        if (speedMulti != 100) {
+            fps = (fps * speedMulti) / 100;
+            if (fps <= 0) {
+                fps = 1; // Prevent division by zero (0 would freeze the game)
             }
         }
     }

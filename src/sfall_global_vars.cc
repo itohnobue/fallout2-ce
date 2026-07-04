@@ -77,6 +77,10 @@ bool sfall_gl_vars_load(File* stream)
         return false;
     }
 
+    if (count < 0 || count > 10000) {
+        return false;
+    }
+
     sfall_gl_vars_state->vars.reserve(count);
 
     GlobalVarEntry entry;

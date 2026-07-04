@@ -61,7 +61,6 @@ static const std::string sfall_metarules[] = {
     "lock_is_jammed",
     "loot_obj",
     "message_box",
-    "metarule_exist",
     "npc_engine_level_up",
     "obj_is_openable",
     "obj_under_cursor",

@@ -476,11 +476,6 @@ int critterSetBaseStat(Object* critter, int stat, int value)
     }
 
     if (stat >= 0 && stat < SAVEABLE_STAT_COUNT) {
-        if (stat > STAT_LUCK && stat <= STAT_POISON_RESISTANCE) {
-            // Cannot change base value of derived stats.
-            return -1;
-        }
-
         if (critter == gDude) {
             value -= traitGetStatModifier(stat);
         }

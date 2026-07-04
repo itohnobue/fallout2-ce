@@ -313,7 +313,7 @@ void opTokenize(Program* program)
             }
 
             temp = (char*)internal_calloc_safe(1, length + 1, __FILE__, __LINE__); // "..\\int\\INTLIB.C, 230
-            strncpy(temp, start, length);
+            strncpy(temp, start + 1, length);
             programStackPushString(program, temp);
         } else {
             programStackPushInteger(program, 0);
@@ -585,10 +585,14 @@ void opPlayMovie(Program* program)
 {
     char* movieFileName = programStackPopString(program);
 
-    strcpy(gIntLibPlayMovieFileName, movieFileName);
+    strncpy(gIntLibPlayMovieFileName, movieFileName, sizeof(gIntLibPlayMovieFileName) - 1);
+    gIntLibPlayMovieFileName[sizeof(gIntLibPlayMovieFileName) - 1] = '\0';
 
     if (strrchr(gIntLibPlayMovieFileName, '.') == nullptr) {
-        strcat(gIntLibPlayMovieFileName, ".mve");
+        size_t _len = strlen(gIntLibPlayMovieFileName);
+        if (_len + 5 <= sizeof(gIntLibPlayMovieFileName)) {
+            strcat(gIntLibPlayMovieFileName, ".mve");
+        }
     }
 
     scriptWindowSelectId(program->windowId);
@@ -612,10 +616,14 @@ void opPlayMovieRect(Program* program)
     int x = programStackPopInteger(program);
     char* movieFileName = programStackPopString(program);
 
-    strcpy(gIntLibPlayMovieRectFileName, movieFileName);
+    strncpy(gIntLibPlayMovieRectFileName, movieFileName, sizeof(gIntLibPlayMovieRectFileName) - 1);
+    gIntLibPlayMovieRectFileName[sizeof(gIntLibPlayMovieRectFileName) - 1] = '\0';
 
     if (strrchr(gIntLibPlayMovieRectFileName, '.') == nullptr) {
-        strcat(gIntLibPlayMovieRectFileName, ".mve");
+        size_t _len = strlen(gIntLibPlayMovieRectFileName);
+        if (_len + 5 <= sizeof(gIntLibPlayMovieRectFileName)) {
+            strcat(gIntLibPlayMovieRectFileName, ".mve");
+        }
     }
 
     scriptWindowSelectId(program->windowId);
@@ -1405,7 +1413,7 @@ static void opAddKey(Program* program)
         gIntLibGenericKeyHandlerProc = proc;
         gIntLibGenericKeyHandlerProgram = program;
     } else {
-        if (key > INT_LIB_KEY_HANDLERS_CAPACITY - 1) {
+        if (key < 0 || key > INT_LIB_KEY_HANDLERS_CAPACITY - 1) {
             programFatalError("Key out of range");
         }
 
@@ -1424,7 +1432,7 @@ static void opDeleteKey(Program* program)
         gIntLibGenericKeyHandlerProc = 0;
         gIntLibGenericKeyHandlerProgram = nullptr;
     } else {
-        if (key > INT_LIB_KEY_HANDLERS_CAPACITY - 1) {
+        if (key < 0 || key > INT_LIB_KEY_HANDLERS_CAPACITY - 1) {
             programFatalError("Key out of range");
         }
 
@@ -2012,6 +2020,30 @@ static int intLibSoundPause(int value)
     return rc == SOUND_NO_ERROR;
 }
 
+// soundStopInterpret — stops both memory and streaming sounds.
+// Unlike |intLibSoundPause|, this always calls |soundStop()|, which stops and
+// rewinds the sound regardless of type.  Streaming sounds paused by the old
+// |opSoundStop|→|intLibSoundPause| path would remain paused (not stopped).
+static int intLibSoundStop(int value)
+{
+    if (value == -1) {
+        return 1;
+    }
+
+    if ((value & 0xA0000000) == 0) {
+        return 0;
+    }
+
+    int index = value & ~0xA0000000;
+    Sound* sound = gIntLibSounds[index];
+    if (sound == nullptr) {
+        return 0;
+    }
+
+    int rc = soundStop(sound);
+    return rc == SOUND_NO_ERROR;
+}
+
 // 0x4665C8 soundRewindInterpret
 static int intLibSoundRewind(int value)
 {
@@ -2098,7 +2130,7 @@ static void opSoundResume(Program* program)
 static void opSoundStop(Program* program)
 {
     int data = programStackPopInteger(program);
-    intLibSoundPause(data);
+    intLibSoundStop(data);
 }
 
 // soundrewind
@@ -2261,7 +2293,10 @@ void intLibInit()
     interpreterRegisterOpcode(0x808E, opShowMouse);
     interpreterRegisterOpcode(0x8090, opRefreshMouse);
     interpreterRegisterOpcode(0x808F, opMouseShape);
-    interpreterRegisterOpcode(0x8091, opSetGlobalMouseFunc);
+    // NOTE: opSetGlobalMouseFunc (0x8091) is intentionally not registered — the
+    // function is not implemented. Unregistering ensures the VM surfaces a clear
+    // "Undefined opcode" error rather than programFatalError.
+    // interpreterRegisterOpcode(0x8091, opSetGlobalMouseFunc);
     interpreterRegisterOpcode(0x806E, opLoadPaletteTable);
     interpreterRegisterOpcode(0x8092, opAddNamedEvent);
     interpreterRegisterOpcode(0x8093, opAddNamedHandler);

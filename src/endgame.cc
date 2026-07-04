@@ -339,6 +339,14 @@ static void endgameEndingRenderPanningScene(int direction, const char* narratorF
         // If `width == 640` then `panDistance` becomes 0 and divisions below can
         // hit divide-by-zero
         int panDistance = width - 640;
+        if (panDistance <= 0) {
+            endgameEndingVoiceOverFree();
+            artUnlock(backgroundHandle);
+            paletteFadeTo(gPaletteBlack);
+            bufferFill(gEndgameEndingSlideshowWindowBuffer, ENDGAME_ENDING_WINDOW_WIDTH, ENDGAME_ENDING_WINDOW_HEIGHT, ENDGAME_ENDING_WINDOW_WIDTH, _colorTable[0]);
+            windowRefresh(gEndgameEndingSlideshowWindow);
+            return;
+        }
         int fadeDistance = panDistance / 4;
         unsigned int frameDelay = 16 * panDistance / panDistance;
         unsigned int baseAnimationTicks = 16 * panDistance;
@@ -947,10 +955,11 @@ static int endgameEndingInit()
             continue;
         }
 
-        strcpy(entry.voiceOverBaseName, tok);
+        strncpy(entry.voiceOverBaseName, tok, sizeof(entry.voiceOverBaseName) - 1);
+        entry.voiceOverBaseName[sizeof(entry.voiceOverBaseName) - 1] = '\0';
 
         narratorFileNameLength = strlen(entry.voiceOverBaseName);
-        if (isspace(entry.voiceOverBaseName[narratorFileNameLength - 1])) {
+        if (narratorFileNameLength > 0 && isspace(entry.voiceOverBaseName[narratorFileNameLength - 1])) {
             entry.voiceOverBaseName[narratorFileNameLength - 1] = '\0';
         }
 
@@ -1075,7 +1084,8 @@ int endgameDeathEndingInit()
 
         // this code is slightly different from the original, but does the same thing
         narratorFileNameLength = strlen(tok);
-        strncpy(entry.voiceOverBaseName, tok, narratorFileNameLength);
+        strncpy(entry.voiceOverBaseName, tok, sizeof(entry.voiceOverBaseName) - 1);
+        entry.voiceOverBaseName[sizeof(entry.voiceOverBaseName) - 1] = '\0';
 
         entry.enabled = false;
 
@@ -1157,10 +1167,10 @@ void endgameSetupDeathEnding(int reason)
 
             if (deathEnding->enabled) {
                 accum += deathEnding->percentage;
+                selectedEnding = index;
                 if (accum >= chance) {
                     break;
                 }
-                selectedEnding++;
             }
         }
     }

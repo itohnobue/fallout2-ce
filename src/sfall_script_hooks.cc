@@ -94,10 +94,13 @@ int ScriptHookCall::numScriptReturnValues() const { return _scriptRetVals; }
 
 void ScriptHookCall::call()
 {
-    if (_callStack.size() == MAX_HOOK_CALL_DEPTH) {
-        debugPrint("! ERROR: Maximum Script Hook call depth reached! Last hook: %d", _hookType);
-        return;
+    // programFatalError uses longjmp to abort script execution, which
+    // skips _callStack.pop_back() and leaves stale entries permanently.
+    // When enough accumulate, clear the stack so hooks aren't disabled.
+    if (_callStack.size() >= MAX_HOOK_CALL_DEPTH) {
+        _callStack.clear();
     }
+
     _callStack.push_back(this);
 
     const auto& hooksOfType = scriptHooks[_hookType];
@@ -916,7 +919,7 @@ void scriptHooks_ComputeDamage(Attack* attack, int numRounds, int baseDmgMult)
             numRounds,
             attack->defenderKnockback,
             attack->hitMode,
-            attack // this is how sfall did it.. TODO: make sure get/set_object_data handler is safe!
+            attack // this is how sfall did it — get_object_data has bounds protection (sizeof(Object)), set_object_data is not implemented
         });
 
     hook.call();
@@ -1071,6 +1074,185 @@ bool scriptHooks_CanUseWeapon(bool result, Object* critter, Object* weapon, int 
         return result;
     }
     return hook.getReturnValueAt(0).asInt() != 0;
+}
+
+/*
+Runs when a script triggers an object animation via animate_stand_obj or
+animate_stand_reverse_obj. Allows scripts to intercept or modify the animation
+before it is registered.
+
+Obj     arg0 - the object being animated
+int     arg1 - the animation ID (ANIM_STAND or other)
+int     arg2 - the animation delay (0 for immediate)
+*/
+void scriptHooks_UseAnimObj(Object* object, int animId, int delay)
+{
+    if (scriptHooks[HOOK_USEANIMOBJ].empty()) {
+        return;
+    }
+
+    ScriptHookCall(HOOK_USEANIMOBJ, 0, { object, animId, delay }).call();
+}
+
+/*
+Runs when the player examines an object (right-click to view description).
+Per sfall 4.4.0+: the hook can return a plain string directly to override
+the description text displayed to the player.
+
+Critter arg0 - the critter performing the examination (may be null)
+Obj     arg1 - the object being examined
+string  arg2 - the default description text (from proto or script override)
+
+string  ret0 - the new description text to display (empty string = no override)
+*/
+void scriptHooks_DescriptionObj(Object* examiner, Object* target, std::string& description)
+{
+    if (scriptHooks[HOOK_DESCRIPTIONOBJ].empty()) {
+        return;
+    }
+
+    ScriptHookCall hook(HOOK_DESCRIPTIONOBJ, 1, { examiner, target, description.c_str() });
+    hook.call();
+
+    if (hook.numReturnValues() <= 0) {
+        return;
+    }
+
+    const char* overrideDesc = hook.getReturnValueAt(0).asString(nullptr);
+    if (overrideDesc != nullptr && overrideDesc[0] != '\0') {
+        description = overrideDesc;
+    }
+}
+
+/*
+Runs when a per-object or ambient lighting level changes.
+Allows scripts to override the light intensity or distance.
+
+Obj     arg0 - the object whose light changed (nullptr for ambient light changes)
+int     arg1 - the new light intensity
+int     arg2 - the new light distance
+
+int     ret0 - overridden light intensity (pass -1 to keep engine value)
+int     ret1 - overridden light distance (pass -1 to keep engine value)
+*/
+void scriptHooks_SetLighting(Object* object, int* lightIntensityPtr, int* lightDistancePtr)
+{
+    if (scriptHooks[HOOK_SETLIGHTING].empty()) {
+        return;
+    }
+
+    const int lightIntensity = lightIntensityPtr ? *lightIntensityPtr : 0;
+    const int lightDistance = lightDistancePtr ? *lightDistancePtr : 0;
+
+    ScriptHookCall hook(HOOK_SETLIGHTING, 2, { object, lightIntensity, lightDistance });
+    hook.call();
+
+    if (hook.numReturnValues() <= 0) {
+        return;
+    }
+
+    if (lightIntensityPtr != nullptr && hook.numReturnValues() >= 1) {
+        const int overrideIntensity = hook.getReturnValueAt(0).asInt();
+        if (overrideIntensity != -1) {
+            *lightIntensityPtr = overrideIntensity;
+        }
+    }
+
+    if (lightDistancePtr != nullptr && hook.numReturnValues() >= 2) {
+        const int overrideDistance = hook.getReturnValueAt(1).asInt();
+        if (overrideDistance != -1) {
+            *lightDistancePtr = std::min(overrideDistance, 8);
+        }
+    }
+}
+
+/*
+Runs continuously during world map travel by car. Allows overriding car speed
+(number of steps per worldmap tick) and fuel consumption per step.
+
+int     arg0 - vanilla car speed (number of wmPartyWalkingStep calls per tick)
+int     arg1 - vanilla fuel consumption per tick
+
+int     ret0 - car speed override (pass -1 to keep engine value)
+int     ret1 - fuel consumption override (pass -1 to keep engine value)
+*/
+void scriptHooks_CarTravel(int* speedPtr, int* fuelConsumptionPtr)
+{
+    if (scriptHooks[HOOK_CARTRAVEL].empty()) {
+        return;
+    }
+
+    ScriptHookCall hook(HOOK_CARTRAVEL, 2, { *speedPtr, *fuelConsumptionPtr });
+    hook.call();
+
+    if (hook.numReturnValues() <= 0) {
+        return;
+    }
+
+    int speedOverride = hook.getReturnValueAt(0).asInt();
+    if (speedOverride >= 0) {
+        *speedPtr = speedOverride;
+    }
+
+    if (hook.numReturnValues() > 1) {
+        int fuelOverride = hook.getReturnValueAt(1).asInt();
+        if (fuelOverride >= 0) {
+            *fuelConsumptionPtr = fuelOverride;
+        }
+    }
+}
+
+/*
+Runs when setting the value of a global variable via op_set_global_var.
+Allows scripts to override the value that gets stored.
+
+int     arg0 - the index number of the global variable being set
+int     arg1 - the value being set
+
+int     ret0 - overrides the value of the global variable
+*/
+int scriptHooks_SetGlobalVar(int varIndex, int value)
+{
+    ScriptHookCall hook(HOOK_SETGLOBALVAR, 1, { varIndex, value });
+    hook.call();
+
+    if (hook.numReturnValues() <= 0) {
+        return value;
+    }
+
+    return hook.getReturnValueAt(0).asInt();
+}
+
+/*
+Runs when the Sneak skill is activated or when the game rolls another sneak
+check after the current duration expires. The hook fires after skillRoll
+determines success/failure and the duration is computed.
+
+int     arg0 - Sneak check result: 1 - success (sneak working), 0 - failure
+int     arg1 - the duration in ticks for the current sneak check
+Critter arg2 - the critter (usually dude_obj)
+
+int     ret0 - overrides the result of the sneak check
+int     ret1 - overrides the duration time for the current result
+*/
+void scriptHooks_Sneak(int* resultPtr, int* durationPtr, Object* critter)
+{
+    if (scriptHooks[HOOK_SNEAK].empty()) {
+        return;
+    }
+
+    ScriptHookCall hook(HOOK_SNEAK, 2, { *resultPtr, *durationPtr, critter });
+    hook.call();
+
+    if (hook.numReturnValues() <= 0) {
+        return;
+    }
+
+    *resultPtr = hook.getReturnValueAt(0).asInt();
+
+    if (hook.numReturnValues() > 1) {
+        *durationPtr = hook.getReturnValueAt(1).asInt();
+    }
 }
 
 } // namespace fallout

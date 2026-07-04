@@ -877,8 +877,8 @@ void critterKill(Object* critter, int anim, bool refreshRect)
         shouldChangeFid = true;
     }
 
-    Rect updatedRect;
-    Rect tempRect;
+    Rect updatedRect = {};
+    Rect tempRect = {};
 
     if (shouldChangeFid) {
         objectSetFrame(critter, 0, &updatedRect);
@@ -891,8 +891,6 @@ void critterKill(Object* critter, int anim, bool refreshRect)
         critter->flags |= OBJECT_NO_BLOCK;
         _obj_toggle_flat(critter, &tempRect);
     }
-
-    // NOTE: using uninitialized updatedRect/tempRect if fid was not set.
 
     rectUnion(&updatedRect, &tempRect, &updatedRect);
 
@@ -1231,6 +1229,11 @@ int sneakEventProcess(Object* obj, void* data)
         time = 600;
         _sneak_working = true;
     }
+
+    // HOOK_SNEAK: allow mods to override sneak result and duration.
+    int sneakResult = _sneak_working ? 1 : 0;
+    scriptHooks_Sneak(&sneakResult, &time, gDude);
+    _sneak_working = sneakResult != 0;
 
     queueAddEvent(time, gDude, nullptr, EVENT_TYPE_SNEAK);
 

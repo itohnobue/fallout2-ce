@@ -3,6 +3,7 @@
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string>
 #include <string.h>
 
 #include "animation.h"
@@ -276,10 +277,17 @@ int objectExamineFunc(Object* critter, Object* target, void (*fn)(const char* st
             if (!messageListGetItem(&gProtoMessageList, &messageListItem)) {
                 debugPrint("\nError: Can't find msg num!");
             }
-            fn(messageListItem.text);
+
+            // HOOK_DESCRIPTIONOBJ: allow scripts to override the "You see nothing" fallback text
+            std::string descStr(messageListItem.text);
+            scriptHooks_DescriptionObj(critter, target, descStr);
+            fn(descStr.c_str());
         } else {
             if (PID_TYPE(target->pid) != OBJ_TYPE_CRITTER || !critterIsDead(target)) {
-                fn(description);
+                // HOOK_DESCRIPTIONOBJ: allow scripts to override the object description
+                std::string descStr(description);
+                scriptHooks_DescriptionObj(critter, target, descStr);
+                fn(descStr.c_str());
             }
         }
     }

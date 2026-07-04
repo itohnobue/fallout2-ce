@@ -1014,7 +1014,10 @@ static int mapLoad(File* stream)
 
         Object* object;
         int fid = buildFid(OBJ_TYPE_MISC, 12, 0, 0, 0);
-        objectCreateWithFidPid(&object, fid, -1);
+        if (objectCreateWithFidPid(&object, fid, -1) == -1) {
+            error = "Error creating map object";
+            goto err;
+        }
         object->flags |= (OBJECT_LIGHT_THRU | OBJECT_NO_SAVE | OBJECT_HIDDEN);
         objectSetLocation(object, 1, 0, nullptr);
         object->sid = gMapSid;
@@ -1180,10 +1183,10 @@ static int _map_age_dead_critters()
     }
 
     int agingType;
-    if (hoursSinceLastVisit > 6 * 24) {
-        agingType = 1;
-    } else if (hoursSinceLastVisit > 14 * 24) {
+    if (hoursSinceLastVisit > 14 * 24) {
         agingType = 2;
+    } else if (hoursSinceLastVisit > 6 * 24) {
+        agingType = 1;
     } else {
         return 0;
     }
@@ -1202,11 +1205,12 @@ static int _map_age_dead_critters()
 
                     if (count >= capacity) {
                         capacity *= 2;
-                        objects = (Object**)internal_realloc(objects, sizeof(*objects) * capacity);
-                        if (objects == nullptr) {
+                        Object** tmp = (Object**)internal_realloc(objects, sizeof(*objects) * capacity);
+                        if (tmp == nullptr) {
                             debugPrint("\nError: Out of Memory!");
                             return -1;
                         }
+                        objects = tmp;
                     }
                 }
             }
@@ -1214,11 +1218,12 @@ static int _map_age_dead_critters()
             objects[count++] = obj;
             if (count >= capacity) {
                 capacity *= 2;
-                objects = (Object**)internal_realloc(objects, sizeof(*objects) * capacity);
-                if (objects == nullptr) {
+                Object** tmp = (Object**)internal_realloc(objects, sizeof(*objects) * capacity);
+                if (tmp == nullptr) {
                     debugPrint("\nError: Out of Memory!");
                     return -1;
                 }
+                objects = tmp;
             }
         }
         obj = objectFindNext();
@@ -1454,37 +1459,45 @@ static int _map_save_file(File* stream)
     gMapHeader.globalVariablesCount = gMapGlobalVarsLength;
     gMapHeader.darkness = 1;
 
-    mapHeaderWrite(&gMapHeader, stream);
+    int rc = mapHeaderWrite(&gMapHeader, stream);
 
-    if (gMapHeader.globalVariablesCount != 0) {
-        fileWriteInt32List(stream, gMapGlobalVars, gMapHeader.globalVariablesCount);
+    if (rc != -1 && gMapHeader.globalVariablesCount != 0) {
+        if (fileWriteInt32List(stream, gMapGlobalVars, gMapHeader.globalVariablesCount) == -1) {
+            rc = -1;
+        }
     }
 
-    if (gMapHeader.localVariablesCount != 0) {
-        fileWriteInt32List(stream, gMapLocalVars, gMapHeader.localVariablesCount);
+    if (rc != -1 && gMapHeader.localVariablesCount != 0) {
+        if (fileWriteInt32List(stream, gMapLocalVars, gMapHeader.localVariablesCount) == -1) {
+            rc = -1;
+        }
     }
 
-    for (int elevation = 0; elevation < ELEVATION_COUNT; elevation++) {
+    for (int elevation = 0; rc != -1 && elevation < ELEVATION_COUNT; elevation++) {
         if ((gMapHeader.flags & _map_data_elev_flags[elevation]) == 0) {
-            _db_fwriteLongCount(stream, _square[elevation]->field_0, SQUARE_GRID_SIZE);
+            if (_db_fwriteLongCount(stream, _square[elevation]->field_0, SQUARE_GRID_SIZE) == -1) {
+                rc = -1;
+            }
         }
     }
 
     char err[80];
 
-    if (scriptSaveAll(stream) == -1) {
+    if (rc != -1 && scriptSaveAll(stream) == -1) {
         snprintf(err, sizeof(err), "Error saving scripts in %s", gMapHeader.name);
         _win_msg(err, 80, 80, _colorTable[31744]);
+        rc = -1;
     }
 
-    if (objectSaveAll(stream) == -1) {
+    if (rc != -1 && objectSaveAll(stream) == -1) {
         snprintf(err, sizeof(err), "Error saving objects in %s", gMapHeader.name);
         _win_msg(err, 80, 80, _colorTable[31744]);
+        rc = -1;
     }
 
     scriptsEnable();
 
-    return 0;
+    return rc;
 }
 
 // 0x483C98

@@ -370,6 +370,22 @@ int gameInitWithOptions(const char* windowTitle, bool isMapper, int font, int fl
         return -1;
     }
 
+    // SFALL: Initialize SpeedMulti from ddraw.ini [Speed] section.
+    // sfall global var 0 controls the global game speed multiplier.
+    // SpeedMultiInitial is the preferred key; falls back to SpeedMulti if
+    // the initial value key is not present.
+    {
+        int speedMultiValue = 100;
+        bool hasSpeedMulti = configGetInt(&gSfallConfig, SFALL_CONFIG_SPEED_KEY, SFALL_CONFIG_SPEED_MULTI_INITIAL_KEY, &speedMultiValue);
+        if (!hasSpeedMulti) {
+            configGetInt(&gSfallConfig, SFALL_CONFIG_SPEED_KEY, SFALL_CONFIG_SPEED_MULTI_KEY, &speedMultiValue);
+        }
+        if (speedMultiValue <= 0) {
+            speedMultiValue = 100; // 0 would freeze the game
+        }
+        sfall_gl_vars_store(0, speedMultiValue);
+    }
+
     if (!sfallListsInit()) {
         debugPrint("Failed on sfallListsInit");
         return -1;
@@ -1021,6 +1037,11 @@ int gameLoadGlobalVars()
         return -1;
     }
 
+    if (gGameGlobalPointers != nullptr) {
+        internal_free(gGameGlobalPointers);
+        gGameGlobalPointers = nullptr;
+    }
+
     gGameGlobalPointers = reinterpret_cast<void**>(internal_malloc(sizeof(*gGameGlobalPointers) * gGameGlobalVarsLength));
     if (gGameGlobalPointers == nullptr) {
         return -1;
@@ -1081,7 +1102,7 @@ int globalVarsRead(const char* path, const char* section, int* variablesListLeng
         if (equals != nullptr) {
             sscanf(equals + 1, "%d", *variablesListPtr + *variablesListLengthPtr - 1);
         } else {
-            *variablesListPtr[*variablesListLengthPtr - 1] = 0;
+            (*variablesListPtr)[*variablesListLengthPtr - 1] = 0;
         }
     }
 
@@ -1498,6 +1519,7 @@ static void showSplash()
     int version;
     fileReadInt32(stream, &version);
     if (version != 'RIX3') {
+        internal_free(palette);
         fileClose(stream);
         return;
     }

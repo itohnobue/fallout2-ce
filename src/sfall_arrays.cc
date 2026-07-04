@@ -1111,6 +1111,12 @@ bool sfallArraysLoad(File* stream)
         // Strip transient expression flags before creating the array
         unsigned int safeFlags = flags & kSavedFlagsMask;
         bool isAssoc = (safeFlags & SFALL_ARRAYFLAG_ASSOC) != 0;
+
+        // Associative arrays store key-value pairs; element count must be even.
+        if (isAssoc && (elCount & 1) != 0) {
+            return false;
+        }
+
         ArrayId id = CreateArray(isAssoc ? -1 : 0, safeFlags);
         SFallArray* arr = get_array_by_id(id);
         if (arr == nullptr) return false;

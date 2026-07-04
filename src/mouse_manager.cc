@@ -552,7 +552,7 @@ bool mouseManagerSetMousePointer(char* fileName)
     } else {
         // NOTE: Uninline.
         char* sep = strchr(string, ' ');
-        if (sep != nullptr) {
+        if (sep == nullptr) {
             return 0;
         }
 

@@ -211,7 +211,9 @@ bool sfall_gl_scr_is_loaded(Program* program)
     }
 
     // Not a global script.
-    return true;
+    // Per sfall 4.4.5 fix: game_loaded() should return false for non-global scripts.
+    // (The 4.2.9-4.4.4 bug was that it always returned 1 from normal scripts.)
+    return false;
 }
 
 void sfall_gl_scr_update(int burstSize)

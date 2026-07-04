@@ -759,7 +759,7 @@ static AiPacket* aiGetPacketByNum(int aiPacketId)
 
     debugPrint("Missing AI Packet\n");
 
-    return gAiPackets;
+    return nullptr;
 }
 
 // 0x428184
@@ -1207,7 +1207,7 @@ static int _ai_check_drugs(Object* critter)
         } while (lastItem != nullptr && critter->data.critter.combat.ap >= 2);
     }
 
-    return 0;
+    return drugUsed ? 1 : 0;
 }
 
 // 0x428868
@@ -1317,8 +1317,8 @@ static bool _ai_find_friend(Object* a1, int a2, int a3)
         return false;
     }
 
-    if (a3 > distance) {
-        int v2 = objectGetDistanceBetween(a1, v1) - a3;
+    if (distance > a3) {
+        int v2 = distance - a3;
         _ai_move_steps_closer(a1, v1, v2, false);
     }
 
@@ -1673,6 +1673,11 @@ static Object* _ai_danger_source(Object* a1)
                 }
 
                 if (candidate != nullptr) {
+                    ScriptHookCall hook(static_cast<HookType>(7), 1, { a1, candidate });
+                    hook.call();
+                    if (hook.numReturnValues() > 0) {
+                        candidate = hook.getReturnValueAt(0).asObject();
+                    }
                     return candidate;
                 }
             }
@@ -1695,6 +1700,11 @@ static Object* _ai_danger_source(Object* a1)
     } else {
         if ((whoHitMe->data.critter.combat.results & DAM_DEAD) == 0) {
             if (attackWho == ATTACK_WHO_WHOMEVER || attackWho == -1) {
+                ScriptHookCall hook(static_cast<HookType>(7), 1, { a1, whoHitMe });
+                hook.call();
+                if (hook.numReturnValues() > 0) {
+                    whoHitMe = hook.getReturnValueAt(0).asObject();
+                }
                 return whoHitMe;
             }
         } else {
@@ -1731,18 +1741,26 @@ static Object* _ai_danger_source(Object* a1)
         break;
     }
 
+    Object* result = nullptr;
     for (int index = 0; index < 4; index++) {
         Object* candidate = targets[index];
         if (candidate != nullptr && isWithinPerceptionDetailed(a1, candidate, PERCEPTION_AI_TARGET) != PERCEPTION_OUT_OF_RANGE) {
             if (pathfinderFindPath(a1, a1->tile, candidate->tile, nullptr, 0, _obj_blocking_at) != 0
                 || _combat_check_bad_shot(a1, candidate, HIT_MODE_RIGHT_WEAPON_PRIMARY, false) == COMBAT_BAD_SHOT_OK) {
-                return candidate;
+                result = candidate;
+                break;
             }
             debugPrint("\nai_danger_source: I couldn't get at my target!  Picking alternate!");
         }
     }
 
-    return nullptr;
+    ScriptHookCall hook(static_cast<HookType>(7), 1, { a1, result });
+    hook.call();
+    if (hook.numReturnValues() > 0) {
+        result = hook.getReturnValueAt(0).asObject();
+    }
+
+    return result;
 }
 
 // 0x4291C4
@@ -2715,7 +2733,7 @@ static int _ai_called_shot(Object* attacker, Object* defender, int hitMode)
                 }
 
                 if (critterGetStat(attacker, STAT_INTELLIGENCE) >= intelligenceRequired) {
-                    hitLocation = randomBetween(0, HIT_LOCATION_SPECIFIC_COUNT);
+                    hitLocation = randomBetween(0, HIT_LOCATION_SPECIFIC_COUNT - 1);
                     int chanceToHit = _determine_to_hit(attacker, defender, hitMode, hitLocation);
                     if (chanceToHit < ai->min_to_hit) {
                         hitLocation = HIT_LOCATION_TORSO;
@@ -3061,7 +3079,7 @@ int _cai_perform_distance_prefs(Object* a1, Object* a2)
     int distance = aiGetPacket(a1)->distance;
 
     if (a2 != nullptr) {
-        if ((a2->data.critter.combat.ap & DAM_DEAD) != 0) {
+        if ((a2->data.critter.combat.results & DAM_DEAD) != 0) {
             a2 = nullptr;
         }
     }

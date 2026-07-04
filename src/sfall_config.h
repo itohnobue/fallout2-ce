@@ -10,6 +10,10 @@ namespace fallout {
 #define SFALL_CONFIG_MAIN_KEY "Main"
 #define SFALL_CONFIG_MISC_KEY "Misc"
 #define SFALL_CONFIG_SCRIPTS_KEY "Scripts"
+#define SFALL_CONFIG_SPEED_KEY "Speed"
+
+#define SFALL_CONFIG_SPEED_MULTI_KEY "SpeedMulti"
+#define SFALL_CONFIG_SPEED_MULTI_INITIAL_KEY "SpeedMultiInitial"
 
 #define SFALL_CONFIG_OVERRIDE_CRITICALS_MODE_KEY "OverrideCriticalTable"
 #define SFALL_CONFIG_OVERRIDE_CRITICALS_FILE_KEY "OverrideCriticalFile"

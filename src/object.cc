@@ -24,6 +24,7 @@
 #include "proto_instance.h"
 #include "scripts.h"
 #include "settings.h"
+#include "sfall_script_hooks.h"
 #include "svga.h"
 #include "text_object.h"
 #include "tile.h"
@@ -1745,6 +1746,9 @@ int objectSetLight(Object* obj, int lightDistance, int lightIntensity, Rect* rec
         obj->lightDistance = std::min(lightDistance, 8);
         obj->lightIntensity = lightIntensity;
 
+        // HOOK_SETLIGHTING: allow scripts to observe/override per-object lighting changes
+        scriptHooks_SetLighting(obj, &obj->lightIntensity, &obj->lightDistance);
+
         if (rect != nullptr) {
             Rect tempRect;
             rc = _obj_turn_on_light(obj, &tempRect);
@@ -1755,6 +1759,9 @@ int objectSetLight(Object* obj, int lightDistance, int lightIntensity, Rect* rec
     } else {
         obj->lightIntensity = 0;
         obj->lightDistance = 0;
+
+        // HOOK_SETLIGHTING: notify scripts when light is turned off
+        scriptHooks_SetLighting(obj, nullptr, nullptr);
     }
 
     return rc;

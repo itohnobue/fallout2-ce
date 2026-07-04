@@ -1253,6 +1253,10 @@ static void palClrPalette(int start, int count)
 // 0x4F60F0 palMakeSynthPalette
 static void palMakeSynthPalette(int a1, int a2, int a3, int a4, int a5, int a6)
 {
+    if (a2 <= 1 || a3 <= 1 || a5 <= 1 || a6 <= 1) {
+        return;
+    }
+
     int i;
     int j;
 

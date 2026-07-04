@@ -237,12 +237,24 @@ int _interpretOutput(const char* format, ...)
 static char* programGetCurrentProcedureName(Program* program)
 {
     const int procedureCount = program->procedureCount();
+    if (procedureCount == 0) {
+        return interpreterMissingProcedureName;
+    }
+
     unsigned char* ptr = program->procedures + 4;
 
     const int procedureOffset = stackReadInt32(ptr, offsetof(Procedure, bodyOffset));
     int identifierOffset = stackReadInt32(ptr, offsetof(Procedure, nameOffset));
 
     for (int index = 0; index < procedureCount; index++) {
+        if (index == procedureCount - 1) {
+            // Last procedure: no next entry to read bounds from
+            if (program->instructionPointer >= procedureOffset) {
+                return (char*)(program->identifiers + identifierOffset);
+            }
+            break;
+        }
+
         int nextProcedureOffset = stackReadInt32(ptr + 24, offsetof(Procedure, bodyOffset));
         if (program->instructionPointer >= procedureOffset && program->instructionPointer < nextProcedureOffset) {
             return (char*)(program->identifiers + identifierOffset);
@@ -280,6 +292,11 @@ static void programPrintError(const char* format, va_list args)
     if (gInterpreterCurrentProgram) {
         longjmp(gInterpreterCurrentProgram->env, 1);
     }
+
+    // No valid program context (e.g., during initialization before any
+    // programInterpret call). Print to stderr and abort.
+    fprintf(stderr, "Fatal error outside interpreter context\n");
+    abort();
 #ifdef _MSC_VER
     __assume(0);
 #else
@@ -398,6 +415,10 @@ static opcode_t stackPopInt16(unsigned char* data, int* pointer)
 static void interpreterStringRefCountIncrease(Program* program, opcode_t opcode, int value)
 {
     if (opcode == VALUE_TYPE_DYNAMIC_STRING) {
+        if (program->dynamicStrings == nullptr || value < 2 || value >= *(int*)(program->dynamicStrings)) {
+            debugPrint("interpreterStringRefCountIncrease: string reference offset %d out of bounds\n", value);
+            return;
+        }
         *(short*)(program->dynamicStrings + 4 + value - 2) += 1;
     }
 }
@@ -406,6 +427,10 @@ static void interpreterStringRefCountIncrease(Program* program, opcode_t opcode,
 void interpreterStringRefCountDecrease(Program* program, opcode_t opcode, int value)
 {
     if (opcode == VALUE_TYPE_DYNAMIC_STRING) {
+        if (program->dynamicStrings == nullptr || value < 2 || value >= *(int*)(program->dynamicStrings)) {
+            debugPrint("interpreterStringRefCountDecrease: string reference offset %d out of bounds\n", value);
+            return;
+        }
         char* string = (char*)(program->dynamicStrings + 4 + value);
         short* refcountPtr = (short*)(string - 2);
 
@@ -515,6 +540,7 @@ Program* programCreateByPath(const char* path)
     program->basePointer = -1;
     program->framePointer = -1;
     program->data = data;
+    program->dataSize = fileSize;
     program->procedures = data + 42;
     program->identifiers = 24 * stackReadInt32(program->procedures, 0) + program->procedures + 4;
     program->staticStrings = program->identifiers + stackReadInt32(program->identifiers, 0) + 4;
@@ -531,6 +557,11 @@ Program* programCreateByPath(const char* path)
 opcode_t programGetNextOpcode(Program* program)
 {
     const int instructionPointer = program->instructionPointer;
+
+    if (instructionPointer + 2 > program->dataSize) {
+        programFatalError("programGetNextOpcode: bytecode read out of bounds (instructionPointer=%d, dataSize=%d)", instructionPointer, program->dataSize);
+    }
+
     program->instructionPointer = instructionPointer + 2;
 
     // NOTE: Uninline.
@@ -721,6 +752,11 @@ static void opPush(Program* program)
 static void opPushBase(Program* program)
 {
     const int argumentCount = programStackPopInteger(program);
+
+    if (argumentCount < 0 || static_cast<size_t>(argumentCount) > program->stackValues->size()) {
+        programFatalError("opPushBase: invalid argument count %d (stack size %zu)", argumentCount, program->stackValues->size());
+    }
+
     programReturnStackPushInteger(program, program->framePointer);
     program->framePointer = program->stackValues->size() - argumentCount;
 }
@@ -767,6 +803,10 @@ static void opDelayedCall(Program* program)
         data[arg] = programStackPopInteger(program);
     }
 
+    if (data[0] >= program->procedureCount()) {
+        programFatalError("Invalid procedure offset given to delayed call");
+    }
+
     unsigned char* const procedure_ptr = program->procedures + 4 + 24 * data[0];
 
     int delay = 1000 * data[1];
@@ -788,6 +828,10 @@ static void opConditionalCall(Program* program)
 
     for (int arg = 0; arg < 2; arg++) {
         data[arg] = programStackPopInteger(program);
+    }
+
+    if (data[0] >= program->procedureCount()) {
+        programFatalError("Invalid procedure offset given to conditional call");
     }
 
     unsigned char* const procedure_ptr = program->procedures + 4 + 24 * data[0];
@@ -1574,11 +1618,21 @@ static void opSubtract(Program* program)
         case VALUE_TYPE_FLOAT:
             programStackPushFloat(program, value[1].integerValue - value[0].floatValue);
             break;
+        case VALUE_TYPE_INT:
+            if ((value[0].integerValue >= 0 || value[1].integerValue <= INT_MAX + value[0].integerValue)
+                && (value[0].integerValue <= 0 || value[1].integerValue >= INT_MIN + value[0].integerValue)) {
+                programStackPushInteger(program, value[1].integerValue - value[0].integerValue);
+            } else {
+                programStackPushFloat(program, (float)value[1].integerValue - (float)value[0].integerValue);
+            }
+            break;
         default:
             programStackPushInteger(program, value[1].integerValue - value[0].integerValue);
             break;
         }
         break;
+    default:
+        programFatalError("Trying to subtract non-numeric types");
     }
 }
 
@@ -1607,11 +1661,22 @@ static void opMultiply(Program* program)
         case VALUE_TYPE_FLOAT:
             programStackPushFloat(program, value[1].integerValue * value[0].floatValue);
             break;
+        case VALUE_TYPE_INT: {
+            long long result = (long long)value[0].integerValue * (long long)value[1].integerValue;
+            if (result >= INT_MIN && result <= INT_MAX) {
+                programStackPushInteger(program, (int)result);
+            } else {
+                programStackPushFloat(program, (float)value[0].integerValue * (float)value[1].integerValue);
+            }
+            break;
+        }
         default:
             programStackPushInteger(program, value[0].integerValue * value[1].integerValue);
             break;
         }
         break;
+    default:
+        programFatalError("Trying to multiply non-numeric types");
     }
 }
 
@@ -1660,6 +1725,8 @@ static void opDivide(Program* program)
             programStackPushInteger(program, value[1].integerValue / value[0].integerValue);
         }
         break;
+    default:
+        programFatalError("Trying to divide non-numeric types");
     }
 }
 
@@ -1677,7 +1744,7 @@ static void opModulo(Program* program)
     }
 
     if (value[1].opcode != VALUE_TYPE_INT) {
-        return;
+        programFatalError("Trying to MOD non-integer types");
     }
 
     if (value[0].opcode == VALUE_TYPE_FLOAT) {
@@ -2068,6 +2135,10 @@ static void opCall(Program* program)
 {
     const int value = programStackPopInteger(program);
 
+    if (value >= program->procedureCount()) {
+        programFatalError("Invalid procedure index %d given to call (max %d)", value, program->procedureCount());
+    }
+
     unsigned char* const ptr = program->procedures + 4 + 24 * value;
 
     const int flags = stackReadInt32(ptr, offsetof(Procedure, flags));
@@ -2277,6 +2348,10 @@ static void opSwapStack(Program* program)
 static void opFetchProcedureAddress(Program* program)
 {
     const int procedureIndex = programStackPopInteger(program);
+
+    if (procedureIndex >= program->procedureCount()) {
+        programFatalError("Invalid procedure index %d given to fetch_proc_address (max %d)", procedureIndex, program->procedureCount());
+    }
 
     const int address = stackReadInt32(program->procedures + 4 + sizeof(Procedure) * procedureIndex, offsetof(Procedure, bodyOffset));
     programStackPushInteger(program, address);
@@ -2669,6 +2744,7 @@ void programInterpret(Program* program, int numInstructions)
         // longjmp from programFatalError()
         gInterpreterCurrentProgram = oldCurrentProgram;
         program->flags |= PROGRAM_FLAG_EXITED | PROGRAM_FLAG_FATAL_ERROR;
+        program->exited = true;
         return;
     }
 
@@ -2712,7 +2788,11 @@ void programInterpret(Program* program, int numInstructions)
             programFatalError(err);
         }
 
-        const unsigned int opcodeIndex = opcode & 0x3FF;
+        const unsigned int opcodeIndex = opcode & 0x3FFF;
+        if (opcodeIndex >= OPCODE_MAX_COUNT) {
+            snprintf(err, sizeof(err), "Opcode index %x out of bounds (max %d).", opcodeIndex, OPCODE_MAX_COUNT);
+            programFatalError(err);
+        }
         OpcodeHandler* handler = gInterpreterOpcodeHandlers[opcodeIndex];
         if (handler == nullptr) {
             snprintf(err, sizeof(err), "Undefined opcode %x.", opcode);
@@ -2830,6 +2910,7 @@ void programExecuteProcedureAsync(Program* program, int procedureIndex)
         } else {
             snprintf(err, sizeof(err), "External procedure %s not found\n", procedureIdentifier);
             _interpretOutput(err);
+            return;
         }
 
         // NOTE: Uninline.
@@ -2951,7 +3032,7 @@ static void doEvents()
         for (procedureIndex = 0; procedureIndex < procedureCount; procedureIndex++) {
             procedureFlags = stackReadInt32(procedurePtr, offsetof(Procedure, flags));
             if ((procedureFlags & PROCEDURE_FLAG_CONDITIONAL) != 0) {
-                memcpy(env, programListNode->program, sizeof(env));
+                memcpy(env, programListNode->program->env, sizeof(env));
                 oldProgramFlags = programListNode->program->flags;
                 oldInstructionPointer = programListNode->program->instructionPointer;
 
@@ -2972,7 +3053,7 @@ static void doEvents()
                     }
                 }
 
-                memcpy(programListNode->program, env, sizeof(env));
+                memcpy(programListNode->program->env, env, sizeof(env));
             } else if ((procedureFlags & PROCEDURE_FLAG_TIMED) != 0) {
                 if ((unsigned int)stackReadInt32(procedurePtr, offsetof(Procedure, time)) < time) {
                     // NOTE: Uninline.

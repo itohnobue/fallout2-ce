@@ -1044,7 +1044,7 @@ int _gdialogExitFromScript()
     dialogReviewEntriesClear();
     tickersRemove(gameDialogTicker);
 
-    if (PID_TYPE(gGameDialogSpeaker->pid) != OBJ_TYPE_ITEM) {
+    if (gGameDialogSpeaker != nullptr && PID_TYPE(gGameDialogSpeaker->pid) != OBJ_TYPE_ITEM) {
         gameDialogRestoreCenterTile();
     }
 
@@ -1245,7 +1245,8 @@ int gameDialogSetTextReply(Program* program, int messageListId, const char* text
     gDialogReplyMessageListId = -4;
     gDialogReplyMessageId = -4;
 
-    strcpy(gDialogReplyText, text);
+    strncpy(gDialogReplyText, text, sizeof(gDialogReplyText) - 1);
+    gDialogReplyText[sizeof(gDialogReplyText) - 1] = '\0';
 
     gGameDialogOptionEntriesLength = 0;
 
@@ -1753,6 +1754,11 @@ void dialogReviewEntriesClear()
             entry->replyText = nullptr;
         }
 
+        if (entry->optionText != nullptr) {
+            internal_free(entry->optionText);
+            entry->optionText = nullptr;
+        }
+
         entry->optionMessageListId = 0;
         entry->optionMessageId = 0;
     }
@@ -1804,6 +1810,10 @@ int gameDialogAddReviewText(const char* string)
 
     entry->optionMessageListId = -3;
     entry->optionMessageId = -3;
+
+    if (entry->optionText != nullptr) {
+        internal_free(entry->optionText);
+    }
     entry->optionText = nullptr;
 
     gGameDialogReviewEntriesLength++;
@@ -1822,6 +1832,10 @@ int gameDialogSetReviewOptionMessage(int messageListId, int messageId)
     GameDialogReviewEntry* entry = &(gDialogReviewEntries[gGameDialogReviewEntriesLength - 1]);
     entry->optionMessageListId = messageListId;
     entry->optionMessageId = messageId;
+
+    if (entry->optionText != nullptr) {
+        internal_free(entry->optionText);
+    }
     entry->optionText = nullptr;
 
     return 0;
@@ -1839,6 +1853,9 @@ int gameDialogSetReviewOptionText(const char* string)
     entry->optionMessageListId = -4;
     entry->optionMessageId = -4;
 
+    if (entry->optionText != nullptr) {
+        internal_free(entry->optionText);
+    }
     entry->optionText = (char*)internal_malloc(strlen(string) + 1);
     strcpy(entry->optionText, string);
 

@@ -1622,7 +1622,7 @@ int get_num_i(int win, int* value, int max_chars_wcursor, bool clear, bool allow
     int width = max_chars_wcursor * fontGetMonospacedCharacterWidth();
     int height = fontGetLineHeight();
 
-    char* string = (char*)internal_malloc(max_chars_wcursor + 1);
+    char* string = (char*)internal_malloc(max_chars_wcursor + 2);
 
     if (clear) {
         string[0] = '\0';

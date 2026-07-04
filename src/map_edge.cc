@@ -246,7 +246,7 @@ static bool mapEdgeLoadFromStream(File* stream)
         while (true) {
             int tileRect[4];
             if (fileReadInt32List(stream, tileRect, 4) == -1) {
-                return elev == ELEVATION_COUNT - 1;
+                return false;
             }
 
             // File stores RECT order: [0]=left, [1]=top, [2]=right, [3]=bottom.
@@ -256,7 +256,7 @@ static bool mapEdgeLoadFromStream(File* stream)
             data.zones.push_back(zone);
 
             if (fileReadInt32(stream, &levelIndicator) == -1) {
-                return elev == ELEVATION_COUNT - 1;
+                return false;
             }
 
             if (levelIndicator != elev) {

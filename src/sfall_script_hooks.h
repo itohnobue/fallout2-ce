@@ -7,6 +7,7 @@
 
 #include <initializer_list>
 #include <memory>
+#include <string>
 
 namespace fallout {
 
@@ -43,7 +44,10 @@ typedef enum {
     HOOK_USEOBJON = 8,
 
     // Removing object from inventory.
-    HOOK_REMOVEINVENOBJ = 9,
+    // NOTE: Deliberately absent — requires RMOBJ_* constants and destination
+    // object tracking not present in CE's itemRemove. Implementing would require
+    // significant refactoring of the item removal code path.
+    // HOOK_REMOVEINVENOBJ = 9,
 
     // Barter price calculation.
     HOOK_BARTERPRICE = 10,
@@ -106,7 +110,7 @@ typedef enum {
     // Game mode is changed. Used in many mods.
     HOOK_GAMEMODECHANGE = 31,
 
-    //    HOOK_USEANIMOBJ = 32,
+    HOOK_USEANIMOBJ = 32,
 
     // Explosive timer is set. Allows to override the time.
     HOOK_EXPLOSIVETIMER = 33,
@@ -120,7 +124,7 @@ typedef enum {
 
     //    HOOK_ONEXPLOSION = 36,
     //    HOOK_SUBCOMBATDAMAGE = 37,
-    //    HOOK_SETLIGHTING = 38,
+    HOOK_SETLIGHTING = 38,
 
     // A continuous sneak check.
     HOOK_SNEAK = 39,
@@ -138,21 +142,32 @@ typedef enum {
     //    HOOK_ADJUSTPOISON = 44,
     //    HOOK_ADJUSTRADS = 45,
 
-    // Any random roll. Has various uses for advanced scripts.
-    HOOK_ROLLCHECK = 46,
+    // NOTE: Deliberately absent — randomRoll() has 30+ call sites but no
+    // event_type context. Adding hook at randomRoll level would fire on every
+    // skill check, combat roll, and AI roll indiscriminately, with no way to
+    // distinguish context. Pass-through hook would be too expensive; adding
+    // context to every call site is too invasive. See SFALL_COMPATIBILITY.md.
+    // HOOK_ROLLCHECK = 46,
 
-    // AI is comparing two weapons when selecting the best one against a specific target or in general.
-    HOOK_BESTWEAPON = 47,
+    // NOTE: Deliberately absent — _ai_best_weapon() has 10+ return points
+    // with complex comparison logic. Adding post-hoc object override would
+    // change function contract and requires restructuring the comparison.
+    // Object lifetime in return value override also problematic.
+    // See SFALL_COMPATIBILITY.md.
+    // HOOK_BESTWEAPON = 47,
 
     // Allows to prevent PC or NPC from using a weapon.
     HOOK_CANUSEWEAPON = 48,
 
     // RESERVED 49..60
 
-    // Weapon SFX name is generated.
-    HOOK_BUILDSFXWEAPON = 61,
+    // NOTE: Deliberately absent — sfxBuildWeaponName() returns char* to a
+    // static buffer (_sfx_file_name). String return value override from scripts
+    // requires buffer management and lifetime semantics. The static buffer
+    // is 16 bytes; overridden strings may not fit. See SFALL_COMPATIBILITY.md.
+    // HOOK_BUILDSFXWEAPON = 61,
 
-    HOOK_COUNT,
+    HOOK_COUNT = 62,
 } HookType;
 
 typedef enum {
@@ -316,6 +331,16 @@ void scriptHooks_BarterPrice(BarterPriceContext* ctx);
 int scriptHooks_AdjustFid(int vanillaFid, int modifiedFid);
 bool scriptHooks_InvenWield(Object* critter, Object* item, InvenSlot slot, int isWield, int isRemove, bool filterInactiveHand = true);
 bool scriptHooks_CanUseWeapon(bool result, Object* critter, Object* weapon, int hitMode);
+
+// Hook fire functions for Phase 2
+void scriptHooks_UseAnimObj(Object* object, int animId, int delay);
+void scriptHooks_DescriptionObj(Object* examiner, Object* target, std::string& description);
+void scriptHooks_SetLighting(Object* object, int* lightIntensityPtr, int* lightDistancePtr);
+
+// Hook fire functions for Phase 5 (RPU hardening)
+void scriptHooks_CarTravel(int* speedPtr, int* fuelConsumptionPtr);
+int scriptHooks_SetGlobalVar(int varIndex, int value);
+void scriptHooks_Sneak(int* resultPtr, int* durationPtr, Object* critter);
 
 } // namespace fallout
 

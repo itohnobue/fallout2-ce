@@ -32,7 +32,7 @@ struct CaseInsensitiveLess {
 typedef std::set<std::string, CaseInsensitiveLess> StringSet;
 
 static bool configParseLine(Config* config, char* string);
-static bool configParseKeyValue(char* string, char* key, char* value);
+static bool configParseKeyValue(char* string, char* key, size_t keySize, char* value, size_t valueSize);
 static bool configEnsureSectionExists(Config* config, const char* sectionKey);
 static bool configTrimString(char* string);
 
@@ -120,9 +120,9 @@ bool configParseCommandLineArguments(Config* config, int argc, char** argv)
 
         *pch = '\0';
 
-        char key[260];
-        char value[260];
-        if (configParseKeyValue(pch + 1, key, value)) {
+        char key[CONFIG_FILE_MAX_LINE_LENGTH];
+        char value[CONFIG_FILE_MAX_LINE_LENGTH];
+        if (configParseKeyValue(pch + 1, key, sizeof(key), value, sizeof(value))) {
             if (!configSetString(config, sectionKey, key, value)) {
                 *pch = ']';
                 return false;
@@ -279,14 +279,14 @@ bool configGetIntList(Config* config, const char* sectionKey, const char* key, i
             break;
         }
 
+        *pch = '\0';
+        *arr++ = atoi(string);
+        string = pch + 1;
+
         count--;
         if (count == 0) {
             break;
         }
-
-        *pch = '\0';
-        *arr++ = atoi(string);
-        string = pch + 1;
     }
 
     // SFALL: Fix getting last item in a list if the list has less than the
@@ -683,9 +683,9 @@ static bool configParseLine(Config* config, char* string)
         }
     }
 
-    char key[260];
-    char value[260];
-    if (!configParseKeyValue(string, key, value)) {
+    char key[CONFIG_FILE_MAX_LINE_LENGTH];
+    char value[CONFIG_FILE_MAX_LINE_LENGTH];
+    if (!configParseKeyValue(string, key, sizeof(key), value, sizeof(value))) {
         return false;
     }
 
@@ -698,7 +698,7 @@ static bool configParseLine(Config* config, char* string)
 // Both key and value are trimmed.
 //
 // 0x42C594
-static bool configParseKeyValue(char* string, char* key, char* value)
+static bool configParseKeyValue(char* string, char* key, size_t keySize, char* value, size_t valueSize)
 {
     if (string == nullptr || key == nullptr || value == nullptr) {
         return false;
@@ -712,8 +712,10 @@ static bool configParseKeyValue(char* string, char* key, char* value)
 
     *pch = '\0';
 
-    strcpy(key, string);
-    strcpy(value, pch + 1);
+    strncpy(key, string, keySize - 1);
+    key[keySize - 1] = '\0';
+    strncpy(value, pch + 1, valueSize - 1);
+    value[valueSize - 1] = '\0';
 
     *pch = '=';
 

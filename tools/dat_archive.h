@@ -5,7 +5,6 @@
 #include <memory>
 #include <optional>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 namespace fallout {
@@ -43,12 +42,6 @@ public:
     std::vector<const DatArchiveEntry*> findEntries(const std::string& pattern) const;
 
     static std::unique_ptr<DatArchive> open(const std::string& path);
-
-private:
-    void ensureEntryLookup() const;
-
-    mutable bool entryLookupInitialized_ = false;
-    mutable std::unordered_map<std::string, const DatArchiveEntry*> entryLookup_;
 };
 
 } // namespace fallout

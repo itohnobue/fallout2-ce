@@ -41,7 +41,7 @@ static const char* parse_ini_triplet(const char* triplet, char* fileName, char* 
     }
 
     size_t fileNameLength = fileNameSectionSep - triplet;
-    if (fileNameLength > kFileNameMaxSize) {
+    if (fileNameLength >= kFileNameMaxSize) {
         return nullptr;
     }
 
@@ -51,7 +51,7 @@ static const char* parse_ini_triplet(const char* triplet, char* fileName, char* 
     }
 
     size_t sectionLength = sectionKeySep - fileNameSectionSep - 1;
-    if (sectionLength > kSectionMaxSize) {
+    if (sectionLength >= kSectionMaxSize) {
         return nullptr;
     }
 

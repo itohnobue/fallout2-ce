@@ -163,7 +163,7 @@ int _combatNumTurns = 0;
 static int combatTurnHookResult = 0;
 
 // 0x510944 combat_state
-unsigned int gCombatState = COMBAT_STATE_PLAYER_TURN;
+unsigned int gCombatState = COMBAT_STATE_0x02;
 
 // 0x510948 aiInfoList
 static CombatAiInfo* _aiInfoList = nullptr;
@@ -2013,7 +2013,7 @@ int combatInit()
     _list_total = 0;
     _gcsd = nullptr;
     _combat_call_display = 0;
-    gCombatState = COMBAT_STATE_PLAYER_TURN;
+    gCombatState = COMBAT_STATE_0x02;
 
     max_action_points = critterGetStat(gDude, STAT_MAXIMUM_ACTION_POINTS);
 
@@ -2062,7 +2062,7 @@ void combatReset()
     _list_total = 0;
     _gcsd = nullptr;
     _combat_call_display = 0;
-    gCombatState = COMBAT_STATE_PLAYER_TURN;
+    gCombatState = COMBAT_STATE_0x02;
 
     max_action_points = critterGetStat(gDude, STAT_MAXIMUM_ACTION_POINTS);
 
@@ -2613,7 +2613,7 @@ static void _combat_begin(Object* attacker)
             }
         }
 
-        gCombatState |= COMBAT_STATE_IN_COMBAT;
+        gCombatState |= COMBAT_STATE_0x01;
 
         tileWindowRefresh();
         gameUiDisable(0);
@@ -2803,8 +2803,8 @@ static void _combat_over()
 
     _combat_exps = 0;
 
-    gCombatState &= ~(COMBAT_STATE_IN_COMBAT | COMBAT_STATE_PLAYER_TURN);
-    gCombatState |= COMBAT_STATE_PLAYER_TURN;
+    gCombatState &= ~(COMBAT_STATE_0x01 | COMBAT_STATE_0x02);
+    gCombatState |= COMBAT_STATE_0x02;
 
     if (_list_total != 0) {
         objectListFree(_combat_list);
@@ -3111,7 +3111,7 @@ static void combatAttemptEnd()
         }
     }
 
-    gCombatState |= COMBAT_STATE_EXIT_REQUESTED;
+    gCombatState |= COMBAT_STATE_0x08;
     _caiTeamCombatExit();
 }
 
@@ -3133,10 +3133,10 @@ static int _combat_input()
 {
     ScopedGameMode gm(GameMode::kPlayerTurn);
 
-    while ((gCombatState & COMBAT_STATE_PLAYER_TURN) != 0) {
+    while ((gCombatState & COMBAT_STATE_0x02) != 0) {
         sharedFpsLimiter.mark();
 
-        if ((gCombatState & COMBAT_STATE_EXIT_REQUESTED) != 0) {
+        if ((gCombatState & COMBAT_STATE_0x08) != 0) {
             break;
         }
 
@@ -3186,8 +3186,8 @@ static int _combat_input()
         _game_user_wants_to_quit = GAME_QUIT_REQUEST_NONE;
     }
 
-    if ((gCombatState & COMBAT_STATE_EXIT_REQUESTED) != 0) {
-        gCombatState &= ~COMBAT_STATE_EXIT_REQUESTED;
+    if ((gCombatState & COMBAT_STATE_0x08) != 0) {
+        gCombatState &= ~COMBAT_STATE_0x08;
         return -1;
     }
 
@@ -3269,7 +3269,7 @@ static int _combat_turn(Object* obj, bool reloadedDuringCombat)
                 }
 
                 if (!reloadedDuringCombat) {
-                    gCombatState |= COMBAT_STATE_PLAYER_TURN;
+                    gCombatState |= 0x02;
                 }
 
                 interfaceBarEndButtonsRenderGreenLights();
@@ -3428,7 +3428,7 @@ void _combat(CombatStartData* csd)
     if (csd == nullptr
         || (csd->attacker == nullptr || csd->attacker->elevation == gElevation)
         || (csd->defender == nullptr || csd->defender->elevation == gElevation)) {
-        bool wasInCombat = (gCombatState & COMBAT_STATE_IN_COMBAT) != 0;
+        bool wasInCombat = (gCombatState & 0x01) != 0;
 
         _combat_begin(nullptr);
 
@@ -3575,9 +3575,7 @@ int _combat_attack(Object* attacker, Object* defender, int hitMode, int hitLocat
         }
 
         if (_gcsd->overrideAttackResults) {
-            // FIXME: looks like a bug, two different fields are used to set
-            // one field.
-            _main_ctd.defenderFlags = _gcsd->attackerResults;
+            _main_ctd.attackerFlags = _gcsd->attackerResults;
             _main_ctd.defenderFlags = _gcsd->targetResults;
         }
     }
@@ -4951,13 +4949,14 @@ static void _damage_object(Object* target, int damage, bool animated, int hitUni
             }
         }
 
+        scriptHooks_OnDeath(target);
+
         if (target->sid != -1) {
             scriptRemove(target->sid);
             target->sid = -1;
         }
 
         partyMemberRemove(target);
-        scriptHooks_OnDeath(target);
     }
 }
 
@@ -5798,7 +5797,7 @@ void _combat_attack_this(Object* target)
         return;
     }
 
-    if ((gCombatState & COMBAT_STATE_PLAYER_TURN) == 0) {
+    if ((gCombatState & 0x02) == 0) {
         return;
     }
 
@@ -5936,7 +5935,7 @@ void _combat_outline_off()
     int v5;
     Object** v9;
 
-    if ((gCombatState & COMBAT_STATE_IN_COMBAT) != 0) {
+    if (gCombatState & 1) {
         for (i = 0; i < _list_total; i++) {
             objectDisableOutline(_combat_list[i], nullptr);
         }
@@ -6065,9 +6064,12 @@ void _combat_delete_critter(Object* obj)
         return;
     }
 
+    int foundIndex = i;
+
     while (i < (_list_total - 1)) {
         _combat_list[i] = _combat_list[i + 1];
         aiInfoCopy(i + 1, i);
+        _combat_list[i]->cid = i;
         i++;
     }
 
@@ -6075,8 +6077,8 @@ void _combat_delete_critter(Object* obj)
 
     _combat_list[_list_total] = obj;
 
-    if (i >= _list_com) {
-        if (i < (_list_noncom + _list_com)) {
+    if (foundIndex >= _list_com) {
+        if (foundIndex < (_list_noncom + _list_com)) {
             _list_noncom--;
         }
     } else {
@@ -6087,6 +6089,7 @@ void _combat_delete_critter(Object* obj)
     objectClearOutline(obj, nullptr);
 
     obj->data.critter.combat.whoHitMe = nullptr;
+    obj->cid = -1;
     _combatai_delete_critter(obj);
 }
 
@@ -6624,7 +6627,7 @@ static void unarmedInitCustom()
                 configGetInt(&unarmedConfig, section, "BonusDamage", &(hitDescription->bonusDamage));
                 configGetInt(&unarmedConfig, section, "BonusCrit", &(hitDescription->bonusCriticalChance));
                 configGetInt(&unarmedConfig, section, "APCost", &(hitDescription->actionPointCost));
-                configGetBool(&unarmedConfig, section, "BonusDamage", &(hitDescription->isPenetrate));
+                configGetBool(&unarmedConfig, section, "Penetrate", &(hitDescription->isPenetrate));
                 configGetBool(&unarmedConfig, section, "Secondary", &(hitDescription->isSecondary));
 
                 for (int stat = 0; stat < PRIMARY_STAT_COUNT; stat++) {

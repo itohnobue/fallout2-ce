@@ -390,7 +390,7 @@ int artGetFidgetCount(int headFid)
 
     int head = headFid & 0xFFF;
 
-    if (head > gArtListDescriptions[OBJ_TYPE_HEAD].fileNamesLength) {
+    if (head >= gArtListDescriptions[OBJ_TYPE_HEAD].fileNamesLength) {
         return 0;
     }
 

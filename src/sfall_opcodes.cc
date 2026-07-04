@@ -60,8 +60,8 @@ typedef enum ExplosionMetarule {
 } ExplosionMetarule;
 
 static constexpr int kVersionMajor = 4;
-static constexpr int kVersionMinor = 3;
-static constexpr int kVersionPatch = 4;
+static constexpr int kVersionMinor = 4;
+static constexpr int kVersionPatch = 9;
 static constexpr int kSfallPathBufferSize = 3200; // matches rotation path size in animation.cc
 
 static void op_art_exists(Program* program)
@@ -103,13 +103,13 @@ static void op_read_byte(Program* program)
 {
     int addr = programStackPopInteger(program);
 
-    int value = 0;
+    int value = -1;
     switch (addr) {
     case 0x56D38C:
         value = combatGetTargetHighlight();
         break;
     default:
-        debugPrint("%s: attempt to 'read_byte' at 0x%x", program->name, addr);
+        programPrintError("%s: attempt to 'read_byte' at 0x%x (not supported)", program->name, addr);
         break;
     }
 
@@ -135,6 +135,9 @@ static void op_set_critter_base_stat(Program* program)
     int value = programStackPopInteger(program);
     int stat = programStackPopInteger(program);
     Object* obj = static_cast<Object*>(programStackPopPointer(program));
+    if (obj == nullptr) {
+        return;
+    }
     critterSetBaseStat(obj, stat, value);
 }
 
@@ -157,6 +160,9 @@ static void op_set_critter_extra_stat(Program* program)
     int value = programStackPopInteger(program);
     int stat = programStackPopInteger(program);
     Object* obj = static_cast<Object*>(programStackPopPointer(program));
+    if (obj == nullptr) {
+        return;
+    }
     critterSetBonusStat(obj, stat, value);
 }
 
@@ -177,6 +183,10 @@ static void op_get_critter_base_stat(Program* program)
     // current stats.
     int stat = programStackPopInteger(program);
     Object* obj = static_cast<Object*>(programStackPopPointer(program));
+    if (obj == nullptr) {
+        programStackPushInteger(program, 0);
+        return;
+    }
     programStackPushInteger(program, critterGetBaseStat(obj, stat));
 }
 
@@ -192,6 +202,10 @@ static void op_get_critter_extra_stat(Program* program)
 {
     int stat = programStackPopInteger(program);
     Object* obj = static_cast<Object*>(programStackPopPointer(program));
+    if (obj == nullptr) {
+        programStackPushInteger(program, 0);
+        return;
+    }
     int value = critterGetBonusStat(obj, stat);
     programStackPushInteger(program, value);
 }
@@ -820,9 +834,21 @@ static void op_set_weapon_ammo_pid(Program* program)
     if (obj != nullptr) {
         if (PID_TYPE(obj->pid) == OBJ_TYPE_ITEM) {
             switch (itemGetType(obj)) {
-            case ITEM_TYPE_WEAPON:
+            case ITEM_TYPE_WEAPON: {
+                // Validate that the new ammo PID references a valid proto.
+                Proto* ammoProto;
+                if (protoGetProto(ammoTypePid, &ammoProto) != 0) {
+                    programPrintError("set_weapon_ammo_pid: invalid ammo PID %d (proto not found)", ammoTypePid);
+                    return;
+                }
+                // Clamp current ammo quantity to the new ammo type's max capacity.
+                int maxCapacity = ammoProto->item.data.ammo.quantity;
+                if (obj->data.item.weapon.ammoQuantity > maxCapacity) {
+                    obj->data.item.weapon.ammoQuantity = maxCapacity;
+                }
                 obj->data.item.weapon.ammoTypePid = ammoTypePid;
                 break;
+            }
             }
         }
     }
@@ -1206,12 +1232,18 @@ static void op_explosions_metarule(Program* program)
         break;
     case EXPL_SET_DYNAMITE_EXPLOSION_DAMAGE:
         explosiveSetDamage(PROTO_ID_DYNAMITE_I, param1, param2);
+        programStackPushInteger(program, 0);
         break;
     case EXPL_SET_PLASTIC_EXPLOSION_DAMAGE:
         explosiveSetDamage(PROTO_ID_PLASTIC_EXPLOSIVES_I, param1, param2);
+        programStackPushInteger(program, 0);
         break;
     case EXPL_SET_EXPLOSION_MAX_TARGET:
         explosionSetMaxTargets(param1);
+        programStackPushInteger(program, 0);
+        break;
+    default:
+        programStackPushInteger(program, 0);
         break;
     }
 }
@@ -1438,6 +1470,11 @@ static void op_make_straight_path(Program* program)
     int type = programStackPopInteger(program);
     int dest = programStackPopInteger(program);
     Object* object = static_cast<Object*>(programStackPopPointer(program));
+
+    if (object == nullptr) {
+        programStackPushPointer(program, nullptr);
+        return;
+    }
 
     int flags = type == BLOCKING_TYPE_SHOOT ? 32 : 0;
 

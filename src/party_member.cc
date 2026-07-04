@@ -859,9 +859,8 @@ Object* partyMemberFindByPid(int pid)
 // 0x494F64 isPotentialPartyMember
 bool _isPotentialPartyMember(Object* object)
 {
-    for (int index = 0; index < gPartyMembersLength; index++) {
-        PartyMemberListItem* partyMember = &(gPartyMembers[index]);
-        if (partyMember->object->pid == gPartyMemberPids[index]) {
+    for (int index = 1; index < gPartyMemberDescriptionsLength; index++) {
+        if (object->pid == gPartyMemberPids[index]) {
             return true;
         }
     }
@@ -948,8 +947,6 @@ static int _partyMemberNewObjID()
             object = objectFindNext();
         }
     } while (object != nullptr);
-
-    _curID++;
 
     return _curID;
 }

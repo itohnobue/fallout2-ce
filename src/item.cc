@@ -3236,12 +3236,12 @@ static bool dudeIsAddicted(int drugPid)
 {
     for (int index = 0; index < ADDICTION_COUNT; index++) {
         DrugDescription* drugDescription = &(gDrugDescriptions[index]);
-        if (drugPid == -1 || drugPid == drugDescription->drugPid) {
+        if (drugPid == -1) {
             if (gGameGlobalVars[drugDescription->gvar] != 0) {
                 return true;
-            } else {
-                return false;
             }
+        } else if (drugPid == drugDescription->drugPid) {
+            return gGameGlobalVars[drugDescription->gvar] != 0;
         }
     }
 

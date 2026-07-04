@@ -402,7 +402,7 @@ long audioSeek(int handle, long offset, int origin)
                 audioRead(handle, buf, remainingBytesToSkip);
             }
 
-            // TODO: Probably leaks memory.
+            internal_free_safe(buf, __FILE__, __LINE__); // "..\int\audio.c", 367
         }
 
         return audioFile->position;

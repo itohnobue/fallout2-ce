@@ -1219,6 +1219,13 @@ void _gmouse_handle_event(int mouseX, int mouseY, int mouseState)
                         tileWindowRefreshRect(&cursorRect, gElevation);
                     }
 
+                    if (actionIndex < 0) {
+                        actionIndex = 0;
+                    }
+                    if (actionIndex >= actionMenuItemsCount) {
+                        actionIndex = actionMenuItemsCount - 1;
+                    }
+
                     switch (actionMenuItems[actionIndex]) {
                     case GAME_MOUSE_ACTION_MENU_ITEM_INVENTORY:
                         inventoryOpenUseItemOn(targetObj);
@@ -1878,12 +1885,12 @@ int gameMouseRenderActionMenuItems(int x, int y, const int* menuItems, int menuI
     }
 
     memset(gGameMouseActionMenuFrmData, 0, gGameMouseActionMenuFrmDataSize);
-    blitBufferToBuffer(arrowData, arrowWidth, arrowHeight, arrowWidth, arrowFrmDest, gGameMouseActionPickFrmWidth);
+    blitBufferToBuffer(arrowData, arrowWidth, arrowHeight, arrowWidth, arrowFrmDest, gGameMouseActionMenuFrmWidth);
 
     unsigned char* dest = menuItemFrmDest;
     for (int index = 0; index < menuItemsLength; index++) {
         unsigned char* data = artGetFrameData(menuItemFrms[index], 0, 0);
-        blitBufferToBuffer(data, menuItemWidth, menuItemHeight, menuItemWidth, dest, gGameMouseActionPickFrmWidth);
+        blitBufferToBuffer(data, menuItemWidth, menuItemHeight, menuItemWidth, dest, gGameMouseActionMenuFrmWidth);
         dest += gGameMouseActionMenuFrmWidth * menuItemHeight;
     }
 

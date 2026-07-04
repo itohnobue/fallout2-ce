@@ -2,6 +2,7 @@
 
 #include <cstdarg>
 #include <cstdio>
+#include <cstring>
 
 #include "sfall_metarules.h"
 
@@ -79,10 +80,20 @@ void OpcodeContext::setReturn(unsigned int value)
 
 void OpcodeContext::setReturn(const char* value)
 {
-    // TODO: don't clutter dynamic string buffer with temporary values, use static buffer like sfall's ScriptExtender::gTextBuffer
+    // Static buffer for temporary string returns — reduces dynamic string
+    // heap clutter for short-lived metarule return values.  Callers may also
+    // format directly into this buffer before calling setReturn().
+    static char gTextBuffer[8192];
+
     ProgramValue programValue;
     programValue.opcode = VALUE_TYPE_DYNAMIC_STRING;
-    programValue.integerValue = programPushString(_program, value);
+    size_t len = strlen(value);
+    if (len < sizeof(gTextBuffer)) {
+        strcpy(gTextBuffer, value);
+        programValue.integerValue = programPushString(_program, gTextBuffer);
+    } else {
+        programValue.integerValue = programPushString(_program, value);
+    }
     setReturn(programValue);
 }
 

@@ -446,8 +446,10 @@ void bufferOutline(unsigned char* buf, int width, int height, int pitch, int col
 
         for (int y = 0; y < height; y++) {
             if (*ptr != 0 && cycle) {
-                // TODO: Check in debugger, might be a bug.
-                *(ptr - pitch) = color & 0xFF;
+                if (y > 0) {
+                    // TODO: Check in debugger, might be a bug.
+                    *(ptr - pitch) = color & 0xFF;
+                }
                 cycle = false;
             } else if (*ptr == 0 && !cycle) {
                 *ptr = color & 0xFF;

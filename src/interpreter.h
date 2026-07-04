@@ -186,6 +186,7 @@ typedef int(InterpretCheckWaitFunc)(Program* program);
 struct Program {
     char* name;
     unsigned char* data;
+    int dataSize;
     struct Program* parent;
     struct Program* child;
     int instructionPointer; // current pos in data

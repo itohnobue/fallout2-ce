@@ -210,6 +210,41 @@
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "RelWithDebInfo"
             }
+        },
+        {
+            "name": "emscripten-base",
+            "hidden": true,
+            "description": "Base preset for all Emscripten/WebAssembly builds.",
+            "inherits": [
+                "base"
+            ],
+            "toolchainFile": "${sourceDir}/cmake/toolchain/Emscripten.cmake",
+            "cacheVariables": {
+                "OPTION_WASM_64": "OFF",
+                "OPTION_WASM_JSPI": "OFF"
+            }
+        },
+        {
+            "name": "emscripten-debug",
+            "displayName": "Emscripten Debug",
+            "description": "Build WebAssembly Debug with Emscripten.",
+            "inherits": [
+                "emscripten-base"
+            ],
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug"
+            }
+        },
+        {
+            "name": "emscripten-release",
+            "displayName": "Emscripten Release",
+            "description": "Build WebAssembly Release with Emscripten.",
+            "inherits": [
+                "emscripten-base"
+            ],
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release"
+            }
         }
     ],
     "buildPresets": [
@@ -288,6 +323,16 @@
             "name": "Mingw-x64-Release",
             "displayName": "MinGW x64 Release",
             "configurePreset": "Mingw-x64-release"
+        },
+        {
+            "name": "emscripten-debug",
+            "displayName": "Emscripten Debug",
+            "configurePreset": "emscripten-debug"
+        },
+        {
+            "name": "emscripten-release",
+            "displayName": "Emscripten Release",
+            "configurePreset": "emscripten-release"
         }
     ]
 }

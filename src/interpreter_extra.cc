@@ -906,6 +906,10 @@ static void opCreateObject(Program* program)
         goto out;
     }
 
+    if (object == nullptr) {
+        goto out;
+    }
+
     if (sid != -1) {
         int scriptType = 0;
         switch (PID_TYPE(object->pid)) {
@@ -1233,8 +1237,9 @@ static void opSetGlobalVar(Program* program)
             gameSetGlobalPointer(variable, value.pointerValue);
             gameSetGlobalVar(variable, 0);
         } else {
+            int intValue = scriptHooks_SetGlobalVar(variable, value.integerValue);
             gameSetGlobalPointer(variable, nullptr);
-            gameSetGlobalVar(variable, value.integerValue);
+            gameSetGlobalVar(variable, intValue);
         }
     } else {
         scriptError("\nScript Error: %s: op_set_global_var: no global vars found!", program->name);
@@ -1356,6 +1361,7 @@ static void opAnimateStand(Program* program)
     }
 
     if (!animationCheckCombatMode()) {
+        scriptHooks_UseAnimObj(object, ANIM_STAND, 0);
         reg_anim_begin(ANIMATION_REQUEST_UNRESERVED);
         animationRegisterAnimate(object, ANIM_STAND, 0);
         reg_anim_end();
@@ -1380,6 +1386,7 @@ static void opAnimateStandReverse(Program* program)
     }
 
     if (!animationCheckCombatMode()) {
+        scriptHooks_UseAnimObj(object, ANIM_STAND, 0);
         reg_anim_begin(ANIMATION_REQUEST_UNRESERVED);
         animationRegisterAnimateReversed(object, ANIM_STAND, 0);
         reg_anim_end();
@@ -1610,14 +1617,12 @@ static void opDrop(Program* program)
 
     Script* script;
     if (scriptGetScript(sid, &script) == -1) {
-        // FIXME: Should be SCRIPT_ERROR_CANT_MATCH_PROGRAM_TO_SID.
-        scriptPredefinedError(program, "drop_obj", SCRIPT_ERROR_OBJECT_IS_NULL);
+        scriptPredefinedError(program, "drop_obj", SCRIPT_ERROR_CANT_MATCH_PROGRAM_TO_SID);
         return;
     }
 
     if (script->target == nullptr) {
-        // FIXME: Should be SCRIPT_ERROR_OBJECT_IS_NULL.
-        scriptPredefinedError(program, "drop_obj", SCRIPT_ERROR_CANT_MATCH_PROGRAM_TO_SID);
+        scriptPredefinedError(program, "drop_obj", SCRIPT_ERROR_OBJECT_IS_NULL);
         return;
     }
 
@@ -1764,8 +1769,7 @@ static void opUseObject(Program* program)
 
     Script* script;
     if (scriptGetScript(sid, &script) == -1) {
-        // FIXME: Should be SCRIPT_ERROR_CANT_MATCH_PROGRAM_TO_SID.
-        scriptPredefinedError(program, "use_obj", SCRIPT_ERROR_OBJECT_IS_NULL);
+        scriptPredefinedError(program, "use_obj", SCRIPT_ERROR_CANT_MATCH_PROGRAM_TO_SID);
         return;
     }
 
@@ -2036,6 +2040,9 @@ static void opMetarule3(Program* program)
     case METARULE3_ART_SET_BASE_FID_NUM:
         if (1) {
             Object* obj = static_cast<Object*>(param1.pointerValue);
+            if (obj == nullptr) {
+                break;
+            }
             int frmId = param2.integerValue;
 
             int fid = buildFid(FID_TYPE(obj->fid),
@@ -2053,7 +2060,13 @@ static void opMetarule3(Program* program)
         result.integerValue = tileSetCenter(param1.integerValue, TILE_SET_CENTER_REFRESH_WINDOW);
         break;
     case METARULE3_CHEM_USE_LEVEL:
-        result.integerValue = aiGetChemUse(static_cast<Object*>(param1.pointerValue));
+        if (1) {
+            Object* obj = static_cast<Object*>(param1.pointerValue);
+            if (obj == nullptr) {
+                break;
+            }
+            result.integerValue = aiGetChemUse(obj);
+        }
         break;
     case METARULE3_CAR_OUT_OF_FUEL:
         result.integerValue = wmCarIsOutOfGas() ? 1 : 0;
@@ -2225,6 +2238,12 @@ static void opCritterHeal(Program* program)
 {
     int amount = programStackPopInteger(program);
     Object* critter = static_cast<Object*>(programStackPopPointer(program));
+
+    if (critter == nullptr) {
+        scriptPredefinedError(program, "critter_heal", SCRIPT_ERROR_OBJECT_IS_NULL);
+        programStackPushInteger(program, -1);
+        return;
+    }
 
     int rc = critterAdjustHitPoints(critter, amount);
 
@@ -2485,12 +2504,14 @@ static void opCritterDamage(Program* program)
 
     if (object == nullptr) {
         scriptPredefinedError(program, "critter_damage", SCRIPT_ERROR_OBJECT_IS_NULL);
+        program->flags &= ~PROGRAM_FLAG_CHILD_CALL;
         return;
     }
 
     if (PID_TYPE(object->pid) != OBJ_TYPE_CRITTER) {
         scriptPredefinedError(program, "critter_damage", SCRIPT_ERROR_FOLLOWS);
         debugPrint(" Can't call on non-critters!");
+        program->flags &= ~PROGRAM_FLAG_CHILD_CALL;
         return;
     }
 
@@ -2941,7 +2962,7 @@ static void opCritterRemoveTrait(Program* program)
 
     if (object == nullptr) {
         scriptPredefinedError(program, "critter_rm_trait", SCRIPT_ERROR_OBJECT_IS_NULL);
-        // FIXME: Ruins stack.
+        programStackPushInteger(program, -1);
         return;
     }
 
@@ -3255,6 +3276,9 @@ static void opMetarule(Program* program)
     case METARULE_DROP_ALL_INVEN:
         if (1) {
             Object* object = static_cast<Object*>(param.pointerValue);
+            if (object == nullptr) {
+                break;
+            }
             result = itemDropAll(object, object->tile);
             if (gDude == object) {
                 interfaceUpdateItems(false, INTERFACE_ITEM_ACTION_DEFAULT, INTERFACE_ITEM_ACTION_DEFAULT);
@@ -3265,6 +3289,10 @@ static void opMetarule(Program* program)
     case METARULE_INVEN_UNWIELD_WHO:
         if (1) {
             Object* object = static_cast<Object*>(param.pointerValue);
+
+            if (object == nullptr) {
+                break;
+            }
 
             int hand = HAND_RIGHT;
             if (object == gDude) {
@@ -3306,6 +3334,9 @@ static void opMetarule(Program* program)
     case METARULE_WEAPON_DAMAGE_TYPE:
         if (1) {
             Object* object = static_cast<Object*>(param.pointerValue);
+            if (object == nullptr) {
+                break;
+            }
             if (PID_TYPE(object->pid) == OBJ_TYPE_ITEM) {
                 if (itemGetType(object) == ITEM_TYPE_WEAPON) {
                     result = weaponGetDamageType(nullptr, object);
@@ -3325,6 +3356,9 @@ static void opMetarule(Program* program)
     case METARULE_CRITTER_BARTERS:
         if (1) {
             Object* object = static_cast<Object*>(param.pointerValue);
+            if (object == nullptr) {
+                break;
+            }
             if (PID_TYPE(object->pid) == OBJ_TYPE_CRITTER) {
                 Proto* proto;
                 protoGetProto(object->pid, &proto);
@@ -3335,7 +3369,13 @@ static void opMetarule(Program* program)
         }
         break;
     case METARULE_CRITTER_KILL_TYPE:
-        result = critterGetKillType(static_cast<Object*>(param.pointerValue));
+        if (1) {
+            Object* critter = static_cast<Object*>(param.pointerValue);
+            if (critter == nullptr) {
+                break;
+            }
+            result = critterGetKillType(critter);
+        }
         break;
     case METARULE_SET_CAR_CARRY_AMOUNT:
         if (1) {
@@ -4376,7 +4416,8 @@ static void opSfxBuildItemName(Program* program)
     const char* baseName = programStackPopString(program);
 
     char soundEffectName[16];
-    strcpy(soundEffectName, gameSoundBuildInterfaceName(baseName));
+    snprintf(soundEffectName, sizeof(soundEffectName), "I%6s%1d", baseName, 1);
+    compat_strupr(soundEffectName);
     programStackPushString(program, soundEffectName);
 }
 
@@ -4483,6 +4524,12 @@ static void opDestroyMultipleObjects(Program* program)
 
     int quantity = programStackPopInteger(program);
     Object* object = static_cast<Object*>(programStackPopPointer(program));
+
+    if (object == nullptr) {
+        scriptPredefinedError(program, "destroy_mult_objs", SCRIPT_ERROR_OBJECT_IS_NULL);
+        program->flags &= ~PROGRAM_FLAG_CHILD_CALL;
+        return;
+    }
 
     Object* self = scriptGetSelf(program);
     bool isSelf = self == object;
