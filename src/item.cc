@@ -695,23 +695,24 @@ static bool _item_identical(Object* item1, Object* item2)
         return false;
     }
 
-    // empty weapons of the same types are always considered the same even the ammo was originally different
-    if (proto->item.type == ITEM_TYPE_WEAPON && item1->data.item.weapon.ammoQuantity < 1 && item2->data.item.weapon.ammoQuantity < 1) {
-        return true;
-    }
-
     int item2Quantity;
     if (proto->item.type == ITEM_TYPE_AMMO || item1->pid == PROTO_ID_MONEY) {
         item2Quantity = item2->data.item.ammo.quantity;
         item2->data.item.ammo.quantity = item1->data.item.ammo.quantity;
     }
 
+    bool sameFlags = item1->data.flags == item2->data.flags;
+
+    // empty weapons of the same types are always considered the same even the ammo was originally different
+    if (sameFlags && proto->item.type == ITEM_TYPE_WEAPON && item1->data.item.weapon.ammoQuantity < 1 && item2->data.item.weapon.ammoQuantity < 1) {
+        return true;
+    }
+
     // CE: Original code is different. It compares exactly 32 bytes one by one
     // in the loop starting with `data` (which means it also checks `Inventory`
     // object). Objects with inventories are filtered a moment earlier, so it
     // should be safe to check only the item-specific data.
-    bool same = item1->data.flags == item2->data.flags
-        && memcmp(&(item1->data.item), &(item2->data.item), sizeof(ItemObjectData)) == 0;
+    bool same = sameFlags && memcmp(&(item1->data.item), &(item2->data.item), sizeof(ItemObjectData)) == 0;
 
     if (proto->item.type == ITEM_TYPE_AMMO || item1->pid == PROTO_ID_MONEY) {
         item2->data.item.ammo.quantity = item2Quantity;
