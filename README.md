@@ -8,10 +8,6 @@ This is a fork of the original Fallout2: CE project, which is no longer getting 
 
 Currently there is no easy way to play both Fallout 1 and Fallout 2 on Mac with Apple Silicon and all the updates installed (like RPU and Et Tu) to get the best gaming experience. This project is aimed to fix that and deliver a native macOS ARM Fallout 1-2 engine which is also compatible with all improvements.
 
-Fallout2: CE has broad (though not total) compatibility with [Sfall](https://github.com/sfall-team/sfall) scripting extensions.  Many traditional Fallout mods work out of the box.
-
-There is also [Fallout 1 Community Edition](https://github.com/alexbatalov/fallout1-ce) (not affiliated with this fork).
-
 ## Mod Compatibility
 
 The following total conversion mods are tested:
