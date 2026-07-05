@@ -229,7 +229,9 @@ namespace {
         { kSfallMisc, "DisableHorrigan", CONTENT_CONFIG_WORLDMAP_SECTION, "disable_horrigan", "0" },
         { kSfallMisc, "CityRepsList", CONTENT_CONFIG_WORLDMAP_SECTION, "city_reputation_list" },
         { kSfallInterface, "WorldMapTravelMarkers", CONTENT_CONFIG_WORLDMAP_SECTION, "trail_markers", "0" },
-        { kSfallMisc, "WorldMapSlots", CONTENT_CONFIG_WORLDMAP_SECTION, "encounter_slots", "0" },
+        // WorldMapSlots migration intentionally removed — `encounter_slots` is never read
+        // from game.cfg and `scriptsGetWorldMapSlots()` has zero callers, making the
+        // entire WorldMapSlots → encounter_slots pipeline dead code.
         { kSfallMisc, "BoostScriptDialogLimit", CONTENT_CONFIG_DIALOG_SECTION, "boost_dialog_limit", "0" },
         // [characters]
         { kSfallMisc, "PremadePaths", CONTENT_CONFIG_CHARACTERS_SECTION, "premade_paths" },
@@ -295,6 +297,7 @@ static bool contentConfigMigrateFromSfall(Config* sfallConfig, const char* conte
 
         if (!configWrite(&migratedConfig, contentConfigFilePath, false)) {
             debugPrint("Failed to write migrated settings to %s!\n", contentConfigFilePath);
+            migrated = false;
         }
     }
 

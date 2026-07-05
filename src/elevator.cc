@@ -504,6 +504,8 @@ static int elevatorWindowInit(int elevator)
             _elevatorFrmImages[reversedIndex].unlock();
         }
 
+        scriptsEnable();
+
         if (gElevatorWindowIsoWasEnabled) {
             isoEnable();
         }
@@ -536,6 +538,8 @@ static int elevatorWindowInit(int elevator)
             _elevatorFrmImages[index].unlock();
         }
 
+        scriptsEnable();
+
         if (gElevatorWindowIsoWasEnabled) {
             isoEnable();
         }
@@ -561,6 +565,8 @@ static int elevatorWindowInit(int elevator)
         for (int index = 0; index < ELEVATOR_FRM_COUNT; index++) {
             _elevatorFrmImages[index].unlock();
         }
+
+        scriptsEnable();
 
         if (gElevatorWindowIsoWasEnabled) {
             isoEnable();

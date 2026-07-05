@@ -82,17 +82,26 @@ int compat_rename(const char* /*oldName*/, const char* /*newName*/)
 }
 
 // game_config_migration.cc uses compat_splitpath to decompose paths.
-void compat_splitpath(const char* /*path*/, char* /*drive*/, char* /*dir*/,
-                      char* /*fname*/, char* /*ext*/)
+void compat_splitpath(const char* /*path*/, char* drive, char* dir,
+                      char* fname, char* ext)
 {
-    // Stub: do nothing — migration tests don't depend on real path decomposition.
+    // Stub: zero-initialize output buffers to produce empty strings
+    // for all path components. Matches the real implementation's contract
+    // of producing null-terminated empty strings when a component is absent.
+    // See platform_compat.cc:71-140 for the real implementation.
+    if (drive != nullptr) drive[0] = '\0';
+    if (dir != nullptr) dir[0] = '\0';
+    if (fname != nullptr) fname[0] = '\0';
+    if (ext != nullptr) ext[0] = '\0';
 }
 
 // game_config_migration.cc uses compat_makepath to construct paths.
-void compat_makepath(char* /*path*/, const char* /*drive*/, const char* /*dir*/,
+void compat_makepath(char* path, const char* /*drive*/, const char* /*dir*/,
                      const char* /*fname*/, const char* /*ext*/)
 {
-    // Stub: do nothing — migration tests don't depend on real path construction.
+    // Stub: zero-initialize the output path to produce an empty string.
+    // See platform_compat.cc:142-220 for the real implementation.
+    if (path != nullptr) path[0] = '\0';
 }
 
 // game_config_migration.cc uses compat_file_exists to check for existing configs.

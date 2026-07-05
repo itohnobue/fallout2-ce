@@ -1044,6 +1044,11 @@ static int mapLoad(File* stream)
 
 err:
 
+    // Restore script execution on ALL code paths. scriptsDisable() was
+    // called at the top of _map_load and every goto err between there
+    // and the normal-path scriptsEnable() must re-enable scripts.
+    scriptsEnable();
+
     if (error != nullptr) {
         char message[100]; // TODO: Size is probably wrong.
         snprintf(message, sizeof(message), "%s while loading map.", error);

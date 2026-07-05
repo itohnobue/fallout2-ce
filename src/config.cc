@@ -229,20 +229,19 @@ bool configGetInt(Config* config, const char* sectionKey, const char* key, int* 
 
     char* end;
     errno = 0;
-    long l = strtol(stringValue, &end, base); // see https://stackoverflow.com/a/6154614
+    long l = strtol(stringValue, &end, base);
 
-    // The link above says right things about converting strings to numbers,
-    // however we need to maintain compatibility with atoi implementation and
-    // original game data. One example of the problem is worldmap.txt where
-    // frequency values expressed as percentages (Frequent=38%). If we handle
-    // the result like the link above suggests (and what previous implementation
-    // provided), we'll simply end up returning `false`, since there will be
-    // unconverted characters left. On the other hand, this function is also
-    // used to parse Sfall config values, which uses hexadecimal notation to
-    // represent colors. We're not going to need any of these in the long run so
-    // for now simply ignore any error that could arise during conversion.
+    // Reject if no conversion was performed (completely non-numeric input).
+    if (end == stringValue) {
+        return false;
+    }
 
-    *valuePtr = l;
+    // Reject on overflow/underflow.
+    if (errno == ERANGE || l < INT_MIN || l > INT_MAX) {
+        return false;
+    }
+
+    *valuePtr = static_cast<int>(l);
 
     return true;
 }
@@ -768,6 +767,11 @@ static bool configParseLine(Config* config, char* string)
             strcpy(gConfigLastSectionKey, sectionKey);
             return configTrimString(gConfigLastSectionKey);
         }
+
+        // Malformed section header — line starts with '[' but has no closing ']'.
+        // Falling through to key-value parsing would silently merge content into
+        // the previous section. Reject instead.
+        return false;
     }
 
     char key[CONFIG_FILE_MAX_LINE_LENGTH];
@@ -892,7 +896,21 @@ bool configGetDouble(Config* config, const char* sectionKey, const char* key, do
         return false;
     }
 
-    *valuePtr = strtod(stringValue, nullptr);
+    char* end;
+    errno = 0;
+    double d = strtod(stringValue, &end);
+
+    // Reject if no conversion was performed (completely non-numeric input).
+    if (end == stringValue) {
+        return false;
+    }
+
+    // Reject on overflow/underflow.
+    if (errno == ERANGE) {
+        return false;
+    }
+
+    *valuePtr = d;
 
     return true;
 }

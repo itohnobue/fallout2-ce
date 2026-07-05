@@ -25,8 +25,8 @@ $ brew install cmake ninja
 ### 2. Configure and build
 
 ```console
-$ cmake --preset macos-debug
-$ cmake --build out/build/macos-debug --config Debug --target fallout2-ce
+$ cmake --preset macos
+$ cmake --build out/build/macos --config Debug --target fallout2-ce
 ```
 
 You should see:
@@ -35,13 +35,13 @@ You should see:
 ** BUILD SUCCEEDED **
 ```
 
-The build output is a universal binary (arm64 + x86_64) at `out/build/macos-debug/Debug/fallout2-ce.app`.
+The build output is at `out/build/macos/Debug/fallout2-ce.app`.
 
 For a release build:
 
 ```console
-$ cmake --preset macos-release
-$ cmake --build out/build/macos-release --config RelWithDebInfo --target fallout2-ce
+$ cmake --preset macos
+$ cmake --build out/build/macos --config RelWithDebInfo --target fallout2-ce
 ```
 
 Alternative manual configuration without presets:
@@ -111,8 +111,8 @@ For 32-bit x86 builds, use the `linux-x86-debug` or `linux-x86-release` presets 
 Use the CMake presets:
 
 ```console
-> cmake --preset windows-x64-debug
-> cmake --build out/build/windows-x64-debug --config Debug
+> cmake --preset windows-x64
+> cmake --build out/build/windows-x64 --config Debug
 ```
 
 Available presets:
@@ -122,8 +122,8 @@ Available presets:
 ### Option B: MinGW-w64 (cross-compile from Linux or macOS)
 
 ```console
-$ cmake --preset Mingw-x64-Debug
-$ cmake --build out/build/Mingw-x64-Debug
+$ cmake --preset Mingw-x64-debug
+$ cmake --build out/build/Mingw-x64-debug
 ```
 
 Available presets:
@@ -165,8 +165,8 @@ A demo of the WebAssembly build is available at: https://github.com/ololoken/fal
 ## iOS
 
 ```console
-$ cmake --preset ios-debug
-$ cmake --build out/build/ios-debug --config Debug
+$ cmake --preset ios
+$ cmake --build out/build/ios --config Debug
 ```
 
 Requires Xcode and a valid signing certificate for device deployment.
@@ -195,13 +195,15 @@ The project includes two additional build targets:
   $ cmake --build out/build/<preset-name> --target ce-frm2png
   ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed usage.
+See the "CLI Tools" section above for build instructions.
 
 ---
 
 ## Testing
 
-The project uses in-game `.ssl` script tests in `sfall_testing/`. These require the Fallout 2 game runtime and the sfall Modders Pack `compile.exe` to execute. There is no headless C++ test runner.
+The project uses in-game `.ssl` script tests in `sfall_testing/`. These require the Fallout 2 game runtime and the sfall Modders Pack `compile.exe` to execute.
+
+A CTest-based headless C++ test suite is also available. Run `ctest --test-dir out/build/<preset-name>` after configuration (e.g., `ctest --test-dir out/build/macos`). See `tests/CMakeLists.txt` for registered test targets.
 
 To run tests interactively: load the game with the `gl_*.ssl` scripts compiled into your mod scripts directory. Each test script logs results to the in-game console.
 

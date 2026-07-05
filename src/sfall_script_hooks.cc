@@ -96,9 +96,12 @@ void ScriptHookCall::call()
 {
     // programFatalError uses longjmp to abort script execution, which
     // skips _callStack.pop_back() and leaves stale entries permanently.
-    // When enough accumulate, clear the stack so hooks aren't disabled.
+    // When enough accumulate, drain the oldest entries (most likely stale).
+    // Do NOT clear all — that would destroy legitimate nested hook-call
+    // frames. Preserve the newest MAX_HOOK_CALL_DEPTH-1 entries.
     if (_callStack.size() >= MAX_HOOK_CALL_DEPTH) {
-        _callStack.clear();
+        size_t excess = _callStack.size() - MAX_HOOK_CALL_DEPTH + 1;
+        _callStack.erase(_callStack.begin(), _callStack.begin() + excess);
     }
 
     _callStack.push_back(this);
@@ -123,6 +126,24 @@ ProgramValue ScriptHookCall::getNextArgFromScript()
         return { 0 };
     }
     return _args[_scriptArgs++];
+}
+
+void scriptHooksUnregisterProgram(Program* program)
+{
+    if (program == nullptr) {
+        return;
+    }
+
+    for (int i = 0; i < HOOK_COUNT; i++) {
+        auto& hooks = scriptHooks[i];
+        for (auto it = hooks.begin(); it != hooks.end();) {
+            if (it->program == program) {
+                it = hooks.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
 }
 
 bool scriptHooksRegister(Program* program, const HookType hookType, const int procedureIndex)

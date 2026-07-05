@@ -2071,8 +2071,16 @@ static void opMetarule3(Program* program)
     case METARULE3_CAR_OUT_OF_FUEL:
         result.integerValue = wmCarIsOutOfGas() ? 1 : 0;
         break;
+    case METARULE3_SET_WM_MUSIC:
+        if (1) {
+            debugPrint("\nIntextra: metarule3: set_wm_music: not implemented");
+        }
+        break;
     case METARULE3_MAP_GET_LOAD_AREA:
         result.integerValue = mapGetLoadedAreaId();
+        break;
+    default:
+        debugPrint("\nIntextra: Error: metarule3: unknown rule %d", rule);
         break;
     }
 
@@ -3038,7 +3046,7 @@ static void opCritterGetInventoryObject(Program* program)
     int type = programStackPopInteger(program);
     Object* critter = static_cast<Object*>(programStackPopPointer(program));
 
-    if (PID_TYPE(critter->pid) == OBJ_TYPE_CRITTER) {
+    if (critter != nullptr && PID_TYPE(critter->pid) == OBJ_TYPE_CRITTER) {
         if (type == kInvenSlotInvCount) {
             programStackPushInteger(program, critter->data.inventory.length);
             return;
@@ -3075,9 +3083,12 @@ static void opCritterGetInventoryObject(Program* program)
             programStackPushInteger(program, 0);
             break;
         }
-    } else {
+    } else if (critter != nullptr) {
         scriptPredefinedError(program, "critter_inven_obj", SCRIPT_ERROR_FOLLOWS);
         debugPrint("  Not a critter!");
+        programStackPushInteger(program, 0);
+    } else {
+        scriptPredefinedError(program, "critter_inven_obj", SCRIPT_ERROR_OBJECT_IS_NULL);
         programStackPushInteger(program, 0);
     }
 }
@@ -3393,6 +3404,9 @@ static void opMetarule(Program* program)
                 result = proto->item.data.container.maxSize;
             }
         }
+        break;
+    default:
+        debugPrint("\nIntextra: Error: metarule: unknown rule %d", rule);
         break;
     }
 

@@ -1,5 +1,6 @@
 #include "platform_compat.h"
 
+#include <errno.h>
 #include <string.h>
 
 #ifdef _WIN32
@@ -245,7 +246,9 @@ int compat_mkdir_recursive(const char* path)
             char saved = *sep;
             *sep = '\0';
             if (compat_mkdir(pathCopy) < 0) {
-                break;
+                if (errno != EEXIST) {
+                    break;
+                }
             }
             *sep = saved;
         }

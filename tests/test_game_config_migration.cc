@@ -5,9 +5,14 @@
 //   2. F2Res migration table entries — all 10 entries verified
 //   3. Sfall migration table entries — all 52 entries verified
 //
-// The two migration tables live in anonymous namespaces, so we mirror the
-// entry structs here and verify the complete table contents. This catches
+// The two migration tables live in anonymous namespaces inside
+// game_config_migration.cc, making them inaccessible to external code.
+// This file mirrors the table entries as regression-test oracles to catch
 // accidental removal, reordering, or mis-mapping of entries.
+//
+// Real source references (mirrored below):
+//   kF2ResMigrationEntries:  src/game_config_migration.cc:33-44  (anonymous namespace)
+//   kSfallMigrationEntries: src/game_config_migration.cc:175-239 (anonymous namespace)
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest.h"
@@ -39,9 +44,9 @@ struct SfallMigrationEntry {
     const char* defaultValue;
 };
 
-// ---- F2Res migration table (mirror of kF2ResMigrationEntries) ----
+// ---- F2Res migration table mirror (test oracle for src/game_config_migration.cc:33-44) ----
 
-static constexpr F2ResMigrationEntry kExpectedF2ResEntries[] = {
+static constexpr F2ResMigrationEntry kTestMirrorF2ResEntries[] = {
     // [MAIN]
     { "MAIN", "SCR_WIDTH",    GAME_CONFIG_SCREEN_KEY, GAME_CONFIG_RESOLUTION_X_KEY },
     { "MAIN", "SCR_HEIGHT",   GAME_CONFIG_SCREEN_KEY, GAME_CONFIG_RESOLUTION_Y_KEY },
@@ -58,10 +63,12 @@ static constexpr F2ResMigrationEntry kExpectedF2ResEntries[] = {
     // [MOVIES]
     { "MOVIES", "MOVIE_SIZE", GAME_CONFIG_UI_KEY, GAME_CONFIG_MOVIE_ASPECT_FIT_KEY },
 };
+static_assert(sizeof(kTestMirrorF2ResEntries) / sizeof(kTestMirrorF2ResEntries[0]) == 10,
+    "F2Res migration mirror must have exactly 10 entries (matches src/game_config_migration.cc:33-44)");
 
-// ---- Sfall migration table (mirror of kSfallMigrationEntries) ----
+// ---- Sfall migration table mirror (test oracle for src/game_config_migration.cc:175-239) ----
 
-static constexpr SfallMigrationEntry kExpectedSfallEntries[] = {
+static constexpr SfallMigrationEntry kTestMirrorSfallEntries[] = {
     // [start]
     { "Misc", "StartingMap",                  CONTENT_CONFIG_START_SECTION, "map",                    "" },
     { "Misc", "MaleStartModel",               CONTENT_CONFIG_START_SECTION, "model_male",            "hmwarr" },
@@ -118,7 +125,7 @@ static constexpr SfallMigrationEntry kExpectedSfallEntries[] = {
     { "Misc",      "DisableHorrigan",       CONTENT_CONFIG_WORLDMAP_SECTION, "disable_horrigan",       "0" },
     { "Misc",      "CityRepsList",          CONTENT_CONFIG_WORLDMAP_SECTION, "city_reputation_list",   nullptr },
     { "Interface", "WorldMapTravelMarkers", CONTENT_CONFIG_WORLDMAP_SECTION, "trail_markers",          "0" },
-    { "Misc",      "WorldMapSlots",          CONTENT_CONFIG_WORLDMAP_SECTION, "encounter_slots",       "0" },
+    // WorldMapSlots migration intentionally removed from source — see src/game_config_migration.cc
     { "Misc",      "BoostScriptDialogLimit", CONTENT_CONFIG_DIALOG_SECTION, "boost_dialog_limit",    "0" },
     // [characters]
     { "Misc", "PremadePaths", CONTENT_CONFIG_CHARACTERS_SECTION, "premade_paths", nullptr },
@@ -126,6 +133,8 @@ static constexpr SfallMigrationEntry kExpectedSfallEntries[] = {
     // [text]
     { "Misc", "ExtraGameMsgFileList", CONTENT_CONFIG_TEXT_SECTION, "extra_msg_file_list", nullptr },
 };
+static_assert(sizeof(kTestMirrorSfallEntries) / sizeof(kTestMirrorSfallEntries[0]) == 51,
+    "Sfall migration mirror must have exactly 51 entries (matches src/game_config_migration.cc:175-241)");
 
 // ---- Tests ----
 
@@ -183,13 +192,13 @@ TEST_CASE("gameConfigMigrateFromF2Res no legacy file present")
 TEST_CASE("F2Res migration table entry count")
 {
     // The source file has exactly 10 entries in kF2ResMigrationEntries.
-    constexpr int expectedCount = sizeof(kExpectedF2ResEntries) / sizeof(kExpectedF2ResEntries[0]);
+    constexpr int expectedCount = sizeof(kTestMirrorF2ResEntries) / sizeof(kTestMirrorF2ResEntries[0]);
     CHECK(expectedCount == 10);
 }
 
 TEST_CASE("F2Res migration table — all entries have non-null keys")
 {
-    for (const auto& entry : kExpectedF2ResEntries) {
+    for (const auto& entry : kTestMirrorF2ResEntries) {
         INFO("Entry: ", entry.legacySection, " / ", entry.legacyKey);
         CHECK(entry.legacySection != nullptr);
         CHECK(entry.legacyKey != nullptr);
@@ -203,33 +212,33 @@ TEST_CASE("F2Res migration table — verify expected key mappings")
     // Spot-check several entries to ensure the mirrored table matches expectations.
 
     // [MAIN] SCR_WIDTH -> screen.resolution_x
-    CHECK(strcmp(kExpectedF2ResEntries[0].legacySection, "MAIN") == 0);
-    CHECK(strcmp(kExpectedF2ResEntries[0].legacyKey, "SCR_WIDTH") == 0);
-    CHECK(strcmp(kExpectedF2ResEntries[0].targetSection, GAME_CONFIG_SCREEN_KEY) == 0);
-    CHECK(strcmp(kExpectedF2ResEntries[0].targetKey, GAME_CONFIG_RESOLUTION_X_KEY) == 0);
+    CHECK(strcmp(kTestMirrorF2ResEntries[0].legacySection, "MAIN") == 0);
+    CHECK(strcmp(kTestMirrorF2ResEntries[0].legacyKey, "SCR_WIDTH") == 0);
+    CHECK(strcmp(kTestMirrorF2ResEntries[0].targetSection, GAME_CONFIG_SCREEN_KEY) == 0);
+    CHECK(strcmp(kTestMirrorF2ResEntries[0].targetKey, GAME_CONFIG_RESOLUTION_X_KEY) == 0);
 
     // [MAIN] WINDOWED -> screen.windowed
-    CHECK(strcmp(kExpectedF2ResEntries[2].legacyKey, "WINDOWED") == 0);
-    CHECK(strcmp(kExpectedF2ResEntries[2].targetKey, GAME_CONFIG_WINDOWED_KEY) == 0);
+    CHECK(strcmp(kTestMirrorF2ResEntries[2].legacyKey, "WINDOWED") == 0);
+    CHECK(strcmp(kTestMirrorF2ResEntries[2].targetKey, GAME_CONFIG_WINDOWED_KEY) == 0);
 
     // [IFACE] IFACE_BAR_MODE -> ui.iface_bar_mode
-    CHECK(strcmp(kExpectedF2ResEntries[3].legacySection, "IFACE") == 0);
-    CHECK(strcmp(kExpectedF2ResEntries[3].targetSection, GAME_CONFIG_UI_KEY) == 0);
+    CHECK(strcmp(kTestMirrorF2ResEntries[3].legacySection, "IFACE") == 0);
+    CHECK(strcmp(kTestMirrorF2ResEntries[3].targetSection, GAME_CONFIG_UI_KEY) == 0);
 
     // [MOVIES] MOVIE_SIZE -> ui.movie_aspect_fit
-    CHECK(strcmp(kExpectedF2ResEntries[9].legacySection, "MOVIES") == 0);
-    CHECK(strcmp(kExpectedF2ResEntries[9].targetKey, GAME_CONFIG_MOVIE_ASPECT_FIT_KEY) == 0);
+    CHECK(strcmp(kTestMirrorF2ResEntries[9].legacySection, "MOVIES") == 0);
+    CHECK(strcmp(kTestMirrorF2ResEntries[9].targetKey, GAME_CONFIG_MOVIE_ASPECT_FIT_KEY) == 0);
 }
 
 TEST_CASE("Sfall migration table entry count")
 {
-    constexpr int expectedCount = sizeof(kExpectedSfallEntries) / sizeof(kExpectedSfallEntries[0]);
-    CHECK(expectedCount == 52);
+    constexpr int expectedCount = sizeof(kTestMirrorSfallEntries) / sizeof(kTestMirrorSfallEntries[0]);
+    CHECK(expectedCount == 51);
 }
 
 TEST_CASE("Sfall migration table — all entries have non-null section/key/target")
 {
-    for (const auto& entry : kExpectedSfallEntries) {
+    for (const auto& entry : kTestMirrorSfallEntries) {
         INFO("Entry: ", entry.sfallSection, " / ", entry.sfallKey);
         CHECK(entry.sfallSection != nullptr);
         CHECK(entry.sfallKey != nullptr);
@@ -244,41 +253,41 @@ TEST_CASE("Sfall migration table — verify expected key mappings")
     // Spot-check representative entries from each section group.
 
     // [start] StartingMap -> start.map
-    CHECK(strcmp(kExpectedSfallEntries[0].sfallKey, "StartingMap") == 0);
-    CHECK(strcmp(kExpectedSfallEntries[0].targetSection, CONTENT_CONFIG_START_SECTION) == 0);
-    CHECK(strcmp(kExpectedSfallEntries[0].targetKey, "map") == 0);
+    CHECK(strcmp(kTestMirrorSfallEntries[0].sfallKey, "StartingMap") == 0);
+    CHECK(strcmp(kTestMirrorSfallEntries[0].targetSection, CONTENT_CONFIG_START_SECTION) == 0);
+    CHECK(strcmp(kTestMirrorSfallEntries[0].targetKey, "map") == 0);
 
     // [dialog] DialogueFix -> dialog.no_exit_hotkey
-    CHECK(strcmp(kExpectedSfallEntries[8].sfallKey, "DialogueFix") == 0);
-    CHECK(strcmp(kExpectedSfallEntries[8].targetSection, CONTENT_CONFIG_DIALOG_SECTION) == 0);
-    CHECK(strcmp(kExpectedSfallEntries[8].targetKey, "no_exit_hotkey") == 0);
+    CHECK(strcmp(kTestMirrorSfallEntries[8].sfallKey, "DialogueFix") == 0);
+    CHECK(strcmp(kTestMirrorSfallEntries[8].targetSection, CONTENT_CONFIG_DIALOG_SECTION) == 0);
+    CHECK(strcmp(kTestMirrorSfallEntries[8].targetKey, "no_exit_hotkey") == 0);
 
     // [combat] DamageFormula -> combat.damage_formula
-    CHECK(strcmp(kExpectedSfallEntries[21].sfallKey, "DamageFormula") == 0);
-    CHECK(strcmp(kExpectedSfallEntries[21].targetSection, CONTENT_CONFIG_COMBAT_SECTION) == 0);
-    CHECK(strcmp(kExpectedSfallEntries[21].targetKey, "damage_formula") == 0);
+    CHECK(strcmp(kTestMirrorSfallEntries[21].sfallKey, "DamageFormula") == 0);
+    CHECK(strcmp(kTestMirrorSfallEntries[21].targetSection, CONTENT_CONFIG_COMBAT_SECTION) == 0);
+    CHECK(strcmp(kTestMirrorSfallEntries[21].targetKey, "damage_formula") == 0);
 
     // [explosions] Dynamite_DmgMax -> explosions.dynamite_max
-    CHECK(strcmp(kExpectedSfallEntries[32].sfallKey, "Dynamite_DmgMax") == 0);
-    CHECK(strcmp(kExpectedSfallEntries[32].targetSection, CONTENT_CONFIG_EXPLOSIONS_SECTION) == 0);
+    CHECK(strcmp(kTestMirrorSfallEntries[32].sfallKey, "Dynamite_DmgMax") == 0);
+    CHECK(strcmp(kTestMirrorSfallEntries[32].targetSection, CONTENT_CONFIG_EXPLOSIONS_SECTION) == 0);
 
     // [skilldex] Lockpick -> skilldex.lockpick
-    CHECK(strcmp(kExpectedSfallEntries[36].sfallKey, "Lockpick") == 0);
-    CHECK(strcmp(kExpectedSfallEntries[36].targetSection, CONTENT_CONFIG_SKILLDEX_SECTION) == 0);
-    CHECK(strcmp(kExpectedSfallEntries[36].targetKey, "lockpick") == 0);
+    CHECK(strcmp(kTestMirrorSfallEntries[36].sfallKey, "Lockpick") == 0);
+    CHECK(strcmp(kTestMirrorSfallEntries[36].targetSection, CONTENT_CONFIG_SKILLDEX_SECTION) == 0);
+    CHECK(strcmp(kTestMirrorSfallEntries[36].targetKey, "lockpick") == 0);
 
     // [worldmap] TownMapHotkeysFix -> worldmap.town_map_hotkeys_fix
-    CHECK(strcmp(kExpectedSfallEntries[43].sfallKey, "TownMapHotkeysFix") == 0);
-    CHECK(strcmp(kExpectedSfallEntries[43].targetSection, CONTENT_CONFIG_WORLDMAP_SECTION) == 0);
-    CHECK(strcmp(kExpectedSfallEntries[43].targetKey, "town_map_hotkeys_fix") == 0);
+    CHECK(strcmp(kTestMirrorSfallEntries[43].sfallKey, "TownMapHotkeysFix") == 0);
+    CHECK(strcmp(kTestMirrorSfallEntries[43].targetSection, CONTENT_CONFIG_WORLDMAP_SECTION) == 0);
+    CHECK(strcmp(kTestMirrorSfallEntries[43].targetKey, "town_map_hotkeys_fix") == 0);
 
     // [Interface] WorldMapTravelMarkers -> worldmap.trail_markers
-    CHECK(strcmp(kExpectedSfallEntries[46].sfallSection, "Interface") == 0);
-    CHECK(strcmp(kExpectedSfallEntries[46].sfallKey, "WorldMapTravelMarkers") == 0);
+    CHECK(strcmp(kTestMirrorSfallEntries[46].sfallSection, "Interface") == 0);
+    CHECK(strcmp(kTestMirrorSfallEntries[46].sfallKey, "WorldMapTravelMarkers") == 0);
 
     // [text] ExtraGameMsgFileList -> text.extra_msg_file_list
-    CHECK(strcmp(kExpectedSfallEntries[51].sfallKey, "ExtraGameMsgFileList") == 0);
-    CHECK(strcmp(kExpectedSfallEntries[51].targetSection, CONTENT_CONFIG_TEXT_SECTION) == 0);
+    CHECK(strcmp(kTestMirrorSfallEntries[50].sfallKey, "ExtraGameMsgFileList") == 0);
+    CHECK(strcmp(kTestMirrorSfallEntries[50].targetSection, CONTENT_CONFIG_TEXT_SECTION) == 0);
 }
 
 TEST_CASE("Sfall migration table — defaultValue consistency")
@@ -287,23 +296,23 @@ TEST_CASE("Sfall migration table — defaultValue consistency")
     // matches the key's purpose. Verify a few known defaults.
 
     // MaleStartModel default = "hmwarr" (tribal male)
-    CHECK(kExpectedSfallEntries[1].defaultValue != nullptr);
-    CHECK(strcmp(kExpectedSfallEntries[1].defaultValue, "hmwarr") == 0);
+    CHECK(kTestMirrorSfallEntries[1].defaultValue != nullptr);
+    CHECK(strcmp(kTestMirrorSfallEntries[1].defaultValue, "hmwarr") == 0);
 
     // PipBoyAvailableAtGameStart default = "0" (pipboy NOT available)
-    CHECK(kExpectedSfallEntries[5].defaultValue != nullptr);
-    CHECK(strcmp(kExpectedSfallEntries[5].defaultValue, "0") == 0);
+    CHECK(kTestMirrorSfallEntries[5].defaultValue != nullptr);
+    CHECK(strcmp(kTestMirrorSfallEntries[5].defaultValue, "0") == 0);
 
     // Combat-related: DamageFormula default = "0" (original formula)
-    CHECK(kExpectedSfallEntries[21].defaultValue != nullptr);
-    CHECK(strcmp(kExpectedSfallEntries[21].defaultValue, "0") == 0);
+    CHECK(kTestMirrorSfallEntries[21].defaultValue != nullptr);
+    CHECK(strcmp(kTestMirrorSfallEntries[21].defaultValue, "0") == 0);
 
     // CheckWeaponAmmoCost default = nullptr (always migrate)
-    CHECK(kExpectedSfallEntries[25].defaultValue == nullptr);
+    CHECK(kTestMirrorSfallEntries[25].defaultValue == nullptr);
 
     // WorldMapTravelMarkers default = "0" (no markers)
-    CHECK(kExpectedSfallEntries[46].defaultValue != nullptr);
-    CHECK(strcmp(kExpectedSfallEntries[46].defaultValue, "0") == 0);
+    CHECK(kTestMirrorSfallEntries[46].defaultValue != nullptr);
+    CHECK(strcmp(kTestMirrorSfallEntries[46].defaultValue, "0") == 0);
 }
 
 TEST_CASE("Sfall migration table — sections use CONTENT_CONFIG_* constants")
@@ -311,7 +320,7 @@ TEST_CASE("Sfall migration table — sections use CONTENT_CONFIG_* constants")
     // All entries should target sections defined by CONTENT_CONFIG_* constants
     // to ensure section names stay consistent across the codebase.
 
-    for (const auto& entry : kExpectedSfallEntries) {
+    for (const auto& entry : kTestMirrorSfallEntries) {
         INFO("Entry: ", entry.sfallKey, " -> ", entry.targetSection);
 
         // Each target section should match one of the CONTENT_CONFIG_* defines
@@ -334,7 +343,7 @@ TEST_CASE("Sfall migration table — sections use CONTENT_CONFIG_* constants")
 
 TEST_CASE("F2Res migration table — sections use GAME_CONFIG_* constants")
 {
-    for (const auto& entry : kExpectedF2ResEntries) {
+    for (const auto& entry : kTestMirrorF2ResEntries) {
         INFO("Entry: ", entry.legacySection, " / ", entry.legacyKey, " -> ", entry.targetSection);
 
         // All F2Res entries target GAME_CONFIG_SCREEN_KEY or GAME_CONFIG_UI_KEY.
@@ -351,14 +360,14 @@ TEST_CASE("No duplicate sfall keys across migration tables")
     // Each sfallKey should appear at most once in the migration table.
     // (We test this by scanning the entire mirrored array for duplicates.)
 
-    for (int i = 0; i < 52; i++) {
-        for (int j = i + 1; j < 52; j++) {
-            INFO("Duplicate key: ", kExpectedSfallEntries[i].sfallKey);
+    for (int i = 0; i < 51; i++) {
+        for (int j = i + 1; j < 51; j++) {
+            INFO("Duplicate key: ", kTestMirrorSfallEntries[i].sfallKey);
             // sfallKey + sfallSection combination should be unique
-            bool sameKey = strcmp(kExpectedSfallEntries[i].sfallKey,
-                                  kExpectedSfallEntries[j].sfallKey) == 0;
-            bool sameSection = strcmp(kExpectedSfallEntries[i].sfallSection,
-                                      kExpectedSfallEntries[j].sfallSection) == 0;
+            bool sameKey = strcmp(kTestMirrorSfallEntries[i].sfallKey,
+                                  kTestMirrorSfallEntries[j].sfallKey) == 0;
+            bool sameSection = strcmp(kTestMirrorSfallEntries[i].sfallSection,
+                                      kTestMirrorSfallEntries[j].sfallSection) == 0;
             bool duplicate = sameKey && sameSection;
             CHECK_FALSE(duplicate);
         }

@@ -1,51 +1,61 @@
-// Unit tests for the critical hit table data structure and accessor semantics.
+// Unit tests for the critical hit table data structure semantics.
 //
-// The criticalsGetValue/criticalsSetValue/criticalsResetValue functions in
-// combat.cc operate on static arrays. This test validates the CriticalHitDescription
-// union layout and the table indexing patterns, verifying the set/get/reset contract.
+// Validates the CriticalHitDescription union layout (member aliasing via
+// values[]), table dimension constants, and the set/get/reset data flow
+// through multi-dimensional arrays.
 //
-// NOTE: This does NOT link combat.cc (which has 40+ engine dependencies).
-// It validates the data structure semantics against the types defined in combat_defs.h.
+// The production accessor functions live in combat.h:62-64 and combat.cc:6368-6393.
+// This test does NOT link combat.cc (which has 40+ engine dependencies) — it uses
+// local test stubs that mirror the same data structure patterns to validate
+// indexing and aliasing correctness.
+//
+// All type names use a "Test" prefix to avoid collision with the real types in
+// combat_defs.h and proto_types.h. Once CMakeLists.txt adds the src/ include path
+// for test_criticals, the Test* types can be replaced with #include "combat_defs.h"
+// and the real CriticalHitDescriptionDataMember enum / CriticalHitDescription union.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest.h"
 
 #include <cstring>
 
-// Include only the type definitions needed (no linking against combat.cc).
-// These mirror the declarations in combat_defs.h and proto_types.h.
+// Test-local type definitions mirroring combat_defs.h and proto_types.h.
+// Prefixed with "Test" to avoid symbol collision with the real headers.
+// See src/combat_defs.h:75-87 for HitLocation, src/combat_defs.h:126-161 for
+// CriticalHitDescriptionDataMember / CriticalHitDescription, and
+// src/proto_types.h:104-130 for KILL_TYPE_COUNT / SFALL_KILL_TYPE_COUNT.
 namespace fallout {
 
 enum {
-    HIT_LOCATION_HEAD = 0,
-    HIT_LOCATION_LEFT_ARM,
-    HIT_LOCATION_RIGHT_ARM,
-    HIT_LOCATION_TORSO,
-    HIT_LOCATION_RIGHT_LEG,
-    HIT_LOCATION_LEFT_LEG,
-    HIT_LOCATION_EYES,
-    HIT_LOCATION_GROIN,
-    HIT_LOCATION_UNCALLED,
-    HIT_LOCATION_COUNT,
+    TEST_HIT_LOCATION_HEAD = 0,
+    TEST_HIT_LOCATION_LEFT_ARM,
+    TEST_HIT_LOCATION_RIGHT_ARM,
+    TEST_HIT_LOCATION_TORSO,
+    TEST_HIT_LOCATION_RIGHT_LEG,
+    TEST_HIT_LOCATION_LEFT_LEG,
+    TEST_HIT_LOCATION_EYES,
+    TEST_HIT_LOCATION_GROIN,
+    TEST_HIT_LOCATION_UNCALLED,
+    TEST_HIT_LOCATION_COUNT,
 };
 
 enum {
-    CRIT_DATA_MEMBER_DAMAGE_MULTIPLIER = 0,
-    CRIT_DATA_MEMBER_FLAGS,
-    CRIT_DATA_MEMBER_MASSIVE_CRITICAL_STAT,
-    CRIT_DATA_MEMBER_MASSIVE_CRITICAL_STAT_MODIFIER,
-    CRIT_DATA_MEMBER_MASSIVE_CRITICAL_FLAGS,
-    CRIT_DATA_MEMBER_MESSAGE_ID,
-    CRIT_DATA_MEMBER_MASSIVE_CRITICAL_MESSAGE_ID,
-    CRIT_DATA_MEMBER_COUNT,
+    TEST_CRIT_DATA_MEMBER_DAMAGE_MULTIPLIER = 0,
+    TEST_CRIT_DATA_MEMBER_FLAGS,
+    TEST_CRIT_DATA_MEMBER_MASSIVE_CRITICAL_STAT,
+    TEST_CRIT_DATA_MEMBER_MASSIVE_CRITICAL_STAT_MODIFIER,
+    TEST_CRIT_DATA_MEMBER_MASSIVE_CRITICAL_FLAGS,
+    TEST_CRIT_DATA_MEMBER_MESSAGE_ID,
+    TEST_CRIT_DATA_MEMBER_MASSIVE_CRITICAL_MESSAGE_ID,
+    TEST_CRIT_DATA_MEMBER_COUNT,
 };
 
-constexpr int CRTICIAL_EFFECT_COUNT = 6;
-constexpr int KILL_TYPE_COUNT = 19;
-constexpr int SFALL_KILL_TYPE_COUNT = KILL_TYPE_COUNT * 2;
+constexpr int TEST_CRTICIAL_EFFECT_COUNT = 6;
+constexpr int TEST_KILL_TYPE_COUNT = 19;
+constexpr int TEST_SFALL_KILL_TYPE_COUNT = TEST_KILL_TYPE_COUNT * 2;
 
-// Mirrors combat_defs.h CriticalHitDescription
-typedef union CriticalHitDescription {
+// Test mirror of combat_defs.h:138-161 CriticalHitDescription union.
+typedef union TestCriticalHitDescription {
     struct {
         int damageMultiplier;
         int flags;
@@ -55,73 +65,77 @@ typedef union CriticalHitDescription {
         int messageId;
         int massiveCriticalMessageId;
     };
-    int values[CRIT_DATA_MEMBER_COUNT];
-} CriticalHitDescription;
+    int values[TEST_CRIT_DATA_MEMBER_COUNT];
+} TestCriticalHitDescription;
 
 } // namespace fallout
 
 using namespace fallout;
 
-// Simulated critical tables (mirrors the static arrays in combat.cc).
-static CriticalHitDescription gCriticalHitTables[SFALL_KILL_TYPE_COUNT][HIT_LOCATION_COUNT][CRTICIAL_EFFECT_COUNT];
-static CriticalHitDescription gPlayerCriticalHitTable[HIT_LOCATION_COUNT][CRTICIAL_EFFECT_COUNT];
-static CriticalHitDescription gBaseCriticalHitTables[SFALL_KILL_TYPE_COUNT][HIT_LOCATION_COUNT][CRTICIAL_EFFECT_COUNT];
-static CriticalHitDescription gBasePlayerCriticalHitTable[HIT_LOCATION_COUNT][CRTICIAL_EFFECT_COUNT];
+// Simulated critical tables (mirrors the static arrays in combat.cc:197-1976).
+static TestCriticalHitDescription gCriticalHitTables[TEST_SFALL_KILL_TYPE_COUNT][TEST_HIT_LOCATION_COUNT][TEST_CRTICIAL_EFFECT_COUNT];
+static TestCriticalHitDescription gPlayerCriticalHitTable[TEST_HIT_LOCATION_COUNT][TEST_CRTICIAL_EFFECT_COUNT];
+static TestCriticalHitDescription gBaseCriticalHitTables[TEST_SFALL_KILL_TYPE_COUNT][TEST_HIT_LOCATION_COUNT][TEST_CRTICIAL_EFFECT_COUNT];
+static TestCriticalHitDescription gBasePlayerCriticalHitTable[TEST_HIT_LOCATION_COUNT][TEST_CRTICIAL_EFFECT_COUNT];
 
-// Exact copies of the accessor functions from combat.cc lines 6343-6368.
-static int criticalsGetValue(int killType, int hitLocation, int effect, int dataMember)
+// Test stubs mirroring the production accessor functions declared in combat.h:62-64
+// and implemented in combat.cc:6368-6393. These stubs operate on the local test
+// tables above and follow the same indexing patterns as the real implementation:
+//   - killType == SFALL_KILL_TYPE_COUNT selects the player table
+//   - otherwise selects gCriticalHitTables[killType]
+static int testCriticalsGetValue(int killType, int hitLocation, int effect, int dataMember)
 {
-    if (killType == SFALL_KILL_TYPE_COUNT) {
+    if (killType == TEST_SFALL_KILL_TYPE_COUNT) {
         return gPlayerCriticalHitTable[hitLocation][effect].values[dataMember];
     } else {
         return gCriticalHitTables[killType][hitLocation][effect].values[dataMember];
     }
 }
 
-static void criticalsSetValue(int killType, int hitLocation, int effect, int dataMember, int value)
+static void testCriticalsSetValue(int killType, int hitLocation, int effect, int dataMember, int value)
 {
-    if (killType == SFALL_KILL_TYPE_COUNT) {
+    if (killType == TEST_SFALL_KILL_TYPE_COUNT) {
         gPlayerCriticalHitTable[hitLocation][effect].values[dataMember] = value;
     } else {
         gCriticalHitTables[killType][hitLocation][effect].values[dataMember] = value;
     }
 }
 
-static void criticalsResetValue(int killType, int hitLocation, int effect, int dataMember)
+static void testCriticalsResetValue(int killType, int hitLocation, int effect, int dataMember)
 {
-    if (killType == SFALL_KILL_TYPE_COUNT) {
+    if (killType == TEST_SFALL_KILL_TYPE_COUNT) {
         gPlayerCriticalHitTable[hitLocation][effect].values[dataMember] = gBasePlayerCriticalHitTable[hitLocation][effect].values[dataMember];
     } else {
         gCriticalHitTables[killType][hitLocation][effect].values[dataMember] = gBaseCriticalHitTables[killType][hitLocation][effect].values[dataMember];
     }
 }
 
-TEST_CASE("CriticalHitDescription union layout")
+TEST_CASE("TestCriticalHitDescription union layout")
 {
     // Verify that the union's values[] and named members alias correctly.
-    CriticalHitDescription desc;
+    TestCriticalHitDescription desc;
     memset(&desc, 0, sizeof(desc));
 
     desc.damageMultiplier = 2;
-    CHECK(desc.values[CRIT_DATA_MEMBER_DAMAGE_MULTIPLIER] == 2);
+    CHECK(desc.values[TEST_CRIT_DATA_MEMBER_DAMAGE_MULTIPLIER] == 2);
 
-    desc.values[CRIT_DATA_MEMBER_FLAGS] = 0x1234;
+    desc.values[TEST_CRIT_DATA_MEMBER_FLAGS] = 0x1234;
     CHECK(desc.flags == 0x1234);
 
     desc.messageId = 5001;
-    CHECK(desc.values[CRIT_DATA_MEMBER_MESSAGE_ID] == 5001);
+    CHECK(desc.values[TEST_CRIT_DATA_MEMBER_MESSAGE_ID] == 5001);
 
     desc.massiveCriticalStat = -1;
-    CHECK(desc.values[CRIT_DATA_MEMBER_MASSIVE_CRITICAL_STAT] == -1);
+    CHECK(desc.values[TEST_CRIT_DATA_MEMBER_MASSIVE_CRITICAL_STAT] == -1);
 
     desc.massiveCriticalFlags = 0xABCD;
-    CHECK(desc.values[CRIT_DATA_MEMBER_MASSIVE_CRITICAL_FLAGS] == 0xABCD);
+    CHECK(desc.values[TEST_CRIT_DATA_MEMBER_MASSIVE_CRITICAL_FLAGS] == 0xABCD);
 
     desc.massiveCriticalMessageId = 9999;
-    CHECK(desc.values[CRIT_DATA_MEMBER_MASSIVE_CRITICAL_MESSAGE_ID] == 9999);
+    CHECK(desc.values[TEST_CRIT_DATA_MEMBER_MASSIVE_CRITICAL_MESSAGE_ID] == 9999);
 }
 
-TEST_CASE("criticalsSetValue / criticalsGetValue")
+TEST_CASE("testCriticalsSetValue / testCriticalsGetValue — data flow through tables")
 {
     // Zero-initialize tables
     memset(gCriticalHitTables, 0, sizeof(gCriticalHitTables));
@@ -129,83 +143,83 @@ TEST_CASE("criticalsSetValue / criticalsGetValue")
 
     SUBCASE("set and get for normal kill type")
     {
-        criticalsSetValue(KILL_TYPE_COUNT - 1, HIT_LOCATION_HEAD, 2,
-            CRIT_DATA_MEMBER_DAMAGE_MULTIPLIER, 4);
-        CHECK(criticalsGetValue(KILL_TYPE_COUNT - 1, HIT_LOCATION_HEAD, 2,
-            CRIT_DATA_MEMBER_DAMAGE_MULTIPLIER) == 4);
+        testCriticalsSetValue(TEST_KILL_TYPE_COUNT - 1, TEST_HIT_LOCATION_HEAD, 2,
+            TEST_CRIT_DATA_MEMBER_DAMAGE_MULTIPLIER, 4);
+        CHECK(testCriticalsGetValue(TEST_KILL_TYPE_COUNT - 1, TEST_HIT_LOCATION_HEAD, 2,
+            TEST_CRIT_DATA_MEMBER_DAMAGE_MULTIPLIER) == 4);
     }
 
-    SUBCASE("set and get for player kill type (SFALL_KILL_TYPE_COUNT)")
+    SUBCASE("set and get for player kill type (TEST_SFALL_KILL_TYPE_COUNT)")
     {
-        criticalsSetValue(SFALL_KILL_TYPE_COUNT, HIT_LOCATION_TORSO, 3,
-            CRIT_DATA_MEMBER_FLAGS, 0xDEAD);
-        CHECK(criticalsGetValue(SFALL_KILL_TYPE_COUNT, HIT_LOCATION_TORSO, 3,
-            CRIT_DATA_MEMBER_FLAGS) == 0xDEAD);
+        testCriticalsSetValue(TEST_SFALL_KILL_TYPE_COUNT, TEST_HIT_LOCATION_TORSO, 3,
+            TEST_CRIT_DATA_MEMBER_FLAGS, 0xDEAD);
+        CHECK(testCriticalsGetValue(TEST_SFALL_KILL_TYPE_COUNT, TEST_HIT_LOCATION_TORSO, 3,
+            TEST_CRIT_DATA_MEMBER_FLAGS) == 0xDEAD);
     }
 
     SUBCASE("set multiple data members on same entry")
     {
-        criticalsSetValue(0, HIT_LOCATION_UNCALLED, 2,
-            CRIT_DATA_MEMBER_FLAGS, 0x01);
-        criticalsSetValue(0, HIT_LOCATION_UNCALLED, 2,
-            CRIT_DATA_MEMBER_MESSAGE_ID, 5019);
-        criticalsSetValue(0, HIT_LOCATION_UNCALLED, 2,
-            CRIT_DATA_MEMBER_DAMAGE_MULTIPLIER, 3);
+        testCriticalsSetValue(0, TEST_HIT_LOCATION_UNCALLED, 2,
+            TEST_CRIT_DATA_MEMBER_FLAGS, 0x01);
+        testCriticalsSetValue(0, TEST_HIT_LOCATION_UNCALLED, 2,
+            TEST_CRIT_DATA_MEMBER_MESSAGE_ID, 5019);
+        testCriticalsSetValue(0, TEST_HIT_LOCATION_UNCALLED, 2,
+            TEST_CRIT_DATA_MEMBER_DAMAGE_MULTIPLIER, 3);
 
-        CHECK(criticalsGetValue(0, HIT_LOCATION_UNCALLED, 2,
-            CRIT_DATA_MEMBER_FLAGS) == 0x01);
-        CHECK(criticalsGetValue(0, HIT_LOCATION_UNCALLED, 2,
-            CRIT_DATA_MEMBER_MESSAGE_ID) == 5019);
-        CHECK(criticalsGetValue(0, HIT_LOCATION_UNCALLED, 2,
-            CRIT_DATA_MEMBER_DAMAGE_MULTIPLIER) == 3);
+        CHECK(testCriticalsGetValue(0, TEST_HIT_LOCATION_UNCALLED, 2,
+            TEST_CRIT_DATA_MEMBER_FLAGS) == 0x01);
+        CHECK(testCriticalsGetValue(0, TEST_HIT_LOCATION_UNCALLED, 2,
+            TEST_CRIT_DATA_MEMBER_MESSAGE_ID) == 5019);
+        CHECK(testCriticalsGetValue(0, TEST_HIT_LOCATION_UNCALLED, 2,
+            TEST_CRIT_DATA_MEMBER_DAMAGE_MULTIPLIER) == 3);
     }
 
     SUBCASE("independent entries do not interfere")
     {
-        criticalsSetValue(0, HIT_LOCATION_HEAD, 0,
-            CRIT_DATA_MEMBER_MESSAGE_ID, 100);
-        criticalsSetValue(0, HIT_LOCATION_HEAD, 1,
-            CRIT_DATA_MEMBER_MESSAGE_ID, 200);
-        criticalsSetValue(1, HIT_LOCATION_HEAD, 0,
-            CRIT_DATA_MEMBER_MESSAGE_ID, 300);
+        testCriticalsSetValue(0, TEST_HIT_LOCATION_HEAD, 0,
+            TEST_CRIT_DATA_MEMBER_MESSAGE_ID, 100);
+        testCriticalsSetValue(0, TEST_HIT_LOCATION_HEAD, 1,
+            TEST_CRIT_DATA_MEMBER_MESSAGE_ID, 200);
+        testCriticalsSetValue(1, TEST_HIT_LOCATION_HEAD, 0,
+            TEST_CRIT_DATA_MEMBER_MESSAGE_ID, 300);
 
-        CHECK(criticalsGetValue(0, HIT_LOCATION_HEAD, 0,
-            CRIT_DATA_MEMBER_MESSAGE_ID) == 100);
-        CHECK(criticalsGetValue(0, HIT_LOCATION_HEAD, 1,
-            CRIT_DATA_MEMBER_MESSAGE_ID) == 200);
-        CHECK(criticalsGetValue(1, HIT_LOCATION_HEAD, 0,
-            CRIT_DATA_MEMBER_MESSAGE_ID) == 300);
+        CHECK(testCriticalsGetValue(0, TEST_HIT_LOCATION_HEAD, 0,
+            TEST_CRIT_DATA_MEMBER_MESSAGE_ID) == 100);
+        CHECK(testCriticalsGetValue(0, TEST_HIT_LOCATION_HEAD, 1,
+            TEST_CRIT_DATA_MEMBER_MESSAGE_ID) == 200);
+        CHECK(testCriticalsGetValue(1, TEST_HIT_LOCATION_HEAD, 0,
+            TEST_CRIT_DATA_MEMBER_MESSAGE_ID) == 300);
     }
 
     SUBCASE("all kill types and hit locations accessible")
     {
         // Verify we can write to every kill type and hit location
-        for (int kt = 0; kt < SFALL_KILL_TYPE_COUNT; kt++) {
-            for (int hl = 0; hl < HIT_LOCATION_COUNT; hl++) {
-                criticalsSetValue(kt, hl, 0, CRIT_DATA_MEMBER_DAMAGE_MULTIPLIER, kt * 100 + hl);
+        for (int kt = 0; kt < TEST_SFALL_KILL_TYPE_COUNT; kt++) {
+            for (int hl = 0; hl < TEST_HIT_LOCATION_COUNT; hl++) {
+                testCriticalsSetValue(kt, hl, 0, TEST_CRIT_DATA_MEMBER_DAMAGE_MULTIPLIER, kt * 100 + hl);
             }
         }
         // Spot-check a few
-        CHECK(criticalsGetValue(5, HIT_LOCATION_EYES, 0,
-            CRIT_DATA_MEMBER_DAMAGE_MULTIPLIER) == 5 * 100 + HIT_LOCATION_EYES);
-        CHECK(criticalsGetValue(SFALL_KILL_TYPE_COUNT - 1, HIT_LOCATION_GROIN, 0,
-            CRIT_DATA_MEMBER_DAMAGE_MULTIPLIER) == (SFALL_KILL_TYPE_COUNT - 1) * 100 + HIT_LOCATION_GROIN);
+        CHECK(testCriticalsGetValue(5, TEST_HIT_LOCATION_EYES, 0,
+            TEST_CRIT_DATA_MEMBER_DAMAGE_MULTIPLIER) == 5 * 100 + TEST_HIT_LOCATION_EYES);
+        CHECK(testCriticalsGetValue(TEST_SFALL_KILL_TYPE_COUNT - 1, TEST_HIT_LOCATION_GROIN, 0,
+            TEST_CRIT_DATA_MEMBER_DAMAGE_MULTIPLIER) == (TEST_SFALL_KILL_TYPE_COUNT - 1) * 100 + TEST_HIT_LOCATION_GROIN);
     }
 
     SUBCASE("all critical effects accessible")
     {
-        for (int eff = 0; eff < CRTICIAL_EFFECT_COUNT; eff++) {
-            criticalsSetValue(0, HIT_LOCATION_HEAD, eff,
-                CRIT_DATA_MEMBER_MESSAGE_ID, eff * 10);
+        for (int eff = 0; eff < TEST_CRTICIAL_EFFECT_COUNT; eff++) {
+            testCriticalsSetValue(0, TEST_HIT_LOCATION_HEAD, eff,
+                TEST_CRIT_DATA_MEMBER_MESSAGE_ID, eff * 10);
         }
-        for (int eff = 0; eff < CRTICIAL_EFFECT_COUNT; eff++) {
-            CHECK(criticalsGetValue(0, HIT_LOCATION_HEAD, eff,
-                CRIT_DATA_MEMBER_MESSAGE_ID) == eff * 10);
+        for (int eff = 0; eff < TEST_CRTICIAL_EFFECT_COUNT; eff++) {
+            CHECK(testCriticalsGetValue(0, TEST_HIT_LOCATION_HEAD, eff,
+                TEST_CRIT_DATA_MEMBER_MESSAGE_ID) == eff * 10);
         }
     }
 }
 
-TEST_CASE("criticalsResetValue")
+TEST_CASE("testCriticalsResetValue — base-value restoration")
 {
     memset(gCriticalHitTables, 0, sizeof(gCriticalHitTables));
     memset(gPlayerCriticalHitTable, 0, sizeof(gPlayerCriticalHitTable));
@@ -216,44 +230,44 @@ TEST_CASE("criticalsResetValue")
     {
         // Set base value
         int baseVal = 42;
-        memcpy(&gBaseCriticalHitTables[0][HIT_LOCATION_HEAD][0].values[CRIT_DATA_MEMBER_DAMAGE_MULTIPLIER],
+        memcpy(&gBaseCriticalHitTables[0][TEST_HIT_LOCATION_HEAD][0].values[TEST_CRIT_DATA_MEMBER_DAMAGE_MULTIPLIER],
                &baseVal, sizeof(baseVal));
 
         // Set working value
-        criticalsSetValue(0, HIT_LOCATION_HEAD, 0, CRIT_DATA_MEMBER_DAMAGE_MULTIPLIER, 99);
-        CHECK(criticalsGetValue(0, HIT_LOCATION_HEAD, 0, CRIT_DATA_MEMBER_DAMAGE_MULTIPLIER) == 99);
+        testCriticalsSetValue(0, TEST_HIT_LOCATION_HEAD, 0, TEST_CRIT_DATA_MEMBER_DAMAGE_MULTIPLIER, 99);
+        CHECK(testCriticalsGetValue(0, TEST_HIT_LOCATION_HEAD, 0, TEST_CRIT_DATA_MEMBER_DAMAGE_MULTIPLIER) == 99);
 
         // Reset
-        criticalsResetValue(0, HIT_LOCATION_HEAD, 0, CRIT_DATA_MEMBER_DAMAGE_MULTIPLIER);
-        CHECK(criticalsGetValue(0, HIT_LOCATION_HEAD, 0, CRIT_DATA_MEMBER_DAMAGE_MULTIPLIER) == 42);
+        testCriticalsResetValue(0, TEST_HIT_LOCATION_HEAD, 0, TEST_CRIT_DATA_MEMBER_DAMAGE_MULTIPLIER);
+        CHECK(testCriticalsGetValue(0, TEST_HIT_LOCATION_HEAD, 0, TEST_CRIT_DATA_MEMBER_DAMAGE_MULTIPLIER) == 42);
     }
 
     SUBCASE("reset restores base value for player table")
     {
         int baseVal = 7;
-        memcpy(&gBasePlayerCriticalHitTable[HIT_LOCATION_TORSO][1].values[CRIT_DATA_MEMBER_FLAGS],
+        memcpy(&gBasePlayerCriticalHitTable[TEST_HIT_LOCATION_TORSO][1].values[TEST_CRIT_DATA_MEMBER_FLAGS],
                &baseVal, sizeof(baseVal));
 
-        criticalsSetValue(SFALL_KILL_TYPE_COUNT, HIT_LOCATION_TORSO, 1, CRIT_DATA_MEMBER_FLAGS, 999);
-        CHECK(criticalsGetValue(SFALL_KILL_TYPE_COUNT, HIT_LOCATION_TORSO, 1, CRIT_DATA_MEMBER_FLAGS) == 999);
+        testCriticalsSetValue(TEST_SFALL_KILL_TYPE_COUNT, TEST_HIT_LOCATION_TORSO, 1, TEST_CRIT_DATA_MEMBER_FLAGS, 999);
+        CHECK(testCriticalsGetValue(TEST_SFALL_KILL_TYPE_COUNT, TEST_HIT_LOCATION_TORSO, 1, TEST_CRIT_DATA_MEMBER_FLAGS) == 999);
 
-        criticalsResetValue(SFALL_KILL_TYPE_COUNT, HIT_LOCATION_TORSO, 1, CRIT_DATA_MEMBER_FLAGS);
-        CHECK(criticalsGetValue(SFALL_KILL_TYPE_COUNT, HIT_LOCATION_TORSO, 1, CRIT_DATA_MEMBER_FLAGS) == 7);
+        testCriticalsResetValue(TEST_SFALL_KILL_TYPE_COUNT, TEST_HIT_LOCATION_TORSO, 1, TEST_CRIT_DATA_MEMBER_FLAGS);
+        CHECK(testCriticalsGetValue(TEST_SFALL_KILL_TYPE_COUNT, TEST_HIT_LOCATION_TORSO, 1, TEST_CRIT_DATA_MEMBER_FLAGS) == 7);
     }
 }
 
-TEST_CASE("CRIT_DATA_MEMBER_COUNT matches union field count")
+TEST_CASE("TEST_CRIT_DATA_MEMBER_COUNT matches union field count")
 {
     // The count should match the number of named int fields in the union
-    CHECK(CRIT_DATA_MEMBER_COUNT == 7);
-    CHECK(sizeof(CriticalHitDescription) == CRIT_DATA_MEMBER_COUNT * sizeof(int));
+    CHECK(TEST_CRIT_DATA_MEMBER_COUNT == 7);
+    CHECK(sizeof(TestCriticalHitDescription) == TEST_CRIT_DATA_MEMBER_COUNT * sizeof(int));
 }
 
 TEST_CASE("table dimensions match constants")
 {
-    CHECK(HIT_LOCATION_COUNT == 9);        // head, left arm, right arm, torso, right leg, left leg, eyes, groin, uncalled
-    CHECK(CRTICIAL_EFFECT_COUNT == 6);     // 0-5 effects
-    CHECK(KILL_TYPE_COUNT == 19);          // man, woman, child, super mutant, ghoul, brahmin, radscorpion, rat, floater, centaur, robot, dog, mantis, deathclaw, plant, gecko, alien, giant ant, big bad boss
-    CHECK(SFALL_KILL_TYPE_COUNT == 38);    // 2x KILL_TYPE_COUNT for sfall extended tables
-    CHECK(CRIT_DATA_MEMBER_COUNT == 7);
+    CHECK(TEST_HIT_LOCATION_COUNT == 9);        // head, left arm, right arm, torso, right leg, left leg, eyes, groin, uncalled
+    CHECK(TEST_CRTICIAL_EFFECT_COUNT == 6);     // 0-5 effects
+    CHECK(TEST_KILL_TYPE_COUNT == 19);          // man, woman, child, super mutant, ghoul, brahmin, radscorpion, rat, floater, centaur, robot, dog, mantis, deathclaw, plant, gecko, alien, giant ant, big bad boss
+    CHECK(TEST_SFALL_KILL_TYPE_COUNT == 38);    // 2x KILL_TYPE_COUNT for sfall extended tables
+    CHECK(TEST_CRIT_DATA_MEMBER_COUNT == 7);
 }

@@ -40,6 +40,7 @@
 #include "sfall_lists.h"
 #include "sfall_metarules.h"
 #include "sfall_script_hooks.h"
+#include "skill.h"
 #include "stat.h"
 #include "svga.h"
 #include "tile.h"
@@ -414,11 +415,21 @@ static void op_set_sfall_global(Program* program)
     ProgramValue value = programStackPopValue(program);
     ProgramValue variable = programStackPopValue(program);
 
-    if ((variable.opcode & VALUE_TYPE_MASK) == VALUE_TYPE_STRING) {
-        const char* key = programGetString(program, variable.opcode, variable.integerValue);
-        sfall_gl_vars_store(key, value.integerValue);
-    } else if (variable.opcode == VALUE_TYPE_INT) {
-        sfall_gl_vars_store(variable.integerValue, value.integerValue);
+    if (value.isFloat()) {
+        // Float values use parallel float storage to preserve precision.
+        if ((variable.opcode & VALUE_TYPE_MASK) == VALUE_TYPE_STRING) {
+            const char* key = programGetString(program, variable.opcode, variable.integerValue);
+            sfall_gl_vars_store_float(key, value.asFloat());
+        } else if (variable.opcode == VALUE_TYPE_INT) {
+            sfall_gl_vars_store_float(variable.integerValue, value.asFloat());
+        }
+    } else {
+        if ((variable.opcode & VALUE_TYPE_MASK) == VALUE_TYPE_STRING) {
+            const char* key = programGetString(program, variable.opcode, variable.integerValue);
+            sfall_gl_vars_store(key, value.integerValue);
+        } else if (variable.opcode == VALUE_TYPE_INT) {
+            sfall_gl_vars_store(variable.integerValue, value.integerValue);
+        }
     }
 }
 
@@ -439,22 +450,35 @@ static void op_get_sfall_global_int(Program* program)
 }
 
 // get_sfall_global_float
-// NOTE: Global variables are int-backed (unordered_map<uint64_t, int>).
-// This handler returns 0.0f — true float storage requires variant storage
-// or a parallel float map (see F-38 for architectural fix).
 static void op_get_sfall_global_float(Program* program)
 {
     ProgramValue variable = programStackPopValue(program);
 
-    int value = 0;
+    float value = 0.0f;
+    bool found = false;
     if ((variable.opcode & VALUE_TYPE_MASK) == VALUE_TYPE_STRING) {
         const char* key = programGetString(program, variable.opcode, variable.integerValue);
-        sfall_gl_vars_fetch(key, value);
+        found = sfall_gl_vars_fetch_float(key, value);
     } else if (variable.opcode == VALUE_TYPE_INT) {
-        sfall_gl_vars_fetch(variable.integerValue, value);
+        found = sfall_gl_vars_fetch_float(variable.integerValue, value);
     }
 
-    programStackPushFloat(program, static_cast<float>(value));
+    // Fall back to int storage if no float entry exists (backward compat).
+    if (!found) {
+        int intValue = 0;
+        if ((variable.opcode & VALUE_TYPE_MASK) == VALUE_TYPE_STRING) {
+            const char* key = programGetString(program, variable.opcode, variable.integerValue);
+            if (sfall_gl_vars_fetch(key, intValue)) {
+                value = static_cast<float>(intValue);
+            }
+        } else if (variable.opcode == VALUE_TYPE_INT) {
+            if (sfall_gl_vars_fetch(variable.integerValue, intValue)) {
+                value = static_cast<float>(intValue);
+            }
+        }
+    }
+
+    programStackPushFloat(program, value);
 }
 
 // get_game_mode
@@ -1000,6 +1024,12 @@ static void op_get_light_level(Program* program)
     programStackPushInteger(program, lightGetAmbientIntensity());
 }
 
+// Custom death model FID numbers set via set_dm_model / set_df_model.
+// Zero means "use engine default". These are applied in op_refresh_pc_art
+// by overriding the proto FID before armor/weapon layering.
+static int gCustomMaleHeroModelNum = 0;
+static int gCustomFemaleHeroModelNum = 0;
+
 // note: might need to be updated when Hero Appearance is implemented
 static void op_refresh_pc_art(Program* program)
 {
@@ -1014,6 +1044,21 @@ static void op_refresh_pc_art(Program* program)
     int rotation = FID_ROTATION(gDude->fid);
 
     _proto_dude_update_gender();
+
+    // Apply custom hero model if one was set via set_dm_model / set_df_model.
+    int customModelNum = 0;
+    if (critterGetStat(gDude, STAT_GENDER) == GENDER_MALE && gCustomMaleHeroModelNum > 0) {
+        customModelNum = gCustomMaleHeroModelNum;
+    } else if (critterGetStat(gDude, STAT_GENDER) == GENDER_FEMALE && gCustomFemaleHeroModelNum > 0) {
+        customModelNum = gCustomFemaleHeroModelNum;
+    }
+
+    if (customModelNum > 0) {
+        Proto* proto;
+        if (protoGetProto(gDude->pid, &proto) != -1) {
+            proto->fid = buildFid(OBJ_TYPE_CRITTER, customModelNum, 0, 0, 0);
+        }
+    }
 
     int fid = inventoryComputeCritterFid(gDude,
         gDude->pid,
@@ -2085,22 +2130,42 @@ static void op_get_npc_level(Program* program)
 }
 
 // set_dm_model(string model_name)
-// Stub: sets the default male hero model.
+// Sets the default male hero model (e.g. "hmjmps"). The model name is resolved
+// via artListIndex and applied in op_refresh_pc_art by overriding proto->fid.
+// Full Hero Appearance integration (armor-aware model switching, death animation
+// hooking) requires changes to _proto_dude_update_gender() in proto.cc.
 static void op_set_dm_model(Program* program)
 {
     const char* modelName = programStackPopString(program);
-    // Stub: Hero Appearance model switching not yet implemented.
-    // RPU Hero Appearance mod uses this for male model selection.
-    (void)modelName;
+    if (modelName == nullptr || modelName[0] == '\0') {
+        gCustomMaleHeroModelNum = 0;
+        return;
+    }
+
+    int modelNum = artListIndex(OBJ_TYPE_CRITTER, modelName);
+    if (modelNum >= 0) {
+        gCustomMaleHeroModelNum = modelNum;
+    } else {
+        programPrintError("set_dm_model: model '%s' not found in art list", modelName);
+    }
 }
 
 // set_df_model(string model_name)
-// Stub: sets the default female hero model.
+// Sets the default female hero model (e.g. "hfjmps").
 static void op_set_df_model(Program* program)
 {
     const char* modelName = programStackPopString(program);
-    // Stub: Hero Appearance model switching not yet implemented.
-    (void)modelName;
+    if (modelName == nullptr || modelName[0] == '\0') {
+        gCustomFemaleHeroModelNum = 0;
+        return;
+    }
+
+    int modelNum = artListIndex(OBJ_TYPE_CRITTER, modelName);
+    if (modelNum >= 0) {
+        gCustomFemaleHeroModelNum = modelNum;
+    } else {
+        programPrintError("set_df_model: model '%s' not found in art list", modelName);
+    }
 }
 
 // hero_select_win(int window_id)
@@ -2396,6 +2461,91 @@ static void op_set_sfall_return(Program* program)
     hookCall->addReturnValueFromScript(value);
 }
 
+// ============================================================
+// Skill point opcodes
+// ============================================================
+
+// set_critter_skill_points(object critter, int skill, int value)
+// Sets the base skill points (proto-level) for a critter.
+// Arguments are popped in reverse order: value, skill, critter.
+static void op_set_critter_skill_points(Program* program)
+{
+    int value = programStackPopInteger(program);
+    int skill = programStackPopInteger(program);
+    Object* critter = static_cast<Object*>(programStackPopPointer(program));
+
+    if (critter == nullptr || FID_TYPE(critter->fid) != OBJ_TYPE_CRITTER) {
+        programPrintError("set_critter_skill_points: expected critter object");
+        return;
+    }
+
+    if (!skillIsValid(skill)) {
+        programPrintError("set_critter_skill_points: invalid skill %d (valid range 0-%d)",
+            skill, SKILL_COUNT - 1);
+        return;
+    }
+
+    Proto* proto;
+    if (protoGetProto(critter->pid, &proto) == -1) {
+        programPrintError("set_critter_skill_points: cannot get proto for pid %d", critter->pid);
+        return;
+    }
+
+    proto->critter.data.skills[skill] = value;
+}
+
+// get_critter_skill_points(object critter, int skill) -> int
+// Returns the base skill points (proto-level) for a critter.
+static void op_get_critter_skill_points(Program* program)
+{
+    int skill = programStackPopInteger(program);
+    Object* critter = static_cast<Object*>(programStackPopPointer(program));
+
+    if (critter == nullptr || FID_TYPE(critter->fid) != OBJ_TYPE_CRITTER) {
+        programPrintError("get_critter_skill_points: expected critter object");
+        programStackPushInteger(program, 0);
+        return;
+    }
+
+    if (!skillIsValid(skill)) {
+        programPrintError("get_critter_skill_points: invalid skill %d (valid range 0-%d)",
+            skill, SKILL_COUNT - 1);
+        programStackPushInteger(program, 0);
+        return;
+    }
+
+    programStackPushInteger(program, skillGetBaseValue(critter, skill));
+}
+
+// set_available_skill_points(int value)
+// Sets the player's unspent skill points.
+static void op_set_available_skill_points(Program* program)
+{
+    int value = programStackPopInteger(program);
+    if (value < 0) {
+        value = 0;
+    }
+    pcSetStat(PC_STAT_UNSPENT_SKILL_POINTS, value);
+}
+
+// get_available_skill_points() -> int
+// Returns the player's current unspent skill points.
+static void op_get_available_skill_points(Program* program)
+{
+    programStackPushInteger(program, pcGetStat(PC_STAT_UNSPENT_SKILL_POINTS));
+}
+
+// mod_skill_points_per_level(int value)
+// Sets a modifier for skill points gained per level. The modifier is stored
+// but full integration requires updating characterEditorUpdateLevel() in
+// character_editor.cc to consume this value.
+static int gSkillPointsPerLevelMod = 0;
+
+static void op_mod_skill_points_per_level(Program* program)
+{
+    gSkillPointsPerLevelMod = programStackPopInteger(program);
+}
+
 // Note: opcodes should pop arguments off the stack in reverse order
 void sfallOpcodesInit()
 {
@@ -2441,11 +2591,16 @@ void sfallOpcodesInit()
     interpreterRegisterOpcode(0x8160, op_get_critter_base_stat);
     // 0x8161 - int  get_critter_extra_stat(object, int StatID)
     interpreterRegisterOpcode(0x8161, op_get_critter_extra_stat);
-    // 0x8242 - void set_critter_skill_points(int critter, int skill, int value)
-    // 0x8243 - int  get_critter_skill_points(int critter, int skill)
+    // 0x8242 - void set_critter_skill_points(object critter, int skill, int value)
+    interpreterRegisterOpcode(0x8242, op_set_critter_skill_points);
+    // 0x8243 - int  get_critter_skill_points(object critter, int skill)
+    interpreterRegisterOpcode(0x8243, op_get_critter_skill_points);
     // 0x8244 - void set_available_skill_points(int value)
+    interpreterRegisterOpcode(0x8244, op_set_available_skill_points);
     // 0x8245 - int  get_available_skill_points()
+    interpreterRegisterOpcode(0x8245, op_get_available_skill_points);
     // 0x8246 - void mod_skill_points_per_level(int value)
+    interpreterRegisterOpcode(0x8246, op_mod_skill_points_per_level);
 
     // 0x81b4 - void set_stat_max(int stat, int value)
     // 0x81b5 - void set_stat_min(int stat, int value)

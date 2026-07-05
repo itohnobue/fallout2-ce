@@ -570,8 +570,10 @@ int scriptsNewObjectId()
         debugPrint("\n    ERROR: new_obj_id() !!!! Picked PLAYER ID!!!!");
     }
 
-    gObjectIdCounter++;
-
+    // The do-while loop above already verified gObjectIdCounter is unique
+    // among all existing objects. Return it directly instead of doing a
+    // second unchecked increment that could collide with loaded objects
+    // after a process restart (gObjectIdCounter resets to 4).
     return gObjectIdCounter;
 }
 
@@ -2152,6 +2154,13 @@ static int scriptListExtentRead(ScriptListExtent* scriptExtent, File* stream)
         return -1;
     }
 
+    // Validate length against array bounds (defense against crafted saves).
+    // scriptListExtentClearRuntimeState iterates [0, length), which must
+    // not exceed SCRIPT_LIST_EXTENT_SIZE.
+    if (scriptExtent->length < 0 || scriptExtent->length > SCRIPT_LIST_EXTENT_SIZE) {
+        return -1;
+    }
+
     int next;
     if (fileReadInt32(stream, &(next)) != 0) {
         return -1;
@@ -2249,7 +2258,12 @@ int scriptGetScript(int sid, Script** scriptPtr)
         return -1;
     }
 
-    ScriptList* scriptList = &(gScriptLists[SID_TYPE(sid)]);
+    int scriptType = SID_TYPE(sid);
+    if (scriptType < 0 || scriptType >= SCRIPT_TYPE_COUNT) {
+        return -1;
+    }
+
+    ScriptList* scriptList = &(gScriptLists[scriptType]);
     ScriptListExtent* scriptListExtent = scriptList->head;
 
     while (scriptListExtent != nullptr) {
@@ -2406,7 +2420,12 @@ int scriptRemove(int sid)
         return -1;
     }
 
-    ScriptList* scriptList = &(gScriptLists[SID_TYPE(sid)]);
+    int scriptType = SID_TYPE(sid);
+    if (scriptType < 0 || scriptType >= SCRIPT_TYPE_COUNT) {
+        return -1;
+    }
+
+    ScriptList* scriptList = &(gScriptLists[scriptType]);
 
     ScriptListExtent* scriptListExtent = scriptList->head;
     int index;
@@ -2430,6 +2449,14 @@ int scriptRemove(int sid)
     }
 
     Script* script = &(scriptListExtent->scripts[index]);
+
+    // Clean up any script hook registrations for this program before
+    // removal. After programListFree() in _scr_remove_all(), hook vectors
+    // would retain dangling Program* references.
+    if (script->program != nullptr) {
+        scriptHooksUnregisterProgram(script->program);
+    }
+
     if ((script->flags & SCRIPT_FLAG_NO_SPATIAL) != 0) {
         if (script->program != nullptr) {
             script->program = nullptr;
@@ -2535,6 +2562,13 @@ int _scr_remove_all()
     gMapSid = -1;
 
     programListFree();
+
+    // All programs have been freed — clear hook vectors to remove
+    // dangling Program* references. Individual scriptRemove() calls
+    // above cleaned per-script hooks, but NO_REMOVE scripts were
+    // skipped; reset catches anything remaining.
+    scriptHooksReset();
+
     _exportClearAllVariables();
 
     return 0;

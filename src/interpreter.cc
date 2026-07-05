@@ -1957,7 +1957,29 @@ static void opLogicalOperatorOr(Program* program)
 static void opLogicalOperatorNot(Program* program)
 {
     ProgramValue value = programStackPopValue(program);
-    programStackPushInteger(program, value.integerValue == 0);
+
+    int result;
+    switch (value.opcode) {
+    case VALUE_TYPE_INT:
+        result = (value.integerValue == 0);
+        break;
+    case VALUE_TYPE_FLOAT:
+        result = (value.floatValue == 0.0f);
+        break;
+    case VALUE_TYPE_PTR:
+        result = (value.pointerValue == nullptr);
+        break;
+    case VALUE_TYPE_STRING:
+    case VALUE_TYPE_DYNAMIC_STRING:
+        // Strings are always truthy (see opLogicalOperatorAnd/Or).
+        result = 0;
+        break;
+    default:
+        result = (value.integerValue == 0);
+        break;
+    }
+
+    programStackPushInteger(program, result);
 }
 
 // 0x46AB2C
