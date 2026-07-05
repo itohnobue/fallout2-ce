@@ -32,6 +32,7 @@ extern const std::size_t kMetarulesCount;
 class Program;
 
 void sfall_metarule(Program* program, int args);
+void sfall_metarules_reset();
 void mf_string_format(OpcodeContext& ctx);
 
 } // namespace fallout

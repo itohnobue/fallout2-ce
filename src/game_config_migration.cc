@@ -229,6 +229,8 @@ namespace {
         { kSfallMisc, "DisableHorrigan", CONTENT_CONFIG_WORLDMAP_SECTION, "disable_horrigan", "0" },
         { kSfallMisc, "CityRepsList", CONTENT_CONFIG_WORLDMAP_SECTION, "city_reputation_list" },
         { kSfallInterface, "WorldMapTravelMarkers", CONTENT_CONFIG_WORLDMAP_SECTION, "trail_markers", "0" },
+        { kSfallMisc, "WorldMapSlots", CONTENT_CONFIG_WORLDMAP_SECTION, "encounter_slots", "0" },
+        { kSfallMisc, "BoostScriptDialogLimit", CONTENT_CONFIG_DIALOG_SECTION, "boost_dialog_limit", "0" },
         // [characters]
         { kSfallMisc, "PremadePaths", CONTENT_CONFIG_CHARACTERS_SECTION, "premade_paths" },
         { kSfallMisc, "PremadeFIDs", CONTENT_CONFIG_CHARACTERS_SECTION, "premade_fids" },
@@ -316,7 +318,11 @@ void contentConfigTryMigrateFromSfall(const char* contentConfigPath)
         return;
     }
     char contentCfgPath[COMPAT_MAX_PATH];
-    snprintf(contentCfgPath, sizeof(contentCfgPath), "%s\\%s", masterPatches.c_str(), contentConfigPath);
+    int pathResult = snprintf(contentCfgPath, sizeof(contentCfgPath), "%s\\%s", masterPatches.c_str(), contentConfigPath);
+    if (pathResult < 0 || pathResult >= (int)sizeof(contentCfgPath)) {
+        debugPrint("Failed to construct content config path: path too long.\n");
+        return;
+    }
     if (contentConfigMigrateFromSfall(&gSfallConfig, contentCfgPath)) {
         debugPrint("Migrated settings from ddraw.ini to game.cfg.\n");
     }

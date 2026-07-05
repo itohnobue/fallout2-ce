@@ -33,6 +33,7 @@
 #include "queue.h"
 #include "scan_unimplemented.h"
 #include "sfall_arrays.h"
+#include "sfall_config.h"
 #include "sfall_global_scripts.h"
 #include "sfall_script_hooks.h"
 #include "stat.h"
@@ -47,9 +48,16 @@ namespace fallout {
 
 #define SCRIPT_LIST_EXTENT_SIZE 16
 
-// SFALL: Increase number of message lists for scripted dialogs.
-// CE: In Sfall this increase is configurable with `BoostScriptDialogLimit`.
-#define SCRIPT_DIALOG_MESSAGE_LIST_CAPACITY 10000
+// SFALL: Number of message lists for scripted dialogs.
+#define SCRIPT_DIALOG_MESSAGE_LIST_MAX_CAPACITY 10000
+
+// CE: WorldMapSlots from ddraw.ini [Misc]. RPU requires 21.
+static int gWorldMapSlots = 0;
+
+// CE: sfall-mods.ini config storage for engine-level awareness.
+// Loaded at init from the game directory, mirrors sfall's mods INI loading.
+static Config gSfallModsIni;
+static bool gSfallModsIniLoaded = false;
 
 typedef struct ScriptsListEntry {
     char name[16];
@@ -264,7 +272,7 @@ static Object* gScriptsRequestedStealingBy;
 static Object* gScriptsRequestedStealingFrom;
 
 // 0x6649D4 script_dialog_msgs
-static MessageList gScriptDialogMessageLists[SCRIPT_DIALOG_MESSAGE_LIST_CAPACITY];
+static MessageList gScriptDialogMessageLists[SCRIPT_DIALOG_MESSAGE_LIST_MAX_CAPACITY];
 
 // scr.msg
 //
@@ -521,6 +529,11 @@ int mapUpdateEventProcess(Object* obj, void* data)
 {
     scriptsExecMapUpdateScripts(SCRIPT_PROC_MAP_UPDATE);
 
+    // Update the direct timer's last-fire time so the 30000-tick
+    // direct path in _script_chk_timed_events doesn't double-fire
+    // on ticks that are multiples of both 600 and 30000.
+    gLastMapUpdateTime = _get_bk_time();
+
     queueClearByEventType(EVENT_TYPE_MAP_UPDATE_EVENT, nullptr);
 
     if (gMapHeader.name[0] == '\0') {
@@ -741,6 +754,18 @@ static Program* scriptsCreateProgramByName(const char* name)
     strcat(path, gScriptsBasePath);
     strcat(path, name);
     strcat(path, ".int");
+
+    // Pre-check file existence to prevent programCreateByPath's internal
+    // programFatalError from longjmp-ing to the calling program's context.
+    // programFatalError longjmps to gInterpreterCurrentProgram->env, which
+    // during lazy script load in scriptExecProc points to the currently
+    // executing script, not the script being loaded. This would corrupt
+    // the wrong program's state.
+    File* test = fileOpen(path, "rb");
+    if (test == nullptr) {
+        return nullptr;
+    }
+    fileClose(test);
 
     return programCreateByPath(path);
 }
@@ -1433,6 +1458,7 @@ static int scriptsLoadScriptsList()
 
         ScriptsListEntry* entry = &(entries[gScriptsListEntriesLength - 1]);
         entry->local_vars_num = 0;
+        memset(entry->name, 0, sizeof(entry->name));
 
         char* substr = strstr(string, ".int");
         if (substr != nullptr) {
@@ -1476,6 +1502,10 @@ static int scriptsFreeScriptsList()
 // 0x4A4F28
 int _scr_find_str_run_info(int scriptIndex, int* /*unused*/, int sid)
 {
+    if (!scriptsIsValidScriptIndex(scriptIndex)) {
+        return -1;
+    }
+
     Script* script;
     if (scriptGetScript(sid, &script) == -1) {
         return -1;
@@ -1489,6 +1519,10 @@ int _scr_find_str_run_info(int scriptIndex, int* /*unused*/, int sid)
 // 0x4A4F68
 int scriptsGetFileName(int scriptIndex, char* name, size_t size)
 {
+    if (!scriptsIsValidScriptIndex(scriptIndex)) {
+        return -1;
+    }
+
     snprintf(name, size, "%s.int", gScriptsListEntries[scriptIndex].name);
     return 0;
 }
@@ -1501,6 +1535,11 @@ int scriptsGetListLength()
 bool scriptsIsValidScriptIndex(int scriptIndex)
 {
     return scriptIndex >= 0 && scriptIndex < gScriptsListEntriesLength;
+}
+
+int scriptsGetWorldMapSlots()
+{
+    return gWorldMapSlots;
 }
 
 // scr_set_dude_script
@@ -1537,6 +1576,43 @@ int scriptsSetDudeScript()
     return 0;
 }
 
+// CE: Load sfall-mods.ini for engine-level awareness.
+// sfall-mods.ini uses the same INI format as ddraw.ini and provides
+// mod-specific overrides. RPU and ET Tu rely on this file being parsed.
+bool sfallModsIniInit()
+{
+    if (gSfallModsIniLoaded) {
+        return true;
+    }
+
+    if (!configInit(&gSfallModsIni)) {
+        return false;
+    }
+
+    const char* path = "sfall-mods.ini";
+    // Try loading; if file doesn't exist, configRead returns false gracefully.
+    configRead(&gSfallModsIni, path, false);
+
+    gSfallModsIniLoaded = true;
+    return true;
+}
+
+void sfallModsIniExit()
+{
+    if (gSfallModsIniLoaded) {
+        configFree(&gSfallModsIni);
+        gSfallModsIniLoaded = false;
+    }
+}
+
+bool sfallModsIniGetInt(const char* section, const char* key, int* value, int defaultValue)
+{
+    if (!gSfallModsIniLoaded) {
+        *value = defaultValue;
+        return false;
+    }
+    return configGetInt(&gSfallModsIni, section, key, value, defaultValue);
+}
 // scr_clear_dude_script
 // 0x4A5044
 int scriptsClearDudeScript()
@@ -1568,7 +1644,7 @@ int scriptsInit()
         return -1;
     }
 
-    for (int index = 0; index < SCRIPT_DIALOG_MESSAGE_LIST_CAPACITY; index++) {
+    for (int index = 0; index < SCRIPT_DIALOG_MESSAGE_LIST_MAX_CAPACITY; index++) {
         if (!messageListInit(&(gScriptDialogMessageLists[index]))) {
             return -1;
         }
@@ -1599,7 +1675,13 @@ int scriptsInit()
     configGetInt(&gContentConfig, CONTENT_CONFIG_MOVIES_SECTION, "artimer3", &gMovieTimerArtimer3, 270);
     configGetInt(&gContentConfig, CONTENT_CONFIG_MOVIES_SECTION, "artimer4", &gMovieTimerArtimer4, 360);
 
+    // SFALL: Read WorldMapSlots from ddraw.ini.
+    configGetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, "WorldMapSlots", &gWorldMapSlots, 21);
+
     checkScriptsOpcodes();
+
+    // SFALL: Load sfall-mods.ini for engine-level mod config awareness.
+    sfallModsIniInit();
 
     return 0;
 }
@@ -1628,7 +1710,7 @@ int _scr_game_init()
         return -1;
     }
 
-    for (i = 0; i < SCRIPT_DIALOG_MESSAGE_LIST_CAPACITY; i++) {
+    for (i = 0; i < SCRIPT_DIALOG_MESSAGE_LIST_MAX_CAPACITY; i++) {
         if (!messageListInit(&(gScriptDialogMessageLists[i]))) {
             debugPrint("\nERROR IN SCRIPT_DIALOG_MSGS!");
             return -1;
@@ -1696,6 +1778,8 @@ int scriptsExit()
     // NOTE: Uninline.
     scriptsFreeScriptsList();
 
+    sfallModsIniExit();
+
     return 0;
 }
 
@@ -1703,7 +1787,7 @@ int scriptsExit()
 // 0x4A52F4
 int _scr_message_free()
 {
-    for (int index = 0; index < SCRIPT_DIALOG_MESSAGE_LIST_CAPACITY; index++) {
+    for (int index = 0; index < SCRIPT_DIALOG_MESSAGE_LIST_MAX_CAPACITY; index++) {
         MessageList* messageList = &(gScriptDialogMessageLists[index]);
         if (messageList->entries_num != 0) {
             if (!messageListFree(messageList)) {
@@ -2648,9 +2732,6 @@ void scriptsExecMapUpdateProc()
 // 0x4A67EC
 void scriptsExecMapUpdateScripts(int proc)
 {
-    // SFALL: Run global scripts.
-    sfall_gl_scr_exec_map_update_scripts(proc);
-
     gSpatialsEnabled = false;
 
     int fixedParam = 0;
@@ -2671,12 +2752,16 @@ void scriptsExecMapUpdateScripts(int proc)
     }
 
     if (sidListCapacity == 0) {
+        gSpatialsEnabled = true;
+        sfall_gl_scr_exec_map_update_scripts(proc);
         return;
     }
 
     int* sidList = (int*)internal_malloc(sizeof(*sidList) * sidListCapacity);
     if (sidList == nullptr) {
         debugPrint("\nError: scr_exec_map_update_scripts: Out of memory for sidList!");
+        gSpatialsEnabled = true;
+        sfall_gl_scr_exec_map_update_scripts(proc);
         return;
     }
 
@@ -2709,6 +2794,9 @@ void scriptsExecMapUpdateScripts(int proc)
     internal_free(sidList);
 
     gSpatialsEnabled = true;
+
+    // SFALL: Run global scripts after regular scripts (matching sfall order).
+    sfall_gl_scr_exec_map_update_scripts(proc);
 }
 
 // 0x4A69A0
@@ -2725,6 +2813,10 @@ static int scriptsGetMessageList(int messageListId, MessageList** messageListPtr
     }
 
     int messageListIndex = messageListId - 1;
+    if (messageListIndex < 0 || messageListIndex >= SCRIPT_DIALOG_MESSAGE_LIST_MAX_CAPACITY) {
+        return -1;
+    }
+
     MessageList* messageList = &(gScriptDialogMessageLists[messageListIndex]);
     if (messageList->entries_num == 0) {
         char scriptName[20];

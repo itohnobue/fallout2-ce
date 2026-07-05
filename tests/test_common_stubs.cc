@@ -12,6 +12,7 @@
 #include "db.h"
 #include "debug.h"
 #include "platform_compat.h"
+#include "settings.h"
 
 namespace fallout {
 
@@ -80,6 +81,38 @@ int compat_rename(const char* /*oldName*/, const char* /*newName*/)
     return -1;
 }
 
+// game_config_migration.cc uses compat_splitpath to decompose paths.
+void compat_splitpath(const char* /*path*/, char* /*drive*/, char* /*dir*/,
+                      char* /*fname*/, char* /*ext*/)
+{
+    // Stub: do nothing — migration tests don't depend on real path decomposition.
+}
+
+// game_config_migration.cc uses compat_makepath to construct paths.
+void compat_makepath(char* /*path*/, const char* /*drive*/, const char* /*dir*/,
+                     const char* /*fname*/, const char* /*ext*/)
+{
+    // Stub: do nothing — migration tests don't depend on real path construction.
+}
+
+// game_config_migration.cc uses compat_file_exists to check for existing configs.
+bool compat_file_exists(const char* /*filePath*/)
+{
+    return false;
+}
+
+// game_config_migration.cc uses compat_mkdir_recursive for output directory creation.
+int compat_mkdir_recursive(const char* /*path*/)
+{
+    return -1;
+}
+
+// game_config_migration.cc uses compat_is_dir to validate paths.
+bool compat_is_dir(const char* /*path*/)
+{
+    return false;
+}
+
 // =============================================================
 // db.h / xfile.h stubs (File I/O)
 // =============================================================
@@ -121,3 +154,10 @@ int filePrintFormatted(File* /*stream*/, const char* /*format*/, ...)
 }
 
 } // namespace fallout
+
+// ---- Global variables defined by the engine ----
+// game_config_migration.cc references Settings settings and gSfallConfig.
+namespace fallout {
+    Settings settings;
+    Config gSfallConfig;
+}

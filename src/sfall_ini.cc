@@ -82,8 +82,8 @@ static bool sfall_read_named_ini(const char* iniFileName, Config* config)
 {
     if (basePath[0] != '\0' && !is_system_file_name(iniFileName)) {
         char path[COMPAT_MAX_PATH];
-        snprintf(path, sizeof(path), "%s\\%s", basePath, iniFileName);
-        if (configRead(config, path, false)) {
+        int pathResult = snprintf(path, sizeof(path), "%s\\%s", basePath, iniFileName);
+        if (pathResult >= 0 && pathResult < (int)sizeof(path) && configRead(config, path, false)) {
             return true;
         }
     }
@@ -94,7 +94,8 @@ static bool sfall_read_named_ini(const char* iniFileName, Config* config)
 void sfall_ini_set_base_path(const char* path)
 {
     if (path != nullptr) {
-        strcpy(basePath, path);
+        strncpy(basePath, path, COMPAT_MAX_PATH - 1);
+        basePath[COMPAT_MAX_PATH - 1] = '\0';
 
         size_t length = strlen(basePath);
         if (length > 0) {
@@ -254,8 +255,10 @@ bool sfall_ini_set_string(const char* triplet, const char* value)
 
     if (basePath[0] != '\0' && !is_system_file_name(fileName)) {
         // Attempt to load requested file in base directory.
-        snprintf(path, sizeof(path), "%s\\%s", basePath, fileName);
-        loaded = configRead(config.get(), path, false);
+        int result = snprintf(path, sizeof(path), "%s\\%s", basePath, fileName);
+        if (result >= 0 && result < (int)sizeof(path)) {
+            loaded = configRead(config.get(), path, false);
+        }
     }
 
     if (!loaded) {

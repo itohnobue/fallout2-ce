@@ -39,7 +39,7 @@ static bool configTrimString(char* string);
 static bool configWriteDb(Config* config, const char* filePath);
 static bool configWriteStandard(Config* config, const char* filePath);
 static bool configWriteSideBySide(Config* config, const char* filePath, int flags);
-static void configWriteSection(FILE* stream, const char* sectionName, ConfigSection* section, const StringSet* handledKeys);
+static bool configWriteSection(FILE* stream, const char* sectionName, ConfigSection* section, const StringSet* handledKeys);
 
 // Last section key read from .INI file.
 //
@@ -398,32 +398,81 @@ static bool configWriteDb(Config* config, const char* filePath)
 
 static bool configWriteStandard(Config* config, const char* filePath)
 {
-    FILE* stream = compat_fopen(filePath, "wt");
+    char tempPath[COMPAT_MAX_PATH];
+    int tempPathLength = snprintf(tempPath, sizeof(tempPath), "%s.tmp", filePath);
+    if (tempPathLength < 0 || tempPathLength >= (int)sizeof(tempPath)) {
+        return false;
+    }
+
+    FILE* stream = compat_fopen(tempPath, "wt");
     if (stream == nullptr) {
         return false;
     }
 
-    for (int i = 0; i < config->entriesLength; i++) {
-        configWriteSection(stream, config->entries[i].key, (ConfigSection*)config->entries[i].value, nullptr);
-        fprintf(stream, "\n");
+    bool ok = true;
+    for (int i = 0; i < config->entriesLength && ok; i++) {
+        if (fprintf(stream, "[%s]\n", config->entries[i].key) < 0) {
+            ok = false;
+            break;
+        }
+        ConfigSection* section = (ConfigSection*)config->entries[i].value;
+        for (int j = 0; j < section->entriesLength && ok; j++) {
+            DictionaryEntry* entry = &(section->entries[j]);
+            if (fprintf(stream, "%s=%s\n", entry->key, *(char**)entry->value) < 0) {
+                ok = false;
+                break;
+            }
+        }
+        if (ok && fprintf(stream, "\n") < 0) {
+            ok = false;
+        }
     }
 
     fclose(stream);
+
+    if (!ok) {
+        compat_remove(tempPath);
+        return false;
+    }
+
+    // Atomically replace original by writing to temp file then renaming.
+    std::string backupPath = std::string(filePath) + ".bak";
+
+    compat_remove(backupPath.c_str()); // ignore errors — may not exist
+
+    if (compat_rename(filePath, backupPath.c_str()) != 0 && errno != ENOENT) {
+        compat_remove(tempPath);
+        return false;
+    }
+
+    if (compat_rename(tempPath, filePath) != 0) {
+        // Restore backup on failure.
+        compat_rename(backupPath.c_str(), filePath);
+        return false;
+    }
+
+    compat_remove(backupPath.c_str()); // ignore errors — cleanup only
     return true;
 }
 
-static void configWriteSection(FILE* stream, const char* sectionName, ConfigSection* section, const StringSet* handledKeys)
+static bool configWriteSection(FILE* stream, const char* sectionName, ConfigSection* section, const StringSet* handledKeys)
 {
     if (sectionName != nullptr) {
-        fprintf(stream, "[%s]\n", sectionName);
+        if (fprintf(stream, "[%s]\n", sectionName) < 0) {
+            return false;
+        }
     }
 
     for (int i = 0; i < section->entriesLength; i++) {
         DictionaryEntry* entry = &(section->entries[i]);
         if (handledKeys == nullptr || handledKeys->find(entry->key) == handledKeys->end()) {
-            fprintf(stream, "%s=%s\n", entry->key, *(char**)entry->value);
+            if (fprintf(stream, "%s=%s\n", entry->key, *(char**)entry->value) < 0) {
+                return false;
+            }
         }
     }
+
+    return true;
 }
 
 static bool configWriteSideBySide(Config* config, const char* filePath, int flags)
@@ -456,13 +505,15 @@ static bool configWriteSideBySide(Config* config, const char* filePath, int flag
     StringSet handledKeys;
     std::vector<std::string> pendingLines;
 
+    bool ok = true;
+
     char currentSectionName[CONFIG_FILE_MAX_LINE_LENGTH] = "";
     ConfigSection* currentSection = nullptr;
     // Treat pre-section preamble as "known" so its comments are preserved.
     bool currentSectionKnown = true;
 
     char line[CONFIG_FILE_MAX_LINE_LENGTH];
-    while (compat_fgets(line, sizeof(line), original) != nullptr) {
+    while (ok && compat_fgets(line, sizeof(line), original) != nullptr) {
         char lineCopy[CONFIG_FILE_MAX_LINE_LENGTH];
         strcpy(lineCopy, line);
 
@@ -485,7 +536,9 @@ static bool configWriteSideBySide(Config* config, const char* filePath, int flag
         if (*trimmed == '[') {
             // End current section, write out remaining keys from it.
             if (currentSection != nullptr) {
-                configWriteSection(output, nullptr, currentSection, &handledKeys);
+                if (!configWriteSection(output, nullptr, currentSection, &handledKeys)) {
+                    ok = false;
+                }
                 handledKeys.clear();
                 currentSection = nullptr;
             }
@@ -512,10 +565,15 @@ static bool configWriteSideBySide(Config* config, const char* filePath, int flag
             if (currentSectionKnown || retainUnknown) {
                 // Flush buffered comments/empty lines that preceded this header.
                 for (const std::string& l : pendingLines) {
-                    fprintf(output, "%s", l.c_str());
+                    if (fprintf(output, "%s", l.c_str()) < 0) {
+                        ok = false;
+                        break;
+                    }
                 }
                 pendingLines.clear();
-                fprintf(output, "%s", line);
+                if (fprintf(output, "%s", line) < 0) {
+                    ok = false;
+                }
             } else {
                 // Suppress unknown section entirely, discard buffered lines.
                 pendingLines.clear();
@@ -539,7 +597,10 @@ static bool configWriteSideBySide(Config* config, const char* filePath, int flag
             if (value != nullptr) {
                 // Flush lines that were between previous key and this one.
                 for (const std::string& l : pendingLines) {
-                    fprintf(output, "%s", l.c_str());
+                    if (fprintf(output, "%s", l.c_str()) < 0) {
+                        ok = false;
+                        break;
+                    }
                 }
                 pendingLines.clear();
 
@@ -554,15 +615,22 @@ static bool configWriteSideBySide(Config* config, const char* filePath, int flag
                     }
                 }
 
-                fprintf(output, "%s=%s%s%s", k, value, comment ? " " : "", comment ? comment : "\n");
+                if (fprintf(output, "%s=%s%s%s", k, value, comment ? " " : "", comment ? comment : "\n") < 0) {
+                    ok = false;
+                }
                 handledKeys.insert(key);
             } else if (retainUnknown) {
                 // Key not in config - write verbatim from original file.
                 for (const std::string& l : pendingLines) {
-                    fprintf(output, "%s", l.c_str());
+                    if (fprintf(output, "%s", l.c_str()) < 0) {
+                        ok = false;
+                        break;
+                    }
                 }
                 pendingLines.clear();
-                fprintf(output, "%s", line);
+                if (fprintf(output, "%s", line) < 0) {
+                    ok = false;
+                }
             }
             // else: drop key; keep pending lines buffered so they attach to the
             // next surviving key rather than becoming orphaned.
@@ -576,32 +644,51 @@ static bool configWriteSideBySide(Config* config, const char* filePath, int flag
     }
 
     // Write remaining keys in the last processed section.
-    if (currentSection != nullptr) {
-        configWriteSection(output, nullptr, currentSection, &handledKeys);
+    if (ok && currentSection != nullptr) {
+        if (!configWriteSection(output, nullptr, currentSection, &handledKeys)) {
+            ok = false;
+        }
     }
 
     // Flush remaining comments/empty lines.
     for (const std::string& l : pendingLines) {
-        fprintf(output, "%s", l.c_str());
+        if (fprintf(output, "%s", l.c_str()) < 0) {
+            ok = false;
+            break;
+        }
     }
     pendingLines.clear();
 
     // Write completely new sections, separated from existing content.
     bool firstNewSection = true;
-    for (int i = 0; i < config->entriesLength; i++) {
+    for (int i = 0; ok && i < config->entriesLength; i++) {
         DictionaryEntry* sectionEntry = &(config->entries[i]);
         if (handledSections.find(sectionEntry->key) == handledSections.end()) {
             if (firstNewSection) {
-                fprintf(output, "\n");
+                if (fprintf(output, "\n") < 0) {
+                    ok = false;
+                    break;
+                }
                 firstNewSection = false;
             }
-            configWriteSection(output, sectionEntry->key, (ConfigSection*)sectionEntry->value, nullptr);
-            fprintf(output, "\n");
+            if (!configWriteSection(output, sectionEntry->key, (ConfigSection*)sectionEntry->value, nullptr)) {
+                ok = false;
+                break;
+            }
+            if (fprintf(output, "\n") < 0) {
+                ok = false;
+                break;
+            }
         }
     }
 
     fclose(output);
     fclose(original);
+
+    if (!ok) {
+        compat_remove(tempPath);
+        return false;
+    }
 
     std::string backupPath = std::string(filePath) + ".bak";
 

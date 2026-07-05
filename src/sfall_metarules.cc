@@ -102,6 +102,11 @@ static void mf_string_to_case(OpcodeContext& ctx);
 void mf_string_format(OpcodeContext& ctx);
 static void mf_floor2(OpcodeContext& ctx);
 
+// Tracks nesting depth of mf_message_box calls.
+// Must be reset across save/load via sfall_metarules_reset() to prevent
+// permanently disabling scripts when a save occurs during a dialog.
+static int sfall_metarules_dialogShowCount = 0;
+
 // ref. https://github.com/sfall-team/sfall/blob/42556141127895c27476cd5242a73739cbb0fade/sfall/Modules/Scripting/Handlers/Metarule.cpp#L72
 
 // TODO: reduce duplication further once this context is shared with opcode handlers too.
@@ -153,7 +158,7 @@ const MetaruleInfo kMetarules[] = {
     // {"interface_print",           mf_interface_print,           5, 6, -1, {ARG_STRING, ARG_INT, ARG_INT, ARG_INT, ARG_INT, ARG_INT}},
     // {"intface_hide",              mf_intface_hide,              0, 0},
     // {"intface_is_hidden",         mf_intface_is_hidden,         0, 0},
-    { "intface_redraw", mf_intface_redraw, 0, 1 },
+    { "intface_redraw", mf_intface_redraw, 0, 0 },
     // {"intface_show",              mf_intface_show,              0, 0},
     { "inventory_redraw", mf_inventory_redraw, 0, 1, -1, { ARG_INT } },
     // {"item_make_explosive",       mf_item_make_explosive,       3, 4, -1, {ARG_INT, ARG_INT, ARG_INT, ARG_INT}},
@@ -419,17 +424,17 @@ void mf_create_win(OpcodeContext& ctx)
         : WINDOW_MOVE_ON_TOP;
 
     int color = (flags & WINDOW_TRANSPARENT) != 0 ? 0 : 256;
-    if (scriptWindowCreate(ctx.stringArg(0),
-            ctx.arg(1).asInt(),
-            ctx.arg(2).asInt(),
-            ctx.arg(3).asInt(),
-            ctx.arg(4).asInt(),
-            color,
-            flags)
-        == -1) {
+    int windowIndex = scriptWindowCreate(ctx.stringArg(0),
+        ctx.arg(1).asInt(),
+        ctx.arg(2).asInt(),
+        ctx.arg(3).asInt(),
+        ctx.arg(4).asInt(),
+        color,
+        flags);
+    if (windowIndex == -1) {
         ctx.printError("%s() - couldn't create window.", ctx.name());
-        ctx.setReturn(-1);
     }
+    ctx.setReturn(windowIndex);
 }
 
 void mf_display_stats(OpcodeContext& ctx)
@@ -865,7 +870,9 @@ void mf_metarule_exist(OpcodeContext& ctx)
 void mf_add_extra_msg_file(OpcodeContext& ctx)
 {
     if (ctx.numArgs() == 2) {
-        programFatalError("op_sfall_func: '%s': explicit fileNumber is not supported in Fallout 2 CE", ctx.name());
+        ctx.printError("%s(): explicit fileNumber is not supported in Fallout 2 CE", ctx.name());
+        ctx.setReturn(-1);
+        return;
     }
 
     const char* fileName = ctx.stringArg(0);
@@ -1348,7 +1355,10 @@ void mf_string_format(OpcodeContext& ctx)
                     debugPrint("%s() - format string contains more conversions than passed arguments (%d): %s",
                         "string_format", numArgs - 1, format);
                 }
-                const auto& arg = formatArgs[std::min(valIdx - 1, numArgs - 2)];
+                // Use corresponding argument if available; otherwise use a default
+                // sentinel to avoid repeating the last argument for excess conversions.
+                static const ProgramValue kDefaultFormatArg;
+                const auto& arg = (valIdx < numArgs) ? formatArgs[valIdx - 1] : kDefaultFormatArg;
 
                 if (c == 'S' || c == 'Z') {
                     c = 's';
@@ -1363,6 +1373,13 @@ void mf_string_format(OpcodeContext& ctx)
                     : arg.isInt()    ? snprintf(outBuf, bufCount, newFmt.get(), arg.integerValue)
                     : arg.isString() ? snprintf(outBuf, bufCount, newFmt.get(), arg.asString(ctx.program()))
                                      : snprintf(outBuf, bufCount, newFmt.get(), "<UNSUPPORTED TYPE>");
+                // snprintf returns what would have been written, which can exceed bufCount.
+                // Clamp to prevent bufCount from going negative and causing buffer underflow.
+                if (partLen < 0) {
+                    partLen = 0;
+                } else if (partLen > bufCount) {
+                    partLen = bufCount;
+                }
             }
             outBuf += partLen;
             bufCount -= partLen;
@@ -1397,8 +1414,6 @@ void mf_floor2(OpcodeContext& ctx)
 // message_box
 void mf_message_box(OpcodeContext& ctx)
 {
-    static int dialogShowCount = 0;
-
     const char* string = ctx.stringArg(0);
     if (string == nullptr || string[0] == '\0') {
         ctx.setReturn(-1);
@@ -1435,10 +1450,10 @@ void mf_message_box(OpcodeContext& ctx)
         color2 = ctx.arg(3).asInt();
     }
 
-    dialogShowCount++;
+    sfall_metarules_dialogShowCount++;
     scriptsDisable();
     int rc = showDialogBox(copy, body, count, 192, 116, color1, nullptr, color2, flags);
-    if (--dialogShowCount == 0) {
+    if (--sfall_metarules_dialogShowCount == 0) {
         scriptsEnable();
     }
 
@@ -1474,7 +1489,7 @@ void sfall_metarule(Program* program, int args)
 
     if (metaruleInfo == nullptr) {
         programPrintError("op_sfall_func(\"%s\", ...) - metarule function is unknown.", metarule);
-        programStackPushInteger(program, 0);
+        programStackPushInteger(program, -1);
         return;
     }
 
@@ -1487,6 +1502,11 @@ void sfall_metarule(Program* program, int args)
 
     metaruleInfo->handler(ctx);
     ctx.pushReturnValue();
+}
+
+void sfall_metarules_reset()
+{
+    sfall_metarules_dialogShowCount = 0;
 }
 
 } // namespace fallout

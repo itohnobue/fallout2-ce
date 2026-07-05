@@ -44,7 +44,7 @@ static UseItemResultCode _obj_use_radio(Object* item);
 static UseItemResultCode _obj_use_explosive(Object* explosive);
 static UseItemResultCode _obj_use_power_on_car(Object* ammo);
 static UseItemResultCode _obj_use_misc_item(Object* item);
-static int _protinstTestDroppedExplosive(Object* explosiveItem);
+int _protinstTestDroppedExplosive(Object* explosiveItem);
 static UseItemResultCode _protinst_default_use_item(Object* user, Object* targetObj, Object* item);
 static int useLadderDown(Object* user, Object* ladder);
 static int useLadderUp(Object* user, Object* ladder);
@@ -1107,7 +1107,7 @@ UseItemResultCode objectUseItemInternal(Object* critter, Object* item)
 }
 
 // 0x49BFE8
-static int _protinstTestDroppedExplosive(Object* explosiveItem)
+int _protinstTestDroppedExplosive(Object* explosiveItem)
 {
     // SFALL
     if (explosiveIsActiveExplosive(explosiveItem->pid)) {

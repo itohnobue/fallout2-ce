@@ -14,6 +14,10 @@ bool sfall_gl_vars_store(const char* key, int value);
 bool sfall_gl_vars_store(int key, int value);
 bool sfall_gl_vars_fetch(const char* key, int& value);
 bool sfall_gl_vars_fetch(int key, int& value);
+bool sfall_gl_vars_store_float(const char* key, float value);
+bool sfall_gl_vars_store_float(int key, float value);
+bool sfall_gl_vars_fetch_float(const char* key, float& value);
+bool sfall_gl_vars_fetch_float(int key, float& value);
 
 } // namespace fallout
 

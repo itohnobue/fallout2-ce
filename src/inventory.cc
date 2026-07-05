@@ -4172,6 +4172,15 @@ static void inventoryWindowOpenContextMenu(int keyCode, int inventoryWindowType)
 
                 _obj_connect(item, gDude->tile, gDude->elevation, nullptr);
                 objectDestroy(item);
+            } else if (useResult == USE_ITEM_RESULT_DROP) {
+                if (itemSlot != nullptr) {
+                    *itemSlot = nullptr;
+                }
+
+                Rect updatedRect;
+                _obj_connect(item, gDude->tile, gDude->elevation, &updatedRect);
+                tileWindowRefreshRect(&updatedRect, gDude->elevation);
+                _protinstTestDroppedExplosive(item);
             } else {
                 if (itemSlot == nullptr) {
                     itemAdd(owner, item, 1);

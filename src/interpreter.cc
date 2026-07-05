@@ -15,6 +15,7 @@
 #include "memory_manager.h"
 #include "platform_compat.h"
 #include "sfall_global_scripts.h"
+#include "sfall_script_hooks.h"
 #include "svga.h"
 
 namespace fallout {
@@ -527,6 +528,12 @@ Program* programCreateByPath(const char* path)
     fileRead(data, 1, fileSize, stream);
     fileClose(stream);
 
+    if (fileSize < 46) {
+        internal_free_safe(data, __FILE__, __LINE__);
+        programFatalError("Invalid .int file '%s': size %d is too small (minimum 46 bytes)\n", path, fileSize);
+        return nullptr;
+    }
+
     Program* program = (Program*)internal_malloc_safe(sizeof(Program), __FILE__, __LINE__); // ..\\int\\INTRPRET.C, 463
     memset(program, 0, sizeof(Program));
 
@@ -557,6 +564,10 @@ Program* programCreateByPath(const char* path)
 opcode_t programGetNextOpcode(Program* program)
 {
     const int instructionPointer = program->instructionPointer;
+
+    if (instructionPointer < 0) {
+        programFatalError("programGetNextOpcode: negative instruction pointer %d", instructionPointer);
+    }
 
     if (instructionPointer + 2 > program->dataSize) {
         programFatalError("programGetNextOpcode: bytecode read out of bounds (instructionPointer=%d, dataSize=%d)", instructionPointer, program->dataSize);
@@ -2143,7 +2154,25 @@ static void opCall(Program* program)
 
     const int flags = stackReadInt32(ptr, offsetof(Procedure, flags));
     if ((flags & PROCEDURE_FLAG_IMPORTED) != 0) {
-        // TODO: Incomplete.
+        char* procedureIdentifier = programGetIdentifier(program, stackReadInt32(ptr, offsetof(Procedure, nameOffset)));
+        int externalProcedureAddress;
+        int externalProcedureArgumentCount;
+        Program* externalProgram = externalProcedureGetProgram(procedureIdentifier, &externalProcedureAddress, &externalProcedureArgumentCount);
+        if (externalProgram != nullptr) {
+            if (externalProcedureArgumentCount == 0) {
+                setupExternalCall(program, externalProgram, externalProcedureAddress, 28);
+                if ((flags & PROCEDURE_FLAG_CRITICAL) != 0) {
+                    opEnterCriticalSection(externalProgram);
+                    programInterpret(externalProgram, 0);
+                }
+            } else {
+                programFatalError("External procedure cannot take arguments in call context");
+            }
+        } else {
+            char err[260];
+            snprintf(err, sizeof(err), "External procedure %s not found\n", procedureIdentifier);
+            _interpretOutput(err);
+        }
     } else {
         program->instructionPointer = stackReadInt32(ptr, offsetof(Procedure, bodyOffset));
         if ((flags & PROCEDURE_FLAG_CRITICAL) != 0) {
@@ -2411,6 +2440,10 @@ static void opExportProcedure(Program* program)
     const int procedureIndex = programStackPopInteger(program);
     const int argumentCount = programStackPopInteger(program);
 
+    if (procedureIndex < 0 || procedureIndex >= program->procedureCount()) {
+        programFatalError("Invalid procedure index %d given to export procedure (max %d)", procedureIndex, program->procedureCount());
+    }
+
     unsigned char* const proc_ptr = program->procedures + 4 + sizeof(Procedure) * procedureIndex;
 
     char* const procedureName = programGetIdentifier(program, stackReadInt32(proc_ptr, offsetof(Procedure, nameOffset)));
@@ -2582,6 +2615,10 @@ static void opCheckProcedureArgumentCount(Program* program)
 {
     const int expectedArgumentCount = programStackPopInteger(program);
     const int procedureIndex = programStackPopInteger(program);
+
+    if (procedureIndex < 0 || procedureIndex >= program->procedureCount()) {
+        programFatalError("Invalid procedure index %d given to check procedure argument count (max %d)", procedureIndex, program->procedureCount());
+    }
 
     const int actualArgumentCount = stackReadInt32(program->procedures + 4 + 24 * procedureIndex, offsetof(Procedure, argCount));
     if (actualArgumentCount != expectedArgumentCount) {
@@ -2871,6 +2908,7 @@ static void setupExternalCallWithReturnVal(Program* caller, Program* callee, int
     callee->flags &= ~0xFFFF;
     callee->instructionPointer = address;
     callee->windowId = caller->windowId;
+    callee->parent = caller;
 
     caller->flags |= PROGRAM_FLAG_CHILD_CALL;
 }
@@ -3458,6 +3496,12 @@ ProgramValue::ProgramValue(Attack* value)
     opcode = VALUE_TYPE_PTR;
     pointerValue = value;
 }
+ProgramValue::ProgramValue(const char* value)
+{
+    opcode = VALUE_TYPE_STRING;
+    integerValue = -1; // sentinel: pointerValue holds the raw C string
+    pointerValue = const_cast<char*>(value);
+}
 
 bool ProgramValue::isPointer() const
 {
@@ -3495,6 +3539,11 @@ const char* ProgramValue::asString(Program* program) const
     if (!isString()) {
         programPrintError("ProgramValue::asString: string expected, got %x", opcode);
         return "";
+    }
+
+    // C-string constructed via ProgramValue(const char*): pointerValue holds the raw string
+    if (integerValue == -1) {
+        return static_cast<const char*>(pointerValue);
     }
 
     return programGetString(program, opcode, integerValue);

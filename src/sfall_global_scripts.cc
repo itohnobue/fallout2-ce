@@ -81,6 +81,17 @@ void sfall_gl_scr_exit()
 void sfall_gl_scr_exec_start_proc()
 {
     for (auto& path : state->paths) {
+        // Pre-check file existence to prevent programCreateByPath's internal
+        // programFatalError from longjmp-ing to the calling program's context.
+        // programFatalError longjmps to gInterpreterCurrentProgram->env, which
+        // during lazy script load points to the currently executing script, not
+        // the script being loaded. This would corrupt the wrong program's state.
+        File* test = fileOpen(path.c_str(), "rb");
+        if (test == nullptr) {
+            continue;
+        }
+        fileClose(test);
+
         Program* program = programCreateByPath(path.c_str());
         if (program != nullptr) {
             GlobalScript scr;
@@ -135,6 +146,13 @@ static void sfall_gl_scr_process_simple(int mode1, int mode2)
 {
     for (auto& scr : state->globalScripts) {
         if (scr.repeat != 0 && (scr.mode == mode1 || scr.mode == mode2)) {
+            // Reset combat check per-script to prevent state leakage between
+            // global scripts. reg_anim_combat_check flips the global
+            // gRegAnimCombatCheck flag in animation.cc. Resetting it before
+            // each script ensures one script disabling combat check doesn't
+            // affect later scripts in the same tick.
+            animationResetCombatCheck();
+
             scr.count++;
             if (scr.count >= scr.repeat) {
                 if (sfall_gl_scr_execute_proc_if_ready(scr.program, scr.procs[SCRIPT_PROC_START])) {
@@ -145,12 +163,6 @@ static void sfall_gl_scr_process_simple(int mode1, int mode2)
             }
         }
     }
-
-    // reg_anim_combat_check flips the global gRegAnimCombatCheck flag in
-    // animation.cc. Resetting it only once after the whole loop means one
-    // global script can disable the combat check and leak that setting into
-    // later global scripts executed in the same tick. Might be better to save/restore.
-    animationResetCombatCheck();
 }
 
 void sfall_gl_scr_process_main()

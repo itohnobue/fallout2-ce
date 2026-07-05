@@ -20,6 +20,7 @@ add_library(test_sources STATIC
     "${CMAKE_SOURCE_DIR}/src/dictionary.cc"
     "${CMAKE_SOURCE_DIR}/src/memory.cc"
     "${CMAKE_SOURCE_DIR}/src/sfall_global_vars.cc"
+    "${CMAKE_SOURCE_DIR}/src/game_config_migration.cc"
 )
 target_include_directories(test_sources PUBLIC "${CMAKE_SOURCE_DIR}/src")
 target_include_directories(test_sources PUBLIC ${SDL2_INCLUDE_DIRS})
@@ -60,3 +61,10 @@ target_include_directories(test_script_hooks PRIVATE ${SDL2_INCLUDE_DIRS})
 target_include_directories(test_script_hooks PRIVATE ${ZLIB_INCLUDE_DIRS})
 target_link_libraries(test_script_hooks PRIVATE test_stubs doctest)
 add_test(NAME test_script_hooks COMMAND test_script_hooks)
+
+# ---- Test: game_config_migration.cc ----
+add_executable(test_game_config_migration
+    test_game_config_migration.cc
+)
+target_link_libraries(test_game_config_migration PRIVATE test_sources test_stubs doctest)
+add_test(NAME test_game_config_migration COMMAND test_game_config_migration)

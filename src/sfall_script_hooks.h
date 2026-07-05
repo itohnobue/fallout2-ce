@@ -244,6 +244,10 @@ public:
     ProgramValue getArgAt(int idx) const;
     ProgramValue getReturnValueAt(int idx) const;
 
+    // Returns the Program* of the last script that ran during call(),
+    // so hook consumers can resolve string-table-based return values.
+    Program* lastProgram() const { return _lastProgram; }
+
 private:
     static std::vector<ScriptHookCall*> _callStack;
 
@@ -257,6 +261,7 @@ private:
 
     int _scriptArgs = 0;
     int _scriptRetVals = 0;
+    Program* _lastProgram = nullptr;
 };
 
 struct BarterPriceContext {

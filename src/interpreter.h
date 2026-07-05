@@ -158,6 +158,7 @@ public:
     ProgramValue(Object* value);
     // TODO: better approach for supporting different object types?
     ProgramValue(Attack* value);
+    ProgramValue(const char* value);
 
     opcode_t opcode;
     union {

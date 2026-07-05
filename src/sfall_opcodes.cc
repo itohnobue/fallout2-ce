@@ -1,6 +1,7 @@
 #include "sfall_opcodes.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <math.h>
 #include <string.h>
 
@@ -59,9 +60,13 @@ typedef enum ExplosionMetarule {
     EXPL_SET_EXPLOSION_MAX_TARGET = 9,
 } ExplosionMetarule;
 
+// Version constants: reported to scripts via sfall_ver_major/minor/build.
+// Bumped from 4.4.9 to 4.5.1 for RPU/ET Tu compatibility.
+// These remain constexpr for now; CMake-configured version would allow
+// compile-time customization for different sfall compatibility targets.
 static constexpr int kVersionMajor = 4;
-static constexpr int kVersionMinor = 4;
-static constexpr int kVersionPatch = 9;
+static constexpr int kVersionMinor = 5;
+static constexpr int kVersionPatch = 1;
 static constexpr int kSfallPathBufferSize = 3200; // matches rotation path size in animation.cc
 
 static void op_art_exists(Program* program)
@@ -135,7 +140,7 @@ static void op_set_critter_base_stat(Program* program)
     int value = programStackPopInteger(program);
     int stat = programStackPopInteger(program);
     Object* obj = static_cast<Object*>(programStackPopPointer(program));
-    if (obj == nullptr) {
+    if (obj == nullptr || FID_TYPE(obj->fid) != OBJ_TYPE_CRITTER) {
         return;
     }
     critterSetBaseStat(obj, stat, value);
@@ -160,7 +165,7 @@ static void op_set_critter_extra_stat(Program* program)
     int value = programStackPopInteger(program);
     int stat = programStackPopInteger(program);
     Object* obj = static_cast<Object*>(programStackPopPointer(program));
-    if (obj == nullptr) {
+    if (obj == nullptr || FID_TYPE(obj->fid) != OBJ_TYPE_CRITTER) {
         return;
     }
     critterSetBonusStat(obj, stat, value);
@@ -183,7 +188,7 @@ static void op_get_critter_base_stat(Program* program)
     // current stats.
     int stat = programStackPopInteger(program);
     Object* obj = static_cast<Object*>(programStackPopPointer(program));
-    if (obj == nullptr) {
+    if (obj == nullptr || FID_TYPE(obj->fid) != OBJ_TYPE_CRITTER) {
         programStackPushInteger(program, 0);
         return;
     }
@@ -202,7 +207,7 @@ static void op_get_critter_extra_stat(Program* program)
 {
     int stat = programStackPopInteger(program);
     Object* obj = static_cast<Object*>(programStackPopPointer(program));
-    if (obj == nullptr) {
+    if (obj == nullptr || FID_TYPE(obj->fid) != OBJ_TYPE_CRITTER) {
         programStackPushInteger(program, 0);
         return;
     }
@@ -393,6 +398,16 @@ static void op_set_global_script_type(Program* program)
     sfall_gl_scr_set_type(program, type);
 }
 
+// available_global_script_types
+// Returns a bitmask of the global script types supported by the engine.
+// Type 0 = timed, Type 1 = background/always, Type 2 = world map only, Type 3 = gameplay.
+static void op_available_global_script_types(Program* program)
+{
+    // All 4 types are supported: bits 0-3 = 0xF = 15
+    constexpr int kSupportedTypes = (1 << 0) | (1 << 1) | (1 << 2) | (1 << 3);
+    programStackPushInteger(program, kSupportedTypes);
+}
+
 // set_sfall_global
 static void op_set_sfall_global(Program* program)
 {
@@ -421,6 +436,25 @@ static void op_get_sfall_global_int(Program* program)
     }
 
     programStackPushInteger(program, value);
+}
+
+// get_sfall_global_float
+// NOTE: Global variables are int-backed (unordered_map<uint64_t, int>).
+// This handler returns 0.0f — true float storage requires variant storage
+// or a parallel float map (see F-38 for architectural fix).
+static void op_get_sfall_global_float(Program* program)
+{
+    ProgramValue variable = programStackPopValue(program);
+
+    int value = 0;
+    if ((variable.opcode & VALUE_TYPE_MASK) == VALUE_TYPE_STRING) {
+        const char* key = programGetString(program, variable.opcode, variable.integerValue);
+        sfall_gl_vars_fetch(key, value);
+    } else if (variable.opcode == VALUE_TYPE_INT) {
+        sfall_gl_vars_fetch(variable.integerValue, value);
+    }
+
+    programStackPushFloat(program, static_cast<float>(value));
 }
 
 // get_game_mode
@@ -697,8 +731,15 @@ static void op_set_script(Program* program)
 // get_proto_data
 static void op_get_proto_data(Program* program)
 {
-    size_t offset = static_cast<size_t>(programStackPopInteger(program));
+    int rawOffset = programStackPopInteger(program);
     int pid = programStackPopInteger(program);
+
+    if (rawOffset < 0) {
+        programPrintError("get_proto_data: negative offset %d not allowed", rawOffset);
+        programStackPushInteger(program, -1);
+        return;
+    }
+    size_t offset = static_cast<size_t>(rawOffset);
 
     Proto* proto;
     if (protoGetProto(pid, &proto) != 0) {
@@ -723,8 +764,14 @@ static void op_get_proto_data(Program* program)
 static void op_set_proto_data(Program* program)
 {
     int value = programStackPopInteger(program);
-    size_t offset = static_cast<size_t>(programStackPopInteger(program));
+    int rawOffset = programStackPopInteger(program);
     int pid = programStackPopInteger(program);
+
+    if (rawOffset < 0) {
+        programPrintError("set_proto_data: negative offset %d not allowed", rawOffset);
+        return;
+    }
+    size_t offset = static_cast<size_t>(rawOffset);
 
     Proto* proto;
     if (protoGetProto(pid, &proto) != 0) {
@@ -835,10 +882,14 @@ static void op_set_weapon_ammo_pid(Program* program)
         if (PID_TYPE(obj->pid) == OBJ_TYPE_ITEM) {
             switch (itemGetType(obj)) {
             case ITEM_TYPE_WEAPON: {
-                // Validate that the new ammo PID references a valid proto.
+                // Validate that the new ammo PID references a valid ammo proto.
                 Proto* ammoProto;
                 if (protoGetProto(ammoTypePid, &ammoProto) != 0) {
                     programPrintError("set_weapon_ammo_pid: invalid ammo PID %d (proto not found)", ammoTypePid);
+                    return;
+                }
+                if (PID_TYPE(ammoTypePid) != OBJ_TYPE_ITEM || ammoProto->item.type != ITEM_TYPE_AMMO) {
+                    programPrintError("set_weapon_ammo_pid: PID %d is not ITEM_TYPE_AMMO", ammoTypePid);
                     return;
                 }
                 // Clamp current ammo quantity to the new ammo type's max capacity.
@@ -1385,6 +1436,10 @@ static void op_get_array(Program* program)
         } else {
             programStackPushString(program, buf);
         }
+    } else {
+        // Unsupported type combination (e.g. float arrayId or non-int key on
+        // string arrayId). Push 0 to maintain stack balance.
+        programStackPushInteger(program, 0);
     }
 }
 
@@ -1619,6 +1674,444 @@ static void op_sfall_func8(Program* program)
     sfall_metarule(program, 8);
 }
 
+// ============================================================
+// Virtual File System (VFS) opcodes
+// sfall VFS allows scripts to read/write files via integer handles.
+// Used by RPU (gl_k_goris_derobing, gl_k_walking_speed) for modifying
+// FRM animation files at runtime.
+// ============================================================
+
+static constexpr int kVfsMaxFiles = 100;
+static FILE* sfallVfsFiles[kVfsMaxFiles] = {};
+static bool sfallVfsFileOpen[kVfsMaxFiles] = {};
+
+static int sfallVfsAllocHandle()
+{
+    for (int i = 0; i < kVfsMaxFiles; i++) {
+        if (!sfallVfsFileOpen[i]) {
+            sfallVfsFileOpen[i] = true;
+            return i;
+        }
+    }
+    return -1;
+}
+
+static void sfallVfsFreeHandle(int id)
+{
+    if (id >= 0 && id < kVfsMaxFiles) {
+        if (sfallVfsFiles[id] != nullptr) {
+            fclose(sfallVfsFiles[id]);
+            sfallVfsFiles[id] = nullptr;
+        }
+        sfallVfsFileOpen[id] = false;
+    }
+}
+
+static void sfallVfsCloseAll()
+{
+    for (int i = 0; i < kVfsMaxFiles; i++) {
+        sfallVfsFreeHandle(i);
+    }
+}
+
+// fs_create(path, size) -> fileId (or -1 on error)
+static void op_fs_create(Program* program)
+{
+    int size = programStackPopInteger(program);
+    const char* path = programStackPopString(program);
+
+    int handle = sfallVfsAllocHandle();
+    if (handle < 0) {
+        programPrintError("fs_create: no free VFS handles");
+        programStackPushInteger(program, -1);
+        return;
+    }
+
+    FILE* file = compat_fopen(path, "w+b");
+    if (file == nullptr) {
+        programPrintError("fs_create: cannot create file '%s'", path);
+        sfallVfsFileOpen[handle] = false;
+        programStackPushInteger(program, -1);
+        return;
+    }
+
+    // Validate size before fseek to prevent UB with size <= 0
+    if (size <= 0) {
+        programPrintError("fs_create: invalid size %d", size);
+        fclose(file);
+        sfallVfsFileOpen[handle] = false;
+        programStackPushInteger(program, -1);
+        return;
+    }
+
+    // Allocate the requested size (simple approach: seek + write)
+    fseek(file, static_cast<long>(size) - 1, SEEK_SET);
+    fputc(0, file);
+    rewind(file);
+
+    sfallVfsFiles[handle] = file;
+    programStackPushInteger(program, handle);
+}
+
+// fs_copy(path, source_path) -> fileId (or -1 on error)
+static void op_fs_copy(Program* program)
+{
+    const char* sourcePath = programStackPopString(program);
+    const char* destPath = programStackPopString(program);
+
+    // Open source file for reading
+    FILE* srcFile = compat_fopen(sourcePath, "rb");
+    if (srcFile == nullptr) {
+        programPrintError("fs_copy: cannot open source '%s'", sourcePath);
+        programStackPushInteger(program, -1);
+        return;
+    }
+
+    int handle = sfallVfsAllocHandle();
+    if (handle < 0) {
+        programPrintError("fs_copy: no free VFS handles");
+        fclose(srcFile);
+        programStackPushInteger(program, -1);
+        return;
+    }
+
+    FILE* destFile = compat_fopen(destPath, "w+b");
+    if (destFile == nullptr) {
+        programPrintError("fs_copy: cannot create dest '%s'", destPath);
+        fclose(srcFile);
+        sfallVfsFileOpen[handle] = false;
+        programStackPushInteger(program, -1);
+        return;
+    }
+
+    // Copy file contents
+    char buf[4096];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof(buf), srcFile)) > 0) {
+        fwrite(buf, 1, n, destFile);
+    }
+
+    fclose(srcFile);
+    rewind(destFile); // position at start for reading
+    sfallVfsFiles[handle] = destFile;
+    programStackPushInteger(program, handle);
+}
+
+// fs_find(path) -> fileId (or -1 if not found)
+static void op_fs_find(Program* program)
+{
+    const char* path = programStackPopString(program);
+
+    FILE* file = compat_fopen(path, "rb");
+    if (file == nullptr) {
+        programStackPushInteger(program, -1);
+        return;
+    }
+
+    int handle = sfallVfsAllocHandle();
+    if (handle < 0) {
+        programPrintError("fs_find: no free VFS handles");
+        fclose(file);
+        programStackPushInteger(program, -1);
+        return;
+    }
+
+    sfallVfsFiles[handle] = file;
+    programStackPushInteger(program, handle);
+}
+
+// fs_write_byte(id, data)
+static void op_fs_write_byte(Program* program)
+{
+    int data = programStackPopInteger(program);
+    int id = programStackPopInteger(program);
+
+    if (id < 0 || id >= kVfsMaxFiles || sfallVfsFiles[id] == nullptr) {
+        programPrintError("fs_write_byte: invalid VFS handle %d", id);
+        return;
+    }
+
+    fputc(data & 0xFF, sfallVfsFiles[id]);
+}
+
+// fs_write_short(id, data)
+static void op_fs_write_short(Program* program)
+{
+    int data = programStackPopInteger(program);
+    int id = programStackPopInteger(program);
+
+    if (id < 0 || id >= kVfsMaxFiles || sfallVfsFiles[id] == nullptr) {
+        programPrintError("fs_write_short: invalid VFS handle %d", id);
+        return;
+    }
+
+    uint16_t value = static_cast<uint16_t>(data);
+    fwrite(&value, sizeof(value), 1, sfallVfsFiles[id]);
+}
+
+// fs_write_int(id, data)
+static void op_fs_write_int(Program* program)
+{
+    int data = programStackPopInteger(program);
+    int id = programStackPopInteger(program);
+
+    if (id < 0 || id >= kVfsMaxFiles || sfallVfsFiles[id] == nullptr) {
+        programPrintError("fs_write_int: invalid VFS handle %d", id);
+        return;
+    }
+
+    int32_t value = static_cast<int32_t>(data);
+    fwrite(&value, sizeof(value), 1, sfallVfsFiles[id]);
+}
+
+// fs_write_float(id, data)
+static void op_fs_write_float(Program* program)
+{
+    ProgramValue pv = programStackPopValue(program);
+    int id = programStackPopInteger(program);
+
+    if (id < 0 || id >= kVfsMaxFiles || sfallVfsFiles[id] == nullptr) {
+        programPrintError("fs_write_float: invalid VFS handle %d", id);
+        return;
+    }
+
+    float value = pv.asFloat();
+    fwrite(&value, sizeof(value), 1, sfallVfsFiles[id]);
+}
+
+// fs_write_string(id, string)
+static void op_fs_write_string(Program* program)
+{
+    const char* string = programStackPopString(program);
+    int id = programStackPopInteger(program);
+
+    if (id < 0 || id >= kVfsMaxFiles || sfallVfsFiles[id] == nullptr) {
+        programPrintError("fs_write_string: invalid VFS handle %d", id);
+        return;
+    }
+
+    fputs(string, sfallVfsFiles[id]);
+}
+
+// fs_write_bstring(id, string) — writes a length-prefixed byte string
+static void op_fs_write_bstring(Program* program)
+{
+    const char* string = programStackPopString(program);
+    int id = programStackPopInteger(program);
+
+    if (id < 0 || id >= kVfsMaxFiles || sfallVfsFiles[id] == nullptr) {
+        programPrintError("fs_write_bstring: invalid VFS handle %d", id);
+        return;
+    }
+
+    int len = static_cast<int>(strlen(string));
+    uint8_t lenByte = static_cast<uint8_t>(len > 255 ? 255 : len);
+    fwrite(&lenByte, 1, 1, sfallVfsFiles[id]);
+    fwrite(string, 1, lenByte, sfallVfsFiles[id]);
+}
+
+// fs_read_byte(id) -> int (-1 on error)
+static void op_fs_read_byte(Program* program)
+{
+    int id = programStackPopInteger(program);
+
+    if (id < 0 || id >= kVfsMaxFiles || sfallVfsFiles[id] == nullptr) {
+        programPrintError("fs_read_byte: invalid VFS handle %d", id);
+        programStackPushInteger(program, -1);
+        return;
+    }
+
+    int value = fgetc(sfallVfsFiles[id]);
+    programStackPushInteger(program, value);
+}
+
+// fs_read_short(id) -> int (-1 on error)
+static void op_fs_read_short(Program* program)
+{
+    int id = programStackPopInteger(program);
+
+    if (id < 0 || id >= kVfsMaxFiles || sfallVfsFiles[id] == nullptr) {
+        programPrintError("fs_read_short: invalid VFS handle %d", id);
+        programStackPushInteger(program, -1);
+        return;
+    }
+
+    uint16_t value;
+    if (fread(&value, sizeof(value), 1, sfallVfsFiles[id]) != 1) {
+        programStackPushInteger(program, -1);
+        return;
+    }
+    programStackPushInteger(program, static_cast<int>(value));
+}
+
+// fs_read_int(id) -> int (-1 on error)
+static void op_fs_read_int(Program* program)
+{
+    int id = programStackPopInteger(program);
+
+    if (id < 0 || id >= kVfsMaxFiles || sfallVfsFiles[id] == nullptr) {
+        programPrintError("fs_read_int: invalid VFS handle %d", id);
+        programStackPushInteger(program, -1);
+        return;
+    }
+
+    int32_t value;
+    if (fread(&value, sizeof(value), 1, sfallVfsFiles[id]) != 1) {
+        programStackPushInteger(program, -1);
+        return;
+    }
+    programStackPushInteger(program, value);
+}
+
+// fs_read_float(id) -> float (0.0 on error)
+static void op_fs_read_float(Program* program)
+{
+    int id = programStackPopInteger(program);
+
+    if (id < 0 || id >= kVfsMaxFiles || sfallVfsFiles[id] == nullptr) {
+        programPrintError("fs_read_float: invalid VFS handle %d", id);
+        programStackPushFloat(program, 0.0f);
+        return;
+    }
+
+    float value;
+    if (fread(&value, sizeof(value), 1, sfallVfsFiles[id]) != 1) {
+        programStackPushFloat(program, 0.0f);
+        return;
+    }
+    programStackPushFloat(program, value);
+}
+
+// fs_delete(id)
+static void op_fs_delete(Program* program)
+{
+    int id = programStackPopInteger(program);
+    sfallVfsFreeHandle(id);
+}
+
+// fs_size(id) -> int (-1 on error)
+static void op_fs_size(Program* program)
+{
+    int id = programStackPopInteger(program);
+
+    if (id < 0 || id >= kVfsMaxFiles || sfallVfsFiles[id] == nullptr) {
+        programPrintError("fs_size: invalid VFS handle %d", id);
+        programStackPushInteger(program, -1);
+        return;
+    }
+
+    long pos = ftell(sfallVfsFiles[id]);
+    fseek(sfallVfsFiles[id], 0, SEEK_END);
+    long size = ftell(sfallVfsFiles[id]);
+    fseek(sfallVfsFiles[id], pos, SEEK_SET);
+
+    programStackPushInteger(program, static_cast<int>(size));
+}
+
+// fs_pos(id) -> int (-1 on error)
+static void op_fs_pos(Program* program)
+{
+    int id = programStackPopInteger(program);
+
+    if (id < 0 || id >= kVfsMaxFiles || sfallVfsFiles[id] == nullptr) {
+        programPrintError("fs_pos: invalid VFS handle %d", id);
+        programStackPushInteger(program, -1);
+        return;
+    }
+
+    programStackPushInteger(program, static_cast<int>(ftell(sfallVfsFiles[id])));
+}
+
+// fs_seek(id, pos)
+static void op_fs_seek(Program* program)
+{
+    int pos = programStackPopInteger(program);
+    int id = programStackPopInteger(program);
+
+    if (id < 0 || id >= kVfsMaxFiles || sfallVfsFiles[id] == nullptr) {
+        programPrintError("fs_seek: invalid VFS handle %d", id);
+        return;
+    }
+
+    fseek(sfallVfsFiles[id], pos, SEEK_SET);
+}
+
+// fs_resize(id, size)
+static void op_fs_resize(Program* program)
+{
+    int size = programStackPopInteger(program);
+    int id = programStackPopInteger(program);
+
+    if (id < 0 || id >= kVfsMaxFiles || sfallVfsFiles[id] == nullptr) {
+        programPrintError("fs_resize: invalid VFS handle %d", id);
+        return;
+    }
+
+    // Note: resize requires read+write mode. Handles opened via fs_find ("rb")
+    // or fs_create/fs_copy ("w+b") may fail silently with fputc if mode is wrong.
+    // TODO: track VFS handle open modes and reopen as "r+b" when needed.
+    if (size <= 0) {
+        programPrintError("fs_resize: invalid size %d", size);
+        return;
+    }
+    fseek(sfallVfsFiles[id], static_cast<long>(size) - 1, SEEK_SET);
+    fputc(0, sfallVfsFiles[id]);
+}
+
+// ============================================================
+// NPC/Hero opcodes
+// ============================================================
+
+// inc_npc_level(pid or string name)
+// Stub: increments an NPC's level. Full implementation requires
+// NPC level tracking infrastructure not yet present in CE.
+static void op_inc_npc_level(Program* program)
+{
+    ProgramValue arg = programStackPopValue(program);
+    // Stub: no-op. PID/name-based NPC level tracking not implemented.
+    // RPU party leveling scripts call this but functionality requires
+    // per-critter level storage.
+    (void)arg;
+}
+
+// get_npc_level(pid or string name) -> int
+// Stub: returns 0. Full implementation needs NPC level storage.
+static void op_get_npc_level(Program* program)
+{
+    ProgramValue arg = programStackPopValue(program);
+    // Stub: always returns 0. NPC level tracking not yet implemented.
+    (void)arg;
+    programStackPushInteger(program, 0);
+}
+
+// set_dm_model(string model_name)
+// Stub: sets the default male hero model.
+static void op_set_dm_model(Program* program)
+{
+    const char* modelName = programStackPopString(program);
+    // Stub: Hero Appearance model switching not yet implemented.
+    // RPU Hero Appearance mod uses this for male model selection.
+    (void)modelName;
+}
+
+// set_df_model(string model_name)
+// Stub: sets the default female hero model.
+static void op_set_df_model(Program* program)
+{
+    const char* modelName = programStackPopString(program);
+    // Stub: Hero Appearance model switching not yet implemented.
+    (void)modelName;
+}
+
+// hero_select_win(int window_id)
+// Stub: opens the hero selection window.
+static void op_hero_select_win(Program* program)
+{
+    int win = programStackPopInteger(program);
+    // Stub: Hero selection window not yet implemented.
+    (void)win;
+}
+
 // div (/)
 static void op_div(Program* program)
 {
@@ -1779,6 +2272,63 @@ static void op_register_hook_proc(Program* program)
     if (!scriptHooksRegister(program, static_cast<HookType>(hookId), procedureIndex)) {
         programPrintError("%s(%d, %d): failed", opcodeName, hookId, procedureIndex);
     }
+}
+
+// register_hook_proc_spec
+// In sfall: inserts at end of hook order (spec = special/append).
+// In CE: currently inserts at beginning due to shared scriptHooksRegister
+// implementation. This is a known gap — see note in op_register_hook_proc.
+static void op_register_hook_proc_spec(Program* program)
+{
+    constexpr char opcodeName[] = "register_hook_proc_spec";
+
+    int procedureIndex = programStackPopInteger(program);
+    int hookId = programStackPopInteger(program);
+    if (hookId < 0 || hookId >= HOOK_COUNT) {
+        programPrintError("%s: invalid hook ID: %d", opcodeName, hookId);
+        return;
+    }
+    if (procedureIndex < 0 || procedureIndex >= program->procedureCount()) {
+        programPrintError("%s: procedure index %d is out of range [0; %d]", opcodeName, procedureIndex, program->procedureCount());
+        return;
+    }
+
+    if (!scriptHooksRegister(program, static_cast<HookType>(hookId), procedureIndex)) {
+        programPrintError("%s(%d, %d): failed", opcodeName, hookId, procedureIndex);
+    }
+}
+
+// ============================================================
+// reg_anim_callback: called when registered animations complete.
+// In sfall 4.x, this registers a procedure to be invoked upon
+// animation completion. The callback receives the animated object
+// and a pre-set argument.
+// Currently stores the callback for future integration with the
+// animation system. The opcode is registered so RPU/ET Tu scripts
+// do not crash.
+// ============================================================
+
+static Program* sfallAnimCallbackProgram = nullptr;
+static int sfallAnimCallbackProcedureIndex = -1;
+
+static void op_reg_anim_callback(Program* program)
+{
+    int procedureIndex = programStackPopInteger(program);
+
+    if (procedureIndex < 0 || procedureIndex >= program->procedureCount()) {
+        programPrintError("reg_anim_callback: procedure index %d is out of range [0; %d]",
+            procedureIndex, program->procedureCount());
+        return;
+    }
+
+    sfallAnimCallbackProgram = program;
+    sfallAnimCallbackProcedureIndex = procedureIndex;
+}
+
+static void sfallAnimCallbackReset()
+{
+    sfallAnimCallbackProgram = nullptr;
+    sfallAnimCallbackProcedureIndex = -1;
 }
 
 ScriptHookCall* hookOpcodeGetCurrentCall(const char* opcodeName)
@@ -1943,6 +2493,7 @@ void sfallOpcodesInit()
     // 0x819b - void set_global_script_type(int type)
     interpreterRegisterOpcode(0x819B, op_set_global_script_type);
     // 0x819c - int available_global_script_types()
+    interpreterRegisterOpcode(0x819c, op_available_global_script_types);
 
     // 0x8170 - bool in_world_map()
     interpreterRegisterOpcode(0x8170, op_in_world_map);
@@ -1962,7 +2513,9 @@ void sfallOpcodesInit()
     interpreterRegisterOpcode(0x8174, op_get_world_map_y_pos);
 
     // 0x8175 - void set_dm_model(string name)
+    interpreterRegisterOpcode(0x8175, op_set_dm_model);
     // 0x8176 - void set_df_model(string name)
+    interpreterRegisterOpcode(0x8176, op_set_df_model);
     // 0x8177 - void set_movie_path(string filename, int movieid)
 
     // 0x8178 - void set_perk_image(int perkID, int value)
@@ -2017,6 +2570,7 @@ void sfallOpcodesInit()
     // 0x819e - int   get_sfall_global_int(string/int varname)
     interpreterRegisterOpcode(0x819E, op_get_sfall_global_int);
     // 0x819f - float get_sfall_global_float(string/int varname)
+    interpreterRegisterOpcode(0x819f, op_get_sfall_global_float);
     // 0x822d - int   create_array(int element_count, int flags)
     interpreterRegisterOpcode(0x822D, op_create_array);
     // 0x822e - void  set_array(int array, any element, any value)
@@ -2062,7 +2616,9 @@ void sfallOpcodesInit()
     // 0x81a4 - void set_eax_environment(int environment)
 
     // 0x81a5 - void inc_npc_level(int pid/string name)
+    interpreterRegisterOpcode(0x81a5, op_inc_npc_level);
     // 0x8241 - int  get_npc_level(int pid/string name)
+    interpreterRegisterOpcode(0x8241, op_get_npc_level);
 
     // 0x81a6 - int get_viewport_x()
     // 0x81a7 - int get_viewport_y()
@@ -2179,23 +2735,41 @@ void sfallOpcodesInit()
     // 0x81f6 - int nb_create_char() // deprecated; do not implement
 
     // 0x81f7 - int   fs_create(string path, int size)
+    interpreterRegisterOpcode(0x81f7, op_fs_create);
     // 0x81f8 - int   fs_copy(string path, string source)
+    interpreterRegisterOpcode(0x81f8, op_fs_copy);
     // 0x81f9 - int   fs_find(string path)
+    interpreterRegisterOpcode(0x81f9, op_fs_find);
     // 0x81fa - void  fs_write_byte(int id, int data)
+    interpreterRegisterOpcode(0x81fa, op_fs_write_byte);
     // 0x81fb - void  fs_write_short(int id, int data)
+    interpreterRegisterOpcode(0x81fb, op_fs_write_short);
     // 0x81fc - void  fs_write_int(int id, int data)
+    interpreterRegisterOpcode(0x81fc, op_fs_write_int);
     // 0x81fd - void  fs_write_float(int id, int data)
+    interpreterRegisterOpcode(0x81fd, op_fs_write_float);
     // 0x81fe - void  fs_write_string(int id, string data)
+    interpreterRegisterOpcode(0x81fe, op_fs_write_string);
     // 0x8208 - void  fs_write_bstring(int id, string data)
+    interpreterRegisterOpcode(0x8208, op_fs_write_bstring);
     // 0x8209 - int   fs_read_byte(int id)
+    interpreterRegisterOpcode(0x8209, op_fs_read_byte);
     // 0x820a - int   fs_read_short(int id)
+    interpreterRegisterOpcode(0x820a, op_fs_read_short);
     // 0x820b - int   fs_read_int(int id)
+    interpreterRegisterOpcode(0x820b, op_fs_read_int);
     // 0x820c - float fs_read_float(int id)
+    interpreterRegisterOpcode(0x820c, op_fs_read_float);
     // 0x81ff - void  fs_delete(int id)
+    interpreterRegisterOpcode(0x81ff, op_fs_delete);
     // 0x8200 - int   fs_size(int id)
+    interpreterRegisterOpcode(0x8200, op_fs_size);
     // 0x8201 - int   fs_pos(int id)
+    interpreterRegisterOpcode(0x8201, op_fs_pos);
     // 0x8202 - void  fs_seek(int id, int pos)
+    interpreterRegisterOpcode(0x8202, op_fs_seek);
     // 0x8203 - void  fs_resize(int id, int size)
+    interpreterRegisterOpcode(0x8203, op_fs_resize);
 
     // 0x8204 - int  get_proto_data(int pid, int offset)
     interpreterRegisterOpcode(0x8204, op_get_proto_data);
@@ -2224,6 +2798,7 @@ void sfallOpcodesInit()
     interpreterRegisterOpcode(0x8212, op_get_version_patch);
 
     // 0x8213 - void hero_select_win(int)
+    interpreterRegisterOpcode(0x8213, op_hero_select_win);
     // 0x8214 - void set_hero_race(int style)
     // 0x8215 - void set_hero_style(int style)
 
@@ -2363,12 +2938,15 @@ void sfallOpcodesInit()
     interpreterRegisterOpcode(0x8281, op_sfall_func8);
 
     // 0x827d - void register_hook_proc_spec(int hook, procedure proc)
-    interpreterRegisterOpcode(0x827d, op_register_hook_proc);
+    interpreterRegisterOpcode(0x827d, op_register_hook_proc_spec);
     // 0x827e - void reg_anim_callback(procedure proc)
+    interpreterRegisterOpcode(0x827e, op_reg_anim_callback);
 }
 
 void sfallOpcodesExit()
 {
+    sfallAnimCallbackReset();
+    sfallVfsCloseAll();
 }
 
 } // namespace fallout

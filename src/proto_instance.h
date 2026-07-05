@@ -43,6 +43,7 @@ int objectUnjamLock(Object* obj);
 int objectUnjamAll();
 int objectAttemptPlacement(Object* obj, int tile, int elevation, int radius);
 int objectAttemptPlacementPartyMember(Object* obj, int tile, int elevation);
+int _protinstTestDroppedExplosive(Object* explosiveItem);
 
 } // namespace fallout
 

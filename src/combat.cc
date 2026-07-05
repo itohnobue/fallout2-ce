@@ -3969,7 +3969,29 @@ static int attackCompute(Attack* attack)
         }
     }
 
+    Object* originalDefender = attack->defender;
+
     roll = scriptHooks_AfterHitRoll(attack->attacker, &(attack->defender), &(attack->defenderHitLocation), accuracy, roll);
+
+    // If the hook overrode the defender, recompute distance and damage multiplier
+    // that were calculated for the original defender before the hook ran.
+    if (attack->defender != originalDefender) {
+        distance = objectGetDistanceBetween(attack->attacker, attack->defender);
+
+        // Re-evaluate Silent Death damage multiplier for the new defender.
+        // The pre-hook check at line 3949 applied the multiplier for the original
+        // defender; if the new defender doesn't qualify, reset to default.
+        if ((attackType == ATTACK_TYPE_MELEE || attackType == ATTACK_TYPE_UNARMED) && attack->attacker == gDude) {
+            if (perkHasRank(gDude, PERK_SILENT_DEATH)
+                && !_is_hit_from_front(gDude, attack->defender)
+                && dudeHasState(DUDE_STATE_SNEAKING)
+                && gDude != attack->defender->data.critter.combat.whoHitMe) {
+                damageMultiplier = 4;
+            } else {
+                damageMultiplier = 2;
+            }
+        }
+    }
 
     if (ammoGetCapacity(attack->weapon) > 0) {
         int rounds = 1;

@@ -718,6 +718,23 @@ if(APPLE)
     include(CPack)
 endif()
 
+# ---- Install rules for non-Apple platforms ----
+if(UNIX AND NOT APPLE AND NOT ANDROID)
+    install(TARGETS ${EXECUTABLE_NAME} RUNTIME DESTINATION bin)
+    # Ensure the binary can find bundled shared libs via $ORIGIN-relative rpath.
+    set_target_properties(${EXECUTABLE_NAME} PROPERTIES
+        INSTALL_RPATH "\$ORIGIN/../lib"
+        INSTALL_RPATH_USE_LINK_PATH TRUE
+    )
+endif()
+
+if(WIN32)
+    install(TARGETS ${EXECUTABLE_NAME} RUNTIME DESTINATION .)
+    if(EXISTS "${CMAKE_SOURCE_DIR}/files")
+        install(DIRECTORY "${CMAKE_SOURCE_DIR}/files/" DESTINATION .)
+    endif()
+endif()
+
 # Add option to enable AddressSanitizer
 option(ENABLE_ASAN "Enable AddressSanitizer for debug builds" OFF)
 

@@ -15,7 +15,7 @@ The following total conversion mods are tested:
 | Mod | Status | Notes |
 | --- | --- | --- |
 | [Fallout 2 Restoration Project (RPU)](https://github.com/BGforgeNet/Fallout2_Restoration_Project) | Supported (Beta) | New hooks: CarTravel, SetGlobalVar, Sneak. SpeedMulti with `ddraw.ini [Speed]` parsing. Null-pointer guards in critter stat opcodes. |
-| [Fallout Et Tu](https://github.com/rotators/Fo1in2) | Partial | All 3 critical hooks implemented (USEANIMOBJ, DESCRIPTIONOBJ, SETLIGHTING). Engine reports sfall 4.4.9. Remaining gaps: some sfall opcodes, `ddraw.ini` section support, `sfall-mods.ini` parsing. |
+| [Fallout Et Tu](https://github.com/rotators/Fo1in2) | Partial | All 3 critical hooks implemented (USEANIMOBJ, DESCRIPTIONOBJ, SETLIGHTING). Engine reports sfall 4.5.1. Remaining gaps: some sfall opcodes. |
 
 ## License
 

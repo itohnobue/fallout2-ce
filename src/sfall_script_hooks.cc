@@ -109,6 +109,7 @@ void ScriptHookCall::call()
         const auto& hook = hooksOfType[i];
         _scriptArgs = 0;
         _scriptRetVals = 0;
+        _lastProgram = hook.program;
         programExecuteProcedure(hook.program, hook.procedureIndex);
     }
 
@@ -1118,7 +1119,10 @@ void scriptHooks_DescriptionObj(Object* examiner, Object* target, std::string& d
         return;
     }
 
-    const char* overrideDesc = hook.getReturnValueAt(0).asString(nullptr);
+    ProgramValue retVal = hook.getReturnValueAt(0);
+    const char* overrideDesc = retVal.isString()
+        ? retVal.asString(hook.lastProgram())
+        : "";
     if (overrideDesc != nullptr && overrideDesc[0] != '\0') {
         description = overrideDesc;
     }
