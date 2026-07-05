@@ -56,6 +56,14 @@ static inline bool pcStatIsValid(int pcStat)
     return pcStat >= 0 && pcStat < PC_STAT_COUNT;
 }
 
+// Sets the maximum value for a stat (used by set_stat_max et al. sfall opcodes).
+// Validates stat index; silently ignored on invalid stat.
+void statSetMaxValue(int stat, int value);
+
+// Sets the minimum value for a stat (used by set_stat_min et al. sfall opcodes).
+// Validates stat index; silently ignored on invalid stat.
+void statSetMinValue(int stat, int value);
+
 } // namespace fallout
 
 #endif /* STAT_H */

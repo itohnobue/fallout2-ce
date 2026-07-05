@@ -194,14 +194,29 @@ bool sfall_gl_vars_load(File* stream)
     return true;
 }
 
+// Convert a C-string key to a uint64_t for use as a map key.
+// Keys must be exactly 8 characters (matching sfall convention).
+// Returns 0 and sets ok=false for keys that are not exactly 8 chars.
+static uint64_t sfall_gl_vars_key_to_uint64(const char* key, bool& ok)
+{
+    size_t len = strlen(key);
+    if (len != 8) {
+        ok = false;
+        return 0;
+    }
+    ok = true;
+    uint64_t result = 0;
+    memcpy(&result, key, len);
+    return result;
+}
+
 bool sfall_gl_vars_store(const char* key, int value)
 {
-    if (strlen(key) != 8) {
+    bool ok;
+    uint64_t numericKey = sfall_gl_vars_key_to_uint64(key, ok);
+    if (!ok) {
         return false;
     }
-
-    uint64_t numericKey;
-    memcpy(&numericKey, key, sizeof(numericKey));
     return sfall_gl_vars_store(numericKey, value);
 }
 
@@ -212,12 +227,11 @@ bool sfall_gl_vars_store(int key, int value)
 
 bool sfall_gl_vars_fetch(const char* key, int& value)
 {
-    if (strlen(key) != 8) {
+    bool ok;
+    uint64_t numericKey = sfall_gl_vars_key_to_uint64(key, ok);
+    if (!ok) {
         return false;
     }
-
-    uint64_t numericKey;
-    memcpy(&numericKey, key, sizeof(numericKey));
     return sfall_gl_vars_fetch(numericKey, value);
 }
 
@@ -258,12 +272,11 @@ static bool sfall_gl_vars_fetch(uint64_t key, int& value)
 
 bool sfall_gl_vars_store_float(const char* key, float value)
 {
-    if (strlen(key) != 8) {
+    bool ok;
+    uint64_t numericKey = sfall_gl_vars_key_to_uint64(key, ok);
+    if (!ok) {
         return false;
     }
-
-    uint64_t numericKey;
-    memcpy(&numericKey, key, sizeof(numericKey));
     sfall_gl_vars_state->floatVars[numericKey] = value;
     return true;
 }
@@ -276,12 +289,11 @@ bool sfall_gl_vars_store_float(int key, float value)
 
 bool sfall_gl_vars_fetch_float(const char* key, float& value)
 {
-    if (strlen(key) != 8) {
+    bool ok;
+    uint64_t numericKey = sfall_gl_vars_key_to_uint64(key, ok);
+    if (!ok) {
         return false;
     }
-
-    uint64_t numericKey;
-    memcpy(&numericKey, key, sizeof(numericKey));
     auto it = sfall_gl_vars_state->floatVars.find(numericKey);
     if (it == sfall_gl_vars_state->floatVars.end()) {
         return false;

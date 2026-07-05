@@ -61,6 +61,7 @@
 #include "sfall_ini.h"
 #include "sfall_lists.h"
 #include "sfall_metarules.h"
+#include "sfall_opcodes.h"
 #include "sfall_script_hooks.h"
 #include "skill.h"
 #include "skilldex.h"
@@ -482,6 +483,7 @@ void gameReset()
     sfall_gl_scr_reset();
     sfall_ini_cache_clear();
     sfall_metarules_reset();
+    sfallOpcodesReset();
     sfallOnGameReset();
     gGameLoaded = false;
 }

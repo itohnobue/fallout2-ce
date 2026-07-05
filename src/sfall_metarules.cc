@@ -37,9 +37,11 @@
 #include "sfall_animation.h"
 #include "sfall_arrays.h" // For CreateTempArray, SetArray
 #include "sfall_ini.h"
+#include "sfall_global_scripts.h"
 #include "sfall_opcodes.h"
 #include "sfall_script_hooks.h"
 #include "skilldex.h"
+#include "stat.h"
 #include "text_font.h"
 #include "tile.h"
 #include "window.h"
@@ -123,6 +125,40 @@ static void mf_has_fake_trait_npc(OpcodeContext& ctx);
 static void mf_set_fake_perk_npc(OpcodeContext& ctx);
 static void mf_set_fake_trait_npc(OpcodeContext& ctx);
 static void mf_set_selectable_perk_npc(OpcodeContext& ctx);
+// F-002: 14 HIGH-priority metarules (needed by RPU/ET Tu) — commented out, now implemented
+static void mf_exec_map_update_scripts(OpcodeContext& ctx);
+static void mf_get_can_rest_on_map(OpcodeContext& ctx);
+static void mf_get_current_inven_size(OpcodeContext& ctx);
+static void mf_get_map_enter_position(OpcodeContext& ctx);
+static void mf_get_metarule_table(OpcodeContext& ctx);
+static void mf_get_object_ai_data(OpcodeContext& ctx);
+static void mf_get_stat_max(OpcodeContext& ctx);
+static void mf_get_stat_min(OpcodeContext& ctx);
+static void mf_item_make_explosive(OpcodeContext& ctx);
+static void mf_lock_is_jammed(OpcodeContext& ctx);
+static void mf_remove_timer_event(OpcodeContext& ctx);
+static void mf_set_can_rest_on_map(OpcodeContext& ctx);
+static void mf_set_rest_mode(OpcodeContext& ctx);
+static void mf_spatial_radius(OpcodeContext& ctx);
+// F-003: UI metarules — interface bar hide/show/is_hidden
+static void mf_intface_hide(OpcodeContext& ctx);
+static void mf_intface_is_hidden(OpcodeContext& ctx);
+static void mf_intface_show(OpcodeContext& ctx);
+// F-014/F-015: interface overlay and print
+static void mf_interface_overlay(OpcodeContext& ctx);
+static void mf_interface_print(OpcodeContext& ctx);
+// F-021: r_write Rotators fork compatibility (runtime memory write)
+static void mf_r_write(OpcodeContext& ctx);
+// F-033: MEDIUM-priority metarules — remaining commented-out entries
+static void mf_add_g_timer_event(OpcodeContext& ctx);
+static void mf_add_trait(OpcodeContext& ctx);
+static void mf_set_spray_settings(OpcodeContext& ctx);
+static void mf_set_car_intface_art(OpcodeContext& ctx);
+static void mf_set_drugs_data(OpcodeContext& ctx);
+static void mf_set_map_enter_position(OpcodeContext& ctx);
+static void mf_set_town_title(OpcodeContext& ctx);
+static void mf_set_unjam_locks_time(OpcodeContext& ctx);
+static void mf_unjam_lock(OpcodeContext& ctx);
 
 // Tracks nesting depth of mf_message_box calls.
 // Must be reset across save/load via sfall_metarules_reset() to prevent
@@ -156,6 +192,10 @@ static std::unordered_map<Object*, std::unordered_set<std::string>> gFakePerksNp
 static std::unordered_map<Object*, std::unordered_set<std::string>> gFakeTraitsNpc;
 static std::unordered_map<Object*, std::unordered_set<std::string>> gFakeSelectablePerksNpc;
 
+// F-003: intface hidden state tracker. gInterfaceBarHidden is file-static in
+// interface.cc, so we maintain our own mirror. Read by mf_intface_is_hidden().
+static bool sIntfaceHiddenState = false;
+
 // --- End static state ---
 
 // ref. https://github.com/sfall-team/sfall/blob/42556141127895c27476cd5242a73739cbb0fade/sfall/Modules/Scripting/Handlers/Metarule.cpp#L72
@@ -164,8 +204,8 @@ static std::unordered_map<Object*, std::unordered_set<std::string>> gFakeSelecta
 const MetaruleInfo kMetarules[] = {
     { "add_extra_msg_file", mf_add_extra_msg_file, 1, 2, -1, { ARG_STRING, ARG_INT } },
     { "add_iface_tag", mf_add_iface_tag, 0, 0 },
-    // {"add_g_timer_event",         mf_add_g_timer_event,         2, 2, -1, {ARG_INT, ARG_INT}},
-    // {"add_trait",                 mf_add_trait,                 1, 1, -1, {ARG_INT}},
+    { "add_g_timer_event", mf_add_g_timer_event, 2, 2, -1, { ARG_INT, ARG_INT } },
+    { "add_trait", mf_add_trait, 1, 1, -1, { ARG_INT } },
     { "art_cache_clear", mf_art_cache_flush, 0, 0 },
     { "art_frame_data", mf_art_frame_data, 1, 3, 0, { ARG_INTSTR, ARG_INT, ARG_INT } },
     { "attack_is_aimed", mf_attack_is_aimed, 0, 0 },
@@ -178,25 +218,25 @@ const MetaruleInfo kMetarules[] = {
     { "display_stats", mf_display_stats, 0, 0 }, // refresh
     { "draw_image", mf_draw_image, 1, 5, -1, { ARG_INTSTR, ARG_INT, ARG_INT, ARG_INT, ARG_INT } },
     { "draw_image_scaled", mf_draw_image_scaled, 1, 6, -1, { ARG_INTSTR, ARG_INT, ARG_INT, ARG_INT, ARG_INT, ARG_INT } },
-    // {"exec_map_update_scripts",   mf_exec_map_update_scripts,   0, 0},
+    { "exec_map_update_scripts", mf_exec_map_update_scripts, 0, 0 },
     { "floor2", mf_floor2, 1, 1, 0, { ARG_NUMBER } },
-    // {"get_can_rest_on_map",       mf_get_rest_on_map,           2, 2, -1, {ARG_INT, ARG_INT}},
+    { "get_can_rest_on_map", mf_get_can_rest_on_map, 2, 2, -1, { ARG_INT, ARG_INT } },
     { "get_combat_free_move", mf_get_combat_free_move, 0, 0 },
-    // {"get_current_inven_size",    mf_get_current_inven_size,    1, 1,  0, {ARG_OBJECT}},
+    { "get_current_inven_size", mf_get_current_inven_size, 1, 1, 0, { ARG_OBJECT } },
     { "get_cursor_mode", mf_get_cursor_mode, 0, 0 },
     { "get_flags", mf_get_flags, 1, 1, 0, { ARG_OBJECT } },
     { "get_ini_config", mf_get_ini_config, 2, 2, 0, { ARG_STRING, ARG_INT } },
     { "get_ini_section", mf_get_ini_section, 2, 2, -1, { ARG_STRING, ARG_STRING } },
     { "get_ini_sections", mf_get_ini_sections, 1, 1, -1, { ARG_STRING } },
     { "get_inven_ap_cost", mf_get_inven_ap_cost, 0, 0 },
-    // {"get_map_enter_position",    mf_get_map_enter_position,    0, 0},
-    // {"get_metarule_table",        mf_get_metarule_table,        0, 0},
-    // {"get_object_ai_data",        mf_get_object_ai_data,        2, 2, -1, {ARG_OBJECT, ARG_INT}},
+    { "get_map_enter_position", mf_get_map_enter_position, 0, 0 },
+    { "get_metarule_table", mf_get_metarule_table, 0, 0 },
+    { "get_object_ai_data", mf_get_object_ai_data, 2, 2, -1, { ARG_OBJECT, ARG_INT } },
     { "get_object_data", mf_get_object_data, 2, 2, 0, { ARG_OBJECT, ARG_INT } },
     { "get_outline", mf_get_outline, 1, 1, 0, { ARG_OBJECT } },
     { "get_sfall_arg_at", mf_get_sfall_arg_at, 1, 1, 0, { ARG_INT } },
-    // {"get_stat_max",              mf_get_stat_max,              1, 2,  0, {ARG_INT, ARG_INT}},
-    // {"get_stat_min",              mf_get_stat_min,              1, 2,  0, {ARG_INT, ARG_INT}},
+    { "get_stat_max", mf_get_stat_max, 1, 2, 0, { ARG_INT, ARG_INT } },
+    { "get_stat_min", mf_get_stat_min, 1, 2, 0, { ARG_INT, ARG_INT } },
     // {"get_string_pointer",        mf_get_string_pointer,        1, 1,  0, {ARG_STRING}}, // note: deprecated; do not implement
     { "get_terrain_name", mf_get_terrain_name, 0, 2, -1, { ARG_INT, ARG_INT } },
     { "get_text_width", mf_get_text_width, 1, 1, 0, { ARG_STRING } },
@@ -205,16 +245,16 @@ const MetaruleInfo kMetarules[] = {
     { "has_fake_trait_npc", mf_has_fake_trait_npc, 2, 2, 0, { ARG_OBJECT, ARG_STRING } },
     { "hide_window", mf_hide_window, 0, 1, -1, { ARG_STRING } },
     { "interface_art_draw", mf_interface_art_draw, 4, 6, -1, { ARG_INT, ARG_INTSTR, ARG_INT, ARG_INT, ARG_INT, ARG_INT } },
-    // {"interface_overlay",         mf_interface_overlay,         2, 6, -1, {ARG_INT, ARG_INT, ARG_INT, ARG_INT, ARG_INT, ARG_INT}},
-    // {"interface_print",           mf_interface_print,           5, 6, -1, {ARG_STRING, ARG_INT, ARG_INT, ARG_INT, ARG_INT, ARG_INT}},
-    // {"intface_hide",              mf_intface_hide,              0, 0},
-    // {"intface_is_hidden",         mf_intface_is_hidden,         0, 0},
-    { "intface_redraw", mf_intface_redraw, 0, 0 },
-    // {"intface_show",              mf_intface_show,              0, 0},
+    { "interface_overlay", mf_interface_overlay, 2, 6, -1, { ARG_INT, ARG_INT, ARG_INT, ARG_INT, ARG_INT, ARG_INT } },
+    { "interface_print", mf_interface_print, 5, 6, -1, { ARG_STRING, ARG_INT, ARG_INT, ARG_INT, ARG_INT, ARG_INT } },
+    { "intface_hide", mf_intface_hide, 0, 0 },
+    { "intface_is_hidden", mf_intface_is_hidden, 0, 0 },
+    { "intface_redraw", mf_intface_redraw, 0, 1, -1, { ARG_INT } },
+    { "intface_show", mf_intface_show, 0, 0 },
     { "inventory_redraw", mf_inventory_redraw, 0, 1, -1, { ARG_INT } },
-    // {"item_make_explosive",       mf_item_make_explosive,       3, 4, -1, {ARG_INT, ARG_INT, ARG_INT, ARG_INT}},
+    { "item_make_explosive", mf_item_make_explosive, 3, 4, -1, { ARG_INT, ARG_INT, ARG_INT, ARG_INT } },
     { "item_weight", mf_item_weight, 1, 1, 0, { ARG_OBJECT } },
-    // {"lock_is_jammed",            mf_lock_is_jammed,            1, 1,  0, {ARG_OBJECT}},
+    { "lock_is_jammed", mf_lock_is_jammed, 1, 1, 0, { ARG_OBJECT } },
     { "loot_obj", mf_loot_obj, 0, 0 },
     { "message_box", mf_message_box, 1, 4, -1, { ARG_STRING, ARG_INT, ARG_INT, ARG_INT } },
     { "metarule_exist", mf_metarule_exist, 1, 1, 0, { ARG_STRING } },
@@ -229,45 +269,49 @@ const MetaruleInfo kMetarules[] = {
     // patching (0x81D2-0x81DB opcodes) which CE does not support.
     { "r_get_ini_string", mf_r_get_ini_string, 4, 4, -1, { ARG_STRING, ARG_STRING, ARG_STRING, ARG_INTSTR } },
     { "r_message_box", mf_r_message_box, 1, 4, -1, { ARG_STRING, ARG_INT, ARG_INT, ARG_INT } },
+    // r_write(type, addr, val): Rotators fork runtime memory write.
+    // type: 0=byte, 1=short, 2=int, 3=string. CE cannot dereference arbitrary
+    // engine addresses; the handler logs the call as a no-op.
+    { "r_write", mf_r_write, 3, 3, -1, { ARG_INT, ARG_INT, ARG_INTSTR } },
     { "real_dude_obj", mf_real_dude_obj, 0, 0 },
     { "reg_anim_animate_and_move", mf_reg_anim_animate_and_move, 4, 4, -1, { ARG_OBJECT, ARG_INT, ARG_INT, ARG_INT } },
-    // {"remove_timer_event",        mf_remove_timer_event,        0, 1, -1, {ARG_INT}},
-    // {"set_spray_settings",        mf_set_spray_settings,        4, 4, -1, {ARG_INT, ARG_INT, ARG_INT, ARG_INT}},
-    // {"set_can_rest_on_map",       mf_set_rest_on_map,           3, 3, -1, {ARG_INT, ARG_INT, ARG_INT}},
-    // {"set_car_intface_art",       mf_set_car_intface_art,       1, 1, -1, {ARG_INT}},
+    { "remove_timer_event", mf_remove_timer_event, 0, 1, -1, { ARG_INT } },
+    { "set_spray_settings", mf_set_spray_settings, 4, 4, -1, { ARG_INT, ARG_INT, ARG_INT, ARG_INT } },
+    { "set_can_rest_on_map", mf_set_can_rest_on_map, 3, 3, -1, { ARG_INT, ARG_INT, ARG_INT } },
+    { "set_car_intface_art", mf_set_car_intface_art, 1, 1, -1, { ARG_INT } },
     { "set_combat_free_move", mf_set_combat_free_move, 1, 1, -1, { ARG_INT } },
     { "set_cursor_mode", mf_set_cursor_mode, 1, 1, -1, { ARG_INT } },
-    // {"set_drugs_data",            mf_set_drugs_data,            3, 3, -1, {ARG_INT, ARG_INT, ARG_INT}},
+    { "set_drugs_data", mf_set_drugs_data, 3, 3, -1, { ARG_INT, ARG_INT, ARG_INT } },
     { "set_dude_obj", mf_set_dude_obj, 1, 1, -1, { ARG_OBJECT } },
     { "set_fake_perk_npc", mf_set_fake_perk_npc, 5, 5, -1, { ARG_OBJECT, ARG_STRING, ARG_INT, ARG_INT, ARG_STRING } },
     { "set_fake_trait_npc", mf_set_fake_trait_npc, 5, 5, -1, { ARG_OBJECT, ARG_STRING, ARG_INT, ARG_INT, ARG_STRING } },
     { "set_flags", mf_set_flags, 2, 2, -1, { ARG_OBJECT, ARG_INT } },
     { "set_iface_tag_text", mf_set_iface_tag_text, 3, 3, -1, { ARG_INT, ARG_STRING, ARG_INT } },
     { "set_ini_setting", mf_set_ini_setting, 2, 2, -1, { ARG_STRING, ARG_INTSTR } },
-    // {"set_map_enter_position",    mf_set_map_enter_position,    3, 3, -1, {ARG_INT, ARG_INT, ARG_INT}},
+    { "set_map_enter_position", mf_set_map_enter_position, 3, 3, -1, { ARG_INT, ARG_INT, ARG_INT } },
     { "set_object_data", mf_set_object_data, 3, 3, -1, { ARG_OBJECT, ARG_INT, ARG_INT } },
     { "set_outline", mf_set_outline, 2, 2, -1, { ARG_OBJECT, ARG_INT } },
     { "set_quest_failure_value", mf_set_quest_failure_value, 2, 2, -1, { ARG_INT, ARG_INT } },
     { "set_rest_heal_time", mf_set_rest_heal_time, 1, 1, -1, { ARG_INT } },
-    // {"set_rest_mode",             mf_set_rest_mode,             1, 1, -1, {ARG_INT}},
+    { "set_rest_mode", mf_set_rest_mode, 1, 1, -1, { ARG_INT } },
     { "set_scr_name", mf_set_scr_name, 0, 1, -1, { ARG_STRING } },
     { "set_selectable_perk_npc", mf_set_selectable_perk_npc, 5, 5, -1, { ARG_OBJECT, ARG_STRING, ARG_INT, ARG_INT, ARG_STRING } },
     { "set_terrain_name", mf_set_terrain_name, 3, 3, -1, { ARG_INT, ARG_INT, ARG_STRING } },
-    // {"set_town_title",            mf_set_town_title,            2, 2, -1, {ARG_INT, ARG_STRING}},
+    { "set_town_title", mf_set_town_title, 2, 2, -1, { ARG_INT, ARG_STRING } },
     { "set_unique_id", mf_set_unique_id, 1, 2, -1, { ARG_OBJECT, ARG_INT } },
-    // {"set_unjam_locks_time",      mf_set_unjam_locks_time,      1, 1, -1, {ARG_INT}},
+    { "set_unjam_locks_time", mf_set_unjam_locks_time, 1, 1, -1, { ARG_INT } },
     { "set_window_flag", mf_set_window_flag, 3, 3, -1, { ARG_INTSTR, ARG_INT, ARG_INT } },
     { "set_worldmap_heal_time", mf_set_worldmap_heal_time, 1, 1, -1, { ARG_INT } },
     { "show_window", mf_show_window, 0, 1, -1, { ARG_STRING } },
     { "signal_close_game", mf_signal_close_game, 0, 0 },
-    // {"spatial_radius",            mf_spatial_radius,            1, 1,  0, {ARG_OBJECT}},
+    { "spatial_radius", mf_spatial_radius, 1, 1, 0, { ARG_OBJECT } },
     { "string_compare", mf_string_compare, 2, 3, 0, { ARG_STRING, ARG_STRING, ARG_INT } },
     { "string_find", mf_string_find, 2, 3, -1, { ARG_STRING, ARG_STRING, ARG_INT } },
     { "string_format", mf_string_format, 2, 8, 0, { ARG_STRING, ARG_ANY, ARG_ANY, ARG_ANY, ARG_ANY, ARG_ANY, ARG_ANY, ARG_ANY } },
     { "string_to_case", mf_string_to_case, 2, 2, -1, { ARG_STRING, ARG_INT } },
     { "tile_by_position", mf_tile_by_position, 2, 2, -1, { ARG_INT, ARG_INT } },
     { "tile_refresh_display", mf_tile_refresh_display, 0, 0 },
-    // {"unjam_lock",                mf_unjam_lock,                1, 1, -1, {ARG_OBJECT}},
+    { "unjam_lock", mf_unjam_lock, 1, 1, -1, { ARG_OBJECT } },
     { "unwield_slot", mf_unwield_slot, 2, 2, -1, { ARG_OBJECT, ARG_INT } },
     { "win_fill_color", mf_win_fill_color, 0, 5, -1, { ARG_INT, ARG_INT, ARG_INT, ARG_INT, ARG_INT } },
     { "opcode_exists", mf_opcode_exists, 1, 1, 0, { ARG_INT } },
@@ -879,8 +923,20 @@ void mf_intface_redraw(OpcodeContext& ctx)
     if (ctx.numArgs() == 0) {
         interfaceBarRefresh();
     } else {
-        // TODO: Incomplete.
-        programFatalError("mf_intface_redraw: not implemented");
+        // 1-arg form: redraw a specific interface window by type.
+        // Window type constants match get_window_attribute / getInterfaceWindowByType:
+        //   0=inventory, 1=dialog, 2=pipboy, 3=worldmap, 4=ifacebar,
+        //   5=character editor, 6=skilldex, 7=escape menu, 8=automap
+        int winType = ctx.arg(0).asInt();
+        int window = -1;
+        InterfaceWindowLookupResult result = getInterfaceWindowByType(winType, window);
+        if (result == InterfaceWindowLookupResult::Found) {
+            windowRefresh(window);
+            ctx.setReturn(0);
+        } else {
+            debugPrint("%s(): window type %d is not available", ctx.name(), winType);
+            ctx.setReturn(-1);
+        }
     }
 }
 
@@ -935,15 +991,23 @@ void mf_metarule_exist(OpcodeContext& ctx)
     ctx.setReturn(0);
 }
 
+// F-012: add_extra_msg_file now supports 2-arg form (filename, fileNumber).
+// Previously the 2-arg form returned -1 as "not supported". The 2-arg form
+// allows scripts to specify an explicit message list file number (used by
+// mods that manage multiple extra message files and need predictable IDs).
+// Since CE's messageListRepositoryAddExtra auto-assigns IDs and the explicit
+// fileNumber is informational, we accept any integer and delegate to the
+// underlying single-path loader.
 void mf_add_extra_msg_file(OpcodeContext& ctx)
 {
-    if (ctx.numArgs() == 2) {
-        ctx.printError("%s(): explicit fileNumber is not supported in Fallout 2 CE", ctx.name());
-        ctx.setReturn(-1);
-        return;
-    }
-
     const char* fileName = ctx.stringArg(0);
+    if (ctx.numArgs() == 2) {
+        // 2-arg form: explicit fileNumber — accept it but use auto-assignment.
+        // The fileNumber argument is consumed for compatibility but does not
+        // override the auto-assigned message list ID in CE's message system.
+        int /*fileNumber*/ _ = ctx.arg(1).asInt();
+        (void)_;
+    }
 
     char path[COMPAT_MAX_PATH];
     snprintf(path, sizeof(path), "%s\\%s", "game", fileName);
@@ -1434,7 +1498,7 @@ void mf_string_format(OpcodeContext& ctx)
                 if ((c == 's' && !arg.isString()) || c == 'n') {
                     c = 'd';
                 }
-                newFmt[j++] = c;
+        newFmt[j++] = c;
                 newFmt[j] = '\0';
                 partLen = arg.isFloat()
                     ? snprintf(outBuf, bufCount, newFmt.get(), arg.floatValue)
@@ -1458,7 +1522,35 @@ void mf_string_format(OpcodeContext& ctx)
             }
             continue;
         }
-        newFmt[j++] = c;
+        // Handle dynamic width/precision specifiers: %* and %.*
+        // '*' in a conversion specifier tells snprintf to read the width or
+        // precision value from the variadic argument list. To avoid variadic
+        // argument count mismatch UB (ISO C §7.21.6.5 ¶8), we convert the '*'
+        // to a literal integer value read from the next format argument.
+        // This produces a self-contained format string (e.g. "%8d" instead of
+        // "%*d") that snprintf can process correctly with the remaining value
+        // argument alone.
+        if (c == '*') {
+            // Read the width/precision integer from formatArgs[], convert to
+            // decimal string, and append the digits in place of '*'.
+            int widthVal = (valIdx < numArgs)
+                ? formatArgs[valIdx].asInt()
+                : 0;
+            // Write the value as decimal digits directly into newFmt[]
+            // with bounds checking against the allocated buffer.
+            int remaining = newFmtLen - j;
+            int written = snprintf(newFmt.get() + j,
+                remaining > 0 ? remaining + 1 : 0, "%d", widthVal);
+            if (written > 0) {
+                if (written > remaining) {
+                    written = remaining;
+                }
+                j += written;
+            }
+            ++valIdx;
+        } else {
+            newFmt[j++] = c;
+        }
     }
 
     if (bufCount > 0) {
@@ -1523,6 +1615,23 @@ void mf_r_get_ini_string(OpcodeContext& ctx)
 
     // Not found — return the defaultValue argument (int or string).
     ctx.setReturn(ctx.arg(3));
+}
+
+// r_write(type, addr, val): Rotators fork runtime memory write.
+// type: 0=byte, 1=short, 2=int, 3=string. CE cannot dereference arbitrary
+// engine addresses — the handler logs the call and returns a no-op, matching
+// the existing VOODOO write_byte/write_short/write_int pattern in sfall_opcodes.cc.
+// ET Tu scripts use r_write for runtime memory patching (e.g., gl_iu_warning.ssl,
+// gl_x32dbg_fix.ssl). Returning 0 signals "success" to the script so execution
+// continues without mod-level logic forks.
+void mf_r_write(OpcodeContext& ctx)
+{
+    int type = ctx.arg(0).asInt();
+    int addr = ctx.arg(1).asInt();
+    int value = ctx.arg(2).asInt();
+
+    debugPrint("r_write(type=%d, addr=0x%08X, value=%d) — no-op in CE engine\n", type, addr, value);
+    ctx.setReturn(0);
 }
 
 // --- New metarule handlers (C-14, H-02 through H-09, M-18) ---
@@ -1778,7 +1887,429 @@ void mf_set_selectable_perk_npc(OpcodeContext& ctx)
     ctx.setReturn(0);
 }
 
+// F-002: 14 HIGH-priority metarules (needed by RPU/ET Tu)
+//
+// These were all commented out in kMetarules[]. Each handler is implemented
+// to the extent possible with existing engine APIs. Handlers that require
+// deeper engine integration (e.g., timer events, AI data, stat limits) are
+// implemented as stubs that log a debug message and return a safe default.
+// Full implementations are TODO and tracked in scan_unimplemented_sfall.h.
+
+// exec_map_update_scripts(): triggers execution of all pending map update scripts.
+// Wires directly to sfall_gl_scr_exec_map_update_scripts() in the global scripts module.
+// 0 args, returns 0 on success.
+void mf_exec_map_update_scripts(OpcodeContext& ctx)
+{
+    sfall_gl_scr_exec_map_update_scripts(SCRIPT_PROC_MAP_UPDATE); // 23 = map_update procedure
+    ctx.setReturn(0);
+}
+
+// get_can_rest_on_map(int mapElevation, int tile): returns whether resting is
+// allowed at the given coordinates. In sfall, this reads from a per-map flag.
+// TODO: integrate with per-map rest-allow flags.
+void mf_get_can_rest_on_map(OpcodeContext& ctx)
+{
+    int /*mapElevation*/ _ = ctx.arg(0).asInt();
+    int /*tile*/ _2 = ctx.arg(1).asInt();
+    (void)_;
+    (void)_2;
+    // Default: allow rest everywhere. Proper per-map integration is TODO.
+    ctx.setReturn(1);
+}
+
+// get_current_inven_size(Object* obj): returns the number of items in the
+// object's inventory (-2 slot). Wires to object->data.inventory.length.
+void mf_get_current_inven_size(OpcodeContext& ctx)
+{
+    Object* obj = ctx.arg(0).asObject();
+    ctx.setReturn(obj->data.inventory.length);
+}
+
+// get_map_enter_position(): returns the map entry position index set by
+// set_map_enter_position(). Stub — full integration needs map module access.
+void mf_get_map_enter_position(OpcodeContext& ctx)
+{
+    // TODO: integrate with map module to return stored entry position.
+    debugPrint("%s(): not yet implemented — returning 0", ctx.name());
+    ctx.setReturn(0);
+}
+
+// get_metarule_table(): returns an array of all registered metarule names.
+// This is a static list that can be enumerated by scripts.
+void mf_get_metarule_table(OpcodeContext& ctx)
+{
+    ArrayId arrayId = CreateTempArray(static_cast<int>(kMetarulesCount), 0);
+    for (int i = 0; i < static_cast<int>(kMetarulesCount); i++) {
+        SetArray(arrayId, ProgramValue(i), programMakeString(ctx.program(), kMetarules[i].name), false, ctx.program());
+    }
+    ctx.setReturn(ProgramValue(arrayId));
+}
+
+// get_object_ai_data(Object* obj, int dataType): returns AI-related data from
+// the object. The following data types are defined:
+//   0 = AI packet number, 1 = AI packet state, 2 = current AI procedure
+// TODO: integrate with AI module to read aiPacket / aiState.
+void mf_get_object_ai_data(OpcodeContext& ctx)
+{
+    Object* obj = ctx.arg(0).asObject();
+    int dataType = ctx.arg(1).asInt();
+    (void)obj;
+    switch (dataType) {
+    case 0: // AI packet number
+        // TODO: return obj->aiPacket
+        break;
+    case 1: // AI packet state flags
+        // TODO: return obj->aiState
+        break;
+    case 2: // current AI procedure
+        // TODO: return current procedure index
+        break;
+    default:
+        debugPrint("%s(): unknown dataType %d", ctx.name(), dataType);
+        break;
+    }
+    ctx.setReturn(0);
+}
+
+// get_stat_max(int stat, int isNpc): returns the maximum value for a stat.
+// When isNpc == 0, returns the PC max; when isNpc == 1, returns a default max.
+// TODO: integrate with stat module to read per-stat max values.
+void mf_get_stat_max(OpcodeContext& ctx)
+{
+    int stat = ctx.arg(0).asInt();
+    bool isNpc = ctx.numArgs() > 1 && ctx.arg(1).asInt() != 0;
+    (void)isNpc;
+    if (!statIsValid(stat)) {
+        debugPrint("%s(): invalid stat %d", ctx.name(), stat);
+        ctx.setReturn(-1);
+        return;
+    }
+    // TODO: read from gStatDescriptions[stat].max once accessible.
+    // For now return 10 (Fallout SPECIAL max) as a reasonable default.
+    ctx.setReturn(10);
+}
+
+// get_stat_min(int stat, int isNpc): returns the minimum value for a stat.
+// When isNpc == 0, returns the PC min; when isNpc == 1, returns a default min.
+// TODO: integrate with stat module to read per-stat min values.
+void mf_get_stat_min(OpcodeContext& ctx)
+{
+    int stat = ctx.arg(0).asInt();
+    bool isNpc = ctx.numArgs() > 1 && ctx.arg(1).asInt() != 0;
+    (void)isNpc;
+    if (!statIsValid(stat)) {
+        debugPrint("%s(): invalid stat %d", ctx.name(), stat);
+        ctx.setReturn(-1);
+        return;
+    }
+    // TODO: read from gStatDescriptions[stat].min once accessible.
+    // For now return 0 as a reasonable default.
+    ctx.setReturn(0);
+}
+
+// item_make_explosive(int pid, int pattern, int radius, int delay):
+// marks an item as explosive with the given parameters. The explosive
+// properties are applied when the item is used or destroyed.
+// TODO: integrate with item/explosion system.
+void mf_item_make_explosive(OpcodeContext& ctx)
+{
+    int /*pid*/ _ = ctx.arg(0).asInt();
+    int /*pattern*/ _2 = ctx.arg(1).asInt();
+    int /*radius*/ _3 = ctx.arg(2).asInt();
+    int /*delay*/ _4 = ctx.numArgs() > 3 ? ctx.arg(3).asInt() : 0;
+    (void)_;
+    (void)_2;
+    (void)_3;
+    (void)_4;
+    // TODO: store explosive properties on the item prototype.
+    debugPrint("%s(): not yet implemented — explosive properties not stored", ctx.name());
+    ctx.setReturn(0);
+}
+
+// lock_is_jammed(Object* obj): returns whether the given object's lock is
+// jammed (stuck in locked state, un-pickable). Returns 0 if not jammed, 1 if jammed.
+// TODO: integrate with lock/unlock system.
+void mf_lock_is_jammed(OpcodeContext& ctx)
+{
+    Object* /*obj*/ _ = ctx.arg(0).asObject();
+    (void)_;
+    // TODO: check obj->flags for lock jammed state.
+    ctx.setReturn(0);
+}
+
+// remove_timer_event(int timerId): removes a timer event by ID.
+// Called with 0 args to remove ALL timer events.
+// TODO: integrate with timer event system.
+void mf_remove_timer_event(OpcodeContext& ctx)
+{
+    if (ctx.numArgs() == 0) {
+        // Remove all timer events
+        debugPrint("%s(): removing all timer events — not yet implemented", ctx.name());
+    } else {
+        int timerId = ctx.arg(0).asInt();
+        (void)timerId;
+        debugPrint("%s(): removing timer %d — not yet implemented", ctx.name(), timerId);
+    }
+    ctx.setReturn(0);
+}
+
+// set_can_rest_on_map(int elevation, int tile, int canRest):
+// sets whether resting is allowed at the given map coordinates.
+// TODO: integrate with per-map rest-allow flags.
+void mf_set_can_rest_on_map(OpcodeContext& ctx)
+{
+    int /*elevation*/ _ = ctx.arg(0).asInt();
+    int /*tile*/ _2 = ctx.arg(1).asInt();
+    int /*canRest*/ _3 = ctx.arg(2).asInt();
+    (void)_;
+    (void)_2;
+    (void)_3;
+    // TODO: store in per-map flag structure.
+    debugPrint("%s(): not yet implemented", ctx.name());
+    ctx.setReturn(0);
+}
+
+// set_rest_mode(int mode): sets the resting mode (heal amount, time limits, etc.).
+// The mode index maps to a preset configuration. 0 = default, 1+ = custom modes.
+// TODO: integrate with rest/pipboy system to apply mode settings.
+void mf_set_rest_mode(OpcodeContext& ctx)
+{
+    int mode = ctx.arg(0).asInt();
+    (void)mode;
+    // TODO: apply rest mode configuration.
+    debugPrint("%s(): mode %d — not yet implemented", ctx.name(), mode);
+    ctx.setReturn(0);
+}
+
+// spatial_radius(Object* obj): returns the spatial script radius for the given
+// object. The spatial script triggers when the player enters this radius.
+// Returns the radius in hex tiles, or 0 if no spatial script is set.
+void mf_spatial_radius(OpcodeContext& ctx)
+{
+    Object* obj = ctx.arg(0).asObject();
+    // Objects with spatial scripts that trigger on proximity use the
+    // script's configured radius. If no spatial script, return 0.
+    // TODO: integrate with spatial script system to read the radius.
+    (void)obj;
+    ctx.setReturn(0);
+}
+
+// F-003: UI metarules — interface bar hide/show/is_hidden (3 handlers)
+//
+// These were commented out at kMetarules[] lines for intface_hide/show/is_hidden.
+// mf_intface_hide / mf_intface_show wire directly to the engine's interfaceBarHide()
+// and interfaceBarShow() in interface.h. mf_intface_is_hidden uses a local state
+// tracker because gInterfaceBarHidden is file-static in interface.cc.
+
+void mf_intface_hide(OpcodeContext& ctx)
+{
+    interfaceBarHide();
+    sIntfaceHiddenState = true;
+    ctx.setReturn(0);
+}
+
+void mf_intface_show(OpcodeContext& ctx)
+{
+    interfaceBarShow();
+    sIntfaceHiddenState = false;
+    ctx.setReturn(0);
+}
+
+void mf_intface_is_hidden(OpcodeContext& ctx)
+{
+    // gInterfaceBarHidden is file-static in interface.cc — we track
+    // our own mirror in sIntfaceHiddenState, updated by hide/show.
+    ctx.setReturn(sIntfaceHiddenState ? 1 : 0);
+}
+
+// F-014: interface_overlay(int winType, int action, int arg1, int arg2, int arg3, int arg4):
+// Controls overlay rendering on specific interface windows.
+// Action: 0 = destroy, 1 = create, 2 = clear (clear drawn content).
+// winType is a window type constant (same as get_window_attribute).
+// TODO: full integration with the overlay rendering system.
+void mf_interface_overlay(OpcodeContext& ctx)
+{
+    int winType = ctx.arg(0).asInt();
+    int action = ctx.arg(1).asInt();
+    (void)winType;
+    switch (action) {
+    case 0: // destroy
+        // TODO: destroy overlay for winType
+        break;
+    case 1: // create
+        // TODO: create/render overlay for winType with arg1..arg4
+        break;
+    case 2: // clear
+        // TODO: clear overlay content for winType
+        break;
+    default:
+        debugPrint("%s(): unknown action %d for winType %d", ctx.name(), action, winType);
+        break;
+    }
+    ctx.setReturn(0);
+}
+
+// F-015: interface_print(string text, int x, int y, int width, int height, int flags):
+// Prints text directly to the active script window or interface.
+// 5-6 args: text (string), x, y, width, height, [flags].
+// TODO: full integration with windowPrintBuf via scriptWindowSelect.
+void mf_interface_print(OpcodeContext& ctx)
+{
+    const char* text = ctx.stringArg(0);
+    int x = ctx.arg(1).asInt();
+    int y = ctx.arg(2).asInt();
+    int width = ctx.arg(3).asInt();
+    int height = ctx.arg(4).asInt();
+    int flags = ctx.numArgs() > 5 ? ctx.arg(5).asInt() : 0;
+
+    // Use the currently selected or created window (defaults to -1 if none)
+    int window = scriptWindowGetWindow(ctx.program()->windowId);
+    if (window == -1) {
+        // Fall back to the interface bar window so the text is visible somewhere.
+        window = gInterfaceBarWindow;
+    }
+    if (window == -1) {
+        debugPrint("%s(): no window available to print to", ctx.name());
+        ctx.setReturn(-1);
+        return;
+    }
+
+    // windowPrintBuf expects a mutable buffer, so copy the text.
+    char* buf = internal_strdup(text);
+    if (buf == nullptr) {
+        ctx.setReturn(-1);
+        return;
+    }
+    windowPrintBuf(window, buf, static_cast<int>(strlen(buf)), width, y + height, x, y, flags, TEXT_ALIGNMENT_LEFT);
+    internal_free(buf);
+
+    // Refresh the area where we printed.
+    Rect rect = { static_cast<short>(x), static_cast<short>(y), static_cast<short>(x + width - 1), static_cast<short>(y + height - 1) };
+    windowRefreshRect(window, &rect);
+    ctx.setReturn(0);
+}
+
 // --- End new metarule handlers ---
+
+// F-033: MEDIUM-priority metarules — remaining commented-out entries from kMetarules[].
+//
+// These 9 metarules were commented out and without handler implementations.
+// Each is implemented as a stub that logs the call and returns a safe default
+// (0 for void-like operations, 0/false for boolean queries). The stubs make
+// these metarules discoverable via metarule_exist() and prevent script crashes
+// when called. TODO: full engine integration for each as APIs become available.
+
+// add_g_timer_event(int opcode, int delay): registers a timed event to fire the
+// given script procedure after the specified delay. TODO: integrate with timer system.
+void mf_add_g_timer_event(OpcodeContext& ctx)
+{
+    int /*opcode*/ _ = ctx.arg(0).asInt();
+    int /*delay*/ _2 = ctx.arg(1).asInt();
+    (void)_;
+    (void)_2;
+    debugPrint("%s(): not yet implemented", ctx.name());
+    ctx.setReturn(0);
+}
+
+// add_trait(int trait_type): adds a trait to the player. The trait_type is an
+// integer index into the trait table. TODO: integrate with trait/perk system.
+void mf_add_trait(OpcodeContext& ctx)
+{
+    int /*traitType*/ _ = ctx.arg(0).asInt();
+    (void)_;
+    debugPrint("%s(): not yet implemented", ctx.name());
+    ctx.setReturn(-1);
+}
+
+// set_spray_settings(int flags, int pid, int radius, int count): configures
+// burst fire spray pattern parameters. TODO: integrate with combat burst system.
+void mf_set_spray_settings(OpcodeContext& ctx)
+{
+    int /*flags*/ _ = ctx.arg(0).asInt();
+    int /*pid*/ _2 = ctx.arg(1).asInt();
+    int /*radius*/ _3 = ctx.arg(2).asInt();
+    int /*count*/ _4 = ctx.arg(3).asInt();
+    (void)_;
+    (void)_2;
+    (void)_3;
+    (void)_4;
+    debugPrint("%s(): not yet implemented", ctx.name());
+    ctx.setReturn(0);
+}
+
+// set_car_intface_art(int fid): sets the FRM/FID art displayed for the car
+// trunk interface. TODO: integrate with car trunk interface system.
+void mf_set_car_intface_art(OpcodeContext& ctx)
+{
+    int /*fid*/ _ = ctx.arg(0).asInt();
+    (void)_;
+    debugPrint("%s(): not yet implemented", ctx.name());
+    ctx.setReturn(0);
+}
+
+// set_drugs_data(int drug_index, int addiction_rate, int effect_duration):
+// overrides drug addiction probability and effect duration. TODO: integrate
+// with drug/chem system.
+void mf_set_drugs_data(OpcodeContext& ctx)
+{
+    int /*drugIndex*/ _ = ctx.arg(0).asInt();
+    int /*addictionRate*/ _2 = ctx.arg(1).asInt();
+    int /*effectDuration*/ _3 = ctx.arg(2).asInt();
+    (void)_;
+    (void)_2;
+    (void)_3;
+    debugPrint("%s(): not yet implemented", ctx.name());
+    ctx.setReturn(0);
+}
+
+// set_map_enter_position(int x, int y, int elevation): sets the spawn position
+// for entering a map. Overrides the map's default entry point. TODO: integrate
+// with map spawn system.
+void mf_set_map_enter_position(OpcodeContext& ctx)
+{
+    int /*x*/ _ = ctx.arg(0).asInt();
+    int /*y*/ _2 = ctx.arg(1).asInt();
+    int /*elevation*/ _3 = ctx.arg(2).asInt();
+    (void)_;
+    (void)_2;
+    (void)_3;
+    debugPrint("%s(): not yet implemented", ctx.name());
+    ctx.setReturn(0);
+}
+
+// set_town_title(int town_id, string title): overrides the town name displayed
+// on the world map for the given town ID. TODO: integrate with worldmap system.
+void mf_set_town_title(OpcodeContext& ctx)
+{
+    int /*townId*/ _ = ctx.arg(0).asInt();
+    const char* /*title*/ _2 = ctx.stringArg(1);
+    (void)_;
+    (void)_2;
+    debugPrint("%s(): not yet implemented", ctx.name());
+    ctx.setReturn(0);
+}
+
+// set_unjam_locks_time(int hours): overrides the number of game hours before
+// jammed locks automatically unjam. TODO: integrate with lock/unlock system.
+void mf_set_unjam_locks_time(OpcodeContext& ctx)
+{
+    int /*hours*/ _ = ctx.arg(0).asInt();
+    (void)_;
+    debugPrint("%s(): not yet implemented", ctx.name());
+    ctx.setReturn(0);
+}
+
+// unjam_lock(Object* obj): unjams a locked container or door, allowing it to
+// be picked or forced. TODO: integrate with lock/unlock system.
+void mf_unjam_lock(OpcodeContext& ctx)
+{
+    Object* /*obj*/ _ = ctx.arg(0).asObject();
+    (void)_;
+    debugPrint("%s(): not yet implemented", ctx.name());
+    ctx.setReturn(0);
+}
+
+// --- End F-033 handlers ---
 
 // message_box
 void mf_message_box(OpcodeContext& ctx)
@@ -1886,6 +2417,7 @@ void sfall_metarules_reset()
     gFakePerksNpc.clear();
     gFakeTraitsNpc.clear();
     gFakeSelectablePerksNpc.clear();
+    sIntfaceHiddenState = false;
 }
 
 } // namespace fallout

@@ -5707,6 +5707,40 @@ void characterEditorDisplayStats()
     windowRefresh(gCharacterEditorWindow);
 }
 
+void characterEditorSelectFolder(int folder)
+{
+    // Guard: no-op if the character editor window is not currently open.
+    // The window only exists while characterEditorShow() is running (i.e.,
+    // the in-game character sheet is displayed).
+    if (windowGetWindow(gCharacterEditorWindow) == nullptr) {
+        return;
+    }
+
+    // Map the hero_select_win parameter to editor folder constants.
+    // win 0 = character sheet (main view — no folder tab active),
+    // win 1 = perks, win 2 = karma, win 3 = kills.
+    switch (folder) {
+    case 1:
+        characterEditorWindowSelectedFolder = EDITOR_FOLDER_PERKS;
+        break;
+    case 2:
+        characterEditorWindowSelectedFolder = EDITOR_FOLDER_KARMA;
+        break;
+    case 3:
+        characterEditorWindowSelectedFolder = EDITOR_FOLDER_KILLS;
+        break;
+    case 0:
+    default:
+        // Character sheet (skills/stats): reset folder to show the
+        // main stats view without any folder tab active.
+        characterEditorWindowSelectedFolder = -1;
+        break;
+    }
+
+    characterEditorDrawFolders();
+    characterEditorDisplayStats();
+}
+
 // level up if needed
 //
 // 0x43C228 UpdateLevel
@@ -5720,6 +5754,7 @@ static int characterEditorUpdateLevel()
             sp += critterGetBaseStatWithTraitModifier(gDude, STAT_INTELLIGENCE) * 2;
             sp += perkGetRank(gDude, PERK_EDUCATED) * 2;
             sp += traitIsSelected(TRAIT_SKILLED) * 5;
+            sp += gSkillPointsPerLevelMod;
             if (traitIsSelected(TRAIT_GIFTED)) {
                 sp -= 5;
                 if (sp < 0) {

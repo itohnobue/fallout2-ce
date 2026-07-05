@@ -565,6 +565,34 @@ int perkGetFrmId(int perk)
     return gPerkDescriptions[perk].frmId;
 }
 
+// Sets the minimum level requirement for a perk.
+// Used by set_perk_level sfall opcode (0x817A).
+void perkSetMinLevel(int perk, int minLevel)
+{
+    if (!perkIsValid(perk)) {
+        return;
+    }
+    gPerkDescriptions[perk].minLevel = minLevel;
+}
+
+// Returns the minimum level requirement for a perk.
+int perkGetMinLevel(int perk)
+{
+    if (!perkIsValid(perk)) {
+        return 0;
+    }
+    return gPerkDescriptions[perk].minLevel;
+}
+
+// Returns the maximum rank for a perk, or -1 if the perk has no ranks.
+int perkGetMaxRank(int perk)
+{
+    if (!perkIsValid(perk)) {
+        return -1;
+    }
+    return gPerkDescriptions[perk].maxRank;
+}
+
 // perk_add_effect
 // 0x496BFC perk_add_effect
 void perkAddEffect(Object* critter, int perk)

@@ -40,6 +40,7 @@
 #include "sfall_callbacks.h"
 #include "sfall_config.h"
 #include "sfall_global_scripts.h"
+#include "sfall_opcodes.h"
 #include "sfall_script_hooks.h"
 #include "skill.h"
 #include "stat.h"
@@ -3576,6 +3577,15 @@ int _combat_attack(Object* attacker, Object* defender, int hitMode, int hitLocat
             hitMode = HIT_MODE_KICK;
         }
     }
+
+    // SFALL: Fire HOOK_TARGETOBJECT when a critter selects a target to attack.
+    scriptHooks_TargetObject(attacker, defender, hitMode, hitLocation);
+
+    // SFALL: Track last attacker/target for get_last_target (0x8248) and
+    // get_last_attacker (0x8249) opcodes. These globals are read by
+    // sfall_opcodes.cc handlers and persist across combat rounds.
+    gLastAttacker = attacker->id;
+    gLastTarget = defender->id;
 
     attackInit(&_main_ctd, attacker, defender, hitMode, hitLocation);
     debugPrint("computing attack...\n");

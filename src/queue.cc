@@ -14,6 +14,7 @@
 #include "proto.h"
 #include "proto_instance.h"
 #include "scripts.h"
+#include "sfall_script_hooks.h"
 
 namespace fallout {
 
@@ -496,6 +497,9 @@ static int explosionProcess(Object* explosive, bool animate)
             minDamage += 10;
         }
     }
+
+    // SFALL: Fire HOOK_ONEXPLOSION before the explosion occurs.
+    scriptHooks_OnExplosion(explosive, tile, elevation, minDamage, maxDamage, gDude);
 
     if (actionExplode(tile, elevation, minDamage, maxDamage, gDude, animate) == -2) {
         queueAddEvent(50, explosive, nullptr, EVENT_TYPE_EXPLOSION);

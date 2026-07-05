@@ -30,6 +30,7 @@
 #include "scripts.h"
 #include "settings.h"
 #include "sfall_global_vars.h"
+#include "sfall_opcodes.h"
 #include "stat.h"
 #include "svga.h"
 #include "text_object.h"
@@ -2844,6 +2845,12 @@ void _object_animate()
                             // NOTE: Uninline.
                             _anim_hide(object, -1);
                         }
+
+                        // SFALL: Fire registered animation callback on completion.
+                        // Matches original sfall reg_anim_callback behavior: the
+                        // callback receives the animated object and fires once per
+                        // animation sequence completion.
+                        sfallAnimCallbackInvoke(object);
 
                         _anim_set_continue(sad->animationSequenceIndex, 1);
                         continue;

@@ -30,6 +30,16 @@ static inline bool perkIsValid(int perk)
     return perk >= 0 && perk < PERK_COUNT;
 }
 
+// Sets the minimum level requirement for a perk.
+// Used by set_perk_level (0x817A) sfall opcode.
+void perkSetMinLevel(int perk, int minLevel);
+
+// Returns the minimum level requirement for a perk.
+int perkGetMinLevel(int perk);
+
+// Returns the maximum rank for a perk, or -1 if the perk has no ranks.
+int perkGetMaxRank(int perk);
+
 // Returns true if critter has at least one rank in specified perk.
 //
 // NOTE: Most perks have only 1 rank, which means dude either have perk, or

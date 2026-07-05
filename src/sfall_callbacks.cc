@@ -7,6 +7,7 @@
 #include "script_sound.h"
 #include "sfall_config.h"
 #include "sfall_global_vars.h"
+#include "sfall_opcodes.h"
 #include "sfall_script_hooks.h"
 #include "stat.h"
 #include "worldmap.h"
@@ -39,6 +40,11 @@ void sfallOnGameReset()
     inventoryResetInvenApCost();
     scriptSoundReset();
     statResetUnspentApBonuses();
+
+    // Close all VFS file handles to prevent handle exhaustion across
+    // save/load cycles. sfall_gl_scr_reset() frees script Program objects
+    // holding handle IDs — closing handles prevents slot leaks.
+    sfallVfsCloseAll();
 
     // Re-initialize SpeedMulti from ddraw.ini after game reset.
     // sfall_gl_vars_reset() clears all sfall global vars including SpeedMulti (key 0).

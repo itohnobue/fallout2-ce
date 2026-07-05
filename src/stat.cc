@@ -22,6 +22,7 @@
 #include "random.h"
 #include "scripts.h"
 #include "sfall_config.h"
+#include "sfall_opcodes.h"
 #include "skill.h"
 #include "svga.h"
 #include "tile.h"
@@ -728,6 +729,24 @@ int statGetFrmId(int stat)
     return statIsValid(stat) ? gStatDescriptions[stat].frmId : 0;
 }
 
+// Sets the maximum value for a stat (used by set_stat_max et al. sfall opcodes).
+// Validates stat index; silently ignored on invalid stat.
+void statSetMaxValue(int stat, int value)
+{
+    if (statIsValid(stat)) {
+        gStatDescriptions[stat].maximumValue = value;
+    }
+}
+
+// Sets the minimum value for a stat (used by set_stat_min et al. sfall opcodes).
+// Validates stat index; silently ignored on invalid stat.
+void statSetMinValue(int stat, int value)
+{
+    if (statIsValid(stat)) {
+        gStatDescriptions[stat].minimumValue = value;
+    }
+}
+
 // Roll D10 against specified stat.
 //
 // This function is intended to be used with one of SPECIAL stats (which are
@@ -769,9 +788,14 @@ int pcAddExperienceWithOptions(int xp, bool doParty, int* xpGained)
 {
     int oldXp = gPcStatValues[PC_STAT_EXPERIENCE];
 
+    // Apply sfall set_xp_mod (0x81AA) percentage modifier to base XP.
+    // gXpModPercentage defaults to 100 (no modification). Values above 100
+    // increase XP gain; values below 100 decrease it; 0 means no XP.
+    int adjustedXp = xp * gXpModPercentage / 100;
+
     int newXp = gPcStatValues[PC_STAT_EXPERIENCE];
-    newXp += xp;
-    newXp += perkGetRank(gDude, PERK_SWIFT_LEARNER) * 5 * xp / 100;
+    newXp += adjustedXp;
+    newXp += perkGetRank(gDude, PERK_SWIFT_LEARNER) * 5 * adjustedXp / 100;
 
     if (newXp < gPcStatDescriptions[PC_STAT_EXPERIENCE].minimumValue) {
         newXp = gPcStatDescriptions[PC_STAT_EXPERIENCE].minimumValue;

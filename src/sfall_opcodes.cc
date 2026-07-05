@@ -7,6 +7,7 @@
 
 #include "animation.h"
 #include "art.h"
+#include "character_editor.h"
 #include "color.h"
 #include "combat.h"
 #include "combat_ai.h"
@@ -30,6 +31,7 @@
 #include "perk.h"
 #include "proto.h"
 #include "proto_instance.h"
+#include "random.h"
 #include "script_sound.h"
 #include "scripts.h"
 #include "sfall_animation.h"
@@ -1784,7 +1786,7 @@ static void sfallVfsFreeHandle(int id)
     }
 }
 
-static void sfallVfsCloseAll()
+void sfallVfsCloseAll()
 {
     for (int i = 0; i < kVfsMaxFiles; i++) {
         sfallVfsFreeHandle(i);
@@ -2234,15 +2236,6 @@ static void op_set_df_model(Program* program)
     }
 }
 
-// hero_select_win(int window_id)
-// Stub: opens the hero selection window.
-static void op_hero_select_win(Program* program)
-{
-    int win = programStackPopInteger(program);
-    // Stub: Hero selection window not yet implemented.
-    (void)win;
-}
-
 // div (/)
 static void op_div(Program* program)
 {
@@ -2607,9 +2600,8 @@ static void op_get_available_skill_points(Program* program)
 
 // mod_skill_points_per_level(int value)
 // Sets a modifier for skill points gained per level. The modifier is stored
-// but full integration requires updating characterEditorUpdateLevel() in
-// character_editor.cc to consume this value.
-static int gSkillPointsPerLevelMod = 0;
+// and consumed by characterEditorUpdateLevel() in character_editor.cc.
+int gSkillPointsPerLevelMod = 0;
 
 static void op_mod_skill_points_per_level(Program* program)
 {
@@ -2786,11 +2778,6 @@ static void op_set_perk_freq(Program* program)
 // Sets the minimum level requirement for a specific perk.
 // value of 0 effectively disables the level gate (any level qualifies).
 // ETu uses value 999 for Magnetic Personality to effectively disable it.
-//
-// NOTE: gPerkDescriptions is static in perk.cc (internal linkage).
-// Currently stores the override in a local table. For full integration,
-// perk.cc's gPerkDescriptions must be made accessible — either remove
-// static and add extern in perk.h, or add a perkSetMinLevel() accessor.
 static void op_set_perk_level(Program* program)
 {
     int value = programStackPopInteger(program);
@@ -2801,16 +2788,7 @@ static void op_set_perk_level(Program* program)
         return;
     }
 
-    // TODO: Once gPerkDescriptions is externally accessible, apply directly:
-    //   gPerkDescriptions[perkID].minLevel = value;
-    // For now, store the override. perkCanAdd() in perk.cc needs to be
-    // updated to check this override table.
-    //
-    // In sfall: modifying minLevel disables/enables a perk at that level.
-    // Setting to 0 means "no minimum level requirement."
-    (void)value; // suppress unused warning until integration is complete
-    (void)perkID;
-    debugPrint("set_perk_level(perkID=%d, value=%d) — override stored, perk.cc integration pending\n", perkID, value);
+    perkSetMinLevel(perkID, value);
 }
 
 // set_skill_max(int value) — 0x81A2
@@ -2831,14 +2809,9 @@ static void op_set_skill_max(Program* program)
 
 // ============================================================
 // Stat max/min opcodes.
-// CE stores stat metadata in gStatDescriptions[] (stat.cc:42), but it
-// has internal linkage (static). These opcodes store overrides in local
-// static variables. Full integration requires either:
-//   (a) making gStatDescriptions externally accessible (remove static,
-//       add extern in stat.h), or
-//   (b) adding statSetMax()/statSetMin() accessor functions.
-// Once integrated, critterGetStat() and related functions will
-// automatically respect the modified limits.
+// Modify stat description limits in gStatDescriptions[] via accessors
+// in stat.cc. critterGetStat() and related functions automatically
+// respect the modified limits.
 // ============================================================
 
 // set_stat_max(int stat, int value) — 0x81B4
@@ -2852,11 +2825,7 @@ static void op_set_stat_max(Program* program)
         return;
     }
 
-    // TODO: Once gStatDescriptions is externally accessible:
-    //   gStatDescriptions[stat].maximumValue = value;
-    (void)value;
-    (void)stat;
-    debugPrint("set_stat_max(stat=%d, value=%d) — override stored, stat.cc integration pending\n", stat, value);
+    statSetMaxValue(stat, value);
 }
 
 // set_stat_min(int stat, int value) — 0x81B5
@@ -2870,11 +2839,7 @@ static void op_set_stat_min(Program* program)
         return;
     }
 
-    // TODO: Once gStatDescriptions is externally accessible:
-    //   gStatDescriptions[stat].minimumValue = value;
-    (void)value;
-    (void)stat;
-    debugPrint("set_stat_min(stat=%d, value=%d) — override stored, stat.cc integration pending\n", stat, value);
+    statSetMinValue(stat, value);
 }
 
 // set_pc_stat_max(int stat, int value) — 0x81B7
@@ -2889,11 +2854,7 @@ static void op_set_pc_stat_max(Program* program)
         return;
     }
 
-    // TODO: Once gStatDescriptions is externally accessible:
-    //   gStatDescriptions[stat].maximumValue = value;
-    (void)value;
-    (void)stat;
-    debugPrint("set_pc_stat_max(stat=%d, value=%d) — override stored, stat.cc integration pending\n", stat, value);
+    statSetMaxValue(stat, value);
 }
 
 // set_pc_stat_min(int stat, int value) — 0x81B8
@@ -2907,11 +2868,7 @@ static void op_set_pc_stat_min(Program* program)
         return;
     }
 
-    // TODO: Once gStatDescriptions is externally accessible:
-    //   gStatDescriptions[stat].minimumValue = value;
-    (void)value;
-    (void)stat;
-    debugPrint("set_pc_stat_min(stat=%d, value=%d) — override stored, stat.cc integration pending\n", stat, value);
+    statSetMinValue(stat, value);
 }
 
 // set_npc_stat_max(int stat, int value) — 0x81B9
@@ -2925,11 +2882,7 @@ static void op_set_npc_stat_max(Program* program)
         return;
     }
 
-    // TODO: Once gStatDescriptions is externally accessible:
-    //   gStatDescriptions[stat].maximumValue = value;
-    (void)value;
-    (void)stat;
-    debugPrint("set_npc_stat_max(stat=%d, value=%d) — override stored, stat.cc integration pending\n", stat, value);
+    statSetMaxValue(stat, value);
 }
 
 // set_npc_stat_min(int stat, int value) — 0x81BA
@@ -2943,11 +2896,631 @@ static void op_set_npc_stat_min(Program* program)
         return;
     }
 
-    // TODO: Once gStatDescriptions is externally accessible:
-    //   gStatDescriptions[stat].minimumValue = value;
-    (void)value;
-    (void)stat;
-    debugPrint("set_npc_stat_min(stat=%d, value=%d) — override stored, stat.cc integration pending\n", stat, value);
+    statSetMinValue(stat, value);
+}
+
+// ============================================================
+// set_perk_name (0x8189) — sets display name override for a perk.
+// Stored in static table; perkGetName() needs integration to read it.
+// ============================================================
+static constexpr int kMaxPerkNameOverrides = 128;
+static char* sfallPerkNameOverrides[kMaxPerkNameOverrides] = {};
+
+static void op_set_perk_name(Program* program)
+{
+    const char* name = programStackPopString(program);
+    int perkID = programStackPopInteger(program);
+
+    if (!perkIsValid(perkID) || perkID >= kMaxPerkNameOverrides) {
+        programPrintError("set_perk_name: invalid perk ID %d", perkID);
+        return;
+    }
+
+    if (sfallPerkNameOverrides[perkID] != nullptr) {
+        delete[] sfallPerkNameOverrides[perkID];
+        sfallPerkNameOverrides[perkID] = nullptr;
+    }
+
+    if (name != nullptr && name[0] != '\0') {
+        size_t len = strlen(name) + 1;
+        sfallPerkNameOverrides[perkID] = new char[len];
+        memcpy(sfallPerkNameOverrides[perkID], name, len);
+    }
+}
+
+// ============================================================
+// set_perk_desc (0x818A) — sets description override for a perk.
+// ============================================================
+static char* sfallPerkDescOverrides[kMaxPerkNameOverrides] = {};
+
+static void op_set_perk_desc(Program* program)
+{
+    const char* desc = programStackPopString(program);
+    int perkID = programStackPopInteger(program);
+
+    if (!perkIsValid(perkID) || perkID >= kMaxPerkNameOverrides) {
+        programPrintError("set_perk_desc: invalid perk ID %d", perkID);
+        return;
+    }
+
+    if (sfallPerkDescOverrides[perkID] != nullptr) {
+        delete[] sfallPerkDescOverrides[perkID];
+        sfallPerkDescOverrides[perkID] = nullptr;
+    }
+
+    if (desc != nullptr && desc[0] != '\0') {
+        size_t len = strlen(desc) + 1;
+        sfallPerkDescOverrides[perkID] = new char[len];
+        memcpy(sfallPerkDescOverrides[perkID], desc, len);
+    }
+}
+
+// ============================================================
+// get_perk_available (0x8190) — returns 1 if perk is selectable.
+// Checks against perk availability criteria using the dude.
+// ============================================================
+static void op_get_perk_available(Program* program)
+{
+    int perk = programStackPopInteger(program);
+
+    if (!perkIsValid(perk)) {
+        programStackPushInteger(program, 0);
+        return;
+    }
+
+    // Check if the perk has valid ranks and the dude meets level requirement.
+    int result = 0;
+    int maxRank = perkGetMaxRank(perk);
+    if (maxRank >= 0) {
+        int level = pcGetStat(PC_STAT_LEVEL);
+        if (level >= perkGetMinLevel(perk)) {
+            result = 1;
+        }
+    }
+    programStackPushInteger(program, result);
+}
+
+// ============================================================
+// Knockback opcodes (0x8195-0x819A).
+// Store knockback settings in static variables; knockback system
+// integration requires combat system changes in combat.cc.
+// ============================================================
+static int sfallWeaponKnockbackType = 0;
+static float sfallWeaponKnockbackValue = 0.0f;
+static int sfallTargetKnockbackType = 0;
+static float sfallTargetKnockbackValue = 0.0f;
+static int sfallAttackerKnockbackType = 0;
+static float sfallAttackerKnockbackValue = 0.0f;
+
+static void op_set_weapon_knockback(Program* program)
+{
+    ProgramValue value = programStackPopValue(program);
+    int type = programStackPopInteger(program);
+    Object* weapon = static_cast<Object*>(programStackPopPointer(program));
+
+    if (weapon == nullptr) {
+        return;
+    }
+
+    sfallWeaponKnockbackType = type;
+    sfallWeaponKnockbackValue = value.isFloat() ? value.asFloat() : static_cast<float>(value.integerValue);
+    debugPrint("set_weapon_knockback(obj=%p, type=%d) — knockback system integration pending\n",
+        static_cast<void*>(weapon), type);
+}
+
+static void op_set_target_knockback(Program* program)
+{
+    ProgramValue value = programStackPopValue(program);
+    int type = programStackPopInteger(program);
+    Object* critter = static_cast<Object*>(programStackPopPointer(program));
+
+    if (critter == nullptr) {
+        return;
+    }
+
+    sfallTargetKnockbackType = type;
+    sfallTargetKnockbackValue = value.isFloat() ? value.asFloat() : static_cast<float>(value.integerValue);
+    debugPrint("set_target_knockback(obj=%p, type=%d) — knockback system integration pending\n",
+        static_cast<void*>(critter), type);
+}
+
+static void op_set_attacker_knockback(Program* program)
+{
+    ProgramValue value = programStackPopValue(program);
+    int type = programStackPopInteger(program);
+    Object* critter = static_cast<Object*>(programStackPopPointer(program));
+
+    if (critter == nullptr) {
+        return;
+    }
+
+    sfallAttackerKnockbackType = type;
+    sfallAttackerKnockbackValue = value.isFloat() ? value.asFloat() : static_cast<float>(value.integerValue);
+    debugPrint("set_attacker_knockback(obj=%p, type=%d) — knockback system integration pending\n",
+        static_cast<void*>(critter), type);
+}
+
+static void op_remove_weapon_knockback(Program* program)
+{
+    Object* weapon = static_cast<Object*>(programStackPopPointer(program));
+    (void)weapon;
+    sfallWeaponKnockbackType = 0;
+    sfallWeaponKnockbackValue = 0.0f;
+}
+
+static void op_remove_target_knockback(Program* program)
+{
+    Object* critter = static_cast<Object*>(programStackPopPointer(program));
+    (void)critter;
+    sfallTargetKnockbackType = 0;
+    sfallTargetKnockbackValue = 0.0f;
+}
+
+static void op_remove_attacker_knockback(Program* program)
+{
+    Object* critter = static_cast<Object*>(programStackPopPointer(program));
+    (void)critter;
+    sfallAttackerKnockbackType = 0;
+    sfallAttackerKnockbackValue = 0.0f;
+}
+
+// ============================================================
+// set_xp_mod (0x81AA) — sets percentage modifier on XP gain.
+// Integration point: pcAddExperience() in stat.cc.
+// ============================================================
+int gXpModPercentage = 100;
+
+static constexpr int kMaxXpModPercentage = 10000;
+
+static void op_set_xp_mod(Program* program)
+{
+    gXpModPercentage = programStackPopInteger(program);
+    if (gXpModPercentage < 0) {
+        gXpModPercentage = 0;
+    }
+    if (gXpModPercentage > kMaxXpModPercentage) {
+        gXpModPercentage = kMaxXpModPercentage;
+    }
+}
+
+// ============================================================
+// Fake perk/trait opcodes (0x81BB-0x81C2).
+// Allow scripts to register custom perks/traits on the perk/trait
+// selection screen. Stored in static tables for now; full integration
+// requires UI changes in perk_dialog.cc and character_editor.cc.
+// ============================================================
+static constexpr int kMaxFakePerks = 64;
+struct FakePerkEntry {
+    char* name;
+    int level;
+    int image;
+    char* desc;
+    bool active;
+};
+static FakePerkEntry sfallFakePerks[kMaxFakePerks] = {};
+static int sfallFakePerkCount = 0;
+
+static constexpr int kMaxFakeTraits = 16;
+struct FakeTraitEntry {
+    char* name;
+    int active; // 0 = inactive, 1 = active  
+    int image;
+    char* desc;
+};
+static FakeTraitEntry sfallFakeTraits[kMaxFakeTraits] = {};
+static int sfallFakeTraitCount = 0;
+
+static char* sfallPerkboxTitle = nullptr;
+static bool sfallHideRealPerks = false;
+
+static void sfallFreeFakePerkEntry(FakePerkEntry& entry)
+{
+    delete[] entry.name;
+    delete[] entry.desc;
+    entry.name = nullptr;
+    entry.desc = nullptr;
+}
+
+static void sfallFreeFakeTraitEntry(FakeTraitEntry& entry)
+{
+    delete[] entry.name;
+    delete[] entry.desc;
+    entry.name = nullptr;
+    entry.desc = nullptr;
+}
+
+// set_fake_perk(name, level, image, desc)
+static void op_set_fake_perk(Program* program)
+{
+    const char* desc = programStackPopString(program);
+    int image = programStackPopInteger(program);
+    int level = programStackPopInteger(program);
+    const char* name = programStackPopString(program);
+
+    if (sfallFakePerkCount >= kMaxFakePerks) {
+        programPrintError("set_fake_perk: too many fake perks (max %d)", kMaxFakePerks);
+        return;
+    }
+
+    FakePerkEntry& entry = sfallFakePerks[sfallFakePerkCount++];
+    entry.active = true;
+    entry.level = level;
+    entry.image = image;
+
+    if (name != nullptr && name[0] != '\0') {
+        size_t len = strlen(name) + 1;
+        entry.name = new char[len];
+        memcpy(entry.name, name, len);
+    }
+    if (desc != nullptr && desc[0] != '\0') {
+        size_t len = strlen(desc) + 1;
+        entry.desc = new char[len];
+        memcpy(entry.desc, desc, len);
+    }
+}
+
+// set_fake_trait(name, active, image, desc)
+static void op_set_fake_trait(Program* program)
+{
+    const char* desc = programStackPopString(program);
+    int image = programStackPopInteger(program);
+    int active = programStackPopInteger(program);
+    const char* name = programStackPopString(program);
+
+    if (sfallFakeTraitCount >= kMaxFakeTraits) {
+        programPrintError("set_fake_trait: too many fake traits (max %d)", kMaxFakeTraits);
+        return;
+    }
+
+    FakeTraitEntry& entry = sfallFakeTraits[sfallFakeTraitCount++];
+    entry.active = (active != 0) ? 1 : 0;
+    entry.image = image;
+
+    if (name != nullptr && name[0] != '\0') {
+        size_t len = strlen(name) + 1;
+        entry.name = new char[len];
+        memcpy(entry.name, name, len);
+    }
+    if (desc != nullptr && desc[0] != '\0') {
+        size_t len = strlen(desc) + 1;
+        entry.desc = new char[len];
+        memcpy(entry.desc, desc, len);
+    }
+}
+
+// set_selectable_perk(name, active, image, desc)
+// Alias for set_fake_perk in sfall; registers a perk as selectable.
+static void op_set_selectable_perk(Program* program)
+{
+    const char* desc = programStackPopString(program);
+    int image = programStackPopInteger(program);
+    int active = programStackPopInteger(program);
+    const char* name = programStackPopString(program);
+
+    // Simply delegate to set_fake_perk logic.
+    if (!active || sfallFakePerkCount >= kMaxFakePerks) {
+        return;
+    }
+
+    FakePerkEntry& entry = sfallFakePerks[sfallFakePerkCount++];
+    entry.active = true;
+    entry.level = 0;
+    entry.image = image;
+
+    if (name != nullptr && name[0] != '\0') {
+        size_t len = strlen(name) + 1;
+        entry.name = new char[len];
+        memcpy(entry.name, name, len);
+    }
+    if (desc != nullptr && desc[0] != '\0') {
+        size_t len = strlen(desc) + 1;
+        entry.desc = new char[len];
+        memcpy(entry.desc, desc, len);
+    }
+}
+
+// set_perkbox_title(title)
+static void op_set_perkbox_title(Program* program)
+{
+    const char* title = programStackPopString(program);
+
+    delete[] sfallPerkboxTitle;
+    sfallPerkboxTitle = nullptr;
+
+    if (title != nullptr && title[0] != '\0') {
+        size_t len = strlen(title) + 1;
+        sfallPerkboxTitle = new char[len];
+        memcpy(sfallPerkboxTitle, title, len);
+    }
+}
+
+// hide_real_perks()
+static void op_hide_real_perks(Program* program)
+{
+    sfallHideRealPerks = true;
+}
+
+// show_real_perks()
+static void op_show_real_perks(Program* program)
+{
+    sfallHideRealPerks = false;
+}
+
+// has_fake_perk(name) -> int
+static void op_has_fake_perk(Program* program)
+{
+    // Accept either string name or integer extraPerkID.
+    ProgramValue arg = programStackPopValue(program);
+    int result = 0;
+
+    if (arg.isString()) {
+        const char* name = arg.asString(program);
+        for (int i = 0; i < sfallFakePerkCount; i++) {
+            if (sfallFakePerks[i].name != nullptr
+                && strcmp(sfallFakePerks[i].name, name) == 0
+                && sfallFakePerks[i].active) {
+                result = i + 1;
+                break;
+            }
+        }
+    } else {
+        int extraPerkID = arg.integerValue;
+        // extraPerkID is 1-indexed
+        if (extraPerkID > 0 && extraPerkID <= sfallFakePerkCount
+            && sfallFakePerks[extraPerkID - 1].active) {
+            result = extraPerkID;
+        }
+    }
+
+    programStackPushInteger(program, result);
+}
+
+// has_fake_trait(name) -> int
+static void op_has_fake_trait(Program* program)
+{
+    const char* name = programStackPopString(program);
+    int result = 0;
+
+    for (int i = 0; i < sfallFakeTraitCount; i++) {
+        if (sfallFakeTraits[i].name != nullptr
+            && strcmp(sfallFakeTraits[i].name, name) == 0) {
+            result = i + 1;
+            break;
+        }
+    }
+
+    programStackPushInteger(program, result);
+}
+
+// ============================================================
+// set_critter_hit_chance_mod (0x81C5) — modifies hit chance.
+// Stores max and mod values; integration requires combat system
+// changes in combat_ai.cc.
+// ============================================================
+static int sfallHitChanceMod = 0;
+static int sfallHitChanceMax = 95;
+
+static void op_set_critter_hit_chance_mod(Program* program)
+{
+    int mod = programStackPopInteger(program);
+    int max = programStackPopInteger(program);
+    Object* critter = static_cast<Object*>(programStackPopPointer(program));
+
+    if (critter == nullptr) {
+        return;
+    }
+
+    sfallHitChanceMax = max;
+    sfallHitChanceMod = mod;
+    debugPrint("set_critter_hit_chance_mod(obj=%p, max=%d, mod=%d) — combat integration pending\n",
+        static_cast<void*>(critter), max, mod);
+}
+
+// ============================================================
+// sneak_success (0x826C) — returns 1 if sneaking is successful.
+// Uses the engine's skill check on the dude's Sneak skill vs 0.
+// Pushes 0 if not sneaking or check fails.
+// ============================================================
+static void op_sneak_success(Program* program)
+{
+    int result = 0;
+    if (gDude != nullptr && dudeHasState(DUDE_STATE_SNEAKING)) {
+        int sneakSkill = skillGetValue(gDude, SKILL_SNEAK);
+        result = (randomBetween(1, 100) <= sneakSkill) ? 1 : 0;
+    }
+    programStackPushInteger(program, result);
+}
+
+// ============================================================
+// create_spatial (0x8273) — creates a spatial script object at a tile.
+// Spatial scripts execute when a critter enters their radius.
+// Full implementation requires script system integration (scriptAdd,
+// scriptSetScript, object creation, and tile placement).
+// ============================================================
+static void op_create_spatial(Program* program)
+{
+    int radius = programStackPopInteger(program);
+    int elevation = programStackPopInteger(program);
+    int tile = programStackPopInteger(program);
+    int scriptID = programStackPopInteger(program);
+
+    // Create a spatial script object — invisible object that
+    // runs its spatial procedure when critters enter its radius.
+    // TODO: Full implementation requires:
+    //   1. scriptAdd(&sid, SCRIPT_TYPE_SPATIAL)
+    //   2. scriptSetObjects(sid, nullptr, nullptr)
+    //   3. objectCreateWithFidPid + objectSetLocation
+    //   4. scr->sp.radius = radius
+    //   5. scr->sp.built_tile = builtTileCreate(tile, elevation)
+    debugPrint("create_spatial(script=%d, tile=%d, elev=%d, radius=%d) — spatial system integration pending\n",
+        scriptID, tile, elevation, radius);
+    programStackPushInteger(program, 0);
+}
+
+// ============================================================
+// hero_select_win (0x8213) — opens hero selection window.
+// The win parameter in sfall specifies which window type to open
+// (0 = character sheet, 1 = perks, 2 = karma, 3 = skills).
+// CE provides equivalent functionality through the character editor
+// and interface bar; full window-type routing requires UI integration.
+// ============================================================
+static void op_hero_select_win(Program* program)
+{
+    int win = programStackPopInteger(program);
+
+    // Map sfall win parameter to character editor folder:
+    //   0 = character sheet (main stats/skills view),
+    //   1 = perks tab,
+    //   2 = karma tab,
+    //   3 = kills (level/location history).
+    // Silently no-ops if the character editor is not currently open
+    // (characterEditorShow() is a blocking modal dialog — it cannot be
+    // opened from within a script handler).
+    if (characterEditorGetWindow() >= 0) {
+        switch (win) {
+        case 0:
+            characterEditorSelectFolder(0);
+            break;
+        case 1:
+            characterEditorSelectFolder(1);
+            break;
+        case 2:
+            characterEditorSelectFolder(2);
+            break;
+        case 3:
+            characterEditorSelectFolder(3);
+            break;
+        default:
+            debugPrint("hero_select_win(win=%d) — unsupported window type\n", win);
+            break;
+        }
+    } else {
+        debugPrint("hero_select_win(win=%d) — character editor not open, navigation skipped\n", win);
+    }
+}
+
+// ============================================================
+// get_last_target (0x8248) / get_last_attacker (0x8249).
+// Returns the last target/attacker of a critter. In sfall, these
+// track per-critter; here we store a global fallback.
+// ============================================================
+int gLastAttacker = -1;
+int gLastTarget = -1;
+
+static void op_get_last_target(Program* program)
+{
+    Object* critter = static_cast<Object*>(programStackPopPointer(program));
+    (void)critter;
+
+    if (gLastTarget >= 0) {
+        Object* obj = objectFindById(gLastTarget);
+        if (obj != nullptr) {
+            programStackPushPointer(program, obj);
+            return;
+        }
+    }
+    programStackPushInteger(program, 0);
+}
+
+static void op_get_last_attacker(Program* program)
+{
+    Object* critter = static_cast<Object*>(programStackPopPointer(program));
+    (void)critter;
+
+    if (gLastAttacker >= 0) {
+        Object* obj = objectFindById(gLastAttacker);
+        if (obj != nullptr) {
+            programStackPushPointer(program, obj);
+            return;
+        }
+    }
+    programStackPushInteger(program, 0);
+}
+
+// ============================================================
+// sfallAnimCallbackInvoke — public API to invoke the registered
+// sfall animation callback procedure on the given object.
+// Should be called from animation completion paths in animation.cc.
+// ============================================================
+void sfallAnimCallbackInvoke(Object* object)
+{
+    if (sfallAnimCallbackProgram == nullptr || sfallAnimCallbackProcedureIndex < 0) {
+        return;
+    }
+
+    if (object == nullptr) {
+        return;
+    }
+
+    // Set up a minimal script execution context.
+    // Push the animated object as the argument, then execute the procedure.
+    Program* program = sfallAnimCallbackProgram;
+    int procIndex = sfallAnimCallbackProcedureIndex;
+
+    if (procIndex < 0 || procIndex >= program->procedureCount()) {
+        sfallAnimCallbackProgram = nullptr;
+        sfallAnimCallbackProcedureIndex = -1;
+        return;
+    }
+
+    programStackPushValue(program, ProgramValue(object));
+    programExecuteProcedure(program, procIndex);
+    // Reset after one-shot invocation (matches sfall behavior).
+    sfallAnimCallbackProgram = nullptr;
+    sfallAnimCallbackProcedureIndex = -1;
+}
+
+void sfallOpcodesReset()
+{
+    // Free and clear fake perk entries.
+    for (int i = 0; i < sfallFakePerkCount; i++) {
+        sfallFreeFakePerkEntry(sfallFakePerks[i]);
+    }
+    sfallFakePerkCount = 0;
+
+    // Free and clear fake trait entries.
+    for (int i = 0; i < sfallFakeTraitCount; i++) {
+        sfallFreeFakeTraitEntry(sfallFakeTraits[i]);
+    }
+    sfallFakeTraitCount = 0;
+
+    // Reset XP modifier to default.
+    gXpModPercentage = 100;
+
+    // Reset hit chance globals.
+    sfallHitChanceMod = 0;
+    sfallHitChanceMax = 95;
+
+    // Reset knockback globals.
+    sfallWeaponKnockbackType = 0;
+    sfallWeaponKnockbackValue = 0.0f;
+    sfallTargetKnockbackType = 0;
+    sfallTargetKnockbackValue = 0.0f;
+    sfallAttackerKnockbackType = 0;
+    sfallAttackerKnockbackValue = 0.0f;
+
+    // Free perk name/desc override entries.
+    for (int i = 0; i < kMaxPerkNameOverrides; i++) {
+        if (sfallPerkNameOverrides[i] != nullptr) {
+            delete[] sfallPerkNameOverrides[i];
+            sfallPerkNameOverrides[i] = nullptr;
+        }
+    }
+    for (int i = 0; i < kMaxPerkNameOverrides; i++) {
+        if (sfallPerkDescOverrides[i] != nullptr) {
+            delete[] sfallPerkDescOverrides[i];
+            sfallPerkDescOverrides[i] = nullptr;
+        }
+    }
+
+    // Reset perkbox UI state.
+    delete[] sfallPerkboxTitle;
+    sfallPerkboxTitle = nullptr;
+    sfallHideRealPerks = false;
+
+    // Reset last target/attacker tracking.
+    gLastAttacker = -1;
+    gLastTarget = -1;
 }
 
 // Note: opcodes should pop arguments off the stack in reverse order
@@ -3126,7 +3699,9 @@ void sfallOpcodesInit()
     // 0x8187 - void set_perk_agl(int perkID, int value)
     // 0x8188 - void set_perk_lck(int perkID, int value)
     // 0x8189 - void set_perk_name(int perkID, string value)
+    interpreterRegisterOpcode(0x8189, op_set_perk_name);
     // 0x818a - void set_perk_desc(int perkID, string value)
+    interpreterRegisterOpcode(0x818A, op_set_perk_desc);
     // 0x8247 - void set_perk_freq(int value)
     interpreterRegisterOpcode(0x8247, op_set_perk_freq);
 
@@ -3138,6 +3713,7 @@ void sfallOpcodesInit()
     // 0x818e - int get_perk_owed()
     // 0x818f - void set_perk_owed(int value)
     // 0x8190 - int get_perk_available(int perk)
+    interpreterRegisterOpcode(0x8190, op_get_perk_available);
 
     // 0x8191 - int get_critter_current_ap(object critter)
     interpreterRegisterOpcode(0x8191, op_get_critter_current_ap);
@@ -3150,11 +3726,17 @@ void sfallOpcodesInit()
     interpreterRegisterOpcode(0x8194, op_toggle_active_hand);
 
     // 0x8195 - void set_weapon_knockback(object weapon, int type, int/float value)
+    interpreterRegisterOpcode(0x8195, op_set_weapon_knockback);
     // 0x8196 - void set_target_knockback(object critter, int type, int/float value)
+    interpreterRegisterOpcode(0x8196, op_set_target_knockback);
     // 0x8197 - void set_attacker_knockback(object critter, int type, int/float value)
+    interpreterRegisterOpcode(0x8197, op_set_attacker_knockback);
     // 0x8198 - void remove_weapon_knockback(object weapon)
+    interpreterRegisterOpcode(0x8198, op_remove_weapon_knockback);
     // 0x8199 - void remove_target_knockback(object critter)
+    interpreterRegisterOpcode(0x8199, op_remove_target_knockback);
     // 0x819a - void remove_attacker_knockback(object critter)
+    interpreterRegisterOpcode(0x819A, op_remove_attacker_knockback);
 
     // 0x819d - void  set_sfall_global(string/int varname, int/float value)
     interpreterRegisterOpcode(0x819D, op_set_sfall_global);
@@ -3194,9 +3776,11 @@ void sfallOpcodesInit()
     // 0x81a2 - void set_skill_max(int value)
     interpreterRegisterOpcode(0x81A2, op_set_skill_max);
     // 0x81aa - void set_xp_mod(int percentage)
+    interpreterRegisterOpcode(0x81AA, op_set_xp_mod);
     // 0x81ab - void set_perk_level_mod(int levels)
 
     // 0x81c5 - void set_critter_hit_chance_mod(object, int max, int mod)
+    interpreterRegisterOpcode(0x81C5, op_set_critter_hit_chance_mod);
     // 0x81c6 - void set_base_hit_chance_mod(int max, int mod)
     // 0x81c7 - void set_critter_skill_mod(object, int max)
     // 0x81c8 - void set_base_skill_mod(int max)
@@ -3232,13 +3816,21 @@ void sfallOpcodesInit()
     interpreterRegisterOpcode(0x81B6, op_set_car_current_town);
 
     // 0x81bb - void set_fake_perk(string name, int level, int image, string desc)
+    interpreterRegisterOpcode(0x81BB, op_set_fake_perk);
     // 0x81bc - void set_fake_trait(string name, int active, int image, string desc)
+    interpreterRegisterOpcode(0x81BC, op_set_fake_trait);
     // 0x81bd - void set_selectable_perk(string name, int active, int image, string desc)
+    interpreterRegisterOpcode(0x81BD, op_set_selectable_perk);
     // 0x81be - void set_perkbox_title(string title)
+    interpreterRegisterOpcode(0x81BE, op_set_perkbox_title);
     // 0x81bf - void hide_real_perks()
+    interpreterRegisterOpcode(0x81BF, op_hide_real_perks);
     // 0x81c0 - void show_real_perks()
+    interpreterRegisterOpcode(0x81C0, op_show_real_perks);
     // 0x81c1 - int has_fake_perk(string name/int extraPerkID)
+    interpreterRegisterOpcode(0x81C1, op_has_fake_perk);
     // 0x81c2 - int has_fake_trait(string name)
+    interpreterRegisterOpcode(0x81C2, op_has_fake_trait);
     // 0x81c3 - void perk_add_mode(int type)
     // 0x81c4 - void clear_selectable_perks()
     // 0x8225 - void remove_trait(int traitID)
@@ -3458,7 +4050,9 @@ void sfallOpcodesInit()
     // 0x8240 - void mark_movie_played(int id)
 
     // 0x8248 - object get_last_target(object critter)
+    interpreterRegisterOpcode(0x8248, op_get_last_target);
     // 0x8249 - object get_last_attacker(object critter)
+    interpreterRegisterOpcode(0x8249, op_get_last_attacker);
     // 0x824a - void block_combat(int enable)
 
     // 0x824b - int tile_under_cursor()
@@ -3492,6 +4086,7 @@ void sfallOpcodesInit()
     // 0x826b - string message_str_game(int fileId, int messageId)
     interpreterRegisterOpcode(0x826B, op_get_message);
     // 0x826c - int sneak_success()
+    interpreterRegisterOpcode(0x826C, op_sneak_success);
     // 0x826d - int tile_light(int elevation, int tileNum)
     interpreterRegisterOpcode(0x826D, op_tile_light);
     // 0x826e - object obj_blocking_line(object objFrom, int tileTo, int blockingType)
@@ -3505,6 +4100,7 @@ void sfallOpcodesInit()
     // 0x8272 - array path_find_to(object objFrom, int tileTo, int blockingType)
     interpreterRegisterOpcode(0x8272, op_make_path);
     // 0x8273 - object create_spatial(int scriptID, int tile, int elevation, int radius)
+    interpreterRegisterOpcode(0x8273, op_create_spatial);
     // 0x8274 - int art_exists(int artFID)
     interpreterRegisterOpcode(0x8274, op_art_exists);
     // 0x8275 - int obj_is_carrying_obj(object invenObj, object itemObj)

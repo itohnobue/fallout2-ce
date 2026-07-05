@@ -1098,6 +1098,8 @@ int scriptsHandleRequests()
 
     if ((gScriptsRequests & SCRIPT_REQUEST_EXPLOSION) != 0) {
         gScriptsRequests &= ~SCRIPT_REQUEST_EXPLOSION;
+        // SFALL: Fire HOOK_ONEXPLOSION before the script-triggered explosion.
+        scriptHooks_OnExplosion(nullptr, gScriptsRequestedExplosionTile, gScriptsRequestedExplosionElevation, gScriptsRequestedExplosionMinDamage, gScriptsRequestedExplosionMaxDamage, nullptr);
         actionExplode(gScriptsRequestedExplosionTile, gScriptsRequestedExplosionElevation, gScriptsRequestedExplosionMinDamage, gScriptsRequestedExplosionMaxDamage, nullptr, 1);
     }
 

@@ -1305,4 +1305,40 @@ void scriptHooks_Sneak(int* resultPtr, int* durationPtr, Object* critter)
     }
 }
 
+/*
+Runs when an explosion occurs (timer expires or premature detonation).
+
+Obj     arg0 - The explosive object
+int     arg1 - The tile where the explosion occurs
+int     arg2 - The elevation
+int     arg3 - The minimum damage
+int     arg4 - The maximum damage
+Obj     arg5 - The source critter (who set/owns the explosive, may be nullptr)
+*/
+void scriptHooks_OnExplosion(Object* explosive, int tile, int elevation, int minDamage, int maxDamage, Object* sourceObj)
+{
+    if (scriptHooks[HOOK_ONEXPLOSION].empty()) {
+        return;
+    }
+
+    ScriptHookCall(HOOK_ONEXPLOSION, 0, { explosive, tile, elevation, minDamage, maxDamage, sourceObj }).call();
+}
+
+/*
+Runs when a critter (player or AI) selects a target to attack.
+
+Critter arg0 - The attacker
+Obj     arg1 - The target object (defender)
+int     arg2 - The hit mode / attack type (see ATKTYPE_* constants)
+int     arg3 - The hit location (see HIT_LOCATION_* constants)
+*/
+void scriptHooks_TargetObject(Object* attacker, Object* defender, int hitMode, int hitLocation)
+{
+    if (scriptHooks[HOOK_TARGETOBJECT].empty()) {
+        return;
+    }
+
+    ScriptHookCall(HOOK_TARGETOBJECT, 0, { attacker, defender, hitMode, hitLocation }).call();
+}
+
 } // namespace fallout

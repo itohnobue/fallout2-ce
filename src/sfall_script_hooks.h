@@ -122,7 +122,7 @@ typedef enum {
     // TODO: maybe combine with USESKILL?
     HOOK_USESKILLON = 35,
 
-    //    HOOK_ONEXPLOSION = 36,
+    HOOK_ONEXPLOSION = 36,
     //    HOOK_SUBCOMBATDAMAGE = 37,
     HOOK_SETLIGHTING = 38,
 
@@ -134,7 +134,7 @@ typedef enum {
     HOOK_STDPROCEDURE = 40,
     HOOK_STDPROCEDURE_END = 41,
 
-    //    HOOK_TARGETOBJECT = 42,
+    HOOK_TARGETOBJECT = 42,
 
     // Random encounter occurs. Override map or cancel the encounter.
     HOOK_ENCOUNTER = 43,
@@ -350,6 +350,10 @@ void scriptHooks_SetLighting(Object* object, int* lightIntensityPtr, int* lightD
 void scriptHooks_CarTravel(int* speedPtr, int* fuelConsumptionPtr);
 int scriptHooks_SetGlobalVar(int varIndex, int value);
 void scriptHooks_Sneak(int* resultPtr, int* durationPtr, Object* critter);
+
+// Hook fire functions for Phase 6 (Hooks restoration)
+void scriptHooks_OnExplosion(Object* explosive, int tile, int elevation, int minDamage, int maxDamage, Object* sourceObj);
+void scriptHooks_TargetObject(Object* attacker, Object* defender, int hitMode, int hitLocation);
 
 } // namespace fallout
 

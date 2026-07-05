@@ -167,7 +167,11 @@ static void sfall_gl_scr_process_simple(int mode1, int mode2)
 
 void sfall_gl_scr_process_main()
 {
-    sfall_gl_scr_process_simple(0, 3);
+    // Only fire mode 3 (always) from the main loop ticker.
+    // Mode 0 scripts fire exclusively from map_update triggers
+    // (sfall_gl_scr_exec_map_update_scripts); including them here
+    // causes double-execution for mode 0 scripts with repeat != 0.
+    sfall_gl_scr_process_simple(3, 3);
 }
 
 void sfall_gl_scr_process_input()
