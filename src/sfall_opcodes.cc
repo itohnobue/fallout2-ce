@@ -3400,6 +3400,24 @@ static void op_hero_select_win(Program* program)
 }
 
 // ============================================================
+// set_hero_race (0x8214) — stores custom hero race for Hero Appearance.
+// ============================================================
+static void op_set_hero_race(Program* program)
+{
+    int race = programStackPopInteger(program);
+    sfall_gl_vars_store("HAp_Race", race);
+}
+
+// ============================================================
+// set_hero_style (0x8215) — stores custom hero style for Hero Appearance.
+// ============================================================
+static void op_set_hero_style(Program* program)
+{
+    int style = programStackPopInteger(program);
+    sfall_gl_vars_store("HApStyle", style);
+}
+
+// ============================================================
 // get_last_target (0x8248) / get_last_attacker (0x8249).
 // Returns the last target/attacker of a critter. In sfall, these
 // track per-critter; here we store a global fallback.
@@ -3521,6 +3539,15 @@ void sfallOpcodesReset()
     // Reset last target/attacker tracking.
     gLastAttacker = -1;
     gLastTarget = -1;
+
+    // Reset hero model overrides set via set_dm_model / set_df_model.
+    gCustomMaleHeroModelNum = 0;
+    gCustomFemaleHeroModelNum = 0;
+
+    // Reset skill/perk modifiers set via metarule opcodes.
+    gSkillMaxCap = 300;
+    gPerkFrequencyOverride = 0;
+    gSkillPointsPerLevelMod = 0;
 }
 
 // Note: opcodes should pop arguments off the stack in reverse order
@@ -3983,8 +4010,10 @@ void sfallOpcodesInit()
 
     // 0x8213 - void hero_select_win(int)
     interpreterRegisterOpcode(0x8213, op_hero_select_win);
-    // 0x8214 - void set_hero_race(int style)
+    // 0x8214 - void set_hero_race(int race)
+    interpreterRegisterOpcode(0x8214, op_set_hero_race);
     // 0x8215 - void set_hero_style(int style)
+    interpreterRegisterOpcode(0x8215, op_set_hero_style);
 
     // 0x8216 - void set_critter_burst_disable(object critter, int disable)
     interpreterRegisterOpcode(0x8216, op_set_critter_burst_disable);

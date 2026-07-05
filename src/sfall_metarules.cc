@@ -186,6 +186,15 @@ static int gRestHealTime = -1;
 // set_terrain_name / get_terrain_name: worldmap coordinate -> terrain name override
 static std::map<std::pair<int, int>, std::string> gTerrainNameOverrides;
 
+// set_town_title: town ID -> display name override (mirrors gTerrainNameOverrides pattern)
+static std::map<int, std::string> gTownTitleOverrides;
+
+// set_car_intface_art: override FID for car trunk interface art (-1 = use default)
+static int gCarIntfaceArtFid = -1;
+
+// set_rest_mode: rest behavior mode (-1 = use default, 0 = disabled, 1 = strict, 2 = no healing)
+static int gRestMode = -1;
+
 // Fake perk/trait storage for NPC critters.
 // Key: Object*, Value: set of perk/trait name strings.
 static std::unordered_map<Object*, std::unordered_set<std::string>> gFakePerksNpc;
@@ -1905,16 +1914,14 @@ void mf_exec_map_update_scripts(OpcodeContext& ctx)
 }
 
 // get_can_rest_on_map(int mapElevation, int tile): returns whether resting is
-// allowed at the given coordinates. In sfall, this reads from a per-map flag.
-// TODO: integrate with per-map rest-allow flags.
+// allowed at the given coordinates. Reads the MAP_CAN_REST_ELEVATION flags.
 void mf_get_can_rest_on_map(OpcodeContext& ctx)
 {
-    int /*mapElevation*/ _ = ctx.arg(0).asInt();
-    int /*tile*/ _2 = ctx.arg(1).asInt();
+    int elevation = ctx.arg(0).asInt();
+    int /*tile*/ _ = ctx.arg(1).asInt();
     (void)_;
-    (void)_2;
-    // Default: allow rest everywhere. Proper per-map integration is TODO.
-    ctx.setReturn(1);
+    bool canRest = wmMapCanRestHere(elevation);
+    ctx.setReturn(canRest ? 1 : 0);
 }
 
 // get_current_inven_size(Object* obj): returns the number of items in the
@@ -1947,22 +1954,28 @@ void mf_get_metarule_table(OpcodeContext& ctx)
 
 // get_object_ai_data(Object* obj, int dataType): returns AI-related data from
 // the object. The following data types are defined:
-//   0 = AI packet number, 1 = AI packet state, 2 = current AI procedure
-// TODO: integrate with AI module to read aiPacket / aiState.
+//   0 = AI packet number (obj->data.critter.combat.aiPacket)
+//   1 = AI packet state flags (requires AiPacket struct internals — TODO)
+//   2 = current AI procedure (requires combat_ai integration — TODO)
 void mf_get_object_ai_data(OpcodeContext& ctx)
 {
     Object* obj = ctx.arg(0).asObject();
     int dataType = ctx.arg(1).asInt();
-    (void)obj;
+
+    if (PID_TYPE(obj->pid) != OBJ_TYPE_CRITTER) {
+        ctx.setReturn(0);
+        return;
+    }
+
     switch (dataType) {
-    case 0: // AI packet number
-        // TODO: return obj->aiPacket
+    case 0: // AI packet number — direct field access
+        ctx.setReturn(obj->data.critter.combat.aiPacket);
+        return;
+    case 1: // AI packet state flags — needs AiPacket internals from combat_ai.cc
+        // TODO: expose AiPacket state flags via public accessor
         break;
-    case 1: // AI packet state flags
-        // TODO: return obj->aiState
-        break;
-    case 2: // current AI procedure
-        // TODO: return current procedure index
+    case 2: // current AI procedure — needs combat AI state machine integration
+        // TODO: expose current procedure index via public accessor
         break;
     default:
         debugPrint("%s(): unknown dataType %d", ctx.name(), dataType);
@@ -1971,9 +1984,58 @@ void mf_get_object_ai_data(OpcodeContext& ctx)
     ctx.setReturn(0);
 }
 
-// get_stat_max(int stat, int isNpc): returns the maximum value for a stat.
+// Default stat limits mirroring the gStatDescriptions[] initializer in stat.cc.
+// These are used by mf_get_stat_max / mf_get_stat_min since gStatDescriptions
+// is file-static in stat.cc and only setters (statSetMaxValue/statSetMinValue)
+// are exposed via the public stat.h API. If the stat module later adds
+// statGetMaxValue()/statGetMinValue() accessors, these should be replaced.
+static const struct {
+    int min;
+    int max;
+} kDefaultStatLimits[STAT_COUNT] = {
+    { 1, 10 },    // STAT_STRENGTH
+    { 1, 10 },    // STAT_PERCEPTION
+    { 1, 10 },    // STAT_ENDURANCE
+    { 1, 10 },    // STAT_CHARISMA
+    { 1, 10 },    // STAT_INTELLIGENCE
+    { 1, 10 },    // STAT_AGILITY
+    { 1, 10 },    // STAT_LUCK
+    { 0, 999 },   // STAT_MAXIMUM_HIT_POINTS
+    { 1, 99 },    // STAT_MAXIMUM_ACTION_POINTS
+    { 0, 999 },   // STAT_ARMOR_CLASS
+    { 0, INT_MAX }, // STAT_UNARMED_DAMAGE
+    { 0, 500 },   // STAT_MELEE_DAMAGE
+    { 0, 999 },   // STAT_CARRY_WEIGHT
+    { 0, 60 },    // STAT_SEQUENCE
+    { 0, 30 },    // STAT_HEALING_RATE
+    { 0, 100 },   // STAT_CRITICAL_CHANCE
+    { -60, 100 }, // STAT_BETTER_CRITICALS
+    { 0, 100 },   // STAT_DAMAGE_THRESHOLD
+    { 0, 100 },   // STAT_DAMAGE_THRESHOLD_LASER
+    { 0, 100 },   // STAT_DAMAGE_THRESHOLD_FIRE
+    { 0, 100 },   // STAT_DAMAGE_THRESHOLD_PLASMA
+    { 0, 100 },   // STAT_DAMAGE_THRESHOLD_ELECTRICAL
+    { 0, 100 },   // STAT_DAMAGE_THRESHOLD_EMP
+    { 0, 100 },   // STAT_DAMAGE_THRESHOLD_EXPLOSION
+    { 0, 90 },    // STAT_DAMAGE_RESISTANCE
+    { 0, 90 },    // STAT_DAMAGE_RESISTANCE_LASER
+    { 0, 90 },    // STAT_DAMAGE_RESISTANCE_FIRE
+    { 0, 90 },    // STAT_DAMAGE_RESISTANCE_PLASMA
+    { 0, 90 },    // STAT_DAMAGE_RESISTANCE_ELECTRICAL
+    { 0, 100 },   // STAT_DAMAGE_RESISTANCE_EMP
+    { 0, 90 },    // STAT_DAMAGE_RESISTANCE_EXPLOSION
+    { 0, 95 },    // STAT_RADIATION_RESISTANCE
+    { 0, 95 },    // STAT_POISON_RESISTANCE
+    { 16, 101 },  // STAT_AGE
+    { 0, 1 },     // STAT_GENDER
+    { 0, 2000 },  // STAT_CURRENT_HIT_POINTS
+    { 0, 2000 },  // STAT_CURRENT_POISON_LEVEL
+    { 0, 2000 },  // STAT_CURRENT_RADIATION_LEVEL
+};
+
+// get_stat_max(int stat, int isNpc): returns the default maximum value for a stat.
 // When isNpc == 0, returns the PC max; when isNpc == 1, returns a default max.
-// TODO: integrate with stat module to read per-stat max values.
+// Uses the default stat limits from the engine's gStatDescriptions initializer.
 void mf_get_stat_max(OpcodeContext& ctx)
 {
     int stat = ctx.arg(0).asInt();
@@ -1984,14 +2046,12 @@ void mf_get_stat_max(OpcodeContext& ctx)
         ctx.setReturn(-1);
         return;
     }
-    // TODO: read from gStatDescriptions[stat].max once accessible.
-    // For now return 10 (Fallout SPECIAL max) as a reasonable default.
-    ctx.setReturn(10);
+    ctx.setReturn(kDefaultStatLimits[stat].max);
 }
 
-// get_stat_min(int stat, int isNpc): returns the minimum value for a stat.
+// get_stat_min(int stat, int isNpc): returns the default minimum value for a stat.
 // When isNpc == 0, returns the PC min; when isNpc == 1, returns a default min.
-// TODO: integrate with stat module to read per-stat min values.
+// Uses the default stat limits from the engine's gStatDescriptions initializer.
 void mf_get_stat_min(OpcodeContext& ctx)
 {
     int stat = ctx.arg(0).asInt();
@@ -2002,9 +2062,7 @@ void mf_get_stat_min(OpcodeContext& ctx)
         ctx.setReturn(-1);
         return;
     }
-    // TODO: read from gStatDescriptions[stat].min once accessible.
-    // For now return 0 as a reasonable default.
-    ctx.setReturn(0);
+    ctx.setReturn(kDefaultStatLimits[stat].min);
 }
 
 // item_make_explosive(int pid, int pattern, int radius, int delay):
@@ -2069,15 +2127,14 @@ void mf_set_can_rest_on_map(OpcodeContext& ctx)
     ctx.setReturn(0);
 }
 
-// set_rest_mode(int mode): sets the resting mode (heal amount, time limits, etc.).
-// The mode index maps to a preset configuration. 0 = default, 1+ = custom modes.
-// TODO: integrate with rest/pipboy system to apply mode settings.
+// set_rest_mode(int mode): stores the resting mode for later integration.
+// Mode bitmask: 0 = disabled (RESTMODE_DISABLED), 1 = strict areas only,
+// 2 = no healing (RESTMODE_NO_HEALING). -1 = use default engine behavior.
+// Integration points: pipboyRest() (pipboy.cc:2232), _AddHealth() (pipboy.cc:2471).
 void mf_set_rest_mode(OpcodeContext& ctx)
 {
     int mode = ctx.arg(0).asInt();
-    (void)mode;
-    // TODO: apply rest mode configuration.
-    debugPrint("%s(): mode %d — not yet implemented", ctx.name(), mode);
+    gRestMode = mode;
     ctx.setReturn(0);
 }
 
@@ -2237,13 +2294,13 @@ void mf_set_spray_settings(OpcodeContext& ctx)
     ctx.setReturn(0);
 }
 
-// set_car_intface_art(int fid): sets the FRM/FID art displayed for the car
-// trunk interface. TODO: integrate with car trunk interface system.
+// set_car_intface_art(int fid): stores the FRM/FID art for the car trunk
+// interface. Integration point: _setup_inventory() at inventory.cc:1338-1340
+// should check gCarIntfaceArtFid when target is PROTO_ID_CAR_TRUNK or PROTO_ID_CAR.
 void mf_set_car_intface_art(OpcodeContext& ctx)
 {
-    int /*fid*/ _ = ctx.arg(0).asInt();
-    (void)_;
-    debugPrint("%s(): not yet implemented", ctx.name());
+    int fid = ctx.arg(0).asInt();
+    gCarIntfaceArtFid = fid;
     ctx.setReturn(0);
 }
 
@@ -2277,15 +2334,19 @@ void mf_set_map_enter_position(OpcodeContext& ctx)
     ctx.setReturn(0);
 }
 
-// set_town_title(int town_id, string title): overrides the town name displayed
-// on the world map for the given town ID. TODO: integrate with worldmap system.
+// set_town_title(int town_id, string title): stores a town title override for
+// the given town ID. Mirrors the gTerrainNameOverrides pattern at line 187.
+// If title is empty or null, clears any existing override.
+// Integration point: wmGetAreaName() at worldmap.cc:5934 should check overrides.
 void mf_set_town_title(OpcodeContext& ctx)
 {
-    int /*townId*/ _ = ctx.arg(0).asInt();
-    const char* /*title*/ _2 = ctx.stringArg(1);
-    (void)_;
-    (void)_2;
-    debugPrint("%s(): not yet implemented", ctx.name());
+    int townId = ctx.arg(0).asInt();
+    const char* title = ctx.stringArg(1);
+    if (title != nullptr && title[0] != '\0') {
+        gTownTitleOverrides[townId] = title;
+    } else {
+        gTownTitleOverrides.erase(townId);
+    }
     ctx.setReturn(0);
 }
 
@@ -2414,6 +2475,9 @@ void sfall_metarules_reset()
     gWorldmapHealTime = -1;
     gRestHealTime = -1;
     gTerrainNameOverrides.clear();
+    gTownTitleOverrides.clear();
+    gCarIntfaceArtFid = -1;
+    gRestMode = -1;
     gFakePerksNpc.clear();
     gFakeTraitsNpc.clear();
     gFakeSelectablePerksNpc.clear();

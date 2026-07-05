@@ -479,6 +479,10 @@ int critterSetBaseStat(Object* critter, int stat, int value)
         return -5;
     }
 
+    if (PID_TYPE(critter->pid) != OBJ_TYPE_CRITTER) {
+        return -5;
+    }
+
     if (stat >= 0 && stat < SAVEABLE_STAT_COUNT) {
         if (critter == gDude) {
             value -= traitGetStatModifier(stat);
@@ -543,6 +547,10 @@ int critterDecBaseStat(Object* critter, int stat)
 int critterSetBonusStat(Object* critter, int stat, int value)
 {
     if (!statIsValid(stat)) {
+        return -5;
+    }
+
+    if (PID_TYPE(critter->pid) != OBJ_TYPE_CRITTER) {
         return -5;
     }
 
