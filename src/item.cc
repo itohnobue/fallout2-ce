@@ -38,6 +38,9 @@
 
 namespace fallout {
 
+extern bool gFallout1Behavior;
+extern int gFastShotFix;
+
 #define ADDICTION_COUNT (9)
 
 // Max number of books that can be loaded from books.ini. This limit is imposed
@@ -802,7 +805,10 @@ int itemGetWeight(Object* item)
         case PROTO_ID_HARDENED_POWER_ARMOR:
         case PROTO_ID_ADVANCED_POWER_ARMOR:
         case PROTO_ID_ADVANCED_POWER_ARMOR_MK_II:
-            weight /= 2;
+            // FO2 halves power armor weight; FO1 does not.
+            if (!gFallout1Behavior) {
+                weight /= 2;
+            }
             break;
         }
     } else if (itemType == ITEM_TYPE_CONTAINER) {
@@ -1718,16 +1724,22 @@ int weaponGetActionPointCost(Object* critter, int hitMode, bool aiming)
                 // NOTE: Uninline.
                 actionPoints = weaponGetSecondaryActionPointCost(weapon);
             }
-
-            if (critter == gDude) {
-                if (traitIsSelected(TRAIT_FAST_SHOT)) {
-                    if (weaponGetRange(critter, hitMode) > 2) {
-                        actionPoints--;
-                    }
-                }
-            }
         } else {
             actionPoints = 3;
+        }
+    }
+
+    // Fast Shot trait AP reduction.
+    // FO2 vanilla (FastShotFix=0): -1 AP only for ranged weapons (range > 2).
+    // FO1 behavior (FastShotFix>=1): -1 AP for ALL weapons including unarmed.
+    if (critter == gDude && traitIsSelected(TRAIT_FAST_SHOT)) {
+        if (gFastShotFix >= 1) {
+            actionPoints--;
+        } else {
+            // FO2 vanilla: only ranged weapons with range > 2
+            if (!isUnarmedHitMode(hitMode) && weaponGetRange(critter, hitMode) > 2) {
+                actionPoints--;
+            }
         }
     }
 

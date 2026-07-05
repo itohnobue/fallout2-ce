@@ -51,6 +51,13 @@
 
 namespace fallout {
 
+// SFALL: Config-driven feature flags. Defined here for engine-global availability.
+// These are initialized to defaults; ddraw.ini values override at config parse time.
+int gFastShotFix = 0;
+int gXPTableMode = 0;
+int gWorldMapFPSPatch = 0;
+int gDisableSpecialMapIDs = 0;
+
 #define CALLED_SHOT_WINDOW_Y (20)
 #define CALLED_SHOT_WINDOW_WIDTH (504)
 #define CALLED_SHOT_WINDOW_HEIGHT (309)
@@ -2043,6 +2050,20 @@ int combatInit()
     unarmedInit();
     damageModInit();
     combat_reset_hit_location_penalty();
+
+    // SFALL: Read WorldMapFPSPatch and DisableSpecialMapIDs from ddraw.ini.
+    // These are parsed here for engine-global availability; behavior gating
+    // happens in worldmap.cc.
+    configGetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, "WorldMapFPSPatch", &gWorldMapFPSPatch, 0);
+    configGetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, "DisableSpecialMapIDs", &gDisableSpecialMapIDs, 0);
+
+    // SFALL: Read FastShotFix from ddraw.ini.
+    // 0 = FO2 vanilla (Fast Shot only affects ranged), 1+ = FO1 behavior (all weapons).
+    configGetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, "FastShotFix", &gFastShotFix, 0);
+
+    // SFALL: Read XPTable from ddraw.ini.
+    // 0 = use hardcoded formula, 1+ = use external table (TODO: load table file).
+    configGetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, "XPTable", &gXPTableMode, 0);
 
     return 0;
 }

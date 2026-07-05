@@ -15,7 +15,7 @@ The following total conversion mods are tested:
 | Mod | Status | Notes |
 | --- | --- | --- |
 | [Fallout 2 Restoration Project (RPU)](https://github.com/BGforgeNet/Fallout2_Restoration_Project) | Supported (Beta) | New hooks: CarTravel, SetGlobalVar, Sneak. SpeedMulti with `ddraw.ini [Speed]` parsing. Null-pointer guards in critter stat opcodes. |
-| [Fallout Et Tu](https://github.com/rotators/Fo1in2) | Partial | All 3 critical hooks implemented (USEANIMOBJ, DESCRIPTIONOBJ, SETLIGHTING). Engine reports sfall 4.5.1. Remaining gaps: some sfall opcodes. |
+| [Fallout Et Tu](https://github.com/rotators/Fo1in2) | Partial | Rotators fork detection (`read_byte` 0x410003 → 0xF4), `r_get_ini_string`, `r_message_box` metarules, and `metarule_exist("rotators")` all supported. USEANIMOBJ, DESCRIPTIONOBJ, SETLIGHTING hooks implemented. VOODOO opcodes registered as no-ops. Engine reports sfall 4.5.1. Remaining gaps: some sfall opcodes. |
 
 ## License
 

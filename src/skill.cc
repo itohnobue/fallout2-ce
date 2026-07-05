@@ -26,6 +26,7 @@
 #include "random.h"
 #include "scripts.h"
 #include "settings.h"
+#include "sfall_opcodes.h"
 #include "sfall_script_hooks.h"
 #include "stat.h"
 #include "trait.h"
@@ -264,8 +265,11 @@ int skillGetValue(Object* critter, int skill)
         value += skillGetGameDifficultyModifier(skill);
     }
 
-    if (value > 300) {
-        value = 300;
+    // Use gSkillMaxCap if set by set_skill_max metarule;
+    // otherwise fall back to engine default of 300.
+    int maxSkill = (gSkillMaxCap > 0) ? gSkillMaxCap : 300;
+    if (value > maxSkill) {
+        value = maxSkill;
     }
 
     return value;
@@ -310,7 +314,8 @@ int skillAdd(Object* obj, int skill)
     }
 
     int skillValue = skillGetValue(obj, skill);
-    if (skillValue >= 300) {
+    int maxSkill = (gSkillMaxCap > 0) ? gSkillMaxCap : 300;
+    if (skillValue >= maxSkill) {
         return -3;
     }
 
@@ -343,7 +348,8 @@ int skillAddForce(Object* obj, int skill)
     Proto* proto;
     protoGetProto(obj->pid, &proto);
 
-    if (skillGetValue(obj, skill) >= 300) {
+    int maxSkill = (gSkillMaxCap > 0) ? gSkillMaxCap : 300;
+    if (skillGetValue(obj, skill) >= maxSkill) {
         return -3;
     }
 

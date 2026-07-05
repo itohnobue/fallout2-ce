@@ -38,6 +38,7 @@
 #include "platform_compat.h"
 #include "proto.h"
 #include "scripts.h"
+#include "sfall_opcodes.h"
 #include "skill.h"
 #include "stat.h"
 #include "svga.h"
@@ -5742,7 +5743,9 @@ static int characterEditorUpdateLevel()
             }
 
             if (selectedPerksCount < 37) {
-                int progression = 3;
+                // Use gPerkFrequencyOverride if set by set_perk_freq metarule;
+                // otherwise fall back to engine default of 3 levels per perk.
+                int progression = (gPerkFrequencyOverride > 0) ? gPerkFrequencyOverride : 3;
                 if (traitIsSelected(TRAIT_SKILLED)) {
                     progression += 1;
                 }

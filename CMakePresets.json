@@ -148,7 +148,8 @@
                 "darwin-base"
             ],
             "cacheVariables": {
-                "CMAKE_OSX_ARCHITECTURES": "arm64"
+                "CMAKE_OSX_ARCHITECTURES": "arm64",
+                "CMAKE_OSX_DEPLOYMENT_TARGET": "11.0"
             }
         },
         {
@@ -159,7 +160,8 @@
                 "darwin-base"
             ],
             "cacheVariables": {
-                "CMAKE_OSX_ARCHITECTURES": "arm64"
+                "CMAKE_OSX_ARCHITECTURES": "arm64",
+                "CMAKE_OSX_DEPLOYMENT_TARGET": "11.0"
             }
         },
         {

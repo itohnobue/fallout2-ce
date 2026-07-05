@@ -301,7 +301,10 @@ enum class EncounterHookResult {
     LoadMapDirectly,
 };
 
-bool scriptHooksRegister(Program* program, HookType hookType, int procedureIndex);
+// atEnd: if true, inserts the hook at the end of the hook list
+// (last executed). Used by register_hook_proc_spec for hooks that
+// should run as final overrides after all other hooks.
+bool scriptHooksRegister(Program* program, HookType hookType, int procedureIndex, bool atEnd = false);
 void scriptHooksUnregisterProgram(Program* program);
 bool scriptHooks_StdProcedure(int procedureNumber, Object* self, Object* source, Object* target, int fixedParam, bool after);
 void scriptHooks_ItemDamage(Object* weapon, Object* critter, int hitMode, bool isMeleeWeaponAttack, int* minDamagePtr, int* maxDamagePtr);

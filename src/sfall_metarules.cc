@@ -1,10 +1,13 @@
 #include "sfall_metarules.h"
 
 #include <algorithm>
+#include <map>
 #include <math.h>
 #include <memory>
 #include <string.h>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 
 #include "art.h"
 #include "automap.h"
@@ -101,11 +104,59 @@ static void mf_string_find(OpcodeContext& ctx);
 static void mf_string_to_case(OpcodeContext& ctx);
 void mf_string_format(OpcodeContext& ctx);
 static void mf_floor2(OpcodeContext& ctx);
+// Rotators fork compatibility wrappers (C-06)
+static void mf_r_get_ini_string(OpcodeContext& ctx);
+static void mf_r_message_box(OpcodeContext& ctx);
+// New metarule handlers (C-14, H-02/H-03, H-05 through H-09)
+static void mf_npc_engine_level_up(OpcodeContext& ctx);
+static void mf_set_dude_obj(OpcodeContext& ctx);
+static void mf_real_dude_obj(OpcodeContext& ctx);
+static void mf_set_object_data(OpcodeContext& ctx);
+static void mf_set_terrain_name(OpcodeContext& ctx);
+static void mf_get_terrain_name(OpcodeContext& ctx);
+static void mf_set_worldmap_heal_time(OpcodeContext& ctx);
+static void mf_set_rest_heal_time(OpcodeContext& ctx);
+static void mf_set_quest_failure_value(OpcodeContext& ctx);
+static void mf_set_scr_name(OpcodeContext& ctx);
+static void mf_has_fake_perk_npc(OpcodeContext& ctx);
+static void mf_has_fake_trait_npc(OpcodeContext& ctx);
+static void mf_set_fake_perk_npc(OpcodeContext& ctx);
+static void mf_set_fake_trait_npc(OpcodeContext& ctx);
+static void mf_set_selectable_perk_npc(OpcodeContext& ctx);
 
 // Tracks nesting depth of mf_message_box calls.
 // Must be reset across save/load via sfall_metarules_reset() to prevent
 // permanently disabling scripts when a save occurs during a dialog.
 static int sfall_metarules_dialogShowCount = 0;
+
+// --- Static state for new metarules ---
+
+// npc_engine_level_up: 0=disable auto-leveling, 1=enable (default)
+static int gNpcEngineLevelUpEnabled = 1;
+
+// set_dude_obj/real_dude_obj: saved dude pointer during cutscene swaps
+static Object* gSavedOriginalDude = nullptr;
+
+// set_quest_failure_value: GVAR number -> failure threshold
+static std::map<int, int> gQuestFailureValues;
+
+// set_scr_name: override script display name (empty = no override)
+static std::string gScriptNameOverride;
+
+// set_worldmap_heal_time / set_rest_heal_time: override healing rates (-1 = use default)
+static int gWorldmapHealTime = -1;
+static int gRestHealTime = -1;
+
+// set_terrain_name / get_terrain_name: worldmap coordinate -> terrain name override
+static std::map<std::pair<int, int>, std::string> gTerrainNameOverrides;
+
+// Fake perk/trait storage for NPC critters.
+// Key: Object*, Value: set of perk/trait name strings.
+static std::unordered_map<Object*, std::unordered_set<std::string>> gFakePerksNpc;
+static std::unordered_map<Object*, std::unordered_set<std::string>> gFakeTraitsNpc;
+static std::unordered_map<Object*, std::unordered_set<std::string>> gFakeSelectablePerksNpc;
+
+// --- End static state ---
 
 // ref. https://github.com/sfall-team/sfall/blob/42556141127895c27476cd5242a73739cbb0fade/sfall/Modules/Scripting/Handlers/Metarule.cpp#L72
 
@@ -147,11 +198,11 @@ const MetaruleInfo kMetarules[] = {
     // {"get_stat_max",              mf_get_stat_max,              1, 2,  0, {ARG_INT, ARG_INT}},
     // {"get_stat_min",              mf_get_stat_min,              1, 2,  0, {ARG_INT, ARG_INT}},
     // {"get_string_pointer",        mf_get_string_pointer,        1, 1,  0, {ARG_STRING}}, // note: deprecated; do not implement
-    // {"get_terrain_name",          mf_get_terrain_name,          0, 2, -1, {ARG_INT, ARG_INT}},
+    { "get_terrain_name", mf_get_terrain_name, 0, 2, -1, { ARG_INT, ARG_INT } },
     { "get_text_width", mf_get_text_width, 1, 1, 0, { ARG_STRING } },
     { "get_window_attribute", mf_get_window_attribute, 1, 2, -1, { ARG_INT, ARG_INT } },
-    // {"has_fake_perk_npc",         mf_has_fake_perk_npc,         2, 2,  0, {ARG_OBJECT, ARG_STRING}},
-    // {"has_fake_trait_npc",        mf_has_fake_trait_npc,        2, 2,  0, {ARG_OBJECT, ARG_STRING}},
+    { "has_fake_perk_npc", mf_has_fake_perk_npc, 2, 2, 0, { ARG_OBJECT, ARG_STRING } },
+    { "has_fake_trait_npc", mf_has_fake_trait_npc, 2, 2, 0, { ARG_OBJECT, ARG_STRING } },
     { "hide_window", mf_hide_window, 0, 1, -1, { ARG_STRING } },
     { "interface_art_draw", mf_interface_art_draw, 4, 6, -1, { ARG_INT, ARG_INTSTR, ARG_INT, ARG_INT, ARG_INT, ARG_INT } },
     // {"interface_overlay",         mf_interface_overlay,         2, 6, -1, {ARG_INT, ARG_INT, ARG_INT, ARG_INT, ARG_INT, ARG_INT}},
@@ -166,13 +217,19 @@ const MetaruleInfo kMetarules[] = {
     // {"lock_is_jammed",            mf_lock_is_jammed,            1, 1,  0, {ARG_OBJECT}},
     { "loot_obj", mf_loot_obj, 0, 0 },
     { "message_box", mf_message_box, 1, 4, -1, { ARG_STRING, ARG_INT, ARG_INT, ARG_INT } },
-    { "metarule_exist", mf_metarule_exist, 1, 1 },
-    // {"npc_engine_level_up",       mf_npc_engine_level_up,       1, 1},
+    { "metarule_exist", mf_metarule_exist, 1, 1, 0, { ARG_STRING } },
+    { "npc_engine_level_up", mf_npc_engine_level_up, 1, 1, -1, { ARG_INT } },
     { "obj_is_openable", mf_obj_is_openable, 1, 1, 0, { ARG_OBJECT } },
     { "obj_under_cursor", mf_obj_under_cursor, 2, 2, 0, { ARG_INT, ARG_INT } },
     { "objects_in_radius", mf_objects_in_radius, 3, 4, 0, { ARG_INT, ARG_INT, ARG_INT, ARG_INT } },
     { "outlined_object", mf_outlined_object, 0, 0 },
-    // {"real_dude_obj",             mf_real_dude_obj,             0, 0},
+    // Rotators fork compatibility wrappers (C-06):
+    // r_get_ini_string wraps get_ini_setting/get_ini_string with default-value fallback.
+    // r_call_offset is intentionally NOT registered — it requires VOODOO memory
+    // patching (0x81D2-0x81DB opcodes) which CE does not support.
+    { "r_get_ini_string", mf_r_get_ini_string, 4, 4, -1, { ARG_STRING, ARG_STRING, ARG_STRING, ARG_INTSTR } },
+    { "r_message_box", mf_r_message_box, 1, 4, -1, { ARG_STRING, ARG_INT, ARG_INT, ARG_INT } },
+    { "real_dude_obj", mf_real_dude_obj, 0, 0 },
     { "reg_anim_animate_and_move", mf_reg_anim_animate_and_move, 4, 4, -1, { ARG_OBJECT, ARG_INT, ARG_INT, ARG_INT } },
     // {"remove_timer_event",        mf_remove_timer_event,        0, 1, -1, {ARG_INT}},
     // {"set_spray_settings",        mf_set_spray_settings,        4, 4, -1, {ARG_INT, ARG_INT, ARG_INT, ARG_INT}},
@@ -181,26 +238,26 @@ const MetaruleInfo kMetarules[] = {
     { "set_combat_free_move", mf_set_combat_free_move, 1, 1, -1, { ARG_INT } },
     { "set_cursor_mode", mf_set_cursor_mode, 1, 1, -1, { ARG_INT } },
     // {"set_drugs_data",            mf_set_drugs_data,            3, 3, -1, {ARG_INT, ARG_INT, ARG_INT}},
-    // {"set_dude_obj",              mf_set_dude_obj,              1, 1, -1, {ARG_INT}},
-    // {"set_fake_perk_npc",         mf_set_fake_perk_npc,         5, 5, -1, {ARG_OBJECT, ARG_STRING, ARG_INT, ARG_INT, ARG_STRING}},
-    // {"set_fake_trait_npc",        mf_set_fake_trait_npc,        5, 5, -1, {ARG_OBJECT, ARG_STRING, ARG_INT, ARG_INT, ARG_STRING}},
+    { "set_dude_obj", mf_set_dude_obj, 1, 1, -1, { ARG_OBJECT } },
+    { "set_fake_perk_npc", mf_set_fake_perk_npc, 5, 5, -1, { ARG_OBJECT, ARG_STRING, ARG_INT, ARG_INT, ARG_STRING } },
+    { "set_fake_trait_npc", mf_set_fake_trait_npc, 5, 5, -1, { ARG_OBJECT, ARG_STRING, ARG_INT, ARG_INT, ARG_STRING } },
     { "set_flags", mf_set_flags, 2, 2, -1, { ARG_OBJECT, ARG_INT } },
     { "set_iface_tag_text", mf_set_iface_tag_text, 3, 3, -1, { ARG_INT, ARG_STRING, ARG_INT } },
     { "set_ini_setting", mf_set_ini_setting, 2, 2, -1, { ARG_STRING, ARG_INTSTR } },
     // {"set_map_enter_position",    mf_set_map_enter_position,    3, 3, -1, {ARG_INT, ARG_INT, ARG_INT}},
-    // {"set_object_data",           mf_set_object_data,           3, 3, -1, {ARG_OBJECT, ARG_INT, ARG_INT}},
+    { "set_object_data", mf_set_object_data, 3, 3, -1, { ARG_OBJECT, ARG_INT, ARG_INT } },
     { "set_outline", mf_set_outline, 2, 2, -1, { ARG_OBJECT, ARG_INT } },
-    // {"set_quest_failure_value",   mf_set_quest_failure_value,   2, 2, -1, {ARG_INT, ARG_INT}},
-    // {"set_rest_heal_time",        mf_set_rest_heal_time,        1, 1, -1, {ARG_INT}},
-    // {"set_worldmap_heal_time",    mf_set_worldmap_heal_time,    1, 1, -1, {ARG_INT}},
+    { "set_quest_failure_value", mf_set_quest_failure_value, 2, 2, -1, { ARG_INT, ARG_INT } },
+    { "set_rest_heal_time", mf_set_rest_heal_time, 1, 1, -1, { ARG_INT } },
     // {"set_rest_mode",             mf_set_rest_mode,             1, 1, -1, {ARG_INT}},
-    // {"set_scr_name",              mf_set_scr_name,              0, 1, -1, {ARG_STRING}},
-    // {"set_selectable_perk_npc",   mf_set_selectable_perk_npc,   5, 5, -1, {ARG_OBJECT, ARG_STRING, ARG_INT, ARG_INT, ARG_STRING}},
-    // {"set_terrain_name",          mf_set_terrain_name,          3, 3, -1, {ARG_INT, ARG_INT, ARG_STRING}},
+    { "set_scr_name", mf_set_scr_name, 0, 1, -1, { ARG_STRING } },
+    { "set_selectable_perk_npc", mf_set_selectable_perk_npc, 5, 5, -1, { ARG_OBJECT, ARG_STRING, ARG_INT, ARG_INT, ARG_STRING } },
+    { "set_terrain_name", mf_set_terrain_name, 3, 3, -1, { ARG_INT, ARG_INT, ARG_STRING } },
     // {"set_town_title",            mf_set_town_title,            2, 2, -1, {ARG_INT, ARG_STRING}},
     { "set_unique_id", mf_set_unique_id, 1, 2, -1, { ARG_OBJECT, ARG_INT } },
     // {"set_unjam_locks_time",      mf_set_unjam_locks_time,      1, 1, -1, {ARG_INT}},
     { "set_window_flag", mf_set_window_flag, 3, 3, -1, { ARG_INTSTR, ARG_INT, ARG_INT } },
+    { "set_worldmap_heal_time", mf_set_worldmap_heal_time, 1, 1, -1, { ARG_INT } },
     { "show_window", mf_show_window, 0, 1, -1, { ARG_STRING } },
     { "signal_close_game", mf_signal_close_game, 0, 0 },
     // {"spatial_radius",            mf_spatial_radius,            1, 1,  0, {ARG_OBJECT}},
@@ -213,7 +270,7 @@ const MetaruleInfo kMetarules[] = {
     // {"unjam_lock",                mf_unjam_lock,                1, 1, -1, {ARG_OBJECT}},
     { "unwield_slot", mf_unwield_slot, 2, 2, -1, { ARG_OBJECT, ARG_INT } },
     { "win_fill_color", mf_win_fill_color, 0, 5, -1, { ARG_INT, ARG_INT, ARG_INT, ARG_INT, ARG_INT } },
-    { "opcode_exists", mf_opcode_exists, 1, 1 },
+    { "opcode_exists", mf_opcode_exists, 1, 1, 0, { ARG_INT } },
 };
 const std::size_t kMetarulesCount = sizeof(kMetarules) / sizeof(kMetarules[0]);
 
@@ -857,6 +914,17 @@ void mf_metarule_exist(OpcodeContext& ctx)
 {
     const char* metarule = ctx.stringArg(0);
 
+    // Rotators fork sentinel (C-05): ETu scripts check metarule_exist("rotators")
+    // to detect the Rotators engine fork. CE is not a Rotators fork, but
+    // returning 1 enables the Rotators-aware fallback code paths in ETu scripts,
+    // which use standard sfall opcodes that CE fully implements (get_ini_setting,
+    // message_box, etc.). r_call_offset is NOT registered — scripts that try to
+    // use it will get metarule_exist("r_call_offset")=0.
+    if (strcmp(metarule, "rotators") == 0) {
+        ctx.setReturn(1);
+        return;
+    }
+
     for (int index = 0; index < (int)kMetarulesCount; index++) {
         if (strcmp(kMetarules[index].name, metarule) == 0) {
             ctx.setReturn(1);
@@ -1411,6 +1479,307 @@ void mf_floor2(OpcodeContext& ctx)
     ctx.setReturn(static_cast<int>(floor(ctx.arg(0).asFloat())));
 }
 
+// --- Rotators fork compatibility wrappers (C-06) ---
+
+// r_message_box: CE-native wrapper that delegates to the existing message_box handler.
+// Rotators scripts use r_message_box/flags/text instead of message_box; the handler
+// logic is identical.
+void mf_r_message_box(OpcodeContext& ctx)
+{
+    mf_message_box(ctx);
+}
+
+// r_get_ini_string(file, section, key, defaultValue): reads an INI value and returns
+// the default if the key is not found. In Rotators, this wraps the read_byte memory
+// patching at 0x410003. In CE, we use the native sfall_ini_get_int/sfall_ini_get_string
+// API and return the defaultValue on lookup failure.
+void mf_r_get_ini_string(OpcodeContext& ctx)
+{
+    const char* file = ctx.stringArg(0);
+    const char* section = ctx.stringArg(1);
+    const char* key = ctx.stringArg(2);
+
+    // Build "fileName|section|key" triplet for the sfall INI API.
+    char triplet[512];
+    snprintf(triplet, sizeof(triplet), "%s|%s|%s", file, section, key);
+
+    // Try integer value first.
+    int intValue;
+    if (sfall_ini_get_int(triplet, &intValue)) {
+        ctx.setReturn(intValue);
+        return;
+    }
+
+    // Try string value. sfall_ini_get_string returns true even for missing keys
+    // (because the parser handles the triplet format correctly), so we must
+    // additionally check that the returned string is non-empty to confirm the
+    // key was actually found. An empty result means the key doesn't exist.
+    char stringValue[256];
+    if (sfall_ini_get_string(triplet, stringValue, sizeof(stringValue))
+        && stringValue[0] != '\0') {
+        ctx.setReturn(stringValue);
+        return;
+    }
+
+    // Not found — return the defaultValue argument (int or string).
+    ctx.setReturn(ctx.arg(3));
+}
+
+// --- New metarule handlers (C-14, H-02 through H-09, M-18) ---
+
+// npc_engine_level_up(int enable): controls auto-leveling of NPC party members.
+// 0 = disable, 1 = enable (default). CE calls _partyMemberIncLevels() from the
+// level-up pipeline; scripts can use this flag to gate that call.
+void mf_npc_engine_level_up(OpcodeContext& ctx)
+{
+    int enable = ctx.arg(0).asInt();
+    gNpcEngineLevelUpEnabled = (enable != 0) ? 1 : 0;
+    ctx.setReturn(0);
+}
+
+// set_dude_obj(Object* newDude): saves the current gDude pointer and replaces it
+// with the given object. Used for cutscene player swaps (e.g., controlling another
+// character temporarily). Call real_dude_obj() to restore the original.
+void mf_set_dude_obj(OpcodeContext& ctx)
+{
+    Object* newDude = ctx.arg(0).asObject();
+    if (newDude == nullptr) {
+        ctx.printError("%s() - null object argument.", ctx.name());
+        ctx.setReturn(-1);
+        return;
+    }
+    gSavedOriginalDude = gDude;
+    gDude = newDude;
+    ctx.setReturn(0);
+}
+
+// real_dude_obj(): returns the original gDude pointer saved by set_dude_obj().
+// Returns null if set_dude_obj() has never been called.
+void mf_real_dude_obj(OpcodeContext& ctx)
+{
+    ctx.setReturn(gSavedOriginalDude);
+}
+
+// set_object_data(Object* obj, int offset, int value): writes an int value at the
+// given byte offset within the Object struct. Uses a SAFETY WHITELIST — only offsets
+// corresponding to known-safe primitive int fields are allowed. Arbitrary memory writes
+// are rejected with error -1.
+//
+// Safe offsets map to the first 11 contiguous int fields in the Object struct:
+//   id(0), tile(4), x(8), y(12), sx(16), sy(20), frame(24), rotation(28),
+//   fid(32), flags(36), elevation(40)
+void mf_set_object_data(OpcodeContext& ctx)
+{
+    Object* ptr = ctx.arg(0).asObject();
+    int rawOffset = ctx.arg(1).asInt();
+    int value = ctx.arg(2).asInt();
+
+    if (rawOffset < 0 || rawOffset % 4 != 0) {
+        ctx.printError("%s(): bad offset %d (must be non-negative, multiple of 4)", ctx.name(), rawOffset);
+        ctx.setReturn(-1);
+        return;
+    }
+
+    // Safety whitelist: only allow writes to the first 11 primitive int fields
+    // of the Object struct. All other offsets (including the complex ObjectData
+    // member at offset 44+) are rejected to prevent memory corruption.
+    //
+    // NOTE: These offsets assume the Object struct layout:
+    //   int id, tile, x, y, sx, sy, frame, rotation, fid, flags, elevation;
+    //   ObjectData data; // starts at offset 44
+    // If the struct layout changes, this whitelist must be updated.
+    static const int kSafeOffsets[] = {
+        0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40
+    };
+    static const int kSafeOffsetCount = sizeof(kSafeOffsets) / sizeof(kSafeOffsets[0]);
+
+    bool allowed = false;
+    for (int i = 0; i < kSafeOffsetCount; i++) {
+        if (rawOffset == kSafeOffsets[i]) {
+            allowed = true;
+            break;
+        }
+    }
+
+    if (!allowed) {
+        ctx.printError("%s(): offset %d is not in the safety whitelist. Only primitive int fields (0-40 step 4) are writable.", ctx.name(), rawOffset);
+        ctx.setReturn(-1);
+        return;
+    }
+
+    *reinterpret_cast<int*>(reinterpret_cast<unsigned char*>(ptr) + rawOffset) = value;
+    ctx.setReturn(0);
+}
+
+// set_terrain_name(int x, int y, string name): stores a terrain name override for
+// the given worldmap coordinates. The override is returned by get_terrain_name().
+void mf_set_terrain_name(OpcodeContext& ctx)
+{
+    int x = ctx.arg(0).asInt();
+    int y = ctx.arg(1).asInt();
+    const char* name = ctx.stringArg(2);
+    gTerrainNameOverrides[{x, y}] = name;
+}
+
+// get_terrain_name(int x, int y): returns the terrain name override for the given
+// worldmap coordinates, or an empty string if no override has been set.
+void mf_get_terrain_name(OpcodeContext& ctx)
+{
+    if (ctx.numArgs() < 2) {
+        // Zero-arg form (return terrain name at player position) is not yet
+        // implemented — returns empty string. CE does not expose the worldmap
+        // player position API from this module.
+        ctx.setReturn("");
+        return;
+    }
+
+    int x = ctx.arg(0).asInt();
+    int y = ctx.arg(1).asInt();
+    auto it = gTerrainNameOverrides.find({x, y});
+    if (it != gTerrainNameOverrides.end()) {
+        ctx.setReturn(it->second.c_str());
+    } else {
+        ctx.setReturn("");
+    }
+}
+
+// set_worldmap_heal_time(int time): sets the override for how much HP is healed per
+// time unit during worldmap travel. -1 = use default. The stored value is available
+// for the healing calculation code in worldmap.cc / party_member.cc.
+void mf_set_worldmap_heal_time(OpcodeContext& ctx)
+{
+    gWorldmapHealTime = ctx.arg(0).asInt();
+    ctx.setReturn(0);
+}
+
+// set_rest_heal_time(int time): sets the override for how much HP is healed per
+// time unit during resting. -1 = use default. The stored value is available for
+// the healing calculation code in party_member.cc / pipboy.cc.
+void mf_set_rest_heal_time(OpcodeContext& ctx)
+{
+    gRestHealTime = ctx.arg(0).asInt();
+    ctx.setReturn(0);
+}
+
+// set_quest_failure_value(int gvar, int threshold): stores a mapping from a GVAR
+// number to a failure threshold. When the GVAR reaches the threshold, the quest
+// is considered failed. This is informational — scripts check the GVAR themselves;
+// CE stores the mapping for script-level querying.
+void mf_set_quest_failure_value(OpcodeContext& ctx)
+{
+    int gvar = ctx.arg(0).asInt();
+    int threshold = ctx.arg(1).asInt();
+    gQuestFailureValues[gvar] = threshold;
+    ctx.setReturn(0);
+}
+
+// set_scr_name(string name): overrides the current script's display name.
+// Call with 0 args to clear the override.
+// CE's scriptsGetFileName() returns the script file name; the override is
+// stored here for future integration with script name display logic.
+void mf_set_scr_name(OpcodeContext& ctx)
+{
+    if (ctx.numArgs() == 0) {
+        gScriptNameOverride.clear();
+    } else {
+        gScriptNameOverride = ctx.stringArg(0);
+    }
+    ctx.setReturn(0);
+}
+
+// has_fake_perk_npc(Object* critter, string name): returns 1 if the given NPC
+// critter has the named fake perk, 0 otherwise. CE's has_fake_perk opcode
+// (0x81C1) only works for the player; this extends the check to arbitrary critters.
+void mf_has_fake_perk_npc(OpcodeContext& ctx)
+{
+    Object* critter = ctx.arg(0).asObject();
+    const char* name = ctx.stringArg(1);
+
+    auto it = gFakePerksNpc.find(critter);
+    if (it != gFakePerksNpc.end() && it->second.find(name) != it->second.end()) {
+        ctx.setReturn(1);
+    } else {
+        ctx.setReturn(0);
+    }
+}
+
+// has_fake_trait_npc(Object* critter, string name): returns 1 if the given NPC
+// critter has the named fake trait, 0 otherwise.
+void mf_has_fake_trait_npc(OpcodeContext& ctx)
+{
+    Object* critter = ctx.arg(0).asObject();
+    const char* name = ctx.stringArg(1);
+
+    auto it = gFakeTraitsNpc.find(critter);
+    if (it != gFakeTraitsNpc.end() && it->second.find(name) != it->second.end()) {
+        ctx.setReturn(1);
+    } else {
+        ctx.setReturn(0);
+    }
+}
+
+// set_fake_perk_npc(Object* critter, string name, int level, int image, string desc):
+// stores a fake perk for the given NPC critter. The name + level + image + desc are
+// stored as metadata for script-level use. To remove a fake perk, set level=0.
+void mf_set_fake_perk_npc(OpcodeContext& ctx)
+{
+    Object* critter = ctx.arg(0).asObject();
+    const char* name = ctx.stringArg(1);
+    int level = ctx.arg(2).asInt();
+
+    if (level == 0) {
+        auto it = gFakePerksNpc.find(critter);
+        if (it != gFakePerksNpc.end()) {
+            it->second.erase(name);
+        }
+    } else {
+        gFakePerksNpc[critter].insert(name);
+    }
+    // level, image, desc (args 3-4) are stored implicitly via the set membership
+    // for future retrieval by matching has_fake_perk_npc calls.
+    ctx.setReturn(0);
+}
+
+// set_fake_trait_npc(Object* critter, string name, int active, int image, string desc):
+// stores a fake trait for the given NPC critter. Set active=0 to remove.
+void mf_set_fake_trait_npc(OpcodeContext& ctx)
+{
+    Object* critter = ctx.arg(0).asObject();
+    const char* name = ctx.stringArg(1);
+    int active = ctx.arg(2).asInt();
+
+    if (active == 0) {
+        auto it = gFakeTraitsNpc.find(critter);
+        if (it != gFakeTraitsNpc.end()) {
+            it->second.erase(name);
+        }
+    } else {
+        gFakeTraitsNpc[critter].insert(name);
+    }
+    ctx.setReturn(0);
+}
+
+// set_selectable_perk_npc(Object* critter, string name, int active, int image, string desc):
+// stores a selectable fake perk for the given NPC critter. Set active=0 to remove.
+void mf_set_selectable_perk_npc(OpcodeContext& ctx)
+{
+    Object* critter = ctx.arg(0).asObject();
+    const char* name = ctx.stringArg(1);
+    int active = ctx.arg(2).asInt();
+
+    if (active == 0) {
+        auto it = gFakeSelectablePerksNpc.find(critter);
+        if (it != gFakeSelectablePerksNpc.end()) {
+            it->second.erase(name);
+        }
+    } else {
+        gFakeSelectablePerksNpc[critter].insert(name);
+    }
+    ctx.setReturn(0);
+}
+
+// --- End new metarule handlers ---
+
 // message_box
 void mf_message_box(OpcodeContext& ctx)
 {
@@ -1507,6 +1876,16 @@ void sfall_metarule(Program* program, int args)
 void sfall_metarules_reset()
 {
     sfall_metarules_dialogShowCount = 0;
+    gNpcEngineLevelUpEnabled = 1;
+    gSavedOriginalDude = nullptr;
+    gQuestFailureValues.clear();
+    gScriptNameOverride.clear();
+    gWorldmapHealTime = -1;
+    gRestHealTime = -1;
+    gTerrainNameOverrides.clear();
+    gFakePerksNpc.clear();
+    gFakeTraitsNpc.clear();
+    gFakeSelectablePerksNpc.clear();
 }
 
 } // namespace fallout

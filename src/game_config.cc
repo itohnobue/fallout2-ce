@@ -91,31 +91,11 @@ bool gameConfigInit(bool isMapper, int argc, char** argv)
         : kDefaultGameConfigFileName;
 
     // Make `fallout2.cfg` file path.
-    char* executable = argv[0];
-    char* ch = strrchr(executable, '\\');
-    if (ch != nullptr) {
-        *ch = '\0';
-        if (isMapper) {
-            snprintf(gGameConfigFilePath,
-                sizeof(gGameConfigFilePath),
-                "%s\\%s",
-                executable,
-                kMapperConfigFileName);
-        } else {
-            snprintf(gGameConfigFilePath,
-                sizeof(gGameConfigFilePath),
-                "%s\\%s",
-                executable,
-                configFileName);
-        }
-        *ch = '\\';
-    } else {
-        if (isMapper) {
-            strcpy(gGameConfigFilePath, kMapperConfigFileName);
-        } else {
-            strcpy(gGameConfigFilePath, configFileName);
-        }
-    }
+    char drive[COMPAT_MAX_DRIVE];
+    char dir[COMPAT_MAX_DIR];
+    compat_splitpath(argv[0], drive, dir, nullptr, nullptr);
+    compat_makepath(gGameConfigFilePath, drive, dir,
+        isMapper ? kMapperConfigFileName : configFileName, nullptr);
 
     configRead(&gGameConfig, gGameConfigFilePath, false);
 

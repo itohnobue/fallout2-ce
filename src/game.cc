@@ -60,6 +60,7 @@
 #include "sfall_global_vars.h"
 #include "sfall_ini.h"
 #include "sfall_lists.h"
+#include "sfall_metarules.h"
 #include "sfall_script_hooks.h"
 #include "skill.h"
 #include "skilldex.h"
@@ -129,6 +130,8 @@ MessageList gMiscMessageList;
 
 bool gGameLoaded = false;
 
+extern bool gFallout1Behavior;
+
 // CE: Sonora folks like to store objects in global variables.
 static void** gGameGlobalPointers = nullptr;
 
@@ -162,6 +165,14 @@ int gameInitWithOptions(const char* windowTitle, bool isMapper, int font, int fl
 
     // Content config reads from the VFS, so it must be initialized after gameDbInit.
     contentConfigInit();
+
+    // Fallout1Behavior: override start date to FO1 (December 5, 2161).
+    // The start year/month/day are read from content_config by scriptsInit().
+    if (gFallout1Behavior) {
+        configSetInt(&gContentConfig, CONTENT_CONFIG_START_SECTION, "year", 2161);
+        configSetInt(&gContentConfig, CONTENT_CONFIG_START_SECTION, "month", 12);
+        configSetInt(&gContentConfig, CONTENT_CONFIG_START_SECTION, "day", 5);
+    }
 
     // Message list repository is considered a specialized file manager, so
     // it should be initialized early in the process.
@@ -276,6 +287,12 @@ int gameInitWithOptions(const char* windowTitle, bool isMapper, int font, int fl
     if (scriptsInit() != 0) {
         debugPrint("Failed on scr_init\n");
         return -1;
+    }
+
+    // Fallout1Behavior: override start time to FO1 (7:21 AM).
+    // FO2 default is 8:00 AM (302400 ticks); FO1 is 7:21 AM (264600 ticks).
+    if (gFallout1Behavior) {
+        gameTimeSetTime(264600);
     }
 
     debugPrint(">scr_init\t");
@@ -464,6 +481,7 @@ void gameReset()
     sfallArraysReset();
     sfall_gl_scr_reset();
     sfall_ini_cache_clear();
+    sfall_metarules_reset();
     sfallOnGameReset();
     gGameLoaded = false;
 }

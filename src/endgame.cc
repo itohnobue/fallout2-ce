@@ -28,6 +28,7 @@
 #include "platform_compat.h"
 #include "random.h"
 #include "settings.h"
+#include "sfall_config.h"
 #include "stat.h"
 #include "svga.h"
 #include "text_font.h"
@@ -36,6 +37,8 @@
 #include "worldmap.h"
 
 namespace fallout {
+
+extern bool gFallout1Behavior;
 
 // The maximum number of subtitle lines per slide.
 #define ENDGAME_ENDING_MAX_SUBTITLES (50)
@@ -239,14 +242,28 @@ void endgamePlayMovie()
     _endgame_maybe_done = 0;
     tickersAdd(_endgame_movie_bk_process);
     backgroundSoundSetEndCallback(_endgame_movie_callback);
-    backgroundSoundLoad("akiss", GSOUND_LIMIT_AFTER, GSOUND_STREAM, GSOUND_NO_LOOP);
+
+    if (gFallout1Behavior) {
+        // FO1: gender-based endgame movie selection (was "not implemented").
+        // FO1 used different endgame movies for male vs. female protagonist.
+        int gender = critterGetStat(gDude, STAT_GENDER);
+        if (gender == GENDER_MALE) {
+            backgroundSoundLoad("elder", GSOUND_LIMIT_AFTER, GSOUND_STREAM, GSOUND_NO_LOOP);
+        } else {
+            backgroundSoundLoad("akiss", GSOUND_LIMIT_AFTER, GSOUND_STREAM, GSOUND_NO_LOOP);
+        }
+    } else {
+        // FO2: default endgame movie.
+        backgroundSoundLoad("akiss", GSOUND_LIMIT_AFTER, GSOUND_STREAM, GSOUND_NO_LOOP);
+    }
+
     inputPauseForTocks(3000);
 
-    // NOTE: Result is ignored. I guess there was some kind of switch for male
-    // vs. female ending, but it was not implemented.
-    critterGetStat(gDude, STAT_GENDER);
+    // FO1: no credits scroll after endgame; FO2: show credits.
+    if (!gFallout1Behavior) {
+        creditsOpen("credits.txt", -1, false);
+    }
 
-    creditsOpen("credits.txt", -1, false);
     backgroundSoundDelete();
     backgroundSoundSetEndCallback(nullptr);
     tickersRemove(_endgame_movie_bk_process);

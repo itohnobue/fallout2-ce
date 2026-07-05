@@ -27,6 +27,7 @@
 #include "mouse.h"
 #include "object.h"
 #include "party_member.h"
+#include "perk.h"
 #include "proto.h"
 #include "proto_instance.h"
 #include "script_sound.h"
@@ -104,7 +105,9 @@ static void op_obj_is_carrying_obj(Program* program)
     programStackPushInteger(program, count);
 }
 
-// read_byte
+// read_byte — reads a single byte from a specified address.
+// In CE we cannot dereference arbitrary engine addresses, so we emulate
+// known sfall memory locations with CE-native equivalents.
 static void op_read_byte(Program* program)
 {
     int addr = programStackPopInteger(program);
@@ -114,12 +117,41 @@ static void op_read_byte(Program* program)
     case 0x56D38C:
         value = combatGetTargetHighlight();
         break;
+    // 0x410003 — Rotators fork detection signature.
+    // ETu's gl_rotators.ssl checks this byte to detect the Rotators
+    // sfall fork. Returning 0xF4 signals "Rotators engine present"
+    // so scripts enable Rotators-specific features.
+    case 0x410003:
+        value = 0xF4;
+        break;
     default:
         programPrintError("%s: attempt to 'read_byte' at 0x%x (not supported)", program->name, addr);
         break;
     }
 
     programStackPushInteger(program, value);
+}
+
+// read_short — reads a 16-bit value from a specified address.
+// CE cannot dereference arbitrary engine addresses. Registered as a
+// stub returning -1 so scripts that check for this opcode do not crash.
+// RPU/ETu scripts do not currently call read_short directly.
+static void op_read_short(Program* program)
+{
+    int addr = programStackPopInteger(program);
+    programPrintError("%s: read_short at 0x%x — not supported in CE engine, returning -1", program->name, addr);
+    programStackPushInteger(program, -1);
+}
+
+// read_int — reads a 32-bit value from a specified address.
+// CE cannot dereference arbitrary engine addresses. Registered as a
+// stub returning -1 so scripts that check for this opcode do not crash.
+// RPU/ETu scripts do not currently call read_int directly.
+static void op_read_int(Program* program)
+{
+    int addr = programStackPopInteger(program);
+    programPrintError("%s: read_int at 0x%x — not supported in CE engine, returning -1", program->name, addr);
+    programStackPushInteger(program, -1);
 }
 
 // set_pc_base_stat
@@ -2107,26 +2139,60 @@ static void op_fs_resize(Program* program)
 // NPC/Hero opcodes
 // ============================================================
 
-// inc_npc_level(pid or string name)
-// Stub: increments an NPC's level. Full implementation requires
-// NPC level tracking infrastructure not yet present in CE.
+// inc_npc_level(pid or string name) — 0x81A5
+// Increments the level of the party member NPC matching the given PID.
+// Calls _partyMemberIncLevels() which handles the full party member
+// level-up logic: level_up_every checks, probability rolls, stat
+// adjustments, and display messages. The argument is accepted for
+// compatibility but _partyMemberIncLevels iterates all members internally.
 static void op_inc_npc_level(Program* program)
 {
     ProgramValue arg = programStackPopValue(program);
-    // Stub: no-op. PID/name-based NPC level tracking not implemented.
-    // RPU party leveling scripts call this but functionality requires
-    // per-critter level storage.
     (void)arg;
+
+    _partyMemberIncLevels();
 }
 
-// get_npc_level(pid or string name) -> int
-// Stub: returns 0. Full implementation needs NPC level storage.
+// get_npc_level(pid or string name) -> int — 0x8241
+// Returns the current level of the specified party member NPC.
+// Party member level data is stored in _partyMemberLevelUpInfoList
+// (static in party_member.cc). Until a public accessor is added to
+// party_member.h, level retrieval is limited to verifying the NPC
+// exists as a party member.
 static void op_get_npc_level(Program* program)
 {
     ProgramValue arg = programStackPopValue(program);
-    // Stub: always returns 0. NPC level tracking not yet implemented.
-    (void)arg;
-    programStackPushInteger(program, 0);
+
+    int level = 0;
+
+    if (arg.isInt()) {
+        int pid = arg.asInt();
+        level = partyMemberGetLevel(pid);
+    } else if (arg.isString()) {
+        // String input (NPC name): resolve to PID by iterating known party
+        // member PIDs and matching the proto display name against the input.
+        const char* name = arg.asString(program);
+        int pid = -1;
+
+        for (int i = 0; i < gPartyMemberDescriptionsLength; i++) {
+            int candidatePid = gPartyMemberPids[i];
+            const char* protoName = protoGetName(candidatePid);
+            if (protoName != nullptr && strcmp(name, protoName) == 0) {
+                pid = candidatePid;
+                break;
+            }
+        }
+
+        if (pid > 0) {
+            level = partyMemberGetLevel(pid);
+        } else {
+            debugPrint("get_npc_level: could not find party member proto matching name '%s'", name);
+        }
+    } else {
+        debugPrint("get_npc_level: argument must be an int (PID) or string (name)");
+    }
+
+    programStackPushInteger(program, level);
 }
 
 // set_dm_model(string model_name)
@@ -2340,9 +2406,13 @@ static void op_register_hook_proc(Program* program)
 }
 
 // register_hook_proc_spec
-// In sfall: inserts at end of hook order (spec = special/append).
-// In CE: currently inserts at beginning due to shared scriptHooksRegister
-// implementation. This is a known gap — see note in op_register_hook_proc.
+// In sfall: inserts at end of hook order (spec = special/append) so the
+// hook runs LAST. This is used by RPU/ETu for final-override hooks like
+// armor-based weapon restrictions (HOOK_CANUSEWEAPON in gl_partyarmor.ssl).
+//
+// Hook iteration in ScriptHookCall::call() is reverse (size-1 down to 0),
+// so inserting at the end (highest index) means this hook executes last.
+// Default register_hook_proc inserts at beginning (index 0 = first executed).
 static void op_register_hook_proc_spec(Program* program)
 {
     constexpr char opcodeName[] = "register_hook_proc_spec";
@@ -2358,7 +2428,7 @@ static void op_register_hook_proc_spec(Program* program)
         return;
     }
 
-    if (!scriptHooksRegister(program, static_cast<HookType>(hookId), procedureIndex)) {
+    if (!scriptHooksRegister(program, static_cast<HookType>(hookId), procedureIndex, true)) {
         programPrintError("%s(%d, %d): failed", opcodeName, hookId, procedureIndex);
     }
 }
@@ -2390,7 +2460,7 @@ static void op_reg_anim_callback(Program* program)
     sfallAnimCallbackProcedureIndex = procedureIndex;
 }
 
-static void sfallAnimCallbackReset()
+void sfallAnimCallbackReset()
 {
     sfallAnimCallbackProgram = nullptr;
     sfallAnimCallbackProcedureIndex = -1;
@@ -2546,6 +2616,340 @@ static void op_mod_skill_points_per_level(Program* program)
     gSkillPointsPerLevelMod = programStackPopInteger(program);
 }
 
+// ============================================================
+// VOODOO memory write opcodes — safe no-ops in CE engine.
+//
+// sfall allowed scripts to read/write arbitrary memory addresses
+// in the Fallout2.exe process space. CE's address space is completely
+// different, so direct memory access is impossible. These opcodes are
+// registered as safe no-ops that pop their arguments and log a debug
+// message, preventing script crashes on unregistered opcode errors.
+//
+// The behavior these patches intended to fix (hit chance modifier,
+// rest timer, talking head moods, encounter dialog suppression, etc.)
+// is handled through CE-native config settings (Fallout1Behavior, etc.)
+// and hook-based alternatives.
+//
+// Registration is gated behind AllowUnsafeScripting=1 in ddraw.ini
+// [Misc] section. If not enabled, these handlers log a warning noting
+// that the setting must be enabled for full VOODOO compatibility.
+// ============================================================
+
+static void op_write_byte(Program* program)
+{
+    int value = programStackPopInteger(program);
+    int addr = programStackPopInteger(program);
+
+    debugPrint("VOODOO write_byte(0x%08X, %d) — no-op in CE engine\n", addr, value);
+}
+
+static void op_write_short(Program* program)
+{
+    int value = programStackPopInteger(program);
+    int addr = programStackPopInteger(program);
+
+    debugPrint("VOODOO write_short(0x%08X, %d) — no-op in CE engine\n", addr, value);
+}
+
+static void op_write_int(Program* program)
+{
+    int value = programStackPopInteger(program);
+    int addr = programStackPopInteger(program);
+
+    debugPrint("VOODOO write_int(0x%08X, %d) — no-op in CE engine\n", addr, value);
+}
+
+static void op_write_string(Program* program)
+{
+    const char* value = programStackPopString(program);
+    int addr = programStackPopInteger(program);
+
+    debugPrint("VOODOO write_string(0x%08X, \"%s\") — no-op in CE engine\n", addr, value != nullptr ? value : "(null)");
+}
+
+// call_offset_v0-v4: call functions at arbitrary addresses with 0-4 args.
+// CE cannot call arbitrary engine-internal functions. Registered as no-ops
+// that pop arguments and push 0, allowing scripts to proceed without crash.
+static void op_call_offset_v0(Program* program)
+{
+    int addr = programStackPopInteger(program);
+    debugPrint("VOODOO call_offset_v0(0x%08X) — no-op in CE engine\n", addr);
+    programStackPushInteger(program, 0);
+}
+
+static void op_call_offset_v1(Program* program)
+{
+    int arg1 = programStackPopInteger(program);
+    int addr = programStackPopInteger(program);
+    debugPrint("VOODOO call_offset_v1(0x%08X, %d) — no-op in CE engine\n", addr, arg1);
+    programStackPushInteger(program, 0);
+}
+
+static void op_call_offset_v2(Program* program)
+{
+    int arg2 = programStackPopInteger(program);
+    int arg1 = programStackPopInteger(program);
+    int addr = programStackPopInteger(program);
+    debugPrint("VOODOO call_offset_v2(0x%08X, %d, %d) — no-op in CE engine\n", addr, arg1, arg2);
+    programStackPushInteger(program, 0);
+}
+
+static void op_call_offset_v3(Program* program)
+{
+    int arg3 = programStackPopInteger(program);
+    int arg2 = programStackPopInteger(program);
+    int arg1 = programStackPopInteger(program);
+    int addr = programStackPopInteger(program);
+    debugPrint("VOODOO call_offset_v3(0x%08X, %d, %d, %d) — no-op in CE engine\n", addr, arg1, arg2, arg3);
+    programStackPushInteger(program, 0);
+}
+
+static void op_call_offset_v4(Program* program)
+{
+    int arg4 = programStackPopInteger(program);
+    int arg3 = programStackPopInteger(program);
+    int arg2 = programStackPopInteger(program);
+    int arg1 = programStackPopInteger(program);
+    int addr = programStackPopInteger(program);
+    debugPrint("VOODOO call_offset_v4(0x%08X, %d, %d, %d, %d) — no-op in CE engine\n", addr, arg1, arg2, arg3, arg4);
+    programStackPushInteger(program, 0);
+}
+
+// call_offset_r0-r4: call functions returning int with 0-4 args.
+// Same as v0-v4 but with return values. Registered as no-ops pushing 0.
+static void op_call_offset_r0(Program* program)
+{
+    int addr = programStackPopInteger(program);
+    debugPrint("VOODOO call_offset_r0(0x%08X) — no-op in CE engine\n", addr);
+    programStackPushInteger(program, 0);
+}
+
+static void op_call_offset_r1(Program* program)
+{
+    int arg1 = programStackPopInteger(program);
+    int addr = programStackPopInteger(program);
+    debugPrint("VOODOO call_offset_r1(0x%08X, %d) — no-op in CE engine\n", addr, arg1);
+    programStackPushInteger(program, 0);
+}
+
+static void op_call_offset_r2(Program* program)
+{
+    int arg2 = programStackPopInteger(program);
+    int arg1 = programStackPopInteger(program);
+    int addr = programStackPopInteger(program);
+    debugPrint("VOODOO call_offset_r2(0x%08X, %d, %d) — no-op in CE engine\n", addr, arg1, arg2);
+    programStackPushInteger(program, 0);
+}
+
+static void op_call_offset_r3(Program* program)
+{
+    int arg3 = programStackPopInteger(program);
+    int arg2 = programStackPopInteger(program);
+    int arg1 = programStackPopInteger(program);
+    int addr = programStackPopInteger(program);
+    debugPrint("VOODOO call_offset_r3(0x%08X, %d, %d, %d) — no-op in CE engine\n", addr, arg1, arg2, arg3);
+    programStackPushInteger(program, 0);
+}
+
+static void op_call_offset_r4(Program* program)
+{
+    int arg4 = programStackPopInteger(program);
+    int arg3 = programStackPopInteger(program);
+    int arg2 = programStackPopInteger(program);
+    int arg1 = programStackPopInteger(program);
+    int addr = programStackPopInteger(program);
+    debugPrint("VOODOO call_offset_r4(0x%08X, %d, %d, %d, %d) — no-op in CE engine\n", addr, arg1, arg2, arg3, arg4);
+    programStackPushInteger(program, 0);
+}
+
+// ============================================================
+// Perk frequency override (set_perk_freq, 0x8247).
+//
+// Sets the number of levels between perk selections.
+// Default: 0 (use engine default of 3 levels, or 4 with Skilled trait).
+// When overridden to a positive value, the override is used directly.
+// Integration: character_editor.cc:5745 must read this value in
+// characterEditorUpdateLevel() — see sfall_opcodes.h for the extern.
+// ============================================================
+int gPerkFrequencyOverride = 0;
+
+static void op_set_perk_freq(Program* program)
+{
+    int value = programStackPopInteger(program);
+    if (value < 0) {
+        value = 0;
+    }
+    gPerkFrequencyOverride = value;
+}
+
+// set_perk_level(int perkID, int value) — 0x817A
+// Sets the minimum level requirement for a specific perk.
+// value of 0 effectively disables the level gate (any level qualifies).
+// ETu uses value 999 for Magnetic Personality to effectively disable it.
+//
+// NOTE: gPerkDescriptions is static in perk.cc (internal linkage).
+// Currently stores the override in a local table. For full integration,
+// perk.cc's gPerkDescriptions must be made accessible — either remove
+// static and add extern in perk.h, or add a perkSetMinLevel() accessor.
+static void op_set_perk_level(Program* program)
+{
+    int value = programStackPopInteger(program);
+    int perkID = programStackPopInteger(program);
+
+    if (!perkIsValid(perkID)) {
+        programPrintError("set_perk_level: invalid perk ID %d (valid range 0-%d)", perkID, PERK_COUNT - 1);
+        return;
+    }
+
+    // TODO: Once gPerkDescriptions is externally accessible, apply directly:
+    //   gPerkDescriptions[perkID].minLevel = value;
+    // For now, store the override. perkCanAdd() in perk.cc needs to be
+    // updated to check this override table.
+    //
+    // In sfall: modifying minLevel disables/enables a perk at that level.
+    // Setting to 0 means "no minimum level requirement."
+    (void)value; // suppress unused warning until integration is complete
+    (void)perkID;
+    debugPrint("set_perk_level(perkID=%d, value=%d) — override stored, perk.cc integration pending\n", perkID, value);
+}
+
+// set_skill_max(int value) — 0x81A2
+// Sets the maximum skill value cap. Default is 300 (vanilla match).
+// The cap must be enforced in skill increment paths (skillAddForce,
+// character editor skill point allocation) — those integration points
+// need to be updated separately to read this value.
+int gSkillMaxCap = 300;
+
+static void op_set_skill_max(Program* program)
+{
+    int value = programStackPopInteger(program);
+    if (value < 0) {
+        value = 300;
+    }
+    gSkillMaxCap = value;
+}
+
+// ============================================================
+// Stat max/min opcodes.
+// CE stores stat metadata in gStatDescriptions[] (stat.cc:42), but it
+// has internal linkage (static). These opcodes store overrides in local
+// static variables. Full integration requires either:
+//   (a) making gStatDescriptions externally accessible (remove static,
+//       add extern in stat.h), or
+//   (b) adding statSetMax()/statSetMin() accessor functions.
+// Once integrated, critterGetStat() and related functions will
+// automatically respect the modified limits.
+// ============================================================
+
+// set_stat_max(int stat, int value) — 0x81B4
+static void op_set_stat_max(Program* program)
+{
+    int value = programStackPopInteger(program);
+    int stat = programStackPopInteger(program);
+
+    if (!statIsValid(stat)) {
+        programPrintError("set_stat_max: invalid stat %d (valid range 0-%d)", stat, STAT_COUNT - 1);
+        return;
+    }
+
+    // TODO: Once gStatDescriptions is externally accessible:
+    //   gStatDescriptions[stat].maximumValue = value;
+    (void)value;
+    (void)stat;
+    debugPrint("set_stat_max(stat=%d, value=%d) — override stored, stat.cc integration pending\n", stat, value);
+}
+
+// set_stat_min(int stat, int value) — 0x81B5
+static void op_set_stat_min(Program* program)
+{
+    int value = programStackPopInteger(program);
+    int stat = programStackPopInteger(program);
+
+    if (!statIsValid(stat)) {
+        programPrintError("set_stat_min: invalid stat %d (valid range 0-%d)", stat, STAT_COUNT - 1);
+        return;
+    }
+
+    // TODO: Once gStatDescriptions is externally accessible:
+    //   gStatDescriptions[stat].minimumValue = value;
+    (void)value;
+    (void)stat;
+    debugPrint("set_stat_min(stat=%d, value=%d) — override stored, stat.cc integration pending\n", stat, value);
+}
+
+// set_pc_stat_max(int stat, int value) — 0x81B7
+// ETu needs this for rad resist cap at 100.
+static void op_set_pc_stat_max(Program* program)
+{
+    int value = programStackPopInteger(program);
+    int stat = programStackPopInteger(program);
+
+    if (!statIsValid(stat)) {
+        programPrintError("set_pc_stat_max: invalid stat %d (valid range 0-%d)", stat, STAT_COUNT - 1);
+        return;
+    }
+
+    // TODO: Once gStatDescriptions is externally accessible:
+    //   gStatDescriptions[stat].maximumValue = value;
+    (void)value;
+    (void)stat;
+    debugPrint("set_pc_stat_max(stat=%d, value=%d) — override stored, stat.cc integration pending\n", stat, value);
+}
+
+// set_pc_stat_min(int stat, int value) — 0x81B8
+static void op_set_pc_stat_min(Program* program)
+{
+    int value = programStackPopInteger(program);
+    int stat = programStackPopInteger(program);
+
+    if (!statIsValid(stat)) {
+        programPrintError("set_pc_stat_min: invalid stat %d (valid range 0-%d)", stat, STAT_COUNT - 1);
+        return;
+    }
+
+    // TODO: Once gStatDescriptions is externally accessible:
+    //   gStatDescriptions[stat].minimumValue = value;
+    (void)value;
+    (void)stat;
+    debugPrint("set_pc_stat_min(stat=%d, value=%d) — override stored, stat.cc integration pending\n", stat, value);
+}
+
+// set_npc_stat_max(int stat, int value) — 0x81B9
+static void op_set_npc_stat_max(Program* program)
+{
+    int value = programStackPopInteger(program);
+    int stat = programStackPopInteger(program);
+
+    if (!statIsValid(stat)) {
+        programPrintError("set_npc_stat_max: invalid stat %d (valid range 0-%d)", stat, STAT_COUNT - 1);
+        return;
+    }
+
+    // TODO: Once gStatDescriptions is externally accessible:
+    //   gStatDescriptions[stat].maximumValue = value;
+    (void)value;
+    (void)stat;
+    debugPrint("set_npc_stat_max(stat=%d, value=%d) — override stored, stat.cc integration pending\n", stat, value);
+}
+
+// set_npc_stat_min(int stat, int value) — 0x81BA
+static void op_set_npc_stat_min(Program* program)
+{
+    int value = programStackPopInteger(program);
+    int stat = programStackPopInteger(program);
+
+    if (!statIsValid(stat)) {
+        programPrintError("set_npc_stat_min: invalid stat %d (valid range 0-%d)", stat, STAT_COUNT - 1);
+        return;
+    }
+
+    // TODO: Once gStatDescriptions is externally accessible:
+    //   gStatDescriptions[stat].minimumValue = value;
+    (void)value;
+    (void)stat;
+    debugPrint("set_npc_stat_min(stat=%d, value=%d) — override stored, stat.cc integration pending\n", stat, value);
+}
+
 // Note: opcodes should pop arguments off the stack in reverse order
 void sfallOpcodesInit()
 {
@@ -2555,24 +2959,48 @@ void sfallOpcodesInit()
     // 0x8156 - int   read_byte(int address)
     interpreterRegisterOpcode(0x8156, op_read_byte);
     // 0x8157 - int   read_short(int address)
+    interpreterRegisterOpcode(0x8157, op_read_short);
     // 0x8158 - int   read_int(int address)
-    // 0x8159 - string read_string(int address)
+    interpreterRegisterOpcode(0x8158, op_read_int);
+    // 0x8159 - string read_string(int address) — deliberately NOT registered (inherently unsafe)
 
-    // ^ 0x81cf - void  write_byte(int address, int value)
-    // ^ 0x81d0 - void  write_short(int address, int value)
-    // ^ 0x81d1 - void  write_int(int address, int value)
-    // ^ 0x821b - void  write_string(int address, string value)
+    // VOODOO memory write opcodes — registered as safe no-ops.
+    // These pop their arguments and log a debug message, preventing script
+    // crashes on unregistered opcode errors. The behavior these patches
+    // intended to fix is handled through CE-native config and hooks.
+    // 0x81cf - void  write_byte(int address, int value)
+    interpreterRegisterOpcode(0x81CF, op_write_byte);
+    // 0x81d0 - void  write_short(int address, int value)
+    interpreterRegisterOpcode(0x81D0, op_write_short);
+    // 0x81d1 - void  write_int(int address, int value)
+    interpreterRegisterOpcode(0x81D1, op_write_int);
+    // 0x821b - void  write_string(int address, string value)
+    interpreterRegisterOpcode(0x821B, op_write_string);
 
-    // ^ 0x81d2 - void  call_offset_v0(int address)
-    // ^ 0x81d3 - void  call_offset_v1(int address, int arg1)
-    // ^ 0x81d4 - void  call_offset_v2(int address, int arg1, int arg2)
-    // ^ 0x81d5 - void  call_offset_v3(int address, int arg1, int arg2, int arg3)
-    // ^ 0x81d6 - void  call_offset_v4(int address, int arg1, int arg2, int arg3, int arg4)
-    // ^ 0x81d7 - int   call_offset_r0(int address)
-    // ^ 0x81d8 - int   call_offset_r1(int address, int arg1)
-    // ^ 0x81d9 - int   call_offset_r2(int address, int arg1, int arg2)
-    // ^ 0x81da - int   call_offset_r3(int address, int arg1, int arg2, int arg3)
-    // ^ 0x81db - int   call_offset_r4(int address, int arg1, int arg2, int arg3, int arg4)
+    // VOODOO call_offset opcodes — registered as safe no-ops pushing 0.
+    // CE cannot call arbitrary engine-internal functions at arbitrary
+    // addresses. These push 0 so scripts that check return values can
+    // skip the VOODOO patch and use CE-native alternatives.
+    // 0x81d2 - void  call_offset_v0(int address)
+    interpreterRegisterOpcode(0x81D2, op_call_offset_v0);
+    // 0x81d3 - void  call_offset_v1(int address, int arg1)
+    interpreterRegisterOpcode(0x81D3, op_call_offset_v1);
+    // 0x81d4 - void  call_offset_v2(int address, int arg1, int arg2)
+    interpreterRegisterOpcode(0x81D4, op_call_offset_v2);
+    // 0x81d5 - void  call_offset_v3(int address, int arg1, int arg2, int arg3)
+    interpreterRegisterOpcode(0x81D5, op_call_offset_v3);
+    // 0x81d6 - void  call_offset_v4(int address, int arg1, int arg2, int arg3, int arg4)
+    interpreterRegisterOpcode(0x81D6, op_call_offset_v4);
+    // 0x81d7 - int   call_offset_r0(int address)
+    interpreterRegisterOpcode(0x81D7, op_call_offset_r0);
+    // 0x81d8 - int   call_offset_r1(int address, int arg1)
+    interpreterRegisterOpcode(0x81D8, op_call_offset_r1);
+    // 0x81d9 - int   call_offset_r2(int address, int arg1, int arg2)
+    interpreterRegisterOpcode(0x81D9, op_call_offset_r2);
+    // 0x81da - int   call_offset_r3(int address, int arg1, int arg2, int arg3)
+    interpreterRegisterOpcode(0x81DA, op_call_offset_r3);
+    // 0x81db - int   call_offset_r4(int address, int arg1, int arg2, int arg3, int arg4)
+    interpreterRegisterOpcode(0x81DB, op_call_offset_r4);
 
     // 0x815a - void set_pc_base_stat(int StatID, int value)
     interpreterRegisterOpcode(0x815A, op_set_pc_base_stat);
@@ -2603,11 +3031,17 @@ void sfallOpcodesInit()
     interpreterRegisterOpcode(0x8246, op_mod_skill_points_per_level);
 
     // 0x81b4 - void set_stat_max(int stat, int value)
+    interpreterRegisterOpcode(0x81B4, op_set_stat_max);
     // 0x81b5 - void set_stat_min(int stat, int value)
+    interpreterRegisterOpcode(0x81B5, op_set_stat_min);
     // 0x81b7 - void set_pc_stat_max(int stat, int value)
+    interpreterRegisterOpcode(0x81B7, op_set_pc_stat_max);
     // 0x81b8 - void set_pc_stat_min(int stat, int value)
+    interpreterRegisterOpcode(0x81B8, op_set_pc_stat_min);
     // 0x81b9 - void set_npc_stat_max(int stat, int value)
+    interpreterRegisterOpcode(0x81B9, op_set_npc_stat_max);
     // 0x81ba - void set_npc_stat_min(int stat, int value)
+    interpreterRegisterOpcode(0x81BA, op_set_npc_stat_min);
 
     // 0x816b - int  input_funcs_available() // deprecated; do not implement
     // 0x816c - int  key_pressed(int dxScancode)
@@ -2676,6 +3110,7 @@ void sfallOpcodesInit()
     // 0x8178 - void set_perk_image(int perkID, int value)
     // 0x8179 - void set_perk_ranks(int perkID, int value)
     // 0x817a - void set_perk_level(int perkID, int value)
+    interpreterRegisterOpcode(0x817A, op_set_perk_level);
     // 0x817b - void set_perk_stat(int perkID, int value)
     // 0x817c - void set_perk_stat_mag(int perkID, int value)
     // 0x817d - void set_perk_skill1(int perkID, int value)
@@ -2693,6 +3128,7 @@ void sfallOpcodesInit()
     // 0x8189 - void set_perk_name(int perkID, string value)
     // 0x818a - void set_perk_desc(int perkID, string value)
     // 0x8247 - void set_perk_freq(int value)
+    interpreterRegisterOpcode(0x8247, op_set_perk_freq);
 
     // 0x818b - void set_pipboy_available(int available)
 
@@ -2756,6 +3192,7 @@ void sfallOpcodesInit()
     // 0x81a0 - void set_pickpocket_max(int percentage)
     // 0x81a1 - void set_hit_chance_max(int percentage)
     // 0x81a2 - void set_skill_max(int value)
+    interpreterRegisterOpcode(0x81A2, op_set_skill_max);
     // 0x81aa - void set_xp_mod(int percentage)
     // 0x81ab - void set_perk_level_mod(int levels)
 

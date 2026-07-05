@@ -15,6 +15,7 @@
 #include "queue.h"
 #include "random.h"
 #include "scripts.h"
+#include "sfall_opcodes.h"
 #include "skill.h"
 
 #include <assert.h>
@@ -146,7 +147,7 @@ void scriptHooksUnregisterProgram(Program* program)
     }
 }
 
-bool scriptHooksRegister(Program* program, const HookType hookType, const int procedureIndex)
+bool scriptHooksRegister(Program* program, const HookType hookType, const int procedureIndex, const bool atEnd)
 {
     assert(program != nullptr && hookType >= 0 && hookType < HOOK_COUNT && procedureIndex >= 0 && procedureIndex < program->procedureCount());
 
@@ -167,8 +168,16 @@ bool scriptHooksRegister(Program* program, const HookType hookType, const int pr
         return false; // unregister fail
     }
 
-    // Put new hooks to beginning, because we want to iterate them in reverse.
-    hooksByType.emplace(hooksByType.begin(), ScriptHook { program, procedureIndex });
+    // register_hook_proc (atEnd=false): insert at end (highest index) — last registered = first executed.
+    // register_hook_proc_spec (atEnd=true): insert at beginning (index 0) — last registered = last executed.
+    // Hook iteration in ScriptHookCall::call() is reverse (size-1 down to 0),
+    // so highest-index hooks execute FIRST, index-0 hooks execute LAST.
+    // register_hook_proc_spec hooks must be at index 0 to serve as final overrides.
+    if (atEnd) {
+        hooksByType.emplace(hooksByType.begin(), ScriptHook { program, procedureIndex });
+    } else {
+        hooksByType.push_back(ScriptHook { program, procedureIndex });
+    }
     return true; // register success
 }
 
@@ -221,6 +230,10 @@ bool scriptHooksInit()
 void scriptHooksReset()
 {
     scriptHooksClear();
+    // Reset animation callback pointer to prevent stale pointer
+    // after game reset / new game cycle. Without this, sfallAnimCallbackProgram
+    // could reference freed Program memory from a previous game session.
+    sfallAnimCallbackReset();
 }
 
 void scriptHooksExit()
@@ -592,7 +605,13 @@ int scriptHooks_CalcApCost(Object* critter, int hitMode, bool aiming, int action
         return actionPoints;
     }
 
-    return hook.getReturnValueAt(0).asInt();
+    int cost = hook.getReturnValueAt(0).asInt();
+    // Clamp to minimum 0 — negative AP costs are nonsensical and can
+    // cause AP gain exploits if a hook script returns a negative value.
+    if (cost < 0) {
+        cost = 0;
+    }
+    return cost;
 }
 
 /*
@@ -621,7 +640,13 @@ int scriptHooks_MoveCost(Object* critter, int distance, int actionPoints)
     if (hook.numReturnValues() <= 0) {
         return actionPoints;
     }
-    return hook.getReturnValueAt(0).asInt();
+    int cost = hook.getReturnValueAt(0).asInt();
+    // Clamp to minimum 0 — negative AP costs would allow free movement
+    // exploits if a hook script returns a negative value.
+    if (cost < 0) {
+        cost = 0;
+    }
+    return cost;
 }
 
 /*

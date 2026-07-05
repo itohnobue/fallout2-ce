@@ -21,12 +21,15 @@
 #include "proto.h"
 #include "random.h"
 #include "scripts.h"
+#include "sfall_config.h"
 #include "skill.h"
 #include "svga.h"
 #include "tile.h"
 #include "trait.h"
 
 namespace fallout {
+
+extern int gXPTableMode;
 
 // Provides metadata about stats.
 typedef struct StatDescription {
@@ -689,6 +692,14 @@ int pcGetExperienceForLevel(int level)
 {
     if (level >= PC_LEVEL_MAX) {
         return -1;
+    }
+
+    // TODO: When gXPTableMode >= 1, load XP values from an external file
+    // (e.g., data/XPTable.dat) using a pre-computed lookup table. For now,
+    // the mode flag is parsed but the hardcoded formula remains.
+    if (gXPTableMode >= 1) {
+        // Fall through to hardcoded formula for now.
+        // Full file-based table loading to be implemented later.
     }
 
     int halfLevel = level / 2;

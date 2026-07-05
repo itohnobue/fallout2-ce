@@ -856,6 +856,19 @@ Object* partyMemberFindByPid(int pid)
     return nullptr;
 }
 
+// Returns the level of a party member by PID by looking up the level from
+// _partyMemberLevelUpInfoList. Returns 0 if the PID is not a known party member
+// or if the party member has not gained any levels yet.
+int partyMemberGetLevel(int pid)
+{
+    for (int index = 0; index < gPartyMemberDescriptionsLength; index++) {
+        if (gPartyMemberPids[index] == pid) {
+            return _partyMemberLevelUpInfoList[index].level;
+        }
+    }
+    return 0;
+}
+
 // 0x494F64 isPotentialPartyMember
 bool _isPotentialPartyMember(Object* object)
 {

@@ -9,6 +9,13 @@ namespace fallout {
 bool gSfallConfigInitialized = false;
 Config gSfallConfig;
 
+bool gFallout1Behavior = false;
+bool gAllowUnsafeScripting = false;
+bool gEnableHeroAppearanceMod = false;
+bool gUseFileSystemOverride = false;
+bool gOverrideArtCacheSize = false;
+bool gExtraSaveSlots = false;
+
 bool sfallConfigInit(int argc, char** argv)
 {
     if (gSfallConfigInitialized) {
@@ -28,18 +35,36 @@ bool sfallConfigInit(int argc, char** argv)
     configSetString(&gSfallConfig, SFALL_CONFIG_MISC_KEY, SFALL_CONFIG_PATCH_FILE, "");
     configSetString(&gSfallConfig, SFALL_CONFIG_SCRIPTS_KEY, SFALL_CONFIG_INI_CONFIG_FOLDER, "");
 
+    configSetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, SFALL_CONFIG_FALLOUT1_BEHAVIOR_KEY, 0);
+    configSetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, SFALL_CONFIG_ENABLE_HERO_APPEARANCE_MOD_KEY, 0);
+    configSetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, SFALL_CONFIG_USE_FILESYSTEM_OVERRIDE_KEY, 0);
+    configSetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, SFALL_CONFIG_OVERRIDE_ART_CACHE_SIZE_KEY, 0);
+    configSetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, SFALL_CONFIG_EXTRA_SAVE_SLOTS_KEY, 0);
+
+    configSetInt(&gSfallConfig, SFALL_CONFIG_DEBUGGING_KEY, SFALL_CONFIG_ALLOW_UNSAFE_SCRIPTING_KEY, 0);
+
     char path[COMPAT_MAX_PATH];
-    char* executable = argv[0];
-    char* ch = strrchr(executable, '\\');
-    if (ch != nullptr) {
-        *ch = '\0';
-        snprintf(path, sizeof(path), "%s\\%s", executable, SFALL_CONFIG_FILE_NAME);
-        *ch = '\\';
-    } else {
-        strcpy(path, SFALL_CONFIG_FILE_NAME);
-    };
+    char drive[COMPAT_MAX_DRIVE];
+    char dir[COMPAT_MAX_DIR];
+    compat_splitpath(argv[0], drive, dir, nullptr, nullptr);
+    compat_makepath(path, drive, dir, SFALL_CONFIG_FILE_NAME, nullptr);
 
     configRead(&gSfallConfig, path, false);
+
+    // Read config values into globals.
+    int tempVal = 0;
+    configGetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, SFALL_CONFIG_FALLOUT1_BEHAVIOR_KEY, &tempVal, 0);
+    gFallout1Behavior = tempVal != 0;
+    configGetInt(&gSfallConfig, SFALL_CONFIG_DEBUGGING_KEY, SFALL_CONFIG_ALLOW_UNSAFE_SCRIPTING_KEY, &tempVal, 0);
+    gAllowUnsafeScripting = tempVal != 0;
+    configGetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, SFALL_CONFIG_ENABLE_HERO_APPEARANCE_MOD_KEY, &tempVal, 0);
+    gEnableHeroAppearanceMod = tempVal != 0;
+    configGetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, SFALL_CONFIG_USE_FILESYSTEM_OVERRIDE_KEY, &tempVal, 0);
+    gUseFileSystemOverride = tempVal != 0;
+    configGetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, SFALL_CONFIG_OVERRIDE_ART_CACHE_SIZE_KEY, &tempVal, 0);
+    gOverrideArtCacheSize = tempVal != 0;
+    configGetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, SFALL_CONFIG_EXTRA_SAVE_SLOTS_KEY, &tempVal, 0);
+    gExtraSaveSlots = tempVal != 0;
 
     gSfallConfigInitialized = true;
 

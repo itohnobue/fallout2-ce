@@ -11,6 +11,7 @@ namespace fallout {
 #define SFALL_CONFIG_MISC_KEY "Misc"
 #define SFALL_CONFIG_SCRIPTS_KEY "Scripts"
 #define SFALL_CONFIG_SPEED_KEY "Speed"
+#define SFALL_CONFIG_DEBUGGING_KEY "Debugging"
 
 #define SFALL_CONFIG_SPEED_MULTI_KEY "SpeedMulti"
 #define SFALL_CONFIG_SPEED_MULTI_INITIAL_KEY "SpeedMultiInitial"
@@ -24,8 +25,22 @@ namespace fallout {
 #define SFALL_CONFIG_CONFIG_FILE "ConfigFile"
 #define SFALL_CONFIG_PATCH_FILE "PatchFile"
 
+#define SFALL_CONFIG_FALLOUT1_BEHAVIOR_KEY "Fallout1Behavior"
+#define SFALL_CONFIG_ALLOW_UNSAFE_SCRIPTING_KEY "AllowUnsafeScripting"
+#define SFALL_CONFIG_ENABLE_HERO_APPEARANCE_MOD_KEY "EnableHeroAppearanceMod"
+#define SFALL_CONFIG_USE_FILESYSTEM_OVERRIDE_KEY "UseFileSystemOverride"
+#define SFALL_CONFIG_OVERRIDE_ART_CACHE_SIZE_KEY "OverrideArtCacheSize"
+#define SFALL_CONFIG_EXTRA_SAVE_SLOTS_KEY "ExtraSaveSlots"
+
 extern bool gSfallConfigInitialized;
 extern Config gSfallConfig;
+
+extern bool gFallout1Behavior;
+extern bool gAllowUnsafeScripting;
+extern bool gEnableHeroAppearanceMod;
+extern bool gUseFileSystemOverride;
+extern bool gOverrideArtCacheSize;
+extern bool gExtraSaveSlots;
 
 bool sfallConfigInit(int argc, char** argv);
 void sfallConfigExit();
