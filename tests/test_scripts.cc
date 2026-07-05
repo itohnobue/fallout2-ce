@@ -47,7 +47,7 @@ static int testScriptsGetWorldMapSlots()
 // =============================================================
 
 constexpr int TEST_OBJECT_ID_PLAYER = 18000;
-constexpr int TEST_OBJECT_ID_PARTY_MEMBER_END = TEST_OBJECT_ID_PLAYER + 0x01000000; // 16795648
+constexpr int TEST_OBJECT_ID_PARTY_MEMBER_END = TEST_OBJECT_ID_PLAYER + 0x01000000; // 16795216
 constexpr int TEST_OBJECT_ID_UNIQUE_START = 0x0FFFFFFF; // 268435455
 constexpr int TEST_OBJECT_ID_UNIQUE_END = 0x7FFFFFFF;   // 2147483647
 
@@ -131,7 +131,7 @@ TEST_CASE("OBJECT_ID constants")
 {
     // Verify the object ID ranges used by scriptsIsUniqueObjectId
     CHECK(TEST_OBJECT_ID_PLAYER == 18000);
-    CHECK(TEST_OBJECT_ID_PARTY_MEMBER_END == 16795648);
+    CHECK(TEST_OBJECT_ID_PARTY_MEMBER_END == 16795216);
     CHECK(TEST_OBJECT_ID_UNIQUE_START == 0x0FFFFFFF);
     CHECK(TEST_OBJECT_ID_UNIQUE_END == 0x7FFFFFFF);
 
@@ -588,4 +588,363 @@ TEST_CASE("GAME_TIME tick constants")
     // Consistency: 24 hours per day, 365 days per year
     CHECK(GAME_TIME_TICKS_PER_DAY == GAME_TIME_TICKS_PER_HOUR * 24);
     CHECK(GAME_TIME_TICKS_PER_YEAR == GAME_TIME_TICKS_PER_DAY * 365);
+}
+
+// ===========================================================================
+// M-014: sfallModsIni extended edge cases (scripts.cc:1586-1619)
+// ===========================================================================
+//
+// Finding M-014 (CONFIRMED, MEDIUM): The existing mirror tests cover lifecycle
+// and basic config integration, but the production code also has:
+//   - configRead returns false gracefully if file missing
+//   - multiple keys in different sections
+//   - int value boundaries (INT_MIN, INT_MAX)
+//   - double-init idempotency with state already loaded
+//
+// Research: RPU CONFIRMED (sfall-mods.ini for mod overrides),
+//           ETu CONFIRMED (fo1_settings.ini, 40+ GVAR settings)
+
+TEST_CASE("M-014: sfallModsIni — init succeeds even when configRead fails (scripts.cc:1598)")
+{
+    // Production calls configRead(&gSfallModsIni, "sfall-mods.ini", false) which
+    // returns false if the file doesn't exist. The function ignores the return
+    // value and marks loaded=true anyway. This mirrors that behavior.
+    if (gTestSfallModsIniLoaded) testSfallModsIniExit();
+
+    SUBCASE("init returns true regardless of file existence")
+    {
+        CHECK(testSfallModsIniInit());
+        CHECK(gTestSfallModsIniLoaded);
+
+        testSfallModsIniExit();
+    }
+}
+
+TEST_CASE("M-014: sfallModsIniGetInt — INT_MIN and INT_MAX boundaries (scripts.cc:1612-1619)")
+{
+    // Finding M-014: configGetInt handles extreme integer values.
+    if (gTestSfallModsIniLoaded) testSfallModsIniExit();
+    CHECK(testSfallModsIniInit());
+
+    configSetInt(&gTestSfallModsIni, "Bounds", "MinInt", -2147483647 - 1);
+    configSetInt(&gTestSfallModsIni, "Bounds", "MaxInt", 2147483647);
+    configSetInt(&gTestSfallModsIni, "Bounds", "Zero", 0);
+
+    int value = 1;
+    CHECK(testSfallModsIniGetInt("Bounds", "MinInt", &value, 0));
+    CHECK(value == -2147483647 - 1);
+    CHECK(testSfallModsIniGetInt("Bounds", "MaxInt", &value, 0));
+    CHECK(value == 2147483647);
+    CHECK(testSfallModsIniGetInt("Bounds", "Zero", &value, 1));
+    CHECK(value == 0);
+
+    testSfallModsIniExit();
+}
+
+TEST_CASE("M-014: sfallModsIniGetInt — returns false and default when not loaded (scripts.cc:1614-1616)")
+{
+    // Production: if (!gSfallModsIniLoaded) { *value = defaultValue; return false; }
+    if (gTestSfallModsIniLoaded) testSfallModsIniExit();
+    CHECK_FALSE(gTestSfallModsIniLoaded);
+
+    int value = 999;
+    bool result = testSfallModsIniGetInt("AnySection", "AnyKey", &value, 42);
+    CHECK_FALSE(result);
+    CHECK(value == 42); // defaultValue returned
+    // value pointer is always written, even on failure
+}
+
+// ===========================================================================
+// N2-019: scriptsExecMapUpdateScripts execution order (scripts.cc:2770-2836)
+// ===========================================================================
+//
+// Finding N2-019 (CONFIRMED, MEDIUM): Fork reversed execution order:
+//   OLD: sfall global scripts ran FIRST, then regular map scripts
+//   NEW: regular map scripts run FIRST, then sfall global scripts
+// Additionally, sfall global scripts now ALWAYS execute:
+//   OLD: skipped when sidListCapacity==0 or malloc failed
+//   NEW: executed in ALL paths (even early returns)
+//
+// Research: RPU CONFIRMED (global script execution order matters for
+//   set_global_script_repeat)
+
+// Mirror of the scriptsExecMapUpdateScripts order with tracking.
+// Returns the execution log as a bitmask: bit 0 = regular scripts ran,
+// bit 1 = sfall global scripts ran.
+constexpr int TEST_EXEC_ORDER_REGULAR  = 0x01;
+constexpr int TEST_EXEC_ORDER_SFALL    = 0x02;
+
+static int testScriptsExecMapUpdateScripts(int scriptCount, int memoryAvailable)
+{
+    int executionLog = 0;
+
+    int sidListCapacity = scriptCount;
+
+    if (sidListCapacity == 0) {
+        // Fork: sfall global scripts execute even when no regular scripts exist.
+        // OLD code: sfall skipped here.
+        executionLog |= TEST_EXEC_ORDER_SFALL;
+        return executionLog;
+    }
+
+    // Simulate malloc
+    if (!memoryAvailable) {
+        // Fork: sfall global scripts execute even on OOM.
+        // OLD code: sfall skipped on malloc failure.
+        executionLog |= TEST_EXEC_ORDER_SFALL;
+        return executionLog;
+    }
+
+    // Regular scripts execute FIRST (fork changed from OLD: globals first)
+    executionLog |= TEST_EXEC_ORDER_REGULAR;
+
+    // Fork: free sidList, then run sfall global scripts AFTER regular scripts.
+    executionLog |= TEST_EXEC_ORDER_SFALL;
+
+    return executionLog;
+}
+
+// ===========================================================================
+// N2-020: scriptsCreateProgramByName file pre-check (scripts.cc:760-771)
+// ===========================================================================
+//
+// Finding N2-020 (CONFIRMED, MEDIUM): Fork adds fileOpen/fileClose pre-check
+// before calling programCreateByPath. Without this, programCreateByPath's
+// internal programFatalError would longjmp to the calling program's context
+// during lazy script load, corrupting the wrong program's state.
+// Cross-file: scripts.cc ↔ interpreter.cc (longjmp across compilation units)
+
+// Mirror of scriptsCreateProgramByName file-existence pre-check.
+// fileExists: true = file found, false = file not found.
+// Returns: true if function proceeds to programCreateByPath, false if nullptr returned.
+static bool testScriptsCreateProgramByNamePreCheck(bool fileExists)
+{
+    if (!fileExists) {
+        return false; // nullptr returned, no longjmp risk
+    }
+    return true; // proceed to programCreateByPath
+}
+
+// ===========================================================================
+// N2-021: sfallModsIniGetInt dead code documentation (scripts.cc:1612)
+// ===========================================================================
+//
+// Finding N2-021 (CONFIRMED, MEDIUM): sfallModsIniGetInt has ZERO production
+// callers. The entire sfall-mods.ini infrastructure is compiled, initialized,
+// and freed, but NO production code calls sfallModsIniGetInt to read from it.
+// This is dead code — init/exit run but the reader is never used.
+//
+// Tests below verify the infrastructure itself works correctly (the function
+// is still callable and returns correct values), serializing the design intent
+// that this dead code exist (potential future consumer from RPU/ETu compat).
+
+// ===========================================================================
+// N2-022: scriptsGetMessageList bounds check (scripts.cc:2852-2854)
+// ===========================================================================
+//
+// Finding N2-022 (CONFIRMED, MEDIUM): Fork adds bounds guard on messageListId.
+// The production code computes:
+//   messageListIndex = messageListId - 1;
+//   if (messageListIndex < 0 || messageListIndex >= MAX_CAPACITY) return -1;
+// Without this: messageListId=0 → messageListIndex=-1 → OOB on gScriptDialogMessageLists[-1].
+// The fork guard prevents the OOB.
+
+constexpr int TEST_MSG_LIST_MAX_CAPACITY = 10000; // matches SCRIPT_DIALOG_MESSAGE_LIST_MAX_CAPACITY
+
+// Mirror of scriptsGetMessageList bounds check.
+static int testScriptsGetMessageListBounds(int messageListId)
+{
+    if (messageListId == -1) {
+        return -1;
+    }
+
+    int messageListIndex = messageListId - 1;
+    if (messageListIndex < 0 || messageListIndex >= TEST_MSG_LIST_MAX_CAPACITY) {
+        return -1;
+    }
+
+    // In production: would access gScriptDialogMessageLists[messageListIndex]
+    return 0; // success
+}
+
+// ===========================================================================
+// N2-019: Execution order tests (scripts.cc:2832-2835)
+// ===========================================================================
+
+TEST_CASE("N2-019: sfall global scripts ALWAYS execute — sidListCapacity==0 (scripts.cc:2790-2794)")
+{
+    // Finding N2-019: OLD code skipped sfall globals when no regular scripts exist.
+    // NEW fork code: sfall_gl_scr_exec_map_update_scripts(proc) runs in all paths.
+    // RPU CONFIRMED: all 17 RPU global scripts use set_global_script_repeat/type,
+    // expected to execute on map update regardless of regular script count.
+    int log = testScriptsExecMapUpdateScripts(0, true);
+    // When sidListCapacity==0, only sfall globals execute.
+    CHECK((log & TEST_EXEC_ORDER_SFALL) != 0);        // sfall ran
+    CHECK((log & TEST_EXEC_ORDER_REGULAR) == 0);       // regular didn't (no scripts)
+}
+
+TEST_CASE("N2-019: sfall global scripts ALWAYS execute — malloc failure (scripts.cc:2797-2802)")
+{
+    // OLD code: on malloc failure, sfall globals were skipped (gap in hook execution).
+    // NEW fork: sfall globals execute even when sidList allocation fails.
+    int log = testScriptsExecMapUpdateScripts(10, false);
+    CHECK((log & TEST_EXEC_ORDER_SFALL) != 0);         // sfall ran despite OOM
+    CHECK((log & TEST_EXEC_ORDER_REGULAR) == 0);       // regular skipped (no memory)
+}
+
+TEST_CASE("N2-019: normal path — regular scripts FIRST, then sfall globals (scripts.cc:2824-2835)")
+{
+    // Finding N2-019: Fork reversed order — regular scripts BEFORE sfall globals.
+    // OLD code: sfall globals first, then regulars.
+    // This is the production guarantee: both execute, in this order.
+    int log = testScriptsExecMapUpdateScripts(5, true);
+    CHECK(log == (TEST_EXEC_ORDER_REGULAR | TEST_EXEC_ORDER_SFALL));
+    CHECK((log & TEST_EXEC_ORDER_REGULAR) != 0);       // regular ran
+    CHECK((log & TEST_EXEC_ORDER_SFALL) != 0);         // sfall ran after
+}
+
+TEST_CASE("N2-019: regression — OLD code would skip sfall globals on empty script list (scripts.cc:2790-2794)")
+{
+    // Regression: OLD code at scriptsExecMapUpdateScripts did NOT call
+    // sfall_gl_scr_exec_map_update_scripts during early returns. The fork
+    // added this call to ALL exit paths. Verify the mirror reflects this.
+    //
+    // Scenario: 0 regular scripts on map — OLD: globals skipped, NEW: globals run.
+    int log_zero = testScriptsExecMapUpdateScripts(0, true);
+    CHECK((log_zero & TEST_EXEC_ORDER_SFALL) != 0);    // FIX: globals run
+
+    // Scenario: OOM — OLD: globals skipped, NEW: globals run.
+    int log_oom = testScriptsExecMapUpdateScripts(10, false);
+    CHECK((log_oom & TEST_EXEC_ORDER_SFALL) != 0);     // FIX: globals run
+}
+
+// ===========================================================================
+// N2-020: File pre-check tests (scripts.cc:760-771)
+// ===========================================================================
+
+TEST_CASE("N2-020: file pre-check — missing file returns nullptr (scripts.cc:766-768)")
+{
+    // Finding N2-020 (CONFIRMED, MEDIUM): Fork adds fileOpen("rb") pre-check.
+    // If file doesn't exist, returns nullptr without longjmp corruption.
+    // Without this: programFatalError longjmp's to the CALLING program's context.
+    bool proceeds = testScriptsCreateProgramByNamePreCheck(false);
+    CHECK_FALSE(proceeds); // nullptr returned, no longjmp
+}
+
+TEST_CASE("N2-020: file pre-check — existing file proceeds to create program (scripts.cc:770-772)")
+{
+    // When file exists, the pre-check passes and the function proceeds to the
+    // real programCreateByPath call. The file was already closed by this point
+    // (fileClose called after the check).
+    bool proceeds = testScriptsCreateProgramByNamePreCheck(true);
+    CHECK(proceeds); // proceed to programCreateByPath
+}
+
+TEST_CASE("N2-020: regression — OLD code would longjmp on missing .int file (scripts.cc:760-768)")
+{
+    // Regression: OLD code called programCreateByPath directly without pre-check.
+    // programCreateByPath → programFatalError → longjmp to calling program's env.
+    // During lazy script load (scriptExecProc), this corrupts the caller's state.
+    //
+    // The fork's fix: check file existence BEFORE calling programCreateByPath.
+    // If file doesn't exist: clean nullptr return (no longjmp).
+    // If file exists: close test handle, proceed to real create.
+    //
+    // This test verifies the mirror that guards against the old behavior —
+    // returns nullptr cleanly vs. triggering the old fatal error.
+    CHECK_FALSE(testScriptsCreateProgramByNamePreCheck(false)); // clean exit
+    CHECK(testScriptsCreateProgramByNamePreCheck(true));        // proceed
+}
+
+// ===========================================================================
+// N2-021: sfallModsIniGetInt dead code documentation (scripts.cc:1612)
+// ===========================================================================
+
+TEST_CASE("N2-021: sfallModsIniGetInt — dead code survives init/exit lifecycle (scripts.cc:1586-1619)")
+{
+    // Finding N2-021 (CONFIRMED, MEDIUM): sfallModsIniGetInt has ZERO production
+    // callers. The infrastructure (init/exit/GetInt + gSfallModsIni Config +
+    // gSfallModsIniLoaded flag) is compiled, initialized, and freed, but no
+    // production code reads from it. The comment at scripts.cc:1583 states
+    // "RPU and ET Tu rely on this file being parsed" — but parsing into a
+    // never-read Config object provides zero value.
+    //
+    // Cross-file gap: scripts.h exports sfallModsIniGetInt but no consumer.
+    // This test verifies the function still works (it's callable and returns
+    // correct values) for when a future RPU/ETu consumer is added.
+
+    if (gTestSfallModsIniLoaded) testSfallModsIniExit();
+
+    // The dead-code lifecycle still works: init loads file, GetInt reads values.
+    CHECK(testSfallModsIniInit());
+
+    configSetInt(&gTestSfallModsIni, "DeadCode", "Value", 42);
+
+    int value = -1;
+    bool success = testSfallModsIniGetInt("DeadCode", "Value", &value, 0);
+    CHECK(success);
+    CHECK(value == 42);
+
+    // Cleanup still works (no leaked Config state)
+    testSfallModsIniExit();
+    CHECK_FALSE(gTestSfallModsIniLoaded);
+}
+
+// ===========================================================================
+// N2-022: scriptsGetMessageList bounds check tests (scripts.cc:2852-2854)
+// ===========================================================================
+
+TEST_CASE("N2-022: scriptsGetMessageList — messageListId=-1 returns -1 (scripts.cc:2847-2849)")
+{
+    // Production: explicit check for messageListId == -1 before computing index.
+    CHECK(testScriptsGetMessageListBounds(-1) == -1);
+}
+
+TEST_CASE("N2-022: scriptsGetMessageList — messageListId=0 returns -1 (scripts.cc:2851-2854)")
+{
+    // Finding N2-022 (CONFIRMED, MEDIUM): messageListId=0 gives index=-1.
+    // Without the fork guard: gScriptDialogMessageLists[-1] = OOB read.
+    // With the fork guard: messageListIndex < 0 → return -1.
+    CHECK(testScriptsGetMessageListBounds(0) == -1);
+}
+
+TEST_CASE("N2-022: scriptsGetMessageList — valid IDs in range (scripts.cc:2851-2854)")
+{
+    // Normal IDs pass the bounds check.
+    CHECK(testScriptsGetMessageListBounds(1) == 0);     // min valid
+    CHECK(testScriptsGetMessageListBounds(5000) == 0);  // mid range
+    CHECK(testScriptsGetMessageListBounds(10000) == 0); // max valid
+}
+
+TEST_CASE("N2-022: scriptsGetMessageList — messageListId > MAX_CAPACITY returns -1 (scripts.cc:2852-2854)")
+{
+    // IDs beyond SCRIPT_DIALOG_MESSAGE_LIST_MAX_CAPACITY (10000) are OOB.
+    // messageListIndex = 10001-1 = 10000 → >= MAX_CAPACITY → return -1
+    CHECK(testScriptsGetMessageListBounds(10001) == -1);
+    CHECK(testScriptsGetMessageListBounds(10002) == -1);
+    CHECK(testScriptsGetMessageListBounds(99999) == -1);
+}
+
+TEST_CASE("N2-022: regression — OLD code would OOB on messageListId=0 (scripts.cc:2852-2854)")
+{
+    // Regression: OLD code computed index = id-1 and directly indexed into
+    // gScriptDialogMessageLists without bounds checking. messageListId=0 gave
+    // index=-1, reading gScriptDialogMessageLists[-1] (undefined behavior).
+    //
+    // FIX: The fork's guard `if (messageListIndex < 0 || messageListIndex >= MAX_CAPACITY)`
+    // catches this case and returns -1 cleanly.
+    //
+    // This test verifies that messageListId=0 → index=-1 → caught by guard.
+    CHECK(testScriptsGetMessageListBounds(0) == -1);  // FIX: clean return
+    // Without guard: this would be UB reading gScriptDialogMessageLists[-1].
+}
+
+TEST_CASE("N2-022: scriptsGetMessageList — boundary IDs (scripts.cc:2851-2854)")
+{
+    // Verify the exact bounds: 1..10000 are valid, everything else is -1.
+    CHECK(testScriptsGetMessageListBounds(-1) == -1);   // explicit -1 sentinel
+    CHECK(testScriptsGetMessageListBounds(0) == -1);     // underflow: index=-1
+    CHECK(testScriptsGetMessageListBounds(1) == 0);      // lower bound: index=0 valid
+    CHECK(testScriptsGetMessageListBounds(10000) == 0);  // upper bound: index=9999 valid
+    CHECK(testScriptsGetMessageListBounds(10001) == -1); // overflow: index=10000
 }

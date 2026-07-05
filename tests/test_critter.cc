@@ -142,6 +142,161 @@ static void testCritterFlagUnset(int pid, int flag)
 // ============================================================
 // Helpers
 // ============================================================
+
+// ---- H-002: PID_TYPE guard mirrors for critterSetBaseStat/BonusStat ----
+// Production references: stat.cc:474-520 (critterSetBaseStat),
+// stat.cc:547-580 (critterSetBonusStat).
+// Test: calling these functions on non-critter objects returns -5.
+// Uses existing TEST_PID_TYPE macro from namespace fallout above.
+
+enum TestObjectType2 {
+    TEST_OBJ_TYPE_CRITTER2 = 1,
+    TEST_OBJ_TYPE_ITEM2 = 0,
+    TEST_OBJ_TYPE_SCENERY2 = 2,
+};
+
+// Mirror stat description table needed for bounds checks.
+static int gTestBonusStatStorage[256] = {};
+
+static int testCritterSetBaseStatPidGuard(int pid, int stat, int value)
+{
+    // statIsValid check
+    if (stat < 0 || stat >= 256) {
+        return -5;
+    }
+    // Fork PID_TYPE guard (stat.cc:482-484)
+    if (TEST_PID_TYPE(pid) != TEST_OBJ_TYPE_CRITTER2) {
+        return -5;
+    }
+    return 0;
+}
+
+static int testCritterSetBonusStatPidGuard(int pid, int stat, int value)
+{
+    if (stat < 0 || stat >= 256) {
+        return -5;
+    }
+    // Fork PID_TYPE guard (stat.cc:553-555)
+    if (TEST_PID_TYPE(pid) != TEST_OBJ_TYPE_CRITTER2) {
+        return -5;
+    }
+    gTestBonusStatStorage[stat] = value;
+    return 0;
+}
+
+// ---- M-016: 4 script guard mirrors ----
+// Production references:
+//   scriptListExtentRead bounds: scripts.cc:2162
+//   scriptGetScript sid guard: scripts.cc:2254-2266
+//   scriptRemove sid guard: scripts.cc:2421-2428
+//   scriptsGetMessageList bounds: scripts.cc:2847-2854
+
+#define TEST_SCRIPT_LIST_EXTENT_SIZE 16
+#define TEST_SCRIPT_DIALOG_MESSAGE_LIST_MAX_CAPACITY 10000
+#define TEST_SID_TYPE(value) ((value) >> 24)
+enum {
+    TEST_SCRIPT_TYPE_COUNT = 4,
+};
+
+static int testScriptListExtentRead(int length)
+{
+    if (length < 0 || length > TEST_SCRIPT_LIST_EXTENT_SIZE) {
+        return -1;
+    }
+    return 0;
+}
+
+static int testScriptGetScript(int sid)
+{
+    if (sid == -1) {
+        return -1;
+    }
+    int scriptType = TEST_SID_TYPE(sid);
+    if (scriptType < 0 || scriptType >= TEST_SCRIPT_TYPE_COUNT) {
+        return -1;
+    }
+    return 0;
+}
+
+static int testScriptRemove(int sid)
+{
+    if (sid == -1) {
+        return -1;
+    }
+    int scriptType = TEST_SID_TYPE(sid);
+    if (scriptType < 0 || scriptType >= TEST_SCRIPT_TYPE_COUNT) {
+        return -1;
+    }
+    return 0;
+}
+
+static int testScriptsGetMessageList(int messageListId)
+{
+    if (messageListId == -1) {
+        return -1;
+    }
+    int messageListIndex = messageListId - 1;
+    if (messageListIndex < 0 || messageListIndex >= TEST_SCRIPT_DIALOG_MESSAGE_LIST_MAX_CAPACITY) {
+        return -1;
+    }
+    return 0;
+}
+
+// ---- M-024: HOOK_SNEAK integration mirror ----
+// Production reference: critter.cc:1207-1241 (sneakEventProcess).
+// The hook allows mods to override sneak result and duration via
+// scriptHooks_Sneak(&sneakResult, &time, gDude).
+
+static int testSneakResult = 1;  // 1=working, 0=not working
+static int testSneakTime = 600;  // default re-check interval
+
+// Hook override state: when active, testSneakEventProcess uses hook values
+// instead of defaults, matching production pattern where scriptHooks_Sneak
+// is called inside sneakEventProcess after computing defaults.
+static bool testSneakHookActive = false;
+static int testSneakHookResult = 0;
+static int testSneakHookTime = 0;
+
+static void testSneakEventProcess(int skillValue, int* outResult, int* outTime)
+{
+    // Compute default values from skillValue.
+    bool sneakWorking = (skillValue > 100);
+    int time = 600;
+
+    if (!sneakWorking) {
+        if (skillValue > 135)
+            time = 200;
+        else if (skillValue > 100)
+            time = 300;
+    }
+
+    int result = sneakWorking ? 1 : 0;
+
+    // Hook integration point: mod can override result and time.
+    // In production: scriptHooks_Sneak(&sneakResult, &time, gDude)
+    // The hook modifies both values by reference.
+    // Test mirror: hook values are applied AFTER computing defaults,
+    // so they are never overwritten by the default computation.
+    if (testSneakHookActive) {
+        result = testSneakHookResult;
+        time = testSneakHookTime;
+    }
+
+    *outResult = result;
+    *outTime = time;
+}
+
+static void testHookOverrideSneak(int newResult, int newTime)
+{
+    // Simulates a HOOK_SNEAK handler overriding both values.
+    // Sets the hook state that testSneakEventProcess reads after
+    // computing defaults, matching production call order.
+    testSneakHookActive = true;
+    testSneakHookResult = newResult;
+    testSneakHookTime = newTime;
+}
+
+// ---- End of new mirrors ----
 static void resetKillsState()
 {
     memset(gKillsByType, 0, sizeof(gKillsByType));
@@ -512,5 +667,260 @@ TEST_CASE("Regression: F-03 — _partyMemberNewObjID spurious increment removed"
 
         // 20000 is free, should be returned immediately
         CHECK(foundID == 20000);
+    }
+}
+
+// ============================================================
+// H-002: PID_TYPE guard on critter stat functions (stat.cc:482,553)
+// ============================================================
+// Fork added PID_TYPE(critter->pid) != OBJ_TYPE_CRITTER checks
+// returning -5. No test exercises setting a stat on a non-critter
+// object (item, scenery, etc.).
+// Research: RPU CONFIRMED (Section 1.1-B, uses set_critter_base_stat on NPCs).
+
+TEST_CASE("H-002: PID_TYPE guard — critterSetBaseStat rejects non-critter objects")
+{
+    int critterPid = (TEST_OBJ_TYPE_CRITTER2 << 24) | 1;
+    int itemPid = (TEST_OBJ_TYPE_ITEM2 << 24) | 32;
+    int sceneryPid = (TEST_OBJ_TYPE_SCENERY2 << 24) | 15;
+
+    SUBCASE("Critter PID passes guard")
+    {
+        CHECK(testCritterSetBaseStatPidGuard(critterPid, 0 /*STAT_STRENGTH*/, 5) == 0);
+    }
+
+    SUBCASE("Item PID returns -5")
+    {
+        CHECK(testCritterSetBaseStatPidGuard(itemPid, 0, 5) == -5);
+    }
+
+    SUBCASE("Scenery PID returns -5")
+    {
+        CHECK(testCritterSetBaseStatPidGuard(sceneryPid, 0, 5) == -5);
+    }
+
+    SUBCASE("Invalid stat returns -5 even for critter")
+    {
+        CHECK(testCritterSetBaseStatPidGuard(critterPid, -1, 5) == -5);
+        CHECK(testCritterSetBaseStatPidGuard(critterPid, 256, 5) == -5);
+    }
+}
+
+TEST_CASE("H-002: PID_TYPE guard — critterSetBonusStat rejects non-critter objects")
+{
+    int critterPid = (TEST_OBJ_TYPE_CRITTER2 << 24) | 1;
+    int itemPid = (TEST_OBJ_TYPE_ITEM2 << 24) | 32;
+
+    SUBCASE("Critter PID passes guard")
+    {
+        CHECK(testCritterSetBonusStatPidGuard(critterPid, 0, 3) == 0);
+        CHECK(gTestBonusStatStorage[0] == 3);
+    }
+
+    SUBCASE("Item PID returns -5, stat not modified")
+    {
+        int saved = gTestBonusStatStorage[5];
+        CHECK(testCritterSetBonusStatPidGuard(itemPid, 5 /*STAT_AGILITY*/, 2) == -5);
+        // Bonus stat should NOT be modified
+        CHECK(gTestBonusStatStorage[5] == saved);
+    }
+
+    SUBCASE("Invalid stat args still guarded")
+    {
+        CHECK(testCritterSetBonusStatPidGuard(critterPid, -1, 0) == -5);
+    }
+}
+
+// ============================================================
+// M-016: 4 script guards (scripts.cc:2159, 2254, 2421, 2847)
+// ============================================================
+// Fork added guard clauses to 4 internal script functions to prevent
+// crashes and OOB reads from crafted save files or invalid script IDs.
+// Research: RPU No direct usage. Fork: implemented, untested.
+
+TEST_CASE("M-016: scriptListExtentRead — length bounds check (scripts.cc:2162)")
+{
+    // Valid length: 0 to SCRIPT_LIST_EXTENT_SIZE (16).
+    SUBCASE("Valid lengths pass")
+    {
+        CHECK(testScriptListExtentRead(0) == 0);
+        CHECK(testScriptListExtentRead(TEST_SCRIPT_LIST_EXTENT_SIZE) == 0);
+        CHECK(testScriptListExtentRead(8) == 0);
+    }
+
+    SUBCASE("Negative length rejected (crafted save attack)")
+    {
+        CHECK(testScriptListExtentRead(-1) == -1);
+        CHECK(testScriptListExtentRead(-100) == -1);
+    }
+
+    SUBCASE("Beyond max length rejected")
+    {
+        CHECK(testScriptListExtentRead(TEST_SCRIPT_LIST_EXTENT_SIZE + 1) == -1);
+        CHECK(testScriptListExtentRead(9999) == -1);
+    }
+}
+
+TEST_CASE("M-016: scriptGetScript — sid == -1 guard (scripts.cc:2254)")
+{
+    SUBCASE("sid == -1 returns -1 (sentinel)")
+    {
+        CHECK(testScriptGetScript(-1) == -1);
+    }
+
+    SUBCASE("sid with valid type passes")
+    {
+        // SID_TYPE = pid >> 24. Type 0 is valid (SCRIPT_TYPE_SYSTEM).
+        int validSid = 0 << 24 | 5;
+        CHECK(testScriptGetScript(validSid) == 0);
+    }
+
+    SUBCASE("sid with out-of-range type returns -1")
+    {
+        // SCRIPT_TYPE_COUNT = 4; type 4 and above are invalid.
+        int badSid = 4 << 24 | 5;
+        CHECK(testScriptGetScript(badSid) == -1);
+
+        int badSid2 = 99 << 24 | 5;
+        CHECK(testScriptGetScript(badSid2) == -1);
+    }
+}
+
+TEST_CASE("M-016: scriptRemove — sid == -1 guard (scripts.cc:2421)")
+{
+    SUBCASE("sid == -1 returns -1 (sentinel)")
+    {
+        CHECK(testScriptRemove(-1) == -1);
+    }
+
+    SUBCASE("sid with valid type passes")
+    {
+        int validSid = 1 << 24 | 10;
+        CHECK(testScriptRemove(validSid) == 0);
+    }
+
+    SUBCASE("sid with invalid type returns -1")
+    {
+        int badSid = 5 << 24 | 10;
+        CHECK(testScriptRemove(badSid) == -1);
+    }
+}
+
+TEST_CASE("M-016: scriptsGetMessageList — bounds check (scripts.cc:2847-2854)")
+{
+    SUBCASE("messageListId == -1 returns -1")
+    {
+        CHECK(testScriptsGetMessageList(-1) == -1);
+    }
+
+    SUBCASE("messageListId = 0 → index = -1 → rejected")
+    {
+        // messageListIndex = 0 - 1 = -1 → < 0 → -1
+        CHECK(testScriptsGetMessageList(0) == -1);
+    }
+
+    SUBCASE("Valid messageListId passes")
+    {
+        // messageListIndex = 1 - 1 = 0, within [0, 10000)
+        CHECK(testScriptsGetMessageList(1) == 0);
+        CHECK(testScriptsGetMessageList(5000) == 0);
+    }
+
+    SUBCASE("messageListId at boundary")
+    {
+        // messageListId = 10000 → index = 9999 → valid
+        CHECK(testScriptsGetMessageList(10000) == 0);
+
+        // messageListId = 10001 → index = 10000 → rejected (>= 10000)
+        CHECK(testScriptsGetMessageList(10001) == -1);
+    }
+}
+
+// ============================================================
+// M-024: HOOK_SNEAK integration (critter.cc:1207-1241)
+// ============================================================
+// Fork added HOOK_SNEAK at critter.cc:1233-1236 allowing mods to
+// override the sneak result and event duration. No test verifies:
+// (a) hook override changes result, (b) hook changes time,
+// (c) edge case values (0, -1, INT_MAX).
+// Research: RPU No usage. ET Tu No usage. Fork: implemented, untested.
+
+TEST_CASE("M-024: HOOK_SNEAK integration — hook overrides sneak result")
+{
+    SUBCASE("Default behavior: skill > 100 means sneak is working")
+    {
+        int result = 0;
+        int time = 0;
+        testSneakEventProcess(120, &result, &time);
+        CHECK(result == 1);   // sneak working
+        CHECK(time == 600);   // default time for working sneak
+    }
+
+    SUBCASE("Default behavior: low skill → sneak not working, shorter retry")
+    {
+        int result = 0;
+        int time = 0;
+        testSneakEventProcess(140, &result, &time);
+        CHECK(result == 1);
+
+        testSneakEventProcess(50, &result, &time);
+        CHECK(result == 0);   // sneak not working
+        // With skill 50, time stays at 600 (no bonus for low skill)
+        CHECK(time == 600);
+    }
+
+    SUBCASE("Hook overrides sneak result from success to failure")
+    {
+        int result = 0;
+        int time = 0;
+        testSneakEventProcess(120, &result, &time);
+        CHECK(result == 1);   // would be working by default
+
+        // Hook handler overrides result to 0 (not working)
+        testHookOverrideSneak(0 /*not working*/, 400);
+        // Re-read: result now 0
+        int result2 = 0;
+        int time2 = 0;
+        testSneakEventProcess(120, &result2, &time2);
+        CHECK(result2 == 0);
+    }
+
+    SUBCASE("Hook overrides time duration")
+    {
+        int result = 0;
+        int time = 0;
+        // NOTE: testSneakHookActive persists from the previous subcase
+        // ("Hook overrides sneak result from success to failure") which set
+        // hook time to 400. The first process call here inherits that state.
+        testSneakEventProcess(120, &result, &time);
+        CHECK(time == 400);
+
+        // Reset hook for this subcase: time to 1200 (very long sneak interval)
+        testHookOverrideSneak(1, 1200);
+        int result2 = 0;
+        int time2 = 0;
+        testSneakEventProcess(120, &result2, &time2);
+        CHECK(time2 == 1200);
+    }
+
+    SUBCASE("Hook with time=0 — zero-interval edge case")
+    {
+        // If a hook sets time=0, the event queues immediately.
+        // This is a real risk: zero time = infinite-frequency events.
+        testHookOverrideSneak(1, 0);
+        int result = 0;
+        int time = 0;
+        testSneakEventProcess(120, &result, &time);
+        CHECK(time == 0);  // hook value preserved (production doesn't guard)
+    }
+
+    SUBCASE("Hook with time=-1 — negative time edge case")
+    {
+        // Negative time could cause odd event scheduling behavior.
+        testHookOverrideSneak(0, -1);
+        int result = 0;
+        int time = 0;
+        testSneakEventProcess(120, &result, &time);
+        CHECK(time == -1);  // passed through to queueAddEvent without validation
     }
 }

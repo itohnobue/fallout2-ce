@@ -242,39 +242,85 @@ namespace fallout {
 namespace fallout {
 
     ProgramValue::ProgramValue()
-        : opcode(0), integerValue(0) {}
+        : opcode(VALUE_TYPE_INT), integerValue(0) {}
 
     ProgramValue::ProgramValue(int value)
-        : opcode(0), integerValue(value) {}
+        : opcode(VALUE_TYPE_INT), integerValue(value) {}
 
     ProgramValue::ProgramValue(unsigned int value)
-        : opcode(0), integerValue(static_cast<int>(value)) {}
+        : opcode(VALUE_TYPE_INT), integerValue(static_cast<int>(value)) {}
 
     ProgramValue::ProgramValue(bool value)
-        : opcode(0), integerValue(value ? 1 : 0) {}
+        : opcode(VALUE_TYPE_INT), integerValue(value ? 1 : 0) {}
 
     ProgramValue::ProgramValue(float value)
-        : opcode(0), floatValue(value) {}
+        : opcode(VALUE_TYPE_FLOAT), floatValue(value) {}
 
-    ProgramValue::ProgramValue(Object* /*value*/)
-        : opcode(0), pointerValue(nullptr) {}
+    ProgramValue::ProgramValue(Object* value)
+        : opcode(VALUE_TYPE_PTR), pointerValue(value) {}
 
-    ProgramValue::ProgramValue(Attack* /*value*/)
-        : opcode(0), pointerValue(nullptr) {}
+    ProgramValue::ProgramValue(Attack* value)
+        : opcode(VALUE_TYPE_PTR), pointerValue(value) {}
 
-    ProgramValue::ProgramValue(const char* /*value*/)
-        : opcode(0), pointerValue(nullptr) {}
+    ProgramValue::ProgramValue(const char* value)
+        : opcode(VALUE_TYPE_STRING), pointerValue(const_cast<char*>(value))
+    {
+        integerValue = -1; // sentinel
+    }
 
-    bool ProgramValue::isEmpty() const { return opcode == 0; }
-    bool ProgramValue::isInt() const { return false; }
-    bool ProgramValue::isFloat() const { return false; }
-    bool ProgramValue::isString() const { return false; }
-    float ProgramValue::asFloat() const { return 0.0f; }
-    bool ProgramValue::isPointer() const { return false; }
+    bool ProgramValue::isEmpty() const {
+        switch (opcode) {
+        case VALUE_TYPE_INT:
+            return integerValue == 0;
+        case VALUE_TYPE_FLOAT:
+            return floatValue == 0.0f;
+        case VALUE_TYPE_STRING:
+        case VALUE_TYPE_DYNAMIC_STRING:
+            return integerValue == 0;
+        default:
+            return integerValue == 0;
+        }
+    }
+    bool ProgramValue::isInt() const { return opcode == VALUE_TYPE_INT; }
+    bool ProgramValue::isFloat() const { return opcode == VALUE_TYPE_FLOAT; }
+    bool ProgramValue::isString() const { return opcode == VALUE_TYPE_STRING || opcode == VALUE_TYPE_DYNAMIC_STRING; }
+    float ProgramValue::asFloat() const {
+        switch (opcode) {
+        case VALUE_TYPE_INT:
+            return static_cast<float>(integerValue);
+        case VALUE_TYPE_FLOAT:
+            return floatValue;
+        default:
+            return 0.0f;
+        }
+    }
+    bool ProgramValue::isPointer() const { return opcode == VALUE_TYPE_PTR; }
     int ProgramValue::asInt() const { return integerValue; }
-    Object* ProgramValue::asObject() const { return nullptr; }
+    Object* ProgramValue::asObject() const {
+        if (opcode == VALUE_TYPE_PTR) return static_cast<Object*>(pointerValue);
+        return nullptr;
+    }
     const char* ProgramValue::asString(Program*) const { return nullptr; }
     const char* ProgramValue::typeDebugString() const { return "UNKNOWN"; }
+
+} // namespace fallout
+
+// =============================================================
+// stat.h stubs
+// =============================================================
+namespace fallout {
+
+    void statSetMaxValue(int /*stat*/, int /*value*/)
+    {
+        // No-op: gStatDescriptions[] is a file-scope static in stat.cc,
+        // not accessible from test context. The stub allows tests to
+        // verify that the function is callable without crashing.
+    }
+
+    int perkGetMaxRank(int /*perk*/)
+    {
+        return -1;  // conservative: "perk has no ranks" in pre-init state
+    }
 
 } // namespace fallout
 

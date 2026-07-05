@@ -121,6 +121,113 @@ static std::vector<TestObject*> testGetAllPartyMembersObjects(bool include_hidde
     return value;
 }
 
+// ---- M-022: _partyMemberIncLevels mirror (party_member.cc:1464-1570) ----
+// The party member level-up engine selects NPCs from gPartyMembers,
+// checks PartyMemberDescription for level_up_every/level_minimum/level_pids_num,
+// performs probabilistic level-up via randomBetween, and swaps proto data.
+
+// PartyMemberDescription mirror (party_member.cc:56-59).
+typedef struct TestPartyMemberDescription {
+    int level_pids[10];
+    int level_up_every;
+    int level_minimum;
+    int level_pids_num;
+    // AI fields not needed for level-up tests
+    int _pad[8];
+} TestPartyMemberDescription;
+
+static TestPartyMemberDescription gTestPartyMemberDescription;
+
+// Mock randomBetween: returns a controllable value for deterministic testing.
+static int gTestRandomOverride = -1;  // -1 = use real formula, else return this
+static int testRandomBetween(int minVal, int maxVal)
+{
+    if (gTestRandomOverride >= 0) {
+        return gTestRandomOverride;
+    }
+    // Default: 50 (mid-range, ~50% probability for 0-100 rolls)
+    return 50;
+}
+
+// Mock pcGetStat for checking PC level against level_minimum.
+static int gTestPcLevel = 1;
+
+// Mirror of _partyMemberIncLevels (party_member.cc:1464-1570).
+// Simplified for testing the level-up logic without the proto-copy
+// and message-display production dependencies.
+static int testPartyMemberIncLevels()
+{
+    int memberIndex;
+    for (int i = 1; i < gPartyMembersLength; i++) {
+        TestPartyMemberListItem* listItem = &gPartyMembers[i];
+        TestObject* obj = listItem->object;
+        if (obj == nullptr) {
+            continue;
+        }
+
+        if (TEST_PID_TYPE(obj->pid) != TEST_OBJ_TYPE_CRITTER) {
+            continue;
+        }
+
+        // partyMemberGetDescription: stub — use test description
+        if (gTestPartyMemberDescription.level_up_every == 0) {
+            continue;
+        }
+
+        // Find memberIndex
+        memberIndex = -1;
+        for (int j = 1; j < gPartyMemberDescriptionsLength; j++) {
+            if (gPartyMemberPids[j] == obj->pid) {
+                memberIndex = j;
+            }
+        }
+        if (memberIndex == -1) {
+            continue;
+        }
+
+        // Check PC level meets minimum
+        if (gTestPcLevel < gTestPartyMemberDescription.level_minimum) {
+            continue;
+        }
+
+        TestPartyMemberLevelUpInfo* levelUpInfo = &(partyMemberLevelUpInfoList[memberIndex]);
+
+        // Check NPC hasn't hit max level
+        if (levelUpInfo->level >= gTestPartyMemberDescription.level_pids_num) {
+            continue;
+        }
+
+        levelUpInfo->numLevelUps++;
+
+        int levelMod = levelUpInfo->numLevelUps % gTestPartyMemberDescription.level_up_every;
+
+        // isEarly skip logic
+        if (levelUpInfo->isEarly != 0) {
+            if (levelMod == 0) {
+                levelUpInfo->isEarly = 0;
+            }
+            continue;
+        }
+
+        // Probabilistic level-up
+        if (levelMod != 0 && testRandomBetween(0, 100) > 100 * levelMod / gTestPartyMemberDescription.level_up_every) {
+            continue;
+        }
+
+        levelUpInfo->level++;
+        if (levelMod != 0) {
+            levelUpInfo->isEarly = 1;
+        }
+
+        // In production: _partyMemberCopyLevelInfo would be called here.
+        // We skip proto data copying for the mirror test.
+    }
+
+    return 0;
+}
+
+// ---- End of new mirrors ----
+
 // ============================================================
 // Helper: reset global state to clean test conditions
 // ============================================================
@@ -492,4 +599,269 @@ TEST_CASE("Regression: F-02 — _isPotentialPartyMember correct iteration bound"
     CHECK(testIsPotentialPartyMember(&cassidy));
     CHECK(testIsPotentialPartyMember(&myron));
     CHECK(testIsPotentialPartyMember(&goris));
+}
+
+// ============================================================
+// M-022: _partyMemberIncLevels (party_member.cc:1464-1570)
+// ============================================================
+// The 106-line party member level-up engine is completely untested.
+// This function (a) selects party members from gPartyMembers,
+// (b) checks PartyMemberDescription for level_up_every / level_minimum,
+// (c) performs probabilistic level-up via randomBetween,
+// (d) tracks isEarly flag for level-up cadence control,
+// (e) caps at level_pids_num (max 6 levels).
+// Research: ET Tu CONFIRMED usage of npc_engine_level_up (Section 4.4).
+// RPU: No usage.
+
+// Helper: set up a party member with all required state for level-up test.
+static void setupPartyMemberForLevelUp(int memberIndex, TestObject* obj, int level, int numLevelUps, int isEarly)
+{
+    if (memberIndex >= 32) return;
+    gPartyMembers[memberIndex].object = obj;
+    // Also register in PID lookup
+    if (memberIndex < gPartyMemberDescriptionsLength) {
+        gPartyMemberPids[memberIndex] = obj->pid;
+    }
+    partyMemberLevelUpInfoList[memberIndex].level = level;
+    partyMemberLevelUpInfoList[memberIndex].numLevelUps = numLevelUps;
+    partyMemberLevelUpInfoList[memberIndex].isEarly = isEarly;
+}
+
+TEST_CASE("M-022: _partyMemberIncLevels — NPC with level_up_every=0 is skipped")
+{
+    TestObject sulik = {};
+    sulik.pid = 0x01000002;
+    sulik.flags = 0;
+
+    SUBCASE("level_up_every=0 → NPC never levels up")
+    {
+        resetPartyState();
+        gPartyMembersLength = 2;  // index 0 (dude) + index 1 (Sulik)
+        gPartyMemberDescriptionsLength = 2;
+        setupPartyMemberForLevelUp(1, &sulik, 0, 0, 0);
+
+        gTestPcLevel = 10;
+        gTestPartyMemberDescription.level_up_every = 0;
+        gTestPartyMemberDescription.level_minimum = 1;
+        gTestPartyMemberDescription.level_pids_num = 6;
+
+        testPartyMemberIncLevels();
+
+        // Level should remain unchanged
+        CHECK(partyMemberLevelUpInfoList[1].level == 0);
+    }
+}
+
+TEST_CASE("M-022: _partyMemberIncLevels — level_minimum guard")
+{
+    TestObject sulik = {};
+    sulik.pid = 0x01000002;
+
+    SUBCASE("PC below level_minimum → NPC does not level up")
+    {
+        resetPartyState();
+        gPartyMembersLength = 2;
+        gPartyMemberDescriptionsLength = 2;
+        setupPartyMemberForLevelUp(1, &sulik, 0, 0, 0);
+
+        gTestPcLevel = 3;
+        gTestRandomOverride = 0;  // force random to favor level-up
+        gTestPartyMemberDescription.level_up_every = 2;
+        gTestPartyMemberDescription.level_minimum = 5;  // PC must be level 5+
+        gTestPartyMemberDescription.level_pids_num = 6;
+
+        testPartyMemberIncLevels();
+
+        // Sulik should NOT level up — PC level 3 < minimum 5
+        CHECK(partyMemberLevelUpInfoList[1].level == 0);
+    }
+
+    SUBCASE("PC at level_minimum → NPC eligible for level-up")
+    {
+        resetPartyState();
+        gPartyMembersLength = 2;
+        gPartyMemberDescriptionsLength = 2;
+        setupPartyMemberForLevelUp(1, &sulik, 0, 0, 0);
+
+        gTestPcLevel = 5;
+        gTestRandomOverride = 0;  // force random to always pass
+        gTestPartyMemberDescription.level_up_every = 1;  // every level
+        gTestPartyMemberDescription.level_minimum = 5;
+        gTestPartyMemberDescription.level_pids_num = 6;
+
+        testPartyMemberIncLevels();
+
+        // With level_up_every=1, numLevelUps becomes 1, levelMod = 1%1 = 0
+        // → level-up triggers regardless of random
+        CHECK(partyMemberLevelUpInfoList[1].level == 1);
+    }
+}
+
+TEST_CASE("M-022: _partyMemberIncLevels — level_pids_num cap")
+{
+    TestObject sulik = {};
+    sulik.pid = 0x01000002;
+
+    SUBCASE("NPC already at max level → no further level-ups")
+    {
+        resetPartyState();
+        gPartyMembersLength = 2;
+        gPartyMemberDescriptionsLength = 2;
+        // Sulik at level 6, already at max
+        setupPartyMemberForLevelUp(1, &sulik, 6, 10, 0);
+
+        gTestPcLevel = 20;
+        gTestRandomOverride = 0;
+        gTestPartyMemberDescription.level_up_every = 1;
+        gTestPartyMemberDescription.level_minimum = 1;
+        gTestPartyMemberDescription.level_pids_num = 6;  // max 6 levels
+
+        testPartyMemberIncLevels();
+
+        // Should still be at level 6
+        CHECK(partyMemberLevelUpInfoList[1].level == 6);
+    }
+
+    SUBCASE("NPC at level 5 with cap of 6 → one more level-up allowed")
+    {
+        resetPartyState();
+        gPartyMembersLength = 2;
+        gPartyMemberDescriptionsLength = 2;
+        setupPartyMemberForLevelUp(1, &sulik, 5, 10, 0);
+
+        gTestPcLevel = 20;
+        gTestRandomOverride = 0;
+        gTestPartyMemberDescription.level_up_every = 1;
+        gTestPartyMemberDescription.level_minimum = 1;
+        gTestPartyMemberDescription.level_pids_num = 6;
+
+        testPartyMemberIncLevels();
+
+        CHECK(partyMemberLevelUpInfoList[1].level == 6);
+    }
+}
+
+TEST_CASE("M-022: _partyMemberIncLevels — probabilistic level-up with level_up_every")
+{
+    TestObject sulik = {};
+    sulik.pid = 0x01000002;
+
+    SUBCASE("levelMod=0 always triggers level-up regardless of random roll")
+    {
+        // When levelMod == 0 (even multiple of level_up_every), the
+        // production code skips the random roll entirely.
+        resetPartyState();
+        gPartyMembersLength = 2;
+        gPartyMemberDescriptionsLength = 2;
+        // 3 level-ups start, after ++ gives 4, level_up_every=2 → levelMod = 4%2 = 0
+        setupPartyMemberForLevelUp(1, &sulik, 0, 3, 0);
+
+        gTestPcLevel = 10;
+        gTestRandomOverride = 99;  // high random — would fail probability check
+        gTestPartyMemberDescription.level_up_every = 2;
+        gTestPartyMemberDescription.level_minimum = 1;
+        gTestPartyMemberDescription.level_pids_num = 6;
+
+        testPartyMemberIncLevels();
+
+        // levelMod=0 → always levels up (no random check)
+        CHECK(partyMemberLevelUpInfoList[1].level == 1);
+    }
+
+    SUBCASE("levelMod != 0 AND random too high → level-up fails")
+    {
+        resetPartyState();
+        gPartyMembersLength = 2;
+        gPartyMemberDescriptionsLength = 2;
+        // 2 level-ups start, after ++ gives 3, level_up_every=5 → levelMod = 3%5 = 3
+        // probability = 100*3/5 = 60%
+        setupPartyMemberForLevelUp(1, &sulik, 0, 2, 0);
+
+        gTestPcLevel = 10;
+        gTestRandomOverride = 70;  // 70 > 60 → fail
+        gTestPartyMemberDescription.level_up_every = 5;
+        gTestPartyMemberDescription.level_minimum = 1;
+        gTestPartyMemberDescription.level_pids_num = 6;
+
+        testPartyMemberIncLevels();
+
+        // Should NOT level up
+        CHECK(partyMemberLevelUpInfoList[1].level == 0);
+    }
+
+    SUBCASE("levelMod != 0 AND random low enough → level-up succeeds, isEarly set")
+    {
+        resetPartyState();
+        gPartyMembersLength = 2;
+        gPartyMemberDescriptionsLength = 2;
+        setupPartyMemberForLevelUp(1, &sulik, 0, 3, 0);
+
+        gTestPcLevel = 10;
+        gTestRandomOverride = 50;  // 50 <= 60 → success
+        gTestPartyMemberDescription.level_up_every = 5;
+        gTestPartyMemberDescription.level_minimum = 1;
+        gTestPartyMemberDescription.level_pids_num = 6;
+
+        testPartyMemberIncLevels();
+
+        CHECK(partyMemberLevelUpInfoList[1].level == 1);
+        CHECK(partyMemberLevelUpInfoList[1].isEarly == 1);  // early flag set
+    }
+}
+
+TEST_CASE("M-022: _partyMemberIncLevels — isEarly skip logic")
+{
+    TestObject sulik = {};
+    sulik.pid = 0x01000002;
+
+    SUBCASE("isEarly=1 → level-ups skipped until next levelMod=0 cycle")
+    {
+        resetPartyState();
+        gPartyMembersLength = 2;
+        gPartyMemberDescriptionsLength = 2;
+        // Sulik got an early level-up last time. isEarly=1.
+        // numLevelUps=4 → after ++: 5, levelMod=5%5=0 → isEarly resets
+        setupPartyMemberForLevelUp(1, &sulik, 0, 4, 1 /*isEarly*/);
+
+        gTestPcLevel = 10;
+        gTestRandomOverride = 0;
+        gTestPartyMemberDescription.level_up_every = 5;
+        gTestPartyMemberDescription.level_minimum = 1;
+        gTestPartyMemberDescription.level_pids_num = 6;
+
+        testPartyMemberIncLevels();
+
+        // First call: levelMod=0 → isEarly resets to 0, level-up skipped
+        CHECK(partyMemberLevelUpInfoList[1].isEarly == 0);
+
+        // Second call: numLevelUps=6, levelMod=1, prob=20, random=0 ≤ 20 → levels up
+        testPartyMemberIncLevels();
+        CHECK(partyMemberLevelUpInfoList[1].level == 1);
+    }
+}
+
+TEST_CASE("M-022: _partyMemberIncLevels — non-critter PID is skipped")
+{
+    TestObject item = {};
+    item.pid = 0x00000030;  // OBJ_TYPE_ITEM
+    item.flags = 0;
+
+    SUBCASE("Item PID in party member slot is ignored")
+    {
+        resetPartyState();
+        gPartyMembersLength = 2;
+        gPartyMemberDescriptionsLength = 2;
+        setupPartyMemberForLevelUp(1, &item, 0, 0, 0);
+
+        gTestPcLevel = 20;
+        gTestRandomOverride = 0;
+        gTestPartyMemberDescription.level_up_every = 1;
+        gTestPartyMemberDescription.level_minimum = 1;
+        gTestPartyMemberDescription.level_pids_num = 6;
+
+        testPartyMemberIncLevels();
+
+        // Item should not level up — PID type check skips it
+        CHECK(partyMemberLevelUpInfoList[1].level == 0);
+    }
 }

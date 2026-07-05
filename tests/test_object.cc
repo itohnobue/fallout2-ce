@@ -91,6 +91,9 @@ static void scriptHooks_SetLighting(Object* obj, int* intensityPtr, int* distanc
 // Helper functions
 // ============================================================
 
+static int test_turnOffLightCalled = 0;
+static int test_turnOnLightCalled = 0;
+
 static void resetTestState()
 {
     s_objectDestroyCallCount = 0;
@@ -98,6 +101,9 @@ static void resetTestState()
     s_lastSetLightingObj = nullptr;
     s_lastSetLightingIntensityPtr = nullptr;
     s_lastSetLightingDistancePtr = nullptr;
+
+    test_turnOffLightCalled = 0;
+    test_turnOnLightCalled = 0;
 
     for (int i = 0; i < HEX_GRID_SIZE; i++) {
         s_gObjectListHeadByTile[i] = nullptr;
@@ -239,8 +245,6 @@ static bool test_isExitGridAt(int tile, int elevation,
 // ============================================================
 
 // Stubbed _obj_turn_off_light / _obj_turn_on_light.
-static int test_turnOffLightCalled = 0;
-static int test_turnOnLightCalled = 0;
 
 static int _obj_turn_off_light(Object* /*obj*/, Rect* /*rect*/)
 {
@@ -934,10 +938,10 @@ TEST_CASE("objectGetDistanceBetween — multihex adjustment")
 
     CHECK(test_objectGetDistanceBetween(a, b) == 0);
 
-    // Multihex critter 3 tiles away: 3 - 1 = 2
+    // Multihex critter 3 tiles away: both have OBJECT_MULTIHEX → 3 - 1 - 1 = 1
     a->tile = 200;
     b->tile = 203;
-    CHECK(test_objectGetDistanceBetween(a, b) == 2);
+    CHECK(test_objectGetDistanceBetween(a, b) == 1);
 
     freeTestObject(a);
     freeTestObject(b);

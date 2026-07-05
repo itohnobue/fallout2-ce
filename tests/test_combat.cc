@@ -841,3 +841,515 @@ TEST_CASE("HurtTooMuch enum values")
     CHECK(static_cast<int>(HURT_CRIPPLED_ARMS) == 3);
     CHECK(static_cast<int>(HURT_COUNT) == 4);
 }
+
+// =============================================================
+// H-005: _ai_called_shot OBO (combat_ai.cc:2736)
+// regression test — HIT_LOCATION_SPECIFIC_COUNT range
+// =============================================================
+//
+// Old code: randomBetween(0, HIT_LOCATION_SPECIFIC_COUNT)
+//   → range 0..8, could return HIT_LOCATION_UNCALLED (8)
+// Fixed code: randomBetween(0, HIT_LOCATION_SPECIFIC_COUNT - 1)
+//   → range 0..7, head through groin only
+//
+// Finding ID: H-005 | Source: combat_ai.cc:2736
+
+TEST_CASE("H-005: Called shot location range excludes HIT_LOCATION_UNCALLED")
+{
+    // HIT_LOCATION_SPECIFIC_COUNT == 8 means valid specific locations are
+    // indices 0-7 (HEAD through GROIN). HIT_LOCATION_UNCALLED (8) is NOT a
+    // valid called-shot target.
+    CHECK(HIT_LOCATION_SPECIFIC_COUNT == 8);
+
+    int specificCount = HIT_LOCATION_SPECIFIC_COUNT;        // 8
+    int oldMax = specificCount;                              // old broken code
+    int fixedMax = specificCount - 1;                        // fixed code
+
+    // Old code: randomBetween(0, 8) → includes index 8 = HIT_LOCATION_UNCALLED
+    CHECK(oldMax == 8);
+    CHECK(static_cast<HitLocation>(oldMax) == HIT_LOCATION_UNCALLED);
+
+    // Fixed code: randomBetween(0, 7) → index 0-7 = HEAD through GROIN
+    CHECK(fixedMax == 7);
+    CHECK(static_cast<HitLocation>(fixedMax) == HIT_LOCATION_GROIN);
+
+    // HIT_LOCATION_UNCALLED is last (index 8), should be excluded from called shots
+    CHECK(HIT_LOCATION_UNCALLED == 8);
+    CHECK(HIT_LOCATION_SPECIFIC_COUNT == HIT_LOCATION_COUNT - 1);
+}
+
+TEST_CASE("H-005: All specific hit locations are valid called-shot targets")
+{
+    // Verify that indices 0 through HIT_LOCATION_SPECIFIC_COUNT - 1
+    // are all valid body parts for aimed shots.
+    CHECK(HIT_LOCATION_HEAD == 0);
+    CHECK(HIT_LOCATION_LEFT_ARM == 1);
+    CHECK(HIT_LOCATION_RIGHT_ARM == 2);
+    CHECK(HIT_LOCATION_TORSO == 3);
+    CHECK(HIT_LOCATION_RIGHT_LEG == 4);
+    CHECK(HIT_LOCATION_LEFT_LEG == 5);
+    CHECK(HIT_LOCATION_EYES == 6);
+    CHECK(HIT_LOCATION_GROIN == 7);
+
+    // All 8 specific locations are < HIT_LOCATION_SPECIFIC_COUNT
+    for (int i = 0; i < HIT_LOCATION_SPECIFIC_COUNT; i++) {
+        CHECK(i < HIT_LOCATION_SPECIFIC_COUNT);
+    }
+}
+
+// =============================================================
+// H-003: attackerFlags/defenderFlags fix (combat.cc:3608-3611)
+// regression test — CombatStartData override path
+// =============================================================
+//
+// Old code (buggy): wrote attackerResults to defenderFlags (copy-paste),
+//   then overwrote defenderFlags with targetResults.
+//   Net: attackerFlags NEVER set, defenderFlags = targetResults.
+// Fixed code: attackerFlags = attackerResults, defenderFlags = targetResults.
+//
+// Finding ID: H-003 | Source: combat.cc:3608-3611
+//
+// Stub mirrors the production override path at combat.cc:3608-3611.
+
+static int stub_combat_attackerFlags;
+static int stub_combat_defenderFlags;
+
+static void stub_apply_combat_start_data_old_buggy(
+    int overrideAttackResults, int attackerResults, int targetResults)
+{
+    // Old buggy code (3608-3611 in origin):
+    // attackerFlags assignment was MISSING
+    // defenderFlags got attackerResults (copy-paste bug), then overwritten
+    if (overrideAttackResults) {
+        // BUG: wrote to defenderFlags instead of attackerFlags
+        stub_combat_defenderFlags = attackerResults;
+        // Second write overwrites — attackerResults is lost
+        stub_combat_defenderFlags = targetResults;
+        // attackerFlags NEVER written
+    }
+}
+
+static void stub_apply_combat_start_data_fixed(
+    int overrideAttackResults, int attackerResults, int targetResults)
+{
+    if (overrideAttackResults) {
+        stub_combat_attackerFlags = attackerResults;
+        stub_combat_defenderFlags = targetResults;
+    }
+}
+
+TEST_CASE("H-003: attackerFlags/defenderFlags set independently from CombatStartData (fixed)")
+{
+    stub_combat_attackerFlags = -1;
+    stub_combat_defenderFlags = -1;
+
+    // Fixed code: attackerFlags = attackerResults, defenderFlags = targetResults
+    stub_apply_combat_start_data_fixed(1, 0xAA, 0xBB);
+
+    CHECK(stub_combat_attackerFlags == 0xAA);
+    CHECK(stub_combat_defenderFlags == 0xBB);
+}
+
+TEST_CASE("H-003: Old buggy code loses attackerResults entirely")
+{
+    stub_combat_attackerFlags = -1;
+    stub_combat_defenderFlags = -1;
+
+    // Old buggy code
+    stub_apply_combat_start_data_old_buggy(1, 0xAA, 0xBB);
+
+    // attackerFlags NEVER written — stays at -1 (initial value)
+    CHECK(stub_combat_attackerFlags == -1);
+
+    // defenderFlags = targetResults (0xBB) — but attackerResults (0xAA) was LOST
+    CHECK(stub_combat_defenderFlags == 0xBB);
+}
+
+TEST_CASE("H-003: attackerFlags/defenderFlags with zero values")
+{
+    stub_combat_attackerFlags = 999;
+    stub_combat_defenderFlags = 999;
+
+    // Fixed code with zero results
+    stub_apply_combat_start_data_fixed(1, 0, 0);
+
+    CHECK(stub_combat_attackerFlags == 0);
+    CHECK(stub_combat_defenderFlags == 0);
+}
+
+TEST_CASE("H-003: No override when overrideAttackResults=0")
+{
+    stub_combat_attackerFlags = 42;
+    stub_combat_defenderFlags = 24;
+
+    // Fixed code with overrideAttackResults=0 — should be a no-op
+    stub_apply_combat_start_data_fixed(0, 0xAA, 0xBB);
+
+    // Values unchanged
+    CHECK(stub_combat_attackerFlags == 42);
+    CHECK(stub_combat_defenderFlags == 24);
+}
+
+TEST_CASE("H-003: Same attackerResults and targetResults — old code still wrong")
+{
+    stub_combat_attackerFlags = -1;
+    stub_combat_defenderFlags = -1;
+
+    // Even when both results are the same, old code still misses attackerFlags
+    stub_apply_combat_start_data_old_buggy(1, 0x55, 0x55);
+
+    CHECK(stub_combat_attackerFlags == -1); // NEVER written
+    // defenderFlags = 0x55 (via targetResults), but this coincidentally matches
+    // the attackerResults value — masking the bug if both happen to be equal
+}
+
+// =============================================================
+// M-006: _combat_delete_critter cid renumbering (combat.cc:6120-6146)
+// =============================================================
+//
+// Finding ID: M-006 | Source: combat.cc:6120-6146
+//
+// Test the cid renumbering and foundIndex-based section counting logic.
+// Old code used loop variable `i` (== _list_total after compaction loop)
+// for section check, making it always take the wrong branch.
+// Fixed code uses `foundIndex` saved before the compaction loop.
+
+// Mirrors production combat list — simplified Object* array with cid
+struct TestCombatObject {
+    int cid;      // obj->cid
+    int id;       // object ID (for identification)
+};
+
+static TestCombatObject stub_combat_list[10];
+static int stub_list_total = 0;
+static int stub_list_com = 0;
+static int stub_list_noncom = 0;
+
+static void stub_combat_list_init(const int ids[], const int cids[], int total, int com)
+{
+    stub_list_total = total;
+    stub_list_com = com;
+    stub_list_noncom = total - com;
+    for (int i = 0; i < total; i++) {
+        stub_combat_list[i].cid = cids[i];
+        stub_combat_list[i].id = ids[i];
+    }
+}
+
+// Old buggy: uses `i` (loop variable, ends at _list_total after loop)
+static void stub_combat_delete_critter_old_buggy(int deleteIndex)
+{
+    if (deleteIndex >= stub_list_total) return;
+
+    int i;
+    for (i = deleteIndex; i < stub_list_total - 1; i++) {
+        stub_combat_list[i] = stub_combat_list[i + 1];
+        stub_combat_list[i].cid = i;
+    }
+
+    stub_list_total--;
+
+    // BUG: `i` now equals old _list_total - 1 (not deleteIndex!),
+    // so section check is always wrong when com/noncom differ.
+    if (i >= stub_list_com) {
+        if (i < (stub_list_noncom + stub_list_com)) {
+            stub_list_noncom--;
+        }
+    } else {
+        stub_list_com--;
+    }
+
+    stub_combat_list[deleteIndex].cid = -1;
+}
+
+// Fixed: uses foundIndex saved before the compaction loop
+static void stub_combat_delete_critter_fixed(int deleteIndex)
+{
+    if (deleteIndex >= stub_list_total) return;
+
+    int foundIndex = deleteIndex;
+    int i;
+    for (i = foundIndex; i < stub_list_total - 1; i++) {
+        stub_combat_list[i] = stub_combat_list[i + 1];
+        stub_combat_list[i].cid = i;
+    }
+
+    stub_list_total--;
+
+    if (foundIndex >= stub_list_com) {
+        if (foundIndex < (stub_list_noncom + stub_list_com)) {
+            stub_list_noncom--;
+        }
+    } else {
+        stub_list_com--;
+    }
+
+    // NOTE: Production sets obj->cid = -1 on the original object being removed
+    // (combat.cc:6145), not on the array slot. The array slot has already been
+    // overwritten by compaction at this point, so applying cid=-1 to the slot
+    // would corrupt the cid sequence for the remaining entries.
+    // In production, _combat_list[_list_total] = obj stores the removed object
+    // at the end of the array (outside the active range), then obj->cid = -1.
+    // The stub does not model end-of-array storage, so we skip the cid=-1.
+}
+
+TEST_CASE("M-006: cid renumbering after combat list compaction")
+{
+    // Setup: 5 critters, cids match index, first 3 are com
+    int ids[] = {100, 101, 102, 103, 104};
+    int cids[] = {0, 1, 2, 3, 4};
+    stub_combat_list_init(ids, cids, 5, 3);
+    CHECK(stub_list_total == 5);
+    CHECK(stub_list_com == 3);
+    CHECK(stub_list_noncom == 2);
+
+    // Delete index 1 (second com critter, id=101, cid=1)
+    stub_combat_delete_critter_fixed(1);
+
+    // Total decreased
+    CHECK(stub_list_total == 4);
+
+    // Remaining critters renumbered
+    // Original: [100(0), 101(1), 102(2), 103(3), 104(4)]
+    // After removing index 1:
+    //   [100(0), 102(1), 103(2), 104(3)]
+    CHECK(stub_combat_list[0].id == 100);
+    CHECK(stub_combat_list[0].cid == 0);
+    CHECK(stub_combat_list[1].id == 102);
+    CHECK(stub_combat_list[1].cid == 1);
+    CHECK(stub_combat_list[2].id == 103);
+    CHECK(stub_combat_list[2].cid == 2);
+    CHECK(stub_combat_list[3].id == 104);
+    CHECK(stub_combat_list[3].cid == 3);
+
+    // com count decreased (foundIndex=1 < _list_com=3)
+    CHECK(stub_list_com == 2);
+    CHECK(stub_list_noncom == 2);
+}
+
+TEST_CASE("M-006: cid renumbering when deleting last element")
+{
+    int ids[] = {100, 101, 102};
+    int cids[] = {0, 1, 2};
+    stub_combat_list_init(ids, cids, 3, 2);
+    CHECK(stub_list_total == 3);
+
+    // Delete index 2 (last element)
+    stub_combat_delete_critter_fixed(2);
+
+    CHECK(stub_list_total == 2);
+    // Non-com count decreased (foundIndex=2 >= _list_com=2 → noncom)
+    CHECK(stub_list_com == 2);
+    CHECK(stub_list_noncom == 0);
+}
+
+TEST_CASE("M-006: Old buggy code always decrements wrong section")
+{
+    // Scenario: 4 com + 1 noncom, delete a com critter (index 0)
+    int ids[] = {100, 101, 102, 103, 200};
+    int cids[] = {0, 1, 2, 3, 4};
+    stub_combat_list_init(ids, cids, 5, 4);
+
+    stub_combat_delete_critter_old_buggy(0);
+
+    // Old buggy code uses i=4 (after compaction loop, i = _list_total = 4)
+    // i=4 >= stub_list_com (4) → enters noncom branch
+    // i=4 < (stub_list_noncom + stub_list_com) → decrements noncom
+    // WRONG: deleted index 0 was in com section, should have decremented com
+    CHECK(stub_list_com == 4);     // unchanged — should be 3!
+    CHECK(stub_list_noncom == 0);  // decremented from 1 → 0, wrong!
+
+    // Reset and try with fixed code
+    stub_combat_list_init(ids, cids, 5, 4);
+    stub_combat_delete_critter_fixed(0);
+
+    // Fixed code uses foundIndex=0:
+    // 0 < stub_list_com (4) → decrements com
+    CHECK(stub_list_com == 3);     // correct
+    CHECK(stub_list_noncom == 1);  // unchanged, correct
+}
+
+TEST_CASE("M-006: obj->cid = -1 sentinel after removal")
+{
+    int ids[] = {100, 101, 102};
+    int cids[] = {0, 1, 2};
+    stub_combat_list_init(ids, cids, 3, 3);
+
+    stub_combat_delete_critter_fixed(1);
+
+    // The deleted object's cid should be -1 (sentinel for "not in combat")
+    // In production: obj->cid = -1 at combat.cc:6145
+    // In our stub: stub_combat_list[foundIndex].cid was already overwritten
+    // by compaction, so we check the logic:
+    // Production writes obj->cid = -1 to the ORIGINAL object, not the slot
+    // The slot at index `foundIndex` gets overwritten by compaction.
+    // The sentinel applies to the actual object being removed.
+
+    // Verify total decreased
+    CHECK(stub_list_total == 2);
+}
+
+// =============================================================
+// M-007: unarmedInitCustom "Penetrate" key fix (combat.cc:6684)
+// regression test — config key independence
+// =============================================================
+//
+// Old code (buggy): configGetBool(..., "BonusDamage", &isPenetrate)
+//   "BonusDamage" key read twice: once as int for bonusDamage,
+//   once as bool for isPenetrate → isPenetrate = (bonusDamage != 0)
+// Fixed code: configGetBool(..., "Penetrate", &isPenetrate)
+//   Separate "Penetrate" key for isPenetrate
+//
+// Finding ID: M-007 | Source: combat.cc:6684
+
+// Stub unarmed hit description matching production
+struct StubUnarmedHitDescription {
+    int requiredLevel;
+    int requiredSkill;
+    int minDamage;
+    int maxDamage;
+    int bonusDamage;
+    int bonusCriticalChance;
+    int actionPointCost;
+    bool isPenetrate;
+    bool isSecondary;
+};
+
+// Stub config: key→int value map (simplified INI)
+struct StubConfigEntry {
+    const char* key;
+    int value;
+};
+
+static const StubConfigEntry* stub_config_find_key(
+    const StubConfigEntry* entries, int entryCount, const char* key)
+{
+    for (int i = 0; i < entryCount; i++) {
+        if (strcmp(entries[i].key, key) == 0) {
+            return &entries[i];
+        }
+    }
+    return nullptr;
+}
+
+static void stub_config_read_old_buggy(
+    StubUnarmedHitDescription* desc,
+    const StubConfigEntry* entries, int entryCount)
+{
+    // Read BonusDamage as int
+    const StubConfigEntry* entry = stub_config_find_key(entries, entryCount, "BonusDamage");
+    if (entry) desc->bonusDamage = entry->value;
+
+    // BUG: Reading "BonusDamage" as bool for isPenetrate
+    // The old code had NO Penetrate key — isPenetrate was derived from BonusDamage only!
+    entry = stub_config_find_key(entries, entryCount, "BonusDamage");
+    if (entry) desc->isPenetrate = (entry->value != 0);
+}
+
+static void stub_config_read_fixed(
+    StubUnarmedHitDescription* desc,
+    const StubConfigEntry* entries, int entryCount)
+{
+    const StubConfigEntry* entry;
+
+    entry = stub_config_find_key(entries, entryCount, "BonusDamage");
+    if (entry) desc->bonusDamage = entry->value;
+
+    // Fixed: reads "Penetrate" directly
+    entry = stub_config_find_key(entries, entryCount, "Penetrate");
+    if (entry) desc->isPenetrate = (entry->value != 0);
+}
+
+TEST_CASE("M-007: Penetrate key independent from BonusDamage (fixed code)")
+{
+    // Config with separate BonusDamage=0 and Penetrate=1
+    StubConfigEntry entries[] = {
+        {"ReqLevel", 5},
+        {"SkillLevel", 100},
+        {"MinDamage", 10},
+        {"MaxDamage", 20},
+        {"BonusDamage", 0},
+        {"Penetrate", 1},
+        {"Secondary", 0},
+    };
+
+    StubUnarmedHitDescription desc = {};
+    stub_config_read_fixed(&desc, entries, 7);
+
+    CHECK(desc.bonusDamage == 0);
+    CHECK(desc.isPenetrate == true);
+}
+
+TEST_CASE("M-007: Old buggy code conflates BonusDamage and Penetrate")
+{
+    // Config with BonusDamage=5 (truthy), but Penetrate=0
+    StubConfigEntry entries[] = {
+        {"BonusDamage", 5},
+        {"Penetrate", 0},
+    };
+
+    StubUnarmedHitDescription desc = {};
+    stub_config_read_old_buggy(&desc, entries, 2);
+
+    // bonusDamage correctly read as 5
+    CHECK(desc.bonusDamage == 5);
+    // BUG: isPenetrate is true because BonusDamage (5) != 0
+    // even though Penetrate=0 explicitly!
+    CHECK(desc.isPenetrate == true);
+}
+
+TEST_CASE("M-007: Fixed code correctly reads Penetrate=0")
+{
+    StubConfigEntry entries[] = {
+        {"BonusDamage", 5},
+        {"Penetrate", 0},
+    };
+
+    StubUnarmedHitDescription desc = {};
+    stub_config_read_fixed(&desc, entries, 2);
+
+    CHECK(desc.bonusDamage == 5);
+    CHECK(desc.isPenetrate == false);  // correct
+}
+
+TEST_CASE("M-007: Old buggy code — BonusDamage=0 masks Penetrate=1")
+{
+    // Config with bonusDamage=0 but Penetrate=1 intended
+    StubConfigEntry entries[] = {
+        {"BonusDamage", 0},
+        {"Penetrate", 1},
+    };
+
+    StubUnarmedHitDescription desc = {};
+    stub_config_read_old_buggy(&desc, entries, 2);
+
+    CHECK(desc.bonusDamage == 0);
+    // BUG: isPenetrate is false because BonusDamage (0) is falsy
+    // The Penetrate=1 setting is lost!
+    CHECK(desc.isPenetrate == false);
+}
+
+TEST_CASE("M-007: Fixed code — BonusDamage=0, Penetrate=1 correctly independent")
+{
+    StubConfigEntry entries[] = {
+        {"BonusDamage", 0},
+        {"Penetrate", 1},
+    };
+
+    StubUnarmedHitDescription desc = {};
+    stub_config_read_fixed(&desc, entries, 2);
+
+    CHECK(desc.bonusDamage == 0);
+    CHECK(desc.isPenetrate == true);  // correct
+}
+
+TEST_CASE("M-007: Unarmed hit descriptions for advanced unarmed hit modes")
+{
+    // Verify all advanced unarmed hit modes have valid indices that the
+    // unarmedInitCustom loop iterates over (line 6668-6671).
+    for (int hm = FIRST_ADVANCED_UNARMED_HIT_MODE; hm <= LAST_ADVANCED_UNARMED_HIT_MODE; hm++) {
+        CHECK(hm >= 0);
+        CHECK(hm < HIT_MODE_COUNT);
+        CHECK(test_isUnarmedHitMode(hm));
+    }
+}

@@ -252,11 +252,12 @@ add_test(NAME test_sfall_config COMMAND test_sfall_config)
 
 # ---- Test: sfall_opcodes (lifecycle, extern globals) ----
 # Extern globals from sfall_opcodes.cc are defined in test_common_stubs.cc.
-# Self-contained — does not link the full sfall_opcodes.cc (150+ engine deps).
+# Links test_sources for sfall_global_vars.cc (M-092 tests).
 add_executable(test_sfall_opcodes
     test_sfall_opcodes.cc
 )
-target_link_libraries(test_sfall_opcodes PRIVATE test_stubs doctest)
+target_link_libraries(test_sfall_opcodes PRIVATE test_sources test_stubs doctest)
+target_include_directories(test_sfall_opcodes PRIVATE ${ZLIB_INCLUDE_DIRS})
 add_test(NAME test_sfall_opcodes COMMAND test_sfall_opcodes)
 
 # ---- Test: sfall metarules (header-level type validation) ----
@@ -281,14 +282,15 @@ target_link_libraries(test_sfall_hooks PRIVATE test_stubs doctest ${SDL2_LIBRARI
 add_test(NAME test_sfall_hooks COMMAND test_sfall_hooks)
 
 # ---- Test: window.cc (word wrap, color conversion, enums) ----
-# Links test_sources (memory.cc for internal_free_safe).
-# SDL2/zlib headers needed for window.h -> window_manager.h -> SDL headers.
+# Self-contained — does NOT link test_sources or SDL2.
+# window.h removed from test to avoid SDL initialization hang on headless macOS.
+# Memory stubs (internal_malloc_safe, etc.) come from test_stubs.
+# Enums from window.h defined locally in test_window.cc.
 add_executable(test_window
     test_window.cc
 )
 target_include_directories(test_window PRIVATE "${CMAKE_SOURCE_DIR}/src")
-target_include_directories(test_window PRIVATE ${ZLIB_INCLUDE_DIRS})
-target_link_libraries(test_window PRIVATE test_sources test_stubs doctest ${SDL2_LIBRARIES})
+target_link_libraries(test_window PRIVATE test_stubs doctest)
 add_test(NAME test_window COMMAND test_window)
 
 # ---- Test: dbox.cc (enum validation, file dialog layout constants) ----
@@ -325,3 +327,73 @@ add_executable(test_character_editor
 )
 target_link_libraries(test_character_editor PRIVATE doctest)
 add_test(NAME test_character_editor COMMAND test_character_editor)
+
+# ============================================================
+# Stage 6 Implementation — New Test Executables (8 entries)
+# ============================================================
+
+# ---- Test: loadsave.cc (H-013/H-014/H-015 fork change mirrors) ----
+# Self-contained test — does not link loadsave.cc (engine file I/O deps).
+add_executable(test_loadsave
+    test_loadsave.cc
+)
+target_link_libraries(test_loadsave PRIVATE doctest)
+add_test(NAME test_loadsave COMMAND test_loadsave)
+
+# ---- Test: sfall_animation.cc (M-057: 8-function module mirrors) ----
+# Self-contained test — does not link sfall_animation.cc (50+ engine deps).
+add_executable(test_sfall_animation
+    test_sfall_animation.cc
+)
+target_link_libraries(test_sfall_animation PRIVATE doctest)
+add_test(NAME test_sfall_animation COMMAND test_sfall_animation)
+
+# ---- Test: endgame.cc (N2-H-001/N2-044/N2-045/N2-046 fork change mirrors) ----
+# Self-contained test — does not link endgame.cc (40+ engine deps).
+# Includes obj_types.h and proto_types.h from src/.
+add_executable(test_endgame
+    test_endgame.cc
+)
+target_include_directories(test_endgame PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_link_libraries(test_endgame PRIVATE doctest)
+add_test(NAME test_endgame COMMAND test_endgame)
+
+# ---- Test: pipboy.cc (M-081/N2-026/N2-027 bounds-checking mirrors) ----
+# Self-contained test — does not link pipboy.cc (30+ engine deps).
+add_executable(test_pipboy
+    test_pipboy.cc
+)
+target_link_libraries(test_pipboy PRIVATE doctest)
+add_test(NAME test_pipboy COMMAND test_pipboy)
+
+# ---- Test: game_dialog.cc (N2-001/N2-049 fork change mirrors) ----
+# Self-contained test — does not link game_dialog.cc (40+ engine deps).
+add_executable(test_game_dialog
+    test_game_dialog.cc
+)
+target_link_libraries(test_game_dialog PRIVATE doctest)
+add_test(NAME test_game_dialog COMMAND test_game_dialog)
+
+# ---- Test: game_mouse.cc (M-089/N2-047 fork change mirrors) ----
+# Self-contained test — does not link game_mouse.cc (40+ engine deps).
+add_executable(test_game_mouse
+    test_game_mouse.cc
+)
+target_link_libraries(test_game_mouse PRIVATE doctest)
+add_test(NAME test_game_mouse COMMAND test_game_mouse)
+
+# ---- Test: sound.cc (N2-003 preloadBuffers error-propagation mirrors) ----
+# Self-contained test — does not link sound.cc.
+add_executable(test_sound
+    test_sound.cc
+)
+target_link_libraries(test_sound PRIVATE doctest)
+add_test(NAME test_sound COMMAND test_sound)
+
+# ---- Test: animation.cc (H-009/H-010/N2-018 fork change mirrors) ----
+# Self-contained test — does not link animation.cc.
+add_executable(test_animation
+    test_animation.cc
+)
+target_link_libraries(test_animation PRIVATE doctest)
+add_test(NAME test_animation COMMAND test_animation)

@@ -1001,3 +1001,146 @@ TEST_CASE("RPU/Et Tu cross-reference: battle_game engine config")
         CHECK(testApplyFastShotAP(3, true, true, true, 0) == 2);
     }
 }
+
+// ================================================================
+// SECTION 9: N2-013 — weaponGetRange called outside weapon-null guard
+// ================================================================
+//
+// Finding N2-013 (MEDIUM): In the refactored Fast Shot path (item.cc:1740),
+// weaponGetRange(critter, hitMode) is called even when weapon == nullptr
+// and !isUnarmedHitMode(hitMode). This call path was never exercised
+// before the fork's refactoring of the Fast Shot logic.
+//
+// The weaponGetRange function (item.cc:1648-1686) is SAFE when weapon
+// is nullptr — it falls through to the CRITTER_LONG_LIMBS / default-1
+// check. But the new call path is a testing gap.
+
+// ---- Mirror types for weaponGetRange ----
+static constexpr int TEST_CRITTER_LONG_LIMBS = 1;
+
+// Mirror of weaponGetRange (item.cc:1642-1686)
+// Simplified: returns 1 for unarmed/unknown, 2 for long-limbs,
+// or the actual weapon range if weapon is provided.
+static int testWeaponGetRange(int /*critter*/, int hitMode, int critterFlags, int weaponRange)
+{
+    // When weapon != nullptr: use weapon range
+    // (simplified stub — the real function looks up proto data)
+    if (weaponRange > 0) {
+        return weaponRange;
+    }
+
+    // weapon == nullptr fallback:
+    // Check if critter has long limbs
+    if (critterFlags & TEST_CRITTER_LONG_LIMBS) {
+        return 2;
+    }
+
+    return 1;
+}
+
+TEST_CASE("N2-013: weaponGetRange — called outside weapon-null guard (item.cc:1740)")
+{
+    // Finding: N2-013 (MEDIUM), adversarial CONFIRMED
+    // Source: item.cc:1740
+    //
+    // Production code (item.cc:1738-1743):
+    //   if (critter == gDude && traitIsSelected(TRAIT_FAST_SHOT)) {
+    //       if (gFastShotFix >= 1) {
+    //           actionPoints--;
+    //       } else {
+    //           // FO2 vanilla: only ranged weapons with range > 2
+    //           if (!isUnarmedHitMode(hitMode) && weaponGetRange(critter, hitMode) > 2) {
+    //               actionPoints--;
+    //           }
+    //       }
+    //   }
+    //
+    // In the gFastShotFix==0 branch, weaponGetRange is called even when
+    // weapon==nullptr (e.g., unarmed hit mode is checked first, but
+    // non-unarmed without a weapon falls through to the range check).
+    // Before the refactoring, weaponGetRange was inside the weapon!=nullptr
+    // guard — this call path is new.
+
+    SUBCASE("weaponGetRange returns 1 for normal critter (no weapon)")
+    {
+        int range = testWeaponGetRange(0, TEST_HIT_MODE_PUNCH, 0, 0);
+        CHECK(range == 1);
+        // For FO2 vanilla Fast Shot: range 1 <= 2 → no AP reduction
+        CHECK_FALSE(range > 2);
+    }
+
+    SUBCASE("weaponGetRange returns 2 for long-limbs critter (no weapon)")
+    {
+        int range = testWeaponGetRange(0, TEST_HIT_MODE_PUNCH, TEST_CRITTER_LONG_LIMBS, 0);
+        CHECK(range == 2);
+        // For FO2 vanilla Fast Shot: range 2 <= 2 → no AP reduction
+        CHECK_FALSE(range > 2);
+    }
+
+    SUBCASE("weaponGetRange returns actual weapon range when weapon exists")
+    {
+        int range = testWeaponGetRange(0, TEST_HIT_MODE_RIGHT_WEAPON_PRIMARY, 0, 50);
+        CHECK(range == 50);
+        // For FO2 vanilla Fast Shot: range 50 > 2 → AP reduction applies
+        CHECK(range > 2);
+    }
+
+    SUBCASE("new call path: weaponGetRange with nullptr weapon in Fast Shot path")
+    {
+        // The production Fast Shot path calls weaponGetRange when:
+        // - critter == gDude
+        // - has Fast Shot trait
+        // - gFastShotFix == 0 (FO2 vanilla)
+        // - !isUnarmedHitMode (e.g., HIT_MODE_RIGHT_WEAPON_PRIMARY)
+        // - weapon == nullptr (no weapon actually equipped)
+
+        // Simulate the call chain:
+        // weaponGetRange(nullptr-returning critter, RIGHT_WEAPON_PRIMARY)
+        int range = testWeaponGetRange(0, TEST_HIT_MODE_RIGHT_WEAPON_PRIMARY, 0, 0);
+        CHECK(range == 1); // falls through to default
+
+        // With this range (1), the Fast Shot condition is:
+        // !isUnarmed && 1 > 2 → false → no AP reduction
+        // This is correct behavior, but the code path was never exercised.
+        CHECK_FALSE(range > 2);
+
+        // The function is safe: weaponGetRange always returns 1-2
+        // when weapon is nullptr (for normal critters).
+        // N2-013 notes: if critterGetWeaponForHitMode had side effects,
+        // this new call path would introduce a bug.
+    }
+
+    SUBCASE("regression: old code called weaponGetRange inside weapon-null guard")
+    {
+        // Old code (pre-fork):
+        //   if (weapon != nullptr) {
+        //       actionPoints = ...;
+        //       if (weaponGetRange(critter, hitMode) > 2) {
+        //           actionPoints--;
+        //       }
+        //   } else {
+        //       actionPoints = ...; // no range check
+        //   }
+        //
+        // The fork restructured to:
+        //   if (weapon != nullptr) {
+        //       actionPoints = ...;
+        //   } else {
+        //       actionPoints = 3;
+        //   }
+        //   // ... (after both branches)
+        //   if (critter == gDude && traitIsSelected(FAST_SHOT)) {
+        //       if (!isUnarmedHitMode(hitMode) && weaponGetRange(critter, hitMode) > 2) {
+        //           actionPoints--;
+        //       }
+        //   }
+        //
+        // The weaponGetRange call is now AFTER the if/else block,
+        // meaning it runs for BOTH weapon!=nullptr and weapon==nullptr paths.
+
+        // Verify that the new code path doesn't crash with nullptr weapon:
+        int range = testWeaponGetRange(0, TEST_HIT_MODE_RIGHT_WEAPON_PRIMARY, 0, 0);
+        CHECK(range >= 1);
+        CHECK(range <= 2);
+    }
+}

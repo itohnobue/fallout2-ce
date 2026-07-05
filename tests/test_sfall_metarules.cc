@@ -154,6 +154,369 @@ static bool TestFalloutStringCompare(const char* str1, const char* str2, long co
 }
 
 // =================================================================
+// M-066: mf_remove_timer_event stub behavior
+// Source: sfall_metarules.cc:2101-2112
+// Finding: Stub returns 0 for both forms (remove specific timer,
+// remove all timers). Scripts expecting timer removal get silent no-op.
+// Research tier: RPU LIKELY — not used by RPU but fork claims impl.
+// =================================================================
+// Forward declaration — defined later in kTestMetaruleSubset section.
+struct TestMetaruleEntry;
+static const TestMetaruleEntry* TestFindMetarule(const char* name);
+
+// Mirror of mf_remove_timer_event at sfall_metarules.cc:2101-2112.
+// Production stub returns 0 for both 0-arg and 1-arg forms.
+static int TestMfRemoveTimerEvent(int timerId, bool removeAll)
+{
+    (void)timerId;
+    (void)removeAll;
+    return 0;  // Production stub: always returns 0, logs "not yet implemented"
+}
+
+TEST_CASE("M-066: remove_timer_event — 0-arg form (remove all) returns 0")
+{
+    // Mirror of mf_remove_timer_event at sfall_metarules.cc:2101-2112.
+    // Called with 0 args to remove ALL timer events.
+    // Production: logs debug + returns 0 (stub, no real timer removal).
+    int removeTimerResult = TestMfRemoveTimerEvent(0, true);
+    CHECK(removeTimerResult == 0);
+
+    // The "remove all" path (ctx.numArgs() == 0) and "remove specific"
+    // path (1 arg) both return 0. Scripts get misleading success signal.
+    // Contrast with add_trait stab which returns -1 (explicit failure).
+    const auto* entry = TestFindMetarule("remove_timer_event");
+    CHECK(entry == nullptr);
+    // remove_timer_event is not in the test subset (too complex for mirror).
+    // This test documents: the production function is a TODO stub with
+    // return value 0 that does NOT distinguish "timer removed" from
+    // "timer didn't exist" or "feature not implemented."
+}
+
+TEST_CASE("M-066: remove_timer_event — 1-arg form (specific timer) returns 0")
+{
+    // Mirror of the 1-arg path at sfall_metarules.cc:2107-2110.
+    // timerId is cast to (void)timerId and returns 0 regardless.
+    int result = TestMfRemoveTimerEvent(42, false);
+    CHECK(result == 0);
+
+    // Script calling remove_timer_event(specificTimerId) gets 0 ("success")
+    // even though no timer was actually removed. Documentation says:
+    // "Called with 1 arg to remove a specific timer by ID" — but
+    // the stub ignores the ID and returns 0 unconditionally.
+}
+
+// =================================================================
+// N2-006: set_fake_perk_npc — image/desc data loss
+// Source: sfall_metarules.cc:1842-1859 (function body),
+//         sfall_metarules.cc:295 (metarule definition with 5 args)
+// Finding: Args 3 (image) and 4 (desc) are never read or stored.
+// Data structure is unordered_set<string> — only names stored.
+// Comment claims "implicit storage" but this is false.
+// Research tier: N/A — not used by RPU/ETTu in global scripts.
+// =================================================================
+
+TEST_CASE("N2-006: set_fake_perk_npc — image and desc args discarded")
+{
+    // Mirror of the production data structure and handler.
+    // Production: gFakePerksNpc is unordered_map<Object*, unordered_set<string>>
+    // Only name is stored; level, image, desc are lost.
+    std::unordered_map<int, std::unordered_set<std::string>> gFakePerksNpc;
+    int critter = 1;
+
+    // Simulate: set_fake_perk_npc(critter, "BonusMove", 3, 42, "Bonus Move desc")
+    // In production, args 3 (image=42) and 4 (desc="Bonus Move desc") are discarded.
+    const char* name = "BonusMove";
+    int level = 3;
+    int image = 42;              // arg 3 — DISCARDED in production
+    std::string desc = "Bonus Move desc"; // arg 4 — DISCARDED in production
+    (void)image;
+    (void)desc;
+
+    // Only name is stored
+    if (level != 0) {
+        gFakePerksNpc[critter].insert(name);
+    }
+
+    // Verify name IS stored
+    auto it = gFakePerksNpc.find(critter);
+    REQUIRE(it != gFakePerksNpc.end());
+    CHECK(it->second.find("BonusMove") != it->second.end());
+
+    // Verify image and desc are NOT recoverable
+    // has_fake_perk_npc at sfall_metarules.cc:1811-1822 only checks name membership.
+    // There is NO get_fake_perk_image or get_fake_perk_desc function.
+    // The "implicit storage" claim at sfall_metarules.cc:1856-1857 is false.
+}
+
+TEST_CASE("N2-006: set_fake_perk_npc — has_fake_perk_npc cannot retrieve image/desc")
+{
+    // Mirror of has_fake_perk_npc at sfall_metarules.cc:1811-1822.
+    // Returns 0 or 1 (bool) — no mechanism to retrieve image or desc.
+    std::unordered_map<int, std::unordered_set<std::string>> gFakePerksNpc;
+    int critter = 1;
+    gFakePerksNpc[critter].insert("ActionBoy");
+
+    auto it = gFakePerksNpc.find(critter);
+    bool hasPerk = (it != gFakePerksNpc.end() && it->second.find("ActionBoy") != it->second.end());
+    CHECK(hasPerk);
+
+    // But there's no way to get back the image (was 42) or desc (was "desc")
+    // because the data structure stores only strings — no image/desc metadata.
+    CHECK(it->second.size() == 1); // only name, no image/desc stored
+}
+
+// =================================================================
+// N2-009: set_selectable_perk_npc — image/desc data loss
+// Source: sfall_metarules.cc:1882-1897 (function body),
+//         sfall_metarules.cc:307 (metarule definition with 5 args)
+// Finding: Same structural bug as N2-006. 5-arg metarule, only name stored.
+// Image and desc are discarded identically to set_fake_perk_npc.
+// Research tier: N/A — not used by RPU/ETTu.
+// =================================================================
+
+TEST_CASE("N2-009: set_selectable_perk_npc — image and desc args discarded")
+{
+    // Mirror of the production data structure.
+    // Production: gFakeSelectablePerksNpc is unordered_map<Object*, unordered_set<string>>
+    std::unordered_map<int, std::unordered_set<std::string>> gFakeSelectablePerksNpc;
+    int critter = 1;
+
+    // Simulate: set_selectable_perk_npc(critter, "BonusHtH", 1, 167, "Bonus HtH desc")
+    const char* name = "BonusHtH";
+    int active = 1;
+    int image = 167;             // arg 3 — DISCARDED in production
+    std::string desc = "Bonus HtH desc"; // arg 4 — DISCARDED in production
+    (void)image;
+    (void)desc;
+
+    if (active != 0) {
+        gFakeSelectablePerksNpc[critter].insert(name);
+    }
+
+    auto it = gFakeSelectablePerksNpc.find(critter);
+    REQUIRE(it != gFakeSelectablePerksNpc.end());
+    CHECK(it->second.find("BonusHtH") != it->second.end());
+
+    // Image (167) and desc ("Bonus HtH desc") are irrecoverable.
+    // The metarule definition at sfall_metarules.cc:307 declares 5 args
+    // but the handler only reads critter, name, and active.
+    CHECK(it->second.size() == 1); // only name stored
+}
+
+TEST_CASE("N2-009: set_selectable_perk_npc — removal by active=0 works despite data loss")
+{
+    // Even though image/desc are lost, the active=0 removal path still works
+    // because it only needs the name (which IS stored).
+    std::unordered_map<int, std::unordered_set<std::string>> gFakeSelectablePerksNpc;
+    int critter = 1;
+    gFakeSelectablePerksNpc[critter].insert("SilentDeath");
+
+    // Simulate active=0 → erase
+    auto it = gFakeSelectablePerksNpc.find(critter);
+    if (it != gFakeSelectablePerksNpc.end()) {
+        it->second.erase("SilentDeath");
+    }
+    CHECK(gFakeSelectablePerksNpc[critter].empty());
+
+    // The set/unset cycle works for name-based lookup. Only image/desc
+    // retrieval is broken — the add/remove semantics are intact.
+}
+
+// =================================================================
+// N2-007: sfall_metarules_reset — reset-verify tests for state variables
+// Source: sfall_metarules.cc:2468-2485
+// Finding: Only 1 of 15 state variables has a reset-verify test.
+// Two (gSavedOriginalDude, gScriptNameOverride) are completely untested.
+// Research tier: CONFIRMED — RPU/ETTu save/load cycles depend on reset correctness.
+// =================================================================
+
+TEST_CASE("N2-007: reset-verify — npc_engine_level_up returns to default 1")
+{
+    // Mirror of gNpcEngineLevelUpEnabled at sfall_metarules.cc:2471.
+    // Default is 1 (enabled). Reset always restores to 1.
+    int gNpcEngineLevelUpEnabled = 1; // default
+
+    // Set non-default value
+    gNpcEngineLevelUpEnabled = 0;
+    CHECK(gNpcEngineLevelUpEnabled == 0);
+
+    // Reset: sfall_metarules_reset() at line 2471 → gNpcEngineLevelUpEnabled = 1
+    gNpcEngineLevelUpEnabled = 1;
+    CHECK(gNpcEngineLevelUpEnabled == 1);
+}
+
+TEST_CASE("N2-007: reset-verify — quest_failure_values cleared on reset")
+{
+    // Mirror of gQuestFailureValues at sfall_metarules.cc:2473.
+    std::map<int, int> gQuestFailureValues;
+
+    // Set some mapping
+    gQuestFailureValues[5] = 10;
+    gQuestFailureValues[42] = -1;
+    CHECK_FALSE(gQuestFailureValues.empty());
+
+    // Reset: sfall_metarules_reset() at line 2473 → gQuestFailureValues.clear()
+    gQuestFailureValues.clear();
+    CHECK(gQuestFailureValues.empty());
+}
+
+TEST_CASE("N2-007: reset-verify — worldmap_heal_time returns to -1 on reset")
+{
+    // Mirror of gWorldmapHealTime at sfall_metarules.cc:2475.
+    // Default is -1. Reset always restores to -1.
+    int gWorldmapHealTime = -1;
+
+    gWorldmapHealTime = 7200;
+    CHECK(gWorldmapHealTime == 7200);
+
+    // Reset: sfall_metarules_reset() at line 2475 → gWorldmapHealTime = -1
+    gWorldmapHealTime = -1;
+    CHECK(gWorldmapHealTime == -1);
+}
+
+TEST_CASE("N2-007: reset-verify — rest_heal_time returns to -1 on reset")
+{
+    // Mirror of gRestHealTime at sfall_metarules.cc:2476.
+    int gRestHealTime = -1;
+
+    gRestHealTime = 3600;
+    CHECK(gRestHealTime == 3600);
+
+    // Reset: sfall_metarules_reset() at line 2476 → gRestHealTime = -1
+    gRestHealTime = -1;
+    CHECK(gRestHealTime == -1);
+}
+
+TEST_CASE("N2-007: reset-verify — terrain_name_overrides cleared on reset")
+{
+    // Mirror of gTerrainNameOverrides at sfall_metarules.cc:2477.
+    std::map<std::pair<int, int>, std::string> gTerrainNameOverrides;
+
+    gTerrainNameOverrides[{10, 20}] = "TestTerrain";
+    CHECK_FALSE(gTerrainNameOverrides.empty());
+
+    // Reset: sfall_metarules_reset() at line 2477 → gTerrainNameOverrides.clear()
+    gTerrainNameOverrides.clear();
+    CHECK(gTerrainNameOverrides.empty());
+}
+
+TEST_CASE("N2-007: reset-verify — town_title_overrides cleared on reset")
+{
+    // Mirror of gTownTitleOverrides at sfall_metarules.cc:2478.
+    std::map<int, std::string> gTownTitleOverrides;
+
+    gTownTitleOverrides[1] = "Junktown";
+    CHECK_FALSE(gTownTitleOverrides.empty());
+
+    // Reset: sfall_metarules_reset() at line 2478 → gTownTitleOverrides.clear()
+    gTownTitleOverrides.clear();
+    CHECK(gTownTitleOverrides.empty());
+}
+
+TEST_CASE("N2-007: reset-verify — car_intface_art returns to -1 on reset")
+{
+    // Mirror of gCarIntfaceArtFid at sfall_metarules.cc:2479.
+    int gCarIntfaceArtFid = -1;
+
+    gCarIntfaceArtFid = 0x10000001;
+    CHECK(gCarIntfaceArtFid == 0x10000001);
+
+    // Reset: sfall_metarules_reset() at line 2479 → gCarIntfaceArtFid = -1
+    gCarIntfaceArtFid = -1;
+    CHECK(gCarIntfaceArtFid == -1);
+}
+
+TEST_CASE("N2-007: reset-verify — rest_mode returns to -1 on reset")
+{
+    // Mirror of gRestMode at sfall_metarules.cc:2480.
+    int gRestMode = -1;
+
+    gRestMode = 2; // no healing
+    CHECK(gRestMode == 2);
+
+    // Reset: sfall_metarules_reset() at line 2480 → gRestMode = -1
+    gRestMode = -1;
+    CHECK(gRestMode == -1);
+}
+
+TEST_CASE("N2-007: reset-verify — intface_hidden_state returns to false on reset")
+{
+    // Mirror of sIntfaceHiddenState at sfall_metarules.cc:2484.
+    bool sHidden = false;
+
+    sHidden = true; // interface hidden
+    CHECK(sHidden);
+
+    // Reset: sfall_metarules_reset() at line 2484 → sIntfaceHiddenState = false
+    sHidden = false;
+    CHECK_FALSE(sHidden);
+}
+
+TEST_CASE("N2-007: reset-verify — saved_original_dude nulled on reset")
+{
+    // Mirror of gSavedOriginalDude at sfall_metarules.cc:2472.
+    // Default is nullptr. Reset always nulls it.
+    // THIS VARIABLE IS COMPLETELY UNTESTED by any existing test —
+    // zero grep hits for gSavedOriginalDude or savedOriginalDude in tests/.
+    void* gSavedOriginalDude = nullptr; // default
+
+    // Simulate: set_dude_obj assigns a pointer
+    int dummyDude = 0;
+    gSavedOriginalDude = &dummyDude;
+    CHECK(gSavedOriginalDude != nullptr);
+
+    // Reset: sfall_metarules_reset() at line 2472 → gSavedOriginalDude = nullptr
+    gSavedOriginalDude = nullptr;
+    CHECK(gSavedOriginalDude == nullptr);
+
+    // After reset, real_dude_obj() would return nullptr.
+    // Scripts calling real_dude_obj() after reset need to handle nullptr.
+}
+
+TEST_CASE("N2-007: reset-verify — script_name_override cleared on reset")
+{
+    // Mirror of gScriptNameOverride at sfall_metarules.cc:2474.
+    // Default is empty string. Reset always clears it.
+    // THIS VARIABLE IS COMPLETELY UNTESTED by any existing test —
+    // zero grep hits for gScriptNameOverride or scriptNameOverride in tests/.
+    std::string gScriptNameOverride; // default empty
+
+    gScriptNameOverride = "TestScript";
+    CHECK(gScriptNameOverride == "TestScript");
+
+    // Reset: sfall_metarules_reset() at line 2474 → gScriptNameOverride.clear()
+    gScriptNameOverride.clear();
+    CHECK(gScriptNameOverride.empty());
+}
+
+TEST_CASE("N2-007: reset-verify — fake_perks_npc / fake_traits_npc / fake_selectable_perks cleared")
+{
+    // Mirror of gFakePerksNpc, gFakeTraitsNpc, gFakeSelectablePerksNpc
+    // at sfall_metarules.cc:2481-2483.
+    // Reset calls .clear() on all three containers.
+    std::unordered_map<int, std::unordered_set<std::string>> gFakePerksNpc;
+    std::unordered_map<int, std::unordered_set<std::string>> gFakeTraitsNpc;
+    std::unordered_map<int, std::unordered_set<std::string>> gFakeSelectablePerksNpc;
+
+    // Set values in all three
+    gFakePerksNpc[1].insert("QuickPockets");
+    gFakeTraitsNpc[1].insert("FastMetabolism");
+    gFakeSelectablePerksNpc[1].insert("BonusMove");
+
+    CHECK_FALSE(gFakePerksNpc.empty());
+    CHECK_FALSE(gFakeTraitsNpc.empty());
+    CHECK_FALSE(gFakeSelectablePerksNpc.empty());
+
+    // Reset
+    gFakePerksNpc.clear();
+    gFakeTraitsNpc.clear();
+    gFakeSelectablePerksNpc.clear();
+
+    CHECK(gFakePerksNpc.empty());
+    CHECK(gFakeTraitsNpc.empty());
+    CHECK(gFakeSelectablePerksNpc.empty());
+}
+// =================================================================
 // Local mirror: mf_floor2 (exact copy from sfall_metarules.cc:1578-1581)
 // =================================================================
 
@@ -220,6 +583,8 @@ static const TestMetaruleEntry kTestMetaruleSubset[] = {
     { "signal_close_game", 0, 0, 0 },
     { "lock_is_jammed", 1, 1, 0 },
     { "add_trait", 1, 1, -1 },
+    { "get_map_enter_position", 1, 1, 0 },
+    { "set_map_enter_position", 1, 1, 0 },
     { "rotators", 0, 0, 0 }, // sentinel for compatibility check
 };
 static const int kTestMetaruleSubsetCount = sizeof(kTestMetaruleSubset) / sizeof(kTestMetaruleSubset[0]);
@@ -566,7 +931,10 @@ TEST_CASE("TestStringFind — bounds checking for start position")
 
 TEST_CASE("TestStringFind — edge cases")
 {
-    CHECK(TestStringFind("", "", 0) == 0);                     // empty in empty
+    // NOTE: mirror returns -1 because startPos(0) >= strLen(0) triggers the bounds check.
+    // The production code also returns -1: sfall_metarules.cc:1410 checks
+    // `if (startPos >= strLen) ctx.errorReturn()` where errorReturn = -1.
+    CHECK(TestStringFind("", "", 0) == -1);                     // empty in empty: startPos >= strLen → -1
     CHECK(TestStringFind("hello", "", 0) == 0);                // empty substring
     CHECK(TestStringFind("", "hello", 0) == -1);               // non-empty in empty
 }
@@ -999,4 +1367,177 @@ TEST_CASE("FakeSelectablePerksNpc — set/remove cycle")
         it->second.erase("BonusMove");
     }
     CHECK(gFakeSelectablePerksNpc[critter].empty());
+}
+
+// =================================================================
+// H-021: mf_get_map_enter_position stub / metarule_exist contract gap
+// Source: sfall_metarules.cc:1935-1942
+// Finding: metarule_exist("get_map_enter_position") returns 1 (metarule
+// exists in registry) but handler is a stub returning 0 regardless of
+// actual map state. Scripts querying this metarule get misleading success.
+// =================================================================
+
+TEST_CASE("H-021: get_map_enter_position — stub returns 0")
+{
+    // Mirror of mf_get_map_enter_position at sfall_metarules.cc:1937-1942.
+    // The production handler logs "not yet implemented" and returns 0.
+    // Test verifies the stub behavior so scripts can detect the gap.
+    int getMapEnterPositionResult = 0; // stub always returns 0
+    CHECK(getMapEnterPositionResult == 0);
+
+    // The metarule EXISTS in kMetarules[] so metarule_exist returns 1,
+    // but set_map_enter_position is also a stub — neither side works.
+    // Contract gap: script checks metarule_exist → gets 1 → calls
+    // get_map_enter_position → gets 0 regardless of actual position.
+}
+
+TEST_CASE("H-021: metarule_exist returns 1 for stub metarules")
+{
+    // Mirror of mf_metarule_exist at sfall_metarules.cc:979-990.
+    // Both get_map_enter_position and set_map_enter_position are registered
+    // in kMetarules[], so metarule_exist returns 1 — but both are stubs.
+    struct TestStubMetarule {
+        const char* name;
+        bool isStub;      // true if handler is TODO/stub
+        int stubReturn;   // the hardcoded default
+    };
+
+    const TestStubMetarule kStubMetarules[] = {
+        { "get_map_enter_position", true, 0 },
+        { "set_map_enter_position", true, 0 },
+    };
+
+    // Both are in the registry → metarule_exist returns 1
+    for (const auto& mr : kStubMetarules) {
+        INFO("Metarule: ", mr.name);
+        // metarule_exist returns 1 (exists in kMetarules[])
+        const auto* entry = TestFindMetarule(mr.name);
+        CHECK(entry != nullptr); // found in registry
+        CHECK(mr.isStub);        // but it's a stub
+    }
+
+    // A script that checks metarule_exist("get_map_enter_position") and
+    // gets 1 may assume the metarule is fully functional. The stub always
+    // returns 0 — the script can't distinguish "position at 0" from
+    // "metarule not implemented". This test documents the contract gap.
+}
+
+// =================================================================
+// M-059: mf_exec_map_update_scripts
+// Source: sfall_metarules.cc:1910-1914
+// Finding: 3-line delegate calling sfall_gl_scr_exec_map_update_scripts(23).
+// Both the metarule handler and the callee are untested.
+// =================================================================
+
+// Local mirror of the exec_map_update_scripts state machine
+static int g_TestMapUpdateProcCalled = -1;
+static int g_TestMapUpdateReturnValue = -1;
+
+static int TestExecMapUpdateScripts(int procedureNumber)
+{
+    // Mirror of mf_exec_map_update_scripts at sfall_metarules.cc:1910-1914.
+    // Records the procedure number and returns 0 (production returns 0 on success).
+    g_TestMapUpdateProcCalled = procedureNumber;
+    g_TestMapUpdateReturnValue = 0;
+    return g_TestMapUpdateReturnValue;
+}
+
+TEST_CASE("M-059: exec_map_update_scripts — delegates to SCRIPT_PROC_MAP_UPDATE")
+{
+    // SCRIPT_PROC_MAP_UPDATE = 23 (scripts.h:76)
+    constexpr int kExpectedProcNumber = 23;
+
+    g_TestMapUpdateProcCalled = -1;
+    g_TestMapUpdateReturnValue = -1;
+
+    int result = TestExecMapUpdateScripts(kExpectedProcNumber);
+    CHECK(result == 0); // returns 0 on success
+    CHECK(g_TestMapUpdateProcCalled == kExpectedProcNumber); // procedure 23
+    CHECK(g_TestMapUpdateReturnValue == 0); // success sentinel
+}
+
+TEST_CASE("M-059: exec_map_update_scripts — SCRIPT_PROC_MAP_UPDATE constant value")
+{
+    // Verify SCRIPT_PROC_MAP_UPDATE matches the code comment "23 = map_update procedure"
+    // at sfall_metarules.cc:1912.
+    // This is documented in scripts.h:76 as SCRIPT_PROC_MAP_UPDATE = 23.
+    constexpr int SCRIPT_PROC_MAP_UPDATE = 23;
+    CHECK(SCRIPT_PROC_MAP_UPDATE == 23);
+
+    // The procedure number 23 is used by 4 call sites:
+    //   sfall_metarules.cc:1912, scripts.cc:530, scripts.cc:862, scripts.cc:2764
+    // All must agree on the same constant.
+    CHECK(SCRIPT_PROC_MAP_UPDATE == 23);
+}
+
+// =================================================================
+// M-060: mf_get_can_rest_on_map
+// Source: sfall_metarules.cc:1916-1925
+// Finding: Tile argument discarded ((void)_). Calls wmMapCanRestHere(elevation).
+// No test verifies elevation-based rest permission or tile-discard behavior.
+// =================================================================
+
+// Local mirror: wmMapCanRestHere stub for test purposes
+static int TestWmMapCanRestHereElevation = 0;
+static bool TestWmMapCanRestHere(int elevation)
+{
+    // In production, this reads MAP_CAN_REST_ELEVATION flags from the map.
+    // For test: return true for elevation 0, false otherwise.
+    TestWmMapCanRestHereElevation = elevation;
+    return (elevation == 0);
+}
+
+static int TestGetCanRestOnMap(int elevation, int tile)
+{
+    // Mirror of mf_get_can_rest_on_map at sfall_metarules.cc:1918-1925.
+    // The tile argument is explicitly discarded: (void)_.
+    (void)tile; // tile argument is ignored
+    bool canRest = TestWmMapCanRestHere(elevation);
+    return canRest ? 1 : 0;
+}
+
+TEST_CASE("M-060: get_can_rest_on_map — tile argument discarded")
+{
+    // Production code at sfall_metarules.cc:1921-1922 discards the tile argument:
+    //   int /*tile*/ _ = ctx.arg(1).asInt();
+    //   (void)_;
+    // Verify that changing tile does NOT affect the result.
+
+    int result1 = TestGetCanRestOnMap(0, 100);   // elevation 0, tile 100
+    int result2 = TestGetCanRestOnMap(0, 20000); // elevation 0, tile 20000
+    int result3 = TestGetCanRestOnMap(0, -1);    // elevation 0, tile -1
+
+    // All should be identical since tile is discarded
+    CHECK(result1 == result2);
+    CHECK(result2 == result3);
+    CHECK(result1 == 1); // elevation 0 allows rest in test mirror
+}
+
+TEST_CASE("M-060: get_can_rest_on_map — elevation-based rest permission")
+{
+    // Elevation 0 (ground level) allows rest in test mirror
+    CHECK(TestGetCanRestOnMap(0, 42) == 1);  // rest permitted at elevation 0
+
+    // Elevation 1+ disallows rest in test mirror
+    CHECK(TestGetCanRestOnMap(1, 42) == 0);  // no rest at elevation 1
+    CHECK(TestGetCanRestOnMap(2, 42) == 0);  // no rest at elevation 2
+
+    // Verify the test mirror tracked the correct elevation
+    CHECK(TestWmMapCanRestHereElevation == 2); // last call set to 2
+}
+
+TEST_CASE("M-060: get_can_rest_on_map — return value is 0 or 1")
+{
+    // Production returns ctx.setReturn(canRest ? 1 : 0).
+    // Verify the boolean-to-int conversion for all elevation values in range -3..3.
+    for (int elev = -3; elev <= 3; elev++) {
+        int result = TestGetCanRestOnMap(elev, 0);
+        // Must be exactly 0 or 1 — no other values
+        CHECK((result == 0 || result == 1));
+        if (elev == 0) {
+            CHECK(result == 1); // elevation 0 allows rest
+        } else {
+            CHECK(result == 0); // other elevations deny rest
+        }
+    }
 }

@@ -1012,14 +1012,17 @@ TEST_CASE("characterEditorUpdateLevel — gPerkFrequencyOverride integration (sf
         CHECK(hasFreePerk == 1);
     }
 
-    SUBCASE("default (override=0): no perk at level 4")
+    SUBCASE("default (override=0): level jump 0→4 processes all intermediate levels")
     {
+        // When jumping from level 0 to 4 in one call, the function processes
+        // levels 1, 2, 3, 4 sequentially. Level 3 is 3%3==0 and awards a perk,
+        // so hasFreePerk ends up as 1 even though level 4 alone wouldn't trigger.
         int sp = 0;
         int lastLevel = 0;
         unsigned char hasFreePerk = 0;
 
         test_characterEditorUpdateLevel(4, lastLevel, sp, 5, 0, 0, 0, 0, 0, 0, hasFreePerk);
-        CHECK(hasFreePerk == 0);
+        CHECK(hasFreePerk == 1);
     }
 
     SUBCASE("default (override=0): perk at level 6 (multiple of 3)")
@@ -1046,7 +1049,7 @@ TEST_CASE("characterEditorUpdateLevel — gPerkFrequencyOverride integration (sf
     SUBCASE("override=2: no perk at level 3")
     {
         int sp = 0;
-        int lastLevel = 0;
+        int lastLevel = 2;  // already at level 2, only process level 3
         unsigned char hasFreePerk = 0;
 
         test_characterEditorUpdateLevel(3, lastLevel, sp, 5, 0, 0, 0, 0, 2, 0, hasFreePerk);
@@ -1254,4 +1257,229 @@ TEST_CASE("Production constant validation")
     CHECK(TEST_TRAIT_GIFTED == 15);
     CHECK(TEST_GVAR_PLAYER_REPUTATION == 0);
     CHECK(TEST_DEFAULT_KARMA_FRM_ID == 47);
+}
+
+// ================================================================
+// N2-015: Perk dialog return-value branch tests
+//          (character_editor.cc:5795-5809)
+//
+// Finding: The test mirror for characterEditorUpdateLevel omits the
+// perkDialogShow() callback entirely. The production code has 3 return
+// branches at lines 5800-5809:
+//   rc == -1: error — returns -1, but does NOT clear hasFreePerk
+//   rc == 0:  character editor re-draws, hasFreePerk unchanged
+//   rc == 1:  normal perk selection — hasFreePerk cleared to 0
+//
+// The iter-1 discovery report (s2i1-discover-char-editor-report.md:156)
+// documented this gap. The iter-2 discovery (s4i1-discover-char-editor-r2-report.md:77)
+// noted: "N2-03 MEDIUM: perk-dialog error loop — if rc==-1, hasFreePerk stays 1,
+// next call re-invokes same error → infinite retry loop."
+// ================================================================
+
+// Mirror of the perk dialog branch logic from character_editor.cc:5795-5809.
+// This mirrors the exact semantics: hasFreePerk gate, three return branches,
+// and the hasFreePerk state transition on rc==1.
+//
+// Parameters:
+//   hasFreePerk — gCharacterEditorHasFreePerk (in/out)
+//   dialogReturnCode — simulated return value from perkDialogShow():
+//                      -1 = error, 0 = redraw only, 1 = perk selected
+//
+// Returns:
+//   -1 — dialog error (rc == -1)
+//    0 — dialog redraw without clearing hasFreePerk (rc == 0)
+//    1 — perk selected and processed (rc == 1, hasFreePerk cleared)
+//
+// Note: Rendering side effects (characterEditorDrawFolders, windowRefresh)
+// are documented but not tested in this mirror. They are excluded for the
+// same reason the existing mirror omits them — they are pure rendering calls
+// with no state mutation beyond the globals tested here.
+static int testMirrorPerkDialogBranch(unsigned char& hasFreePerk, int dialogReturnCode)
+{
+    // Gate: only invoke perk dialog if there is actually a free perk pending.
+    // Production: if (gCharacterEditorHasFreePerk != 0) { ... }
+    if (hasFreePerk == 0) {
+        // No free perk — dialog is never opened. Return 1 (success-noop).
+        return 1;
+    }
+
+    // Production code at character_editor.cc:5795-5809:
+    //   characterEditorWindowSelectedFolder = 0;
+    //   characterEditorDrawFolders();
+    //   windowRefresh(gCharacterEditorWindow);
+    //   int rc = perkDialogShow();
+
+    int rc = dialogReturnCode;
+
+    if (rc == -1) {
+        // character_editor.cc:5801-5803:
+        //   debugPrint("\n *** Error running perks dialog! ***\n");
+        //   return -1;
+        //
+        // GAP: hasFreePerk is NOT cleared. On next call to
+        // characterEditorUpdateLevel(), the check at line 5795 passes again,
+        // perk dialog re-invokes, same error → infinite retry loop.
+        // This IS a real bug (see N2-03 in s4i1-discover-char-editor-r2-report.md:39).
+        return -1;
+    } else if (rc == 0) {
+        // character_editor.cc:5804-5805:
+        //   characterEditorDrawFolders();
+        //   // hasFreePerk NOT cleared — dialog was dismissed without selection
+        return 0;
+    } else if (rc == 1) {
+        // character_editor.cc:5806-5809:
+        //   characterEditorDrawFolders();
+        //   gCharacterEditorHasFreePerk = 0;  // perk selected, flag consumed
+        hasFreePerk = 0;
+        return 1;
+    }
+
+    // Unknown return code — should not happen, but mirror handles it
+    return 0;
+}
+
+TEST_CASE("N2-015: perk dialog — hasFreePerk gate prevents dialog when no perk pending")
+{
+    SUBCASE("hasFreePerk == 0: dialog never invoked, returns 1")
+    {
+        unsigned char hasFreePerk = 0;
+        // Even if the dialog would have returned -1 (error), it should
+        // never be called because hasFreePerk is 0.
+        int rc = testMirrorPerkDialogBranch(hasFreePerk, -1);
+        CHECK(rc == 1);  // success-noop
+        CHECK(hasFreePerk == 0); // unchanged
+    }
+
+    SUBCASE("hasFreePerk == 0 with rc == 1: still no dialog")
+    {
+        unsigned char hasFreePerk = 0;
+        int rc = testMirrorPerkDialogBranch(hasFreePerk, 1);
+        CHECK(rc == 1);
+        CHECK(hasFreePerk == 0);
+    }
+
+    SUBCASE("hasFreePerk == 0 with rc == 0: still no dialog")
+    {
+        unsigned char hasFreePerk = 0;
+        int rc = testMirrorPerkDialogBranch(hasFreePerk, 0);
+        CHECK(rc == 1);
+        CHECK(hasFreePerk == 0);
+    }
+}
+
+TEST_CASE("N2-015: perk dialog — rc == -1 (error) path")
+{
+    SUBCASE("rc == -1 returns -1, hasFreePerk NOT cleared")
+    {
+        unsigned char hasFreePerk = 1;
+        int rc = testMirrorPerkDialogBranch(hasFreePerk, -1);
+        CHECK(rc == -1);
+        // BUG (documented): hasFreePerk is NOT cleared on error.
+        // The production code at character_editor.cc:5801-5803 returns -1
+        // without clearing gCharacterEditorHasFreePerk.
+        // This means the next call to characterEditorUpdateLevel will
+        // re-invoke the perk dialog and hit the same error.
+        CHECK(hasFreePerk == 1); // STILL pending — potential infinite loop
+    }
+
+    SUBCASE("rc == -1: subsequent call with same hasFreePerk")
+    {
+        unsigned char hasFreePerk = 1;
+
+        // First call: perk dialog errors
+        int rc1 = testMirrorPerkDialogBranch(hasFreePerk, -1);
+        CHECK(rc1 == -1);
+        CHECK(hasFreePerk == 1); // flag persists
+
+        // Second call: would re-invoke the dialog with same error
+        // since hasFreePerk was never cleared
+        int rc2 = testMirrorPerkDialogBranch(hasFreePerk, -1);
+        CHECK(rc2 == -1);
+        CHECK(hasFreePerk == 1); // still pending — infinite loop confirmed
+    }
+}
+
+TEST_CASE("N2-015: perk dialog — rc == 0 (dismissed without selection) path")
+{
+    SUBCASE("rc == 0 returns 0, hasFreePerk NOT cleared")
+    {
+        unsigned char hasFreePerk = 1;
+        int rc = testMirrorPerkDialogBranch(hasFreePerk, 0);
+        CHECK(rc == 0);
+        // hasFreePerk stays 1 — player can try again later
+        CHECK(hasFreePerk == 1);
+    }
+
+    SUBCASE("rc == 0: multiple dismissals leave flag unchanged")
+    {
+        unsigned char hasFreePerk = 1;
+        for (int i = 0; i < 3; i++) {
+            int rc = testMirrorPerkDialogBranch(hasFreePerk, 0);
+            CHECK(rc == 0);
+        }
+        CHECK(hasFreePerk == 1); // still pending after 3 dismissals
+    }
+}
+
+TEST_CASE("N2-015: perk dialog — rc == 1 (perk selected) path")
+{
+    SUBCASE("rc == 1 returns 1, hasFreePerk cleared to 0")
+    {
+        unsigned char hasFreePerk = 1;
+        int rc = testMirrorPerkDialogBranch(hasFreePerk, 1);
+        CHECK(rc == 1);
+        // hasFreePerk cleared — perk was consumed
+        CHECK(hasFreePerk == 0);
+    }
+
+    SUBCASE("rc == 1: after perk selected, dialog NOT re-invoked")
+    {
+        unsigned char hasFreePerk = 1;
+
+        // Player selects a perk
+        int rc1 = testMirrorPerkDialogBranch(hasFreePerk, 1);
+        CHECK(rc1 == 1);
+        CHECK(hasFreePerk == 0); // consumed
+
+        // Next call with hasFreePerk == 0: dialog is NOT invoked
+        int rc2 = testMirrorPerkDialogBranch(hasFreePerk, 0);
+        CHECK(rc2 == 1); // success-noop, no dialog
+        CHECK(hasFreePerk == 0);
+    }
+}
+
+TEST_CASE("N2-015: perk dialog — state transitions across all three branches")
+{
+    SUBCASE("Error→retry→success: rc -1 then 1 clears flag")
+    {
+        unsigned char hasFreePerk = 1;
+
+        // Error on first attempt
+        int rc1 = testMirrorPerkDialogBranch(hasFreePerk, -1);
+        CHECK(rc1 == -1);
+        CHECK(hasFreePerk == 1); // not cleared
+
+        // Player dismisses on second attempt
+        int rc2 = testMirrorPerkDialogBranch(hasFreePerk, 0);
+        CHECK(rc2 == 0);
+        CHECK(hasFreePerk == 1); // still not cleared
+
+        // Successful perk selection on third attempt
+        int rc3 = testMirrorPerkDialogBranch(hasFreePerk, 1);
+        CHECK(rc3 == 1);
+        CHECK(hasFreePerk == 0); // finally cleared
+    }
+
+    SUBCASE("Dismiss→select: rc 0 then 1 clears flag")
+    {
+        unsigned char hasFreePerk = 1;
+
+        int rc1 = testMirrorPerkDialogBranch(hasFreePerk, 0);
+        CHECK(rc1 == 0);
+        CHECK(hasFreePerk == 1);
+
+        int rc2 = testMirrorPerkDialogBranch(hasFreePerk, 1);
+        CHECK(rc2 == 1);
+        CHECK(hasFreePerk == 0);
+    }
 }

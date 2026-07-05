@@ -27,6 +27,7 @@
 #include <algorithm>
 #include <cstring>
 #include <cassert>
+#include <string>
 
 // ============================================================================
 // Section 1: Test-local type definitions mirroring the production types
@@ -70,7 +71,9 @@ enum TestObjectFlags : unsigned int {
     TEST_OBJECT_TRANS_ENERGY = 0x80000,
     TEST_OBJECT_IN_LEFT_HAND  = 0x1000000,
     TEST_OBJECT_IN_RIGHT_HAND = 0x2000000,
+    TEST_OBJECT_IN_ANY_HAND   = 0x3000000,
     TEST_OBJECT_WORN          = 0x4000000,
+    TEST_OBJECT_EQUIPPED      = 0x7000000,
     TEST_OBJECT_WALL_TRANS_END = 0x10000000,
     TEST_OBJECT_LIGHT_THRU    = 0x20000000,
     TEST_OBJECT_SEEN          = 0x40000000,
@@ -1473,7 +1476,16 @@ TEST_CASE("critterRestoreEquipped — restores equipped items")
     SUBCASE("restores left hand, right hand, and armor")
     {
         TestObject* critter = testObjectAlloc(0);
-        testInventorySetup(critter, nullptr, 0);
+        // Provide capacity for restore: testItemAdd requires capacity >= length+1.
+        // In production, itemAdd() handles dynamic reallocation, but the test
+        // stub uses fixed capacity. Allocate space for 3 items, then set length to 0.
+        TestInventoryItem* spareSlots[3] = {
+            testItemAlloc(nullptr, 0),
+            testItemAlloc(nullptr, 0),
+            testItemAlloc(nullptr, 0),
+        };
+        testInventorySetup(critter, spareSlots, 3);
+        critter->inventory.length = 0; // start empty, capacity=3
 
         TestObject* fist   = testMakeEquippedItem(100, 0); // flags cleared during strip
         TestObject* knife  = testMakeEquippedItem(101, 0);
@@ -1506,7 +1518,9 @@ TEST_CASE("critterRestoreEquipped — restores equipped items")
     SUBCASE("dual-wield restore sets both flags")
     {
         TestObject* critter = testObjectAlloc(0);
-        testInventorySetup(critter, nullptr, 0);
+        TestInventoryItem* spareSlots[1] = { testItemAlloc(nullptr, 0) };
+        testInventorySetup(critter, spareSlots, 1);
+        critter->inventory.length = 0; // start empty, capacity=1
 
         TestObject* dualWield = testMakeEquippedItem(100, 0);
 
@@ -1524,7 +1538,9 @@ TEST_CASE("critterRestoreEquipped — restores equipped items")
     SUBCASE("restore with null fields skips those")
     {
         TestObject* critter = testObjectAlloc(0);
-        testInventorySetup(critter, nullptr, 0);
+        TestInventoryItem* spareSlots[1] = { testItemAlloc(nullptr, 0) };
+        testInventorySetup(critter, spareSlots, 1);
+        critter->inventory.length = 0; // start empty, capacity=1
 
         TestObject* fist = testMakeEquippedItem(100, 0);
 
@@ -1644,4 +1660,538 @@ TEST_CASE("item type PID range mapping consistency")
 
     // nullptr returns -1 (safe)
     CHECK(testItemGetType(nullptr) == -1);
+}
+
+// ============================================================================
+// Section: H-012 / N2-010 — _adjust_fid first-call stale FID
+// ============================================================================
+//
+// Finding H-012 (HIGH): The fork changed the first arg to scriptHooks_AdjustFid
+// from (fid, fid) to (gInventoryWindowDudeFid, fid). This means on the first
+// call of _adjust_fid, arg0 = gInventoryWindowDudeFid = 0 (static zero-init).
+// Subsequent calls carry the previously-modified FID as arg0.
+//
+// Finding N2-010 (MEDIUM): Iter-2 discovered that gInventoryWindowDudeFid's
+// static zero-init means the very first hook invocation receives arg0=0
+// instead of a valid FID. ET Tu's gl_partyarmor.ssl adjustfid_handler expects
+// arg0 to be the NPC's vanilla FID.
+//
+// sfall research (CONFIRMED): gl_hook_item_compat.ssl:36-43 tests
+// HOOK_ADJUSTFID with 2 int args and expects meaningful comparison.
+//
+// ET Tu research (CONFIRMED): gl_partyarmor.ssl:229-239 registers
+// adjustfid_handler for HOOK_ADJUSTFID; handler reads arg0 as vanilla_fid.
+
+// ---- Mirror globals for _adjust_fid ----
+static int gTestInventoryWindowDudeFid = 0; // static zero-init
+static int gTestLastAdjustFidArg0 = 0;      // capture what arg0 was
+static int gTestLastAdjustFidArg1 = 0;      // capture what arg1 was
+static int gTestAdjustFidCallCount = 0;
+
+// Mirror of _adjust_fid (inventory.cc:2658-2669)
+//
+// Production code:
+//   gInventoryWindowDudeFid = scriptHooks_AdjustFid(gInventoryWindowDudeFid, fid);
+// arg0 = gInventoryWindowDudeFid (current static value, 0 on first call)
+// arg1 = fid                       (freshly computed FID)
+static void testAdjustFid(int computedFid)
+{
+    int arg0 = gTestInventoryWindowDudeFid; // capture BEFORE hook (0 on first call)
+    int arg1 = computedFid;                 // freshly computed FID
+
+    gTestLastAdjustFidArg0 = arg0;
+    gTestLastAdjustFidArg1 = arg1;
+    gTestAdjustFidCallCount++;
+
+    // Hook result: pretend the hook returns computedFid unchanged.
+    int hookResult = arg1;
+    gTestInventoryWindowDudeFid = hookResult;
+}
+
+// Reset _adjust_fid test state
+static void testResetAdjustFidState()
+{
+    gTestInventoryWindowDudeFid = 0;
+    gTestLastAdjustFidArg0 = 0;
+    gTestLastAdjustFidArg1 = 0;
+    gTestAdjustFidCallCount = 0;
+}
+
+TEST_CASE("H-012 / N2-010: _adjust_fid first-call stale/zero FID (inventory.cc:2668)")
+{
+    // Finding: H-012 (HIGH) + N2-010 (MEDIUM), adversarial CONFIRMED
+    // Source: inventory.cc:2668
+    //
+    // Regression test: On the first call to _adjust_fid, arg0 (gInventoryWindowDudeFid)
+    // is 0 because it's a static zero-initialized variable. The hook receives
+    // arg0=0 instead of a valid FID. This affects ET Tu's NPC armor system.
+
+    testResetAdjustFidState();
+
+    SUBCASE("first call: arg0 is zero (static zero-init)")
+    {
+        // First call computes FID 16777226 (0x100000A) for the dude
+        int computedFid = 0x100000A;
+        testAdjustFid(computedFid);
+
+        CHECK(gTestAdjustFidCallCount == 1);
+        CHECK(gTestLastAdjustFidArg0 == 0);      // STALE: zero instead of FID
+        CHECK(gTestLastAdjustFidArg1 == computedFid); // arg1 is correct
+    }
+
+    SUBCASE("first call: arg0 == 0, which is not a valid FID")
+    {
+        testAdjustFid(0x100000A);
+        // Verify arg0 is indeed zero on first call
+        CHECK(gTestLastAdjustFidArg0 == 0);
+
+        // A valid FID should never be 0 for a real NPC/dude
+        // (FID 0 would typically be a null/error value).
+        // This is the gap: the hook handler cannot distinguish
+        // "initial zero due to static init" from "FID 0".
+    }
+
+    SUBCASE("second call: arg0 carries previously-modified FID")
+    {
+        // Second call (e.g., after inventoryOpenUseItemOn triggers
+        // an FID recalculation at line 4232)
+        int firstFid = 0x100000A;
+        int secondFid = 0x200000B;
+
+        testAdjustFid(firstFid);
+        CHECK(gTestLastAdjustFidArg0 == 0);         // first call: arg0=0
+        CHECK(gTestLastAdjustFidArg1 == firstFid);
+
+        testAdjustFid(secondFid);
+        CHECK(gTestLastAdjustFidArg0 == firstFid);  // second call: arg0=previous result
+        CHECK(gTestLastAdjustFidArg1 == secondFid); // arg1=correct new value
+        CHECK(gTestAdjustFidCallCount == 2);
+    }
+
+    SUBCASE("N2-010: ET Tu compat — handler expects arg0=vanilla FID")
+    {
+        // ET Tu's gl_partyarmor.ssl:229-239 adjustfid_handler:
+        //   variable vanilla_fid := get_sfall_arg;  // args[0]
+        //   variable modified_fid := get_sfall_arg; // args[1]
+        //
+        // On first call, arg0=0 → handler receives 0 as "vanilla FID"
+        // and tries to use it for NPC appearance calculation.
+
+        int computedFid = 0x100000A; // valid NPC FID
+        testAdjustFid(computedFid);
+
+        // The handler would receive 0 as "vanilla" FID — this is wrong.
+        // A proper fix would compute the real vanilla FID and pass it as arg0.
+        CHECK(gTestLastAdjustFidArg0 == 0); // THIS IS THE BUG: handler sees 0
+
+        // Second call: handler sees the previously-modified value,
+        // which is also incorrect — it's not the "vanilla" FID but
+        // the hook-modified result from the previous call.
+        testAdjustFid(0x300000C);
+        CHECK(gTestLastAdjustFidArg0 == computedFid); // modified, not vanilla
+    }
+
+    SUBCASE("regression: old code passed (fid, fid)")
+    {
+        // Pre-fork code: gInventoryWindowDudeFid = scriptHooks_AdjustFid(fid, fid);
+        // Both args were the freshly-computed fid. This was consistent.
+        //
+        // Simulate the old behavior:
+        int fid = 0x100000A;
+        int arg0_old = fid; // old code: both args were fid
+        int arg1_old = fid;
+        CHECK(arg0_old == arg1_old); // old code: args match
+
+        // The fork changed arg0 to gInventoryWindowDudeFid,
+        // which breaks this invariant on the first call.
+        // Test that the fork behavior differs:
+        testAdjustFid(fid);
+        CHECK(gTestLastAdjustFidArg0 != gTestLastAdjustFidArg1); // fork: args differ
+    }
+}
+
+
+// ============================================================================
+// Section: N2-011 — Negative AP reduction (no clamp on setter)
+// ============================================================================
+//
+// inventorySetQuickPocketsApCostReduction (inventory.cc:1068-1071) accepts
+// any int without validation. No negative value test exists.
+
+TEST_CASE("N2-011: inventorySetQuickPocketsApCostReduction — negative value (inventory.cc:1068-1071)")
+{
+    // Finding: N2-011 (MEDIUM), adversarial CONFIRMED
+    // Source: inventory.cc:1068-1071
+    //
+    // The setter accepts any int. A negative value inverts the AP formula:
+    //   gInventoryApCost - (-N) * quickPockets = gInventoryApCost + N * quickPockets
+    // This INCREASES AP cost instead of reducing it.
+    //
+    // The config re-init path (sfall_callbacks.cc:69) reads the value
+    // without validation — unlike speedMultiValue which IS clamped.
+
+    testResetAllPools();
+    gInventoryApCost = kDefaultInventoryApCost;
+    kQuickPocketsApCostReduction = 2;
+
+    SUBCASE("negative reduction INCREASES AP cost (bug trigger)")
+    {
+        // Set reduction = -5
+        testInventorySetQuickPocketsApCostReduction(-5);
+        CHECK(kQuickPocketsApCostReduction == -5); // setter accepts negative
+
+        // With 2 ranks of Quick Pockets:
+        // cost = 4 - (-5)*2 = 4 + 10 = 14
+        TestObject* dude = testObjectAlloc(0);
+        gDude = dude;
+        gStubPerkQuickPocketsRank = 2;
+
+        int cost = testInventoryGetInvenApCost();
+        // Formula: max(4 - (-5) * 2, 0) = max(4 + 10, 0) = 14
+        CHECK(cost == 14); // INCREASED instead of decreased!
+
+        // Expected correct behavior (with clamped reduction):
+        // cost should be <= 4 (the base AP cost)
+        // But with negative reduction, it's 14 — 3.5x the base cost.
+    }
+
+    SUBCASE("negative reduction with 1 rank")
+    {
+        testInventorySetQuickPocketsApCostReduction(-2);
+        TestObject* dude = testObjectAlloc(0);
+        gDude = dude;
+        gStubPerkQuickPocketsRank = 1;
+
+        // cost = max(4 - (-2)*1, 0) = 6
+        CHECK(testInventoryGetInvenApCost() == 6);
+    }
+
+    SUBCASE("negative reduction with 0 ranks (no change in formula)")
+    {
+        testInventorySetQuickPocketsApCostReduction(-100);
+        TestObject* dude = testObjectAlloc(0);
+        gDude = dude;
+        gStubPerkQuickPocketsRank = 0;
+
+        // cost = max(4 - (-100)*0, 0) = 4
+        CHECK(testInventoryGetInvenApCost() == 4);
+    }
+
+    SUBCASE("negative reduction + no dude → no change")
+    {
+        testInventorySetQuickPocketsApCostReduction(-10);
+        gDude = nullptr;
+        gStubPerkQuickPocketsRank = 0;
+        // no dude → quickPockets = 0 → cost = max(4 - (-10)*0, 0) = 4
+        CHECK(testInventoryGetInvenApCost() == 4);
+    }
+
+    SUBCASE("large negative value")
+    {
+        testInventorySetQuickPocketsApCostReduction(-999999);
+        CHECK(kQuickPocketsApCostReduction == -999999);
+
+        TestObject* dude = testObjectAlloc(0);
+        gDude = dude;
+        gStubPerkQuickPocketsRank = 1;
+
+        // cost = max(4 - (-999999)*1, 0) = 1000003 (still positive)
+        // The std::max(..., 0) clamp only prevents negative output,
+        // not absurdly large positive output.
+        int cost = testInventoryGetInvenApCost();
+        CHECK(cost > 1000000);
+    }
+
+    kQuickPocketsApCostReduction = 2;
+    gDude = nullptr;
+}
+
+
+// ============================================================================
+// Section: M-043 / N2-014 — USE_ITEM_RESULT_DROP path
+// ============================================================================
+//
+// The DROP path (inventory.cc:4175-4183) clears the inventory slot but
+// does NOT call itemRemove() — so the item's ->owner field is not cleared
+// and OBJECT_EQUIPPED flag persists.
+//
+// itemRemove() (item.cc:461-462) does:
+//   itemToRemove->owner = nullptr;
+//   itemToRemove->flags &= ~OBJECT_EQUIPPED;
+
+// ---- Mirror structs for DROP path ----
+static TestObject* gTestDude = nullptr;
+
+// Mirror of the DROP path logic (inventory.cc:4175-4183)
+// Also mirrors itemRemove's cleanup (item.cc:461-462)
+struct DropResult {
+    bool slotCleared;
+    bool ownerCleared;
+    bool equippedFlagCleared;
+    bool itemConnected; // _obj_connect called
+};
+
+static DropResult testDropPathLogic(TestObject* item, TestObject* owner,
+                                     TestObject** itemSlot)
+{
+    DropResult result = {};
+    result.slotCleared = false;
+    result.ownerCleared = false;
+    result.equippedFlagCleared = false;
+    result.itemConnected = false;
+
+    // DROP path: *itemSlot = nullptr (clear slot, skip itemRemove)
+    if (itemSlot != nullptr) {
+        *itemSlot = nullptr;
+        result.slotCleared = true;
+    }
+
+    // _obj_connect(item, gDude->tile, ...) — place item in world
+    result.itemConnected = true;
+
+    // NOTE: itemRemove() is NEVER called in the DROP path.
+    // The following are the MISSING operations:
+    //
+    // From itemRemove():
+    //   itemToRemove->owner = nullptr;       // NOT DONE
+    //   itemToRemove->flags &= ~OBJECT_EQUIPPED; // NOT DONE
+
+    // Check what itemRemove DOES that DROP skips:
+    result.ownerCleared = (item->owner == nullptr);    // should be false
+    result.equippedFlagCleared = ((item->flags & TEST_OBJECT_EQUIPPED) == 0); // should be false
+
+    return result;
+}
+
+// Mirror of what a proper itemRemove() call would do
+static void testItemRemoveCleanup(TestObject* item)
+{
+    item->owner = nullptr;
+    item->flags &= ~TEST_OBJECT_EQUIPPED;
+}
+
+TEST_CASE("M-043 / N2-014: USE_ITEM_RESULT_DROP path — owner not cleared (inventory.cc:4175-4183)")
+{
+    // Finding: M-043 (MEDIUM) + N2-014 (MEDIUM), adversarial CONFIRMED
+    // Source: inventory.cc:4175-4183
+    //
+    // The DROP path bypasses itemRemove(). Critical cleanup skipped:
+    // 1. item->owner stays set to the origin critter (item thinks it's owned)
+    // 2. OBJECT_EQUIPPED flag persists if item was equipped
+
+    testResetAllPools();
+
+    SUBCASE("DROP: item->owner NOT cleared")
+    {
+        TestObject* critter = testObjectAlloc(0);
+        TestObject* item = testObjectAlloc(100, TEST_OBJECT_IN_RIGHT_HAND); // equipped weapon
+        item->owner = critter; // item belongs to critter
+
+        TestObject* slot = item; // "inventory slot" pointing to item
+        TestObject** slotPtr = &slot;
+
+        DropResult dr = testDropPathLogic(item, critter, slotPtr);
+
+        CHECK(dr.slotCleared == true);           // slot was cleared ✓
+        CHECK(dr.itemConnected == true);         // item connected to world ✓
+
+        // N2-014: These should be true after a proper remove,
+        // but DROP skips them:
+        CHECK(dr.ownerCleared == false);         // BUG: owner not cleared!
+        CHECK(dr.equippedFlagCleared == false);  // BUG: equipped flag persists!
+
+        // Verify the state is indeed wrong:
+        CHECK(item->owner == critter);           // item still thinks critter owns it
+        CHECK((item->flags & TEST_OBJECT_EQUIPPED) != 0); // OBJECT_EQUIPPED still set
+    }
+
+    SUBCASE("contrast with itemRemove: owner IS cleared")
+    {
+        TestObject* critter = testObjectAlloc(0);
+        TestObject* item = testObjectAlloc(100, TEST_OBJECT_IN_RIGHT_HAND | TEST_OBJECT_EQUIPPED);
+        item->owner = critter;
+
+        // Proper itemRemove would do:
+        testItemRemoveCleanup(item);
+
+        CHECK(item->owner == nullptr);           // owner cleared ✓
+        CHECK((item->flags & TEST_OBJECT_EQUIPPED) == 0); // flags cleared ✓
+    }
+
+    SUBCASE("DROP: equipped Stealth Boy would not be deactivated")
+    {
+        // From item.cc:452-459: itemRemove checks if the item is
+        // a Stealth Boy and calls stealthBoyTurnOff. DROP skips this.
+        // If a Stealth Boy was equipped and then "used" resulting in
+        // USE_ITEM_RESULT_DROP, the stealth effect would persist because
+        // stealthBoyTurnOff is never called.
+
+        TestObject* critter = testObjectAlloc(0);
+        TestObject* stealthBoy = testObjectAlloc(999, TEST_OBJECT_EQUIPPED);
+        stealthBoy->owner = critter;
+
+        TestObject* slot = stealthBoy;
+        TestObject** slotPtr = &slot;
+
+        DropResult dr = testDropPathLogic(stealthBoy, critter, slotPtr);
+
+        // Stealth Boy cleanup skipped:
+        CHECK(stealthBoy->owner == critter);     // still owned
+        CHECK((stealthBoy->flags & TEST_OBJECT_EQUIPPED) != 0); // still equipped
+        CHECK(dr.slotCleared == true);           // but slot was cleared
+    }
+
+    SUBCASE("contrast with REMOVE path: objectDestroy → itemRemove called internally")
+    {
+        // The REMOVE path (inventory.cc:4168-4174) calls objectDestroy(item)
+        // which internally calls itemRemove(). So REMOVE properly cleans up.
+
+        TestObject* critter = testObjectAlloc(0);
+        TestObject* item = testObjectAlloc(100, TEST_OBJECT_EQUIPPED);
+        item->owner = critter;
+
+        // Simulate the REMOVE path's proper cleanup chain:
+        testItemRemoveCleanup(item);
+
+        CHECK(item->owner == nullptr);
+        CHECK((item->flags & TEST_OBJECT_EQUIPPED) == 0);
+    }
+
+    SUBCASE("N2-014: objectGetOwner returns stale pointer after DROP")
+    {
+        // After DROP, any code calling objectGetOwner(item) returns
+        // the original critter instead of nullptr — the item thinks
+        // it's still owned.
+
+        TestObject* critter = testObjectAlloc(0);
+        TestObject* item = testObjectAlloc(100, 0);
+        item->owner = critter;
+
+        // Simulate DROP
+        TestObject* slot = item;
+        TestObject** slotPtr = &slot;
+        testDropPathLogic(item, critter, slotPtr);
+
+        // objectGetOwner would return critter — WRONG
+        CHECK(item->owner != nullptr);
+        CHECK(item->owner == critter);
+        // Correct behavior after DROP: item->owner should be nullptr
+    }
+}
+
+
+// ============================================================================
+// Section: M-045 — HOOK_DESCRIPTIONOBJ integration (mirror)
+// ============================================================================
+//
+// Finding M-045 (MEDIUM): objectExamineFunc at proto_instance.cc:281-290
+// wraps messageListItem.text in std::string without checking if
+// messageListGetItem succeeded. The text pointer may be uninitialized.
+//
+// Also tests the hook override pattern: hook receives examiner, target,
+// and description string; can override the description via the mutable
+// string reference.
+
+// ---- Mirror types for HOOK_DESCRIPTIONOBJ ----
+static int gTestDescriptionObjHookCallCount = 0;
+static int gTestDescriptionObjLastExaminer = 0;
+static int gTestDescriptionObjLastTarget = 0;
+static std::string gTestDescriptionObjLastDescription;
+static bool gTestDescriptionObjOverrideEnabled = false;
+static std::string gTestDescriptionObjOverrideText;
+
+// Mirror of HOOK_DESCRIPTIONOBJ dispatch (proto_instance.cc:282-290)
+static void testDescriptionObjHook(int examiner, int target, std::string& description)
+{
+    gTestDescriptionObjHookCallCount++;
+    gTestDescriptionObjLastExaminer = examiner;
+    gTestDescriptionObjLastTarget = target;
+    gTestDescriptionObjLastDescription = description;
+
+    if (gTestDescriptionObjOverrideEnabled) {
+        description = gTestDescriptionObjOverrideText;
+    }
+}
+
+static void testResetDescriptionObjState()
+{
+    gTestDescriptionObjHookCallCount = 0;
+    gTestDescriptionObjLastExaminer = 0;
+    gTestDescriptionObjLastTarget = 0;
+    gTestDescriptionObjLastDescription.clear();
+    gTestDescriptionObjOverrideEnabled = false;
+    gTestDescriptionObjOverrideText.clear();
+}
+
+TEST_CASE("M-045: HOOK_DESCRIPTIONOBJ — hook call and override pattern (proto_instance.cc:281-290)")
+{
+    // Finding: M-045 (MEDIUM), adversarial CONFIRMED
+    // Source: proto_instance.cc:281-290
+    //
+    // ET Tu research (CONFIRMED): gl_fo1mechanics.ssl:265-273 registers
+    // DescriptionObj_handler for HOOK_DESCRIPTIONOBJ. Handler reads
+    // examiner, target, and description; uses set_sfall_return to override.
+    //
+    // Note: The UB risk (uninitialized messageListItem.text after
+    // messageListGetItem failure) is in proto_instance.cc, outside
+    // this domain's writable files. This test mirrors the hook
+    // pattern but cannot test the production call site directly.
+
+    testResetDescriptionObjState();
+
+    SUBCASE("hook receives correct examiner and target")
+    {
+        std::string desc = "You see: a shiny item.";
+        testDescriptionObjHook(42, 99, desc);
+
+        CHECK(gTestDescriptionObjHookCallCount == 1);
+        CHECK(gTestDescriptionObjLastExaminer == 42);
+        CHECK(gTestDescriptionObjLastTarget == 99);
+        CHECK(gTestDescriptionObjLastDescription == "You see: a shiny item.");
+    }
+
+    SUBCASE("hook overrides description string")
+    {
+        gTestDescriptionObjOverrideEnabled = true;
+        gTestDescriptionObjOverrideText = "This is a farm part (override)";
+        std::string desc = "You see: some junk.";
+
+        testDescriptionObjHook(1, 2, desc);
+
+        // After hook, description should be overridden:
+        CHECK(desc == "This is a farm part (override)");
+    }
+
+    SUBCASE("hook with empty fallback description (\"You see nothing\" path)")
+    {
+        // The "no description" path (message 493 = "You see nothing")
+        // also calls the hook with the fallback text.
+        std::string fallbackDesc = "You see nothing.";
+        testDescriptionObjHook(1, 5, fallbackDesc);
+
+        CHECK(gTestDescriptionObjHookCallCount == 1);
+        CHECK(gTestDescriptionObjLastDescription == "You see nothing.");
+    }
+
+    SUBCASE("ET Tu compat: farm parts quest pattern")
+    {
+        // ET Tu's gl_fo1mechanics.ssl:265-273:
+        //   procedure DescriptionObj_handler begin
+        //     variable examiner := get_sfall_arg;
+        //     variable target := get_sfall_arg;
+        //     variable description := get_sfall_arg;
+        //     ...
+        //     set_sfall_return("farm part description override");
+        //
+        // Verify the override pattern:
+        gTestDescriptionObjOverrideEnabled = true;
+        gTestDescriptionObjOverrideText = "This is part of a farming machine.";
+        std::string desc = "You see: a strange metal object.";
+
+        testDescriptionObjHook(100, 200, desc);
+
+        CHECK(desc == "This is part of a farming machine.");
+        CHECK(gTestDescriptionObjLastExaminer == 100);
+        CHECK(gTestDescriptionObjLastTarget == 200);
+    }
 }
