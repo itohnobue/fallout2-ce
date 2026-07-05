@@ -21,11 +21,13 @@ add_library(test_sources STATIC
     "${CMAKE_SOURCE_DIR}/src/memory.cc"
     "${CMAKE_SOURCE_DIR}/src/sfall_global_vars.cc"
     "${CMAKE_SOURCE_DIR}/src/game_config_migration.cc"
+    "${CMAKE_SOURCE_DIR}/src/sfall_config.cc"
+    "${CMAKE_SOURCE_DIR}/src/sfall_arrays.cc"
+    "${CMAKE_SOURCE_DIR}/src/sfall_ini.cc"
 )
 target_include_directories(test_sources PUBLIC "${CMAKE_SOURCE_DIR}/src")
-target_include_directories(test_sources PUBLIC ${SDL2_INCLUDE_DIRS})
 target_include_directories(test_sources PUBLIC ${ZLIB_INCLUDE_DIRS})
-target_link_libraries(test_sources PUBLIC test_stubs)
+target_link_libraries(test_sources PUBLIC test_stubs ${SDL2_LIBRARIES})
 
 # ---- Test: config.cc ----
 add_executable(test_config
@@ -57,9 +59,8 @@ add_executable(test_script_hooks
 )
 target_include_directories(test_script_hooks PRIVATE "${CMAKE_SOURCE_DIR}/src")
 # SDL2/zlib headers needed for transitive includes from interpreter.h
-target_include_directories(test_script_hooks PRIVATE ${SDL2_INCLUDE_DIRS})
 target_include_directories(test_script_hooks PRIVATE ${ZLIB_INCLUDE_DIRS})
-target_link_libraries(test_script_hooks PRIVATE test_stubs doctest)
+target_link_libraries(test_script_hooks PRIVATE test_stubs doctest ${SDL2_LIBRARIES})
 add_test(NAME test_script_hooks COMMAND test_script_hooks)
 
 # ---- Test: game_config_migration.cc ----
@@ -68,3 +69,259 @@ add_executable(test_game_config_migration
 )
 target_link_libraries(test_game_config_migration PRIVATE test_sources test_stubs doctest)
 add_test(NAME test_game_config_migration COMMAND test_game_config_migration)
+
+# ============================================================
+# Stage 4 Implementation — New Test Executables (29 entries)
+# Added by consolidation agent (s4-impl-cmake-consolidate)
+# ============================================================
+
+# ---- Test: combat data structures ----
+# Self-contained — does not link combat.cc (40+ engine deps).
+add_executable(test_combat
+    test_combat.cc
+)
+target_include_directories(test_combat PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_include_directories(test_combat PRIVATE ${ZLIB_INCLUDE_DIRS})
+target_link_libraries(test_combat PRIVATE doctest ${SDL2_LIBRARIES})
+add_test(NAME test_combat COMMAND test_combat)
+
+# ---- Test: combat hooks ----
+# Self-contained — does not link combat.cc.
+add_executable(test_combat_hooks
+    test_combat_hooks.cc
+)
+target_include_directories(test_combat_hooks PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_include_directories(test_combat_hooks PRIVATE ${ZLIB_INCLUDE_DIRS})
+target_link_libraries(test_combat_hooks PRIVATE doctest ${SDL2_LIBRARIES})
+add_test(NAME test_combat_hooks COMMAND test_combat_hooks)
+
+# ---- Test: interpreter core (data structures) ----
+# Self-contained test — does not link interpreter.cc (50+ engine deps).
+add_executable(test_interpreter_core
+    test_interpreter_core.cc
+)
+target_link_libraries(test_interpreter_core PRIVATE doctest)
+add_test(NAME test_interpreter_core COMMAND test_interpreter_core)
+
+# ---- Test: interpreter_extra (data structures + logic patterns) ----
+# Self-contained test — does not link interpreter_extra.cc (50+ engine deps).
+add_executable(test_interpreter_extra
+    test_interpreter_extra.cc
+)
+target_link_libraries(test_interpreter_extra PRIVATE doctest)
+add_test(NAME test_interpreter_extra COMMAND test_interpreter_extra)
+
+# ---- Test: inventory.cc core logic patterns ----
+# Self-contained test — does not link inventory.cc (60+ engine deps).
+add_executable(test_inventory
+    test_inventory.cc
+)
+target_link_libraries(test_inventory PRIVATE doctest)
+add_test(NAME test_inventory COMMAND test_inventory)
+
+# ---- Test: item.cc (addiction, power armor weight, Fast Shot AP) ----
+# Self-contained test — does not link item.cc (70+ engine deps).
+add_executable(test_item
+    test_item.cc
+)
+target_link_libraries(test_item PRIVATE doctest)
+add_test(NAME test_item COMMAND test_item)
+
+# ---- Test: stat.cc (experience, stat min/max, XP modifier) ----
+# Self-contained test — does not link stat.cc.
+add_executable(test_stat
+    test_stat.cc
+)
+target_link_libraries(test_stat PRIVATE doctest)
+add_test(NAME test_stat COMMAND test_stat)
+
+# ---- Test: game.cc (state machine, SpeedMulti, globalVarsRead fix) ----
+# Self-contained test — does not link game.cc.
+add_executable(test_game
+    test_game.cc
+)
+target_link_libraries(test_game PRIVATE doctest)
+add_test(NAME test_game COMMAND test_game)
+
+# ---- Test: map.cc / map_edge.cc (coordinate math, aging fix) ----
+# Self-contained test — does not link map.cc or map_edge.cc.
+add_executable(test_map
+    test_map.cc
+)
+target_link_libraries(test_map PRIVATE doctest)
+add_test(NAME test_map COMMAND test_map)
+
+# ---- Test: sfall_config (configGetInt/Double/IntList fork validation) ----
+# Links test_sources (config.cc, sfall_config.cc) for config/sfall_config testing.
+add_executable(test_config_sfall
+    test_config_sfall.cc
+)
+target_link_libraries(test_config_sfall PRIVATE test_sources test_stubs doctest)
+add_test(NAME test_config_sfall COMMAND test_config_sfall)
+
+# ---- Test: misc engine (configGetBool/SetDouble/IntList edges, ScopedConfig) ----
+# Links test_sources (config.cc) for config function testing.
+add_executable(test_misc_engine
+    test_misc_engine.cc
+)
+target_link_libraries(test_misc_engine PRIVATE test_sources test_stubs doctest)
+add_test(NAME test_misc_engine COMMAND test_misc_engine)
+
+# ---- Test: object.cc (data structures, RAII, pure logic) ----
+# Self-contained test — does not link object.cc (40+ engine deps).
+# Includes obj_types.h from src/ for real type definitions.
+add_executable(test_object
+    test_object.cc
+)
+target_include_directories(test_object PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_link_libraries(test_object PRIVATE doctest)
+add_test(NAME test_object COMMAND test_object)
+
+# ---- Test: party_member.h (self-contained test-local mirrors) ----
+add_executable(test_party
+    test_party.cc
+)
+target_link_libraries(test_party PRIVATE doctest)
+add_test(NAME test_party COMMAND test_party)
+
+# ---- Test: perk.h (self-contained test-local mirrors) ----
+add_executable(test_perk
+    test_perk.cc
+)
+target_link_libraries(test_perk PRIVATE doctest)
+add_test(NAME test_perk COMMAND test_perk)
+
+# ---- Test: critter.h (self-contained test-local mirrors) ----
+add_executable(test_critter
+    test_critter.cc
+)
+target_link_libraries(test_critter PRIVATE doctest)
+add_test(NAME test_critter COMMAND test_critter)
+
+# ---- Test: proto data structures ----
+# Self-contained test — does not link proto.cc (50+ engine deps).
+# Includes proto_types.h, obj_types.h from src/ for real type definitions.
+add_executable(test_proto
+    test_proto.cc
+)
+target_include_directories(test_proto PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_link_libraries(test_proto PRIVATE doctest)
+add_test(NAME test_proto COMMAND test_proto)
+
+# ---- Test: scripts.cc (data structures, accessors, sfallModsIni config) ----
+# Links test_sources (config.cc) for sfallModsIni Config integration.
+add_executable(test_scripts
+    test_scripts.cc
+)
+target_link_libraries(test_scripts PRIVATE test_sources test_stubs doctest)
+add_test(NAME test_scripts COMMAND test_scripts)
+
+# ---- Test: skill.cc (data structures, table integrity, skill max cap) ----
+# Self-contained — uses test-local stubs only.
+add_executable(test_skill
+    test_skill.cc
+)
+target_link_libraries(test_skill PRIVATE doctest)
+add_test(NAME test_skill COMMAND test_skill)
+
+# ---- Test: sfall_arrays.cc ----
+# Links test_sources (sfall_arrays.cc) for array functions.
+# Local stubs in test file override engine dependencies.
+add_executable(test_sfall_arrays
+    test_sfall_arrays.cc
+)
+target_link_libraries(test_sfall_arrays PRIVATE test_sources test_stubs doctest)
+add_test(NAME test_sfall_arrays COMMAND test_sfall_arrays)
+
+# ---- Test: sfall_ini.cc ----
+# Links test_sources (sfall_ini.cc) for INI functions.
+# Local stubs in test file override engine dependencies.
+add_executable(test_sfall_ini
+    test_sfall_ini.cc
+)
+target_link_libraries(test_sfall_ini PRIVATE test_sources test_stubs doctest)
+add_test(NAME test_sfall_ini COMMAND test_sfall_ini)
+
+# ---- Test: sfall_config lifecycle (from sfall-infra) ----
+# Links test_sources (sfall_config.cc) for sfallConfigInit/Exit.
+add_executable(test_sfall_config
+    test_sfall_config.cc
+)
+target_link_libraries(test_sfall_config PRIVATE test_sources test_stubs doctest)
+add_test(NAME test_sfall_config COMMAND test_sfall_config)
+
+# ---- Test: sfall_opcodes (lifecycle, extern globals) ----
+# Extern globals from sfall_opcodes.cc are defined in test_common_stubs.cc.
+# Self-contained — does not link the full sfall_opcodes.cc (150+ engine deps).
+add_executable(test_sfall_opcodes
+    test_sfall_opcodes.cc
+)
+target_link_libraries(test_sfall_opcodes PRIVATE test_stubs doctest)
+add_test(NAME test_sfall_opcodes COMMAND test_sfall_opcodes)
+
+# ---- Test: sfall metarules (header-level type validation) ----
+# Header-level test — does not link sfall_metarules.cc.
+# SDL2/zlib headers needed for transitive includes from sfall_metarules.h.
+add_executable(test_sfall_metarules
+    test_sfall_metarules.cc
+)
+target_include_directories(test_sfall_metarules PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_include_directories(test_sfall_metarules PRIVATE ${ZLIB_INCLUDE_DIRS})
+target_link_libraries(test_sfall_metarules PRIVATE test_stubs doctest ${SDL2_LIBRARIES})
+add_test(NAME test_sfall_metarules COMMAND test_sfall_metarules)
+
+# ---- Test: sfall hooks (extended hook type validation) ----
+# Complements test_script_hooks.cc. Header-level test.
+add_executable(test_sfall_hooks
+    test_sfall_hooks.cc
+)
+target_include_directories(test_sfall_hooks PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_include_directories(test_sfall_hooks PRIVATE ${ZLIB_INCLUDE_DIRS})
+target_link_libraries(test_sfall_hooks PRIVATE test_stubs doctest ${SDL2_LIBRARIES})
+add_test(NAME test_sfall_hooks COMMAND test_sfall_hooks)
+
+# ---- Test: window.cc (word wrap, color conversion, enums) ----
+# Links test_sources (memory.cc for internal_free_safe).
+# SDL2/zlib headers needed for window.h -> window_manager.h -> SDL headers.
+add_executable(test_window
+    test_window.cc
+)
+target_include_directories(test_window PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_include_directories(test_window PRIVATE ${ZLIB_INCLUDE_DIRS})
+target_link_libraries(test_window PRIVATE test_sources test_stubs doctest ${SDL2_LIBRARIES})
+add_test(NAME test_window COMMAND test_window)
+
+# ---- Test: dbox.cc (enum validation, file dialog layout constants) ----
+# Header-only test — self-contained with dbox.h constants.
+add_executable(test_dbox
+    test_dbox.cc
+)
+target_include_directories(test_dbox PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_link_libraries(test_dbox PRIVATE doctest)
+add_test(NAME test_dbox COMMAND test_dbox)
+
+# ---- Test: dialog.cc (dialog state, color conversion, F-05 fix) ----
+# Links test_sources (memory.cc). SDL2/zlib for dialog.h cascade.
+add_executable(test_dialog
+    test_dialog.cc
+)
+target_include_directories(test_dialog PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_include_directories(test_dialog PRIVATE ${ZLIB_INCLUDE_DIRS})
+target_link_libraries(test_dialog PRIVATE test_sources test_stubs doctest ${SDL2_LIBRARIES})
+add_test(NAME test_dialog COMMAND test_dialog)
+
+# ---- Test: worldmap (self-contained data structure tests) ----
+# Self-contained test — does not link worldmap.cc (45+ engine deps).
+add_executable(test_worldmap
+    test_worldmap.cc
+)
+target_link_libraries(test_worldmap PRIVATE doctest)
+add_test(NAME test_worldmap COMMAND test_worldmap)
+
+# ---- Test: character_editor.cc (pure logic mirrors) ----
+# Self-contained test — does not link character_editor.cc (40+ engine deps).
+add_executable(test_character_editor
+    test_character_editor.cc
+)
+target_link_libraries(test_character_editor PRIVATE doctest)
+add_test(NAME test_character_editor COMMAND test_character_editor)

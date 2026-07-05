@@ -8,11 +8,15 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
+#include <cstdlib>
 
 #include "db.h"
 #include "debug.h"
+#include "interpreter.h"
+#include "object.h"
 #include "platform_compat.h"
 #include "settings.h"
+#include "sfall_script_hooks.h"
 
 namespace fallout {
 
@@ -164,9 +168,156 @@ int filePrintFormatted(File* /*stream*/, const char* /*format*/, ...)
 
 } // namespace fallout
 
+// =============================================================
+// interpreter.h stubs (inside namespace fallout)
+// =============================================================
+
+// sfall_opcodes test calls hookOpcodeGetCurrentCall, which calls
+// programPrintError when no ScriptHookCall is active.
+namespace fallout {
+    void programPrintError(const char* /*format*/, ...)
+    {
+        // no-op: tests don't validate error message content
+    }
+} // namespace fallout
+
+// =============================================================
+// sfall_script_hooks.h stubs
+// =============================================================
+
+// test_sfall_opcodes calls hookOpcodeGetCurrentCall, which calls
+// ScriptHookCall::current(). In unit test context there is no active
+// hook call, so return nullptr.
+namespace fallout {
+    ScriptHookCall* ScriptHookCall::current()
+    {
+        return nullptr;
+    }
+} // namespace fallout
+
 // ---- Global variables defined by the engine ----
 // game_config_migration.cc references Settings settings and gSfallConfig.
+// NOTE: gSfallConfig is defined in sfall_config.cc (in test_sources).
+// Do NOT redefine here — causes duplicate symbol when linking test_sources.
 namespace fallout {
     Settings settings;
-    Config gSfallConfig;
+    // Config gSfallConfig; — MOVED to sfall_config.cc (via test_sources)
+
+    // sfall_opcodes.cc extern globals — defined here so test_sfall_opcodes
+    // can be self-contained without linking sfall_opcodes.cc (150+ engine deps).
+    int gPerkFrequencyOverride = 0;
+    int gSkillPointsPerLevelMod = 0;
+    int gLastAttacker = -1;
+    int gLastTarget = -1;
+    int gSkillMaxCap = 300;
+    int gXpModPercentage = 100;
 }
+
+// =============================================================
+// memory_manager.h stubs (safe allocation wrappers)
+// =============================================================
+// test_window.cc uses the _safe variants that include file/line
+// tracking. Minimal forwarding stubs.
+
+namespace fallout {
+    void* internal_malloc_safe(size_t size, const char* /*file*/, int /*line*/)
+    {
+        return malloc(size);
+    }
+
+    void* internal_realloc_safe(void* ptr, size_t size, const char* /*file*/, int /*line*/)
+    {
+        return realloc(ptr, size);
+    }
+
+    void internal_free_safe(void* ptr, const char* /*file*/, int /*line*/)
+    {
+        free(ptr);
+    }
+} // namespace fallout
+
+// =============================================================
+// interpreter.h stubs — ProgramValue (used by sfall_arrays.cc)
+// =============================================================
+namespace fallout {
+
+    ProgramValue::ProgramValue()
+        : opcode(0), integerValue(0) {}
+
+    ProgramValue::ProgramValue(int value)
+        : opcode(0), integerValue(value) {}
+
+    ProgramValue::ProgramValue(unsigned int value)
+        : opcode(0), integerValue(static_cast<int>(value)) {}
+
+    ProgramValue::ProgramValue(bool value)
+        : opcode(0), integerValue(value ? 1 : 0) {}
+
+    ProgramValue::ProgramValue(float value)
+        : opcode(0), floatValue(value) {}
+
+    ProgramValue::ProgramValue(Object* /*value*/)
+        : opcode(0), pointerValue(nullptr) {}
+
+    ProgramValue::ProgramValue(Attack* /*value*/)
+        : opcode(0), pointerValue(nullptr) {}
+
+    ProgramValue::ProgramValue(const char* /*value*/)
+        : opcode(0), pointerValue(nullptr) {}
+
+    bool ProgramValue::isEmpty() const { return opcode == 0; }
+    bool ProgramValue::isInt() const { return false; }
+    bool ProgramValue::isFloat() const { return false; }
+    bool ProgramValue::isString() const { return false; }
+    float ProgramValue::asFloat() const { return 0.0f; }
+    bool ProgramValue::isPointer() const { return false; }
+    int ProgramValue::asInt() const { return integerValue; }
+    Object* ProgramValue::asObject() const { return nullptr; }
+    const char* ProgramValue::asString(Program*) const { return nullptr; }
+    const char* ProgramValue::typeDebugString() const { return "UNKNOWN"; }
+
+} // namespace fallout
+
+// =============================================================
+// sfall_opcodes.h stubs — lifecycle functions
+// test_sfall_opcodes.cc calls these but we no longer link
+// sfall_opcodes.cc (it has 150+ engine deps).
+// =============================================================
+namespace fallout {
+
+    void sfallVfsCloseAll()
+    {
+        // No-op: VFS handle slots are not available in test context.
+    }
+
+    void sfallAnimCallbackReset()
+    {
+        // No-op: animation callback state is not available in test context.
+    }
+
+    void sfallOpcodesReset()
+    {
+        // Reset extern globals to their documented defaults.
+        // Matches sfall_opcodes.cc lines ~3460-3475.
+        gPerkFrequencyOverride = 0;
+        gSkillPointsPerLevelMod = 0;
+        gLastAttacker = -1;
+        gLastTarget = -1;
+        gSkillMaxCap = 300;
+        gXpModPercentage = 100;
+    }
+
+    void sfallOpcodesExit()
+    {
+        // Matches sfall_opcodes.cc lines ~4163-4167.
+        sfallAnimCallbackReset();
+        sfallVfsCloseAll();
+    }
+
+    ScriptHookCall* hookOpcodeGetCurrentCall(const char* /*opcodeName*/)
+    {
+        // In test context there is no active hook call — return nullptr.
+        return nullptr;
+    }
+
+} // namespace fallout
