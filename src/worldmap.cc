@@ -55,6 +55,12 @@
 
 namespace fallout {
 
+extern bool gFallout1Behavior;
+
+// Forward declaration: accessor added by Impl-B1 metasrules agent.
+// Returns the override title string for a given area index, or nullptr if none set.
+const char* sfallGetTownTitleOverride(int areaIndex);
+
 #define CITY_NAME_SIZE (40)
 #define TILE_WALK_MASK_NAME_SIZE (40)
 #define ENTRANCE_LIST_CAPACITY (10)
@@ -505,15 +511,15 @@ int wmGetRestHealTime()
 static std::map<std::pair<int, int>, bool> gCanRestOnTiles;
 void wmSetCanRestOnTile(int elevation, int tile, bool canRest)
 {
-    gCanRestOnTiles[{elevation, tile}] = canRest;
+    gCanRestOnTiles[{ elevation, tile }] = canRest;
 }
 void wmClearCanRestOnTile(int elevation, int tile)
 {
-    gCanRestOnTiles.erase({elevation, tile});
+    gCanRestOnTiles.erase({ elevation, tile });
 }
 bool wmGetCanRestOnTile(int elevation, int tile)
 {
-    auto it = gCanRestOnTiles.find({elevation, tile});
+    auto it = gCanRestOnTiles.find({ elevation, tile });
     if (it != gCanRestOnTiles.end()) {
         return it->second;
     }
@@ -3703,14 +3709,18 @@ static int wmRndEncounterOccurred(int* mapToLoadPtr)
                 int xpGained;
                 pcAddExperience(xp, &xpGained);
 
-                MessageListItem messageListItem;
-                char* text = getmsg(&gMiscMessageList, &messageListItem, 8500);
-                if (strlen(text) < 110) {
-                    char formattedText[120];
-                    snprintf(formattedText, sizeof(formattedText), text, xpGained);
-                    displayMonitorAddMessage(formattedText);
-                } else {
-                    debugPrint("WorldMap: Error: Rnd Encounter string too long!");
+                // F-108: FO2-specific message ID 8500. FO1 does not display
+                // encounter detection XP messages.
+                if (!gFallout1Behavior) {
+                    MessageListItem messageListItem;
+                    char* text = getmsg(&gMiscMessageList, &messageListItem, 8500);
+                    if (strlen(text) < 110) {
+                        char formattedText[120];
+                        snprintf(formattedText, sizeof(formattedText), text, xpGained);
+                        displayMonitorAddMessage(formattedText);
+                    } else {
+                        debugPrint("WorldMap: Error: Rnd Encounter string too long!");
+                    }
                 }
             }
         }
@@ -3729,9 +3739,14 @@ static int wmRndEncounterOccurred(int* mapToLoadPtr)
 
         title = getmsg(&wmMsgFile, &messageListItem, 2999);
         body = getmsg(&wmMsgFile, &messageListItem, 3000 + 50 * wmGenData.encounterTableId + wmGenData.encounterEntryId);
-        if (showDialogBox(title, &body, 1, 169, 116, _colorTable[32328], nullptr, _colorTable[32328], DIALOG_BOX_LARGE | DIALOG_BOX_YES_NO) == 0) {
-            wmClearRandomEncounterState();
-            return 0;
+
+        // F-006: FO1 skips the "Investigate?" encounter dialog. In FO1 mode,
+        // proceed directly to the encounter without prompting.
+        if (!gFallout1Behavior) {
+            if (showDialogBox(title, &body, 1, 169, 116, _colorTable[32328], nullptr, _colorTable[32328], DIALOG_BOX_LARGE | DIALOG_BOX_YES_NO) == 0) {
+                wmClearRandomEncounterState();
+                return 0;
+            }
         }
     }
 
@@ -3909,7 +3924,11 @@ int wmSetupRandomEncounter()
         "%s %s",
         getmsg(&wmMsgFile, &messageListItem, 2998),
         getmsg(&wmMsgFile, &messageListItem, 3000 + 50 * wmGenData.encounterTableId + wmGenData.encounterEntryId));
-    displayMonitorAddMessage(formattedText);
+
+    // F-023: FO1 does not display "You encounter: [name]" message.
+    if (!gFallout1Behavior) {
+        displayMonitorAddMessage(formattedText);
+    }
 
     int gameDifficulty = settings.preferences.game_difficulty;
     switch (encounterTableEntry->scenery) {
@@ -5830,25 +5849,28 @@ static int wmInterfaceDrawCircleOverlay(CityInfo* city, CitySizeDescription* cit
         circleBlendTable,
         _commonGrayTable);
 
-    // CE: Slightly increase whitespace between cirle and city name.
-    int nameY = y + citySizeDescription->frmImage.getHeight() + 3;
-    int maxY = 464 - fontGetLineHeight();
-    if (nameY < maxY) {
-        MessageListItem messageListItem;
-        char name[40];
-        if (wmAreaIsKnown(city->areaId)) {
-            // NOTE: Uninline.
-            wmGetAreaName(city, name);
-        } else {
-            strncpy(name, getmsg(&wmMsgFile, &messageListItem, 1004), 40);
-        }
+    // F-026: FO1 does not draw city circle labels on the worldmap.
+    if (!gFallout1Behavior) {
+        // CE: Slightly increase whitespace between cirle and city name.
+        int nameY = y + citySizeDescription->frmImage.getHeight() + 3;
+        int maxY = 464 - fontGetLineHeight();
+        if (nameY < maxY) {
+            MessageListItem messageListItem;
+            char name[40];
+            if (wmAreaIsKnown(city->areaId)) {
+                // NOTE: Uninline.
+                wmGetAreaName(city, name);
+            } else {
+                strncpy(name, getmsg(&wmMsgFile, &messageListItem, 1004), 40);
+            }
 
-        int width = fontGetStringWidth(name);
-        fontDrawText(dest + WM_WINDOW_WIDTH * nameY + x + citySizeDescription->frmImage.getWidth() / 2 - width / 2,
-            name,
-            width,
-            WM_WINDOW_WIDTH,
-            _colorTable[992] | FONT_SHADOW);
+            int width = fontGetStringWidth(name);
+            fontDrawText(dest + WM_WINDOW_WIDTH * nameY + x + citySizeDescription->frmImage.getWidth() / 2 - width / 2,
+                name,
+                width,
+                WM_WINDOW_WIDTH,
+                _colorTable[992] | FONT_SHADOW);
+        }
     }
 
     return 0;
@@ -6061,8 +6083,15 @@ static int wmGetAreaName(CityInfo* city, char* name)
 {
     MessageListItem messageListItem;
 
-    getmsg(&gMapMessageList, &messageListItem, city->areaId + 1500);
-    strncpy(name, messageListItem.text, 40);
+    // F-020: Check gTownTitleOverrides map before reading default msg.
+    // FO1/Et Tu mods use set_town_title to override area names.
+    const char* overriddenTitle = sfallGetTownTitleOverride(city->areaId);
+    if (overriddenTitle != nullptr) {
+        strncpy(name, overriddenTitle, 40);
+    } else {
+        getmsg(&gMapMessageList, &messageListItem, city->areaId + 1500);
+        strncpy(name, messageListItem.text, 40);
+    }
 
     return 0;
 }

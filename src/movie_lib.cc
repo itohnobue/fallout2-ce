@@ -1487,7 +1487,9 @@ static void _nfPkDecomp(unsigned char* a1, unsigned char* a2, int a3, int a4, in
                         break;
                     case 2:
                     case 3:
-                        if (a2 >= a2_end) { return; }
+                        if (a2 >= a2_end) {
+                            return;
+                        }
                         byte = *a2++;
                         v11 = word_51F618[byte];
                         if (v7 == 3) {
@@ -1500,11 +1502,15 @@ static void _nfPkDecomp(unsigned char* a1, unsigned char* a2, int a3, int a4, in
                     case 4:
                     case 5:
                         if (v7 == 4) {
-                            if (a2 >= a2_end) { return; }
+                            if (a2 >= a2_end) {
+                                return;
+                            }
                             byte = *a2++;
                             v13 = word_51F418[byte];
                         } else {
-                            if (a2 + 2 > a2_end) { return; }
+                            if (a2 + 2 > a2_end) {
+                                return;
+                            }
                             v13 = *(unsigned short*)a2;
                             a2 += 2;
                         }
@@ -1548,7 +1554,9 @@ static void _nfPkDecomp(unsigned char* a1, unsigned char* a2, int a3, int a4, in
                 case 7:
                     if (a2[0] > a2[1]) {
                         // 7/1
-                        if (a2 + 4 > a2_end) { return; }
+                        if (a2 + 4 > a2_end) {
+                            return;
+                        }
                         for (i = 0; i < 2; i++) {
                             value1 = _$$R0053[a2[2 + i] & 0xF];
                             map1[i * 8] = value1 & 0xFF;
@@ -1591,7 +1599,9 @@ static void _nfPkDecomp(unsigned char* a1, unsigned char* a2, int a3, int a4, in
                     } else {
                         // 7/2
                         // VERIFIED
-                        if (a2 + 10 > a2_end) { return; }
+                        if (a2 + 10 > a2_end) {
+                            return;
+                        }
                         for (i = 0; i < 8; i++) {
                             value1 = _$$R0004[a2[2 + i]];
                             map1[i * 4] = value1 & 0xFF;
@@ -1626,7 +1636,9 @@ static void _nfPkDecomp(unsigned char* a1, unsigned char* a2, int a3, int a4, in
                     if (a2[0] > a2[1]) {
                         if (a2[6] > a2[7]) {
                             // 8/1
-                            if (a2 + 12 > a2_end) { return; }
+                            if (a2 + 12 > a2_end) {
+                                return;
+                            }
                             for (i = 0; i < 4; i++) {
                                 value1 = _$$R0004[a2[2 + i]];
                                 map1[i * 4] = value1 & 0xFF;
@@ -1677,7 +1689,9 @@ static void _nfPkDecomp(unsigned char* a1, unsigned char* a2, int a3, int a4, in
                             dest -= var_10;
                         } else {
                             // 8/2
-                            if (a2 + 12 > a2_end) { return; }
+                            if (a2 + 12 > a2_end) {
+                                return;
+                            }
                             for (i = 0; i < 4; i++) {
                                 value1 = _$$R0004[a2[2 + i]];
                                 map1[i * 4] = value1 & 0xFF;
@@ -1737,7 +1751,9 @@ static void _nfPkDecomp(unsigned char* a1, unsigned char* a2, int a3, int a4, in
                     } else {
                         // 8/3
                         // VERIFIED
-                        if (a2 + 16 > a2_end) { return; }
+                        if (a2 + 16 > a2_end) {
+                            return;
+                        }
                         for (i = 0; i < 2; i++) {
                             value1 = _$$R0004[a2[2 + i]];
                             map1[i * 4] = value1 & 0xFF;
@@ -1847,7 +1863,9 @@ static void _nfPkDecomp(unsigned char* a1, unsigned char* a2, int a3, int a4, in
                         if (a2[2] > a2[3]) {
                             // 9/1
                             // VERIFIED
-                            if (a2 + 12 > a2_end) { return; }
+                            if (a2 + 12 > a2_end) {
+                                return;
+                            }
                             for (i = 0; i < 8; i++) {
                                 value1 = _$$R0063[a2[4 + i]];
                                 map1[i * 4] = value1 & 0xFF;
@@ -1886,7 +1904,9 @@ static void _nfPkDecomp(unsigned char* a1, unsigned char* a2, int a3, int a4, in
                         } else {
                             // 9/2
                             // VERIFIED
-                            if (a2 + 12 > a2_end) { return; }
+                            if (a2 + 12 > a2_end) {
+                                return;
+                            }
                             for (i = 0; i < 8; i++) {
                                 value1 = _$$R0063[a2[4 + i]];
                                 map1[i * 4 + 3] = value1 & 0xFF;
@@ -1923,7 +1943,9 @@ static void _nfPkDecomp(unsigned char* a1, unsigned char* a2, int a3, int a4, in
                         if (a2[2] > a2[3]) {
                             // 9/3
                             // VERIFIED
-                            if (a2 + 8 > a2_end) { return; }
+                            if (a2 + 8 > a2_end) {
+                                return;
+                            }
                             for (i = 0; i < 4; i++) {
                                 value1 = _$$R0063[a2[4 + i]];
                                 map1[i * 4 + 3] = value1 & 0xFF;
@@ -1964,7 +1986,9 @@ static void _nfPkDecomp(unsigned char* a1, unsigned char* a2, int a3, int a4, in
                         } else {
                             // 9/4
                             // VERIFIED
-                            if (a2 + 20 > a2_end) { return; }
+                            if (a2 + 20 > a2_end) {
+                                return;
+                            }
                             for (i = 0; i < 16; i++) {
                                 value1 = _$$R0063[a2[4 + i]];
                                 map1[i * 4] = value1 & 0xFF;
@@ -2003,7 +2027,9 @@ static void _nfPkDecomp(unsigned char* a1, unsigned char* a2, int a3, int a4, in
                         if (a2[12] > a2[13]) {
                             // 10/1
                             // VERIFIED
-                            if (a2 + 24 > a2_end) { return; }
+                            if (a2 + 24 > a2_end) {
+                                return;
+                            }
                             for (i = 0; i < 8; i++) {
                                 value1 = _$$R0063[a2[4 + i]];
                                 map1[i * 4] = value1 & 0xFF;
@@ -2061,7 +2087,9 @@ static void _nfPkDecomp(unsigned char* a1, unsigned char* a2, int a3, int a4, in
                         } else {
                             // 10/2
                             // VERIFIED
-                            if (a2 + 24 > a2_end) { return; }
+                            if (a2 + 24 > a2_end) {
+                                return;
+                            }
                             for (i = 0; i < 8; i++) {
                                 value1 = _$$R0063[a2[4 + i]];
                                 map1[i * 4] = value1 & 0xFF;
@@ -2129,7 +2157,9 @@ static void _nfPkDecomp(unsigned char* a1, unsigned char* a2, int a3, int a4, in
                     } else {
                         // 10/3
                         // VERIFIED
-                        if (a2 + 32 > a2_end) { return; }
+                        if (a2 + 32 > a2_end) {
+                            return;
+                        }
                         for (i = 0; i < 4; i++) {
                             value1 = _$$R0063[a2[4 + i]];
                             map1[i * 4] = value1 & 0xFF;
@@ -2250,7 +2280,9 @@ static void _nfPkDecomp(unsigned char* a1, unsigned char* a2, int a3, int a4, in
                     }
                     break;
                 case 11:
-                    if (a2 + 64 > a2_end) { return; }
+                    if (a2 + 64 > a2_end) {
+                        return;
+                    }
                     value2 = nf_width;
 
                     src_ptr = (unsigned int*)a2;
@@ -2267,7 +2299,9 @@ static void _nfPkDecomp(unsigned char* a1, unsigned char* a2, int a3, int a4, in
                     dest -= var_10;
                     break;
                 case 12:
-                    if (a2 + 16 > a2_end) { return; }
+                    if (a2 + 16 > a2_end) {
+                        return;
+                    }
                     value2 = nf_width;
 
                     for (i = 0; i < 4; i++) {
@@ -2300,7 +2334,9 @@ static void _nfPkDecomp(unsigned char* a1, unsigned char* a2, int a3, int a4, in
                     dest -= var_10;
                     break;
                 case 13:
-                    if (a2 + 4 > a2_end) { return; }
+                    if (a2 + 4 > a2_end) {
+                        return;
+                    }
                     byte = a2[0];
                     value1 = byte | (byte << 8) | (byte << 16) | (byte << 24);
 
@@ -2345,12 +2381,16 @@ static void _nfPkDecomp(unsigned char* a1, unsigned char* a2, int a3, int a4, in
                 case 14:
                 case 15:
                     if (v7 == 14) {
-                        if (a2 >= a2_end) { return; }
+                        if (a2 >= a2_end) {
+                            return;
+                        }
                         byte = *a2++;
                         value1 = byte | (byte << 8) | (byte << 16) | (byte << 24);
                         value2 = value1;
                     } else {
-                        if (a2 + 2 > a2_end) { return; }
+                        if (a2 + 2 > a2_end) {
+                            return;
+                        }
                         byte = *(unsigned short*)a2;
                         a2 += 2;
                         value1 = byte | (byte << 16);

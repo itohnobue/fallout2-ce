@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -11,6 +12,7 @@
 #include "platform_compat.h"
 #include "scripts.h"
 #include "sfall_config.h"
+#include "sfall_ext.h"
 #include "sfall_script_hooks.h"
 
 namespace fallout {
@@ -42,21 +44,43 @@ bool sfall_gl_scr_init()
         return false;
     }
 
+    // F-030: Merge user-configured global script paths from ddraw.ini
+    // [Misc] GlobalScriptPaths with hardcoded defaults. User paths take
+    // priority (added first). F-141: Use std::set for deduplication.
+    std::set<std::string> uniquePaths;
+    const std::vector<std::string>& userPaths = sfallGetGlobalScriptPaths();
+    char** files;
+
+    for (const auto& userGlob : userPaths) {
+        std::string globStr = std::string(userGlob);
+        // Extract the directory component from the glob pattern.
+        size_t lastSep = globStr.find_last_of("\\/");
+        std::string userDir = (lastSep != std::string::npos) ? globStr.substr(0, lastSep) : ".";
+
+        int userFilesLength = fileNameListInit(globStr.c_str(), &files);
+        if (userFilesLength != 0) {
+            for (int index = 0; index < userFilesLength; index++) {
+                char path[COMPAT_MAX_PATH];
+                snprintf(path, sizeof(path), "%s\\%s", userDir.c_str(), files[index]);
+                uniquePaths.insert(std::string { path });
+            }
+            fileNameListFree(&files, 0);
+        }
+    }
+
     // Load global scripts from both the vanilla "scripts\gl*.int" and
     // the RPU/Et Tu "scripts\sfall\gl*.int" paths. RPU places extended
     // global scripts under the sfall subdirectory — without this second
     // pass those scripts are silently never loaded.
     const char* scriptPath = "scripts\\gl*.int";
     const char* dir = "scripts";
-    char** files;
     int filesLength = fileNameListInit(scriptPath, &files);
     if (filesLength != 0) {
         for (int index = 0; index < filesLength; index++) {
             char path[COMPAT_MAX_PATH];
             snprintf(path, sizeof(path), "%s\\%s", dir, files[index]);
-            state->paths.push_back(std::string { path });
+            uniquePaths.insert(std::string { path });
         }
-
         fileNameListFree(&files, 0);
     }
 
@@ -68,10 +92,13 @@ bool sfall_gl_scr_init()
         for (int index = 0; index < sfallFilesLength; index++) {
             char path[COMPAT_MAX_PATH];
             snprintf(path, sizeof(path), "%s\\%s", sfallDir, files[index]);
-            state->paths.push_back(std::string { path });
+            uniquePaths.insert(std::string { path });
         }
-
         fileNameListFree(&files, 0);
+    }
+
+    for (const auto& path : uniquePaths) {
+        state->paths.push_back(path);
     }
 
     std::sort(state->paths.begin(), state->paths.end());

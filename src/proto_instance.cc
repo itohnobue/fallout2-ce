@@ -3,8 +3,8 @@
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string>
 #include <string.h>
+#include <string>
 
 #include "animation.h"
 #include "art.h"

@@ -3,9 +3,9 @@
 #include <algorithm>
 #include <cstdint>
 #include <limits.h>
-#include <unordered_map>
 #include <math.h>
 #include <string.h>
+#include <unordered_map>
 
 #include "animation.h"
 #include "art.h"
@@ -38,6 +38,7 @@
 #include "scripts.h"
 #include "sfall_animation.h"
 #include "sfall_arrays.h"
+#include "sfall_config.h"
 #include "sfall_global_scripts.h"
 #include "sfall_global_vars.h"
 #include "sfall_ini.h"
@@ -2044,6 +2045,11 @@ static void op_fs_write_byte(Program* program)
         return;
     }
 
+    if (sfallVfsFileMode[id] == 1) {
+        programPrintError("fs_write_byte: handle %d is read-only (opened via fs_find)", id);
+        return;
+    }
+
     fputc(data & 0xFF, sfallVfsFiles[id]);
 }
 
@@ -2055,6 +2061,11 @@ static void op_fs_write_short(Program* program)
 
     if (id < 0 || id >= kVfsMaxFiles || sfallVfsFiles[id] == nullptr) {
         programPrintError("fs_write_short: invalid VFS handle %d", id);
+        return;
+    }
+
+    if (sfallVfsFileMode[id] == 1) {
+        programPrintError("fs_write_short: handle %d is read-only (opened via fs_find)", id);
         return;
     }
 
@@ -2073,6 +2084,11 @@ static void op_fs_write_int(Program* program)
         return;
     }
 
+    if (sfallVfsFileMode[id] == 1) {
+        programPrintError("fs_write_int: handle %d is read-only (opened via fs_find)", id);
+        return;
+    }
+
     int32_t value = static_cast<int32_t>(data);
     fwrite(&value, sizeof(value), 1, sfallVfsFiles[id]);
 }
@@ -2085,6 +2101,11 @@ static void op_fs_write_float(Program* program)
 
     if (id < 0 || id >= kVfsMaxFiles || sfallVfsFiles[id] == nullptr) {
         programPrintError("fs_write_float: invalid VFS handle %d", id);
+        return;
+    }
+
+    if (sfallVfsFileMode[id] == 1) {
+        programPrintError("fs_write_float: handle %d is read-only (opened via fs_find)", id);
         return;
     }
 
@@ -2103,6 +2124,11 @@ static void op_fs_write_string(Program* program)
         return;
     }
 
+    if (sfallVfsFileMode[id] == 1) {
+        programPrintError("fs_write_string: handle %d is read-only (opened via fs_find)", id);
+        return;
+    }
+
     fputs(string, sfallVfsFiles[id]);
 }
 
@@ -2114,6 +2140,11 @@ static void op_fs_write_bstring(Program* program)
 
     if (id < 0 || id >= kVfsMaxFiles || sfallVfsFiles[id] == nullptr) {
         programPrintError("fs_write_bstring: invalid VFS handle %d", id);
+        return;
+    }
+
+    if (sfallVfsFileMode[id] == 1) {
+        programPrintError("fs_write_bstring: handle %d is read-only (opened via fs_find)", id);
         return;
     }
 
@@ -2782,14 +2813,15 @@ static void op_mod_skill_points_per_level(Program* program)
 // registered as safe no-ops that pop their arguments and log a debug
 // message, preventing script crashes on unregistered opcode errors.
 //
-// The behavior these patches intended to fix (hit chance modifier,
-// rest timer, talking head moods, encounter dialog suppression, etc.)
-// is handled through CE-native config settings (Fallout1Behavior, etc.)
-// and hook-based alternatives.
+// NOTE: gFallout1Behavior exists as a config flag but currently has
+// zero integration with these VOODOO handlers — none of the write_*
+// opcodes check or respect it. Actual FO1/FO2 behavioral differences
+// (hit chance, rest healing, encounter dialog, etc.) are handled in
+// separate engine modules (combat.cc, worldmap.cc, pipboy.cc, etc.).
 //
 // Registration is gated behind AllowUnsafeScripting=1 in ddraw.ini
-// [Misc] section. If not enabled, these handlers log a warning noting
-// that the setting must be enabled for full VOODOO compatibility.
+// [Misc] section. If not enabled, these opcodes are not registered
+// and scripts will see unregistered opcode errors.
 // ============================================================
 
 static void op_write_byte(Program* program)
@@ -2824,9 +2856,17 @@ static void op_write_string(Program* program)
     debugPrint("VOODOO write_string(0x%08X, \"%s\") — no-op in CE engine\n", addr, value != nullptr ? value : "(null)");
 }
 
-// call_offset_v0-v4: call functions at arbitrary addresses with 0-4 args.
-// CE cannot call arbitrary engine-internal functions. Registered as no-ops
-// that pop arguments and push 0, allowing scripts to proceed without crash.
+// ============================================================
+// VOODOO call_offset opcodes — deferred implementation (permanent stubs).
+//
+// call_offset_* opcodes are designed to call functions at arbitrary
+// addresses in the original Fallout2.exe process space. CE's address
+// space is completely different, making this fundamentally impossible.
+// TODO: These will remain permanent no-op stubs. Scripts should use
+// CE-native metarule or opcode alternatives instead. Consider making
+// opcode_exists() return 0 for these so scripts can detect the absence
+// of call_offset at runtime — currently it returns 1 (misleading).
+// ============================================================
 static void op_call_offset_v0(Program* program)
 {
     int addr = programStackPopInteger(program);
@@ -3286,7 +3326,7 @@ static int sfallFakePerkCount = 0;
 static constexpr int kMaxFakeTraits = 16;
 struct FakeTraitEntry {
     char* name;
-    int active; // 0 = inactive, 1 = active  
+    int active; // 0 = inactive, 1 = active
     int image;
     char* desc;
 };
@@ -4289,41 +4329,46 @@ void sfallOpcodesInit()
 
     // VOODOO memory write opcodes — registered as safe no-ops.
     // These pop their arguments and log a debug message, preventing script
-    // crashes on unregistered opcode errors. The behavior these patches
-    // intended to fix is handled through CE-native config and hooks.
-    // 0x81cf - void  write_byte(int address, int value)
-    interpreterRegisterOpcode(0x81CF, op_write_byte);
-    // 0x81d0 - void  write_short(int address, int value)
-    interpreterRegisterOpcode(0x81D0, op_write_short);
-    // 0x81d1 - void  write_int(int address, int value)
-    interpreterRegisterOpcode(0x81D1, op_write_int);
-    // 0x821b - void  write_string(int address, string value)
-    interpreterRegisterOpcode(0x821B, op_write_string);
+    // crashes on unregistered opcode errors.
+    //
+    // NOTE: AllowUnsafeScripting gates registration because these opcodes
+    // perform no useful work in CE — they exist only for script compatibility.
+    // Scripts should use CE-native opcodes and metarules instead.
+    if (gAllowUnsafeScripting) {
+        // 0x81cf - void  write_byte(int address, int value)
+        interpreterRegisterOpcode(0x81CF, op_write_byte);
+        // 0x81d0 - void  write_short(int address, int value)
+        interpreterRegisterOpcode(0x81D0, op_write_short);
+        // 0x81d1 - void  write_int(int address, int value)
+        interpreterRegisterOpcode(0x81D1, op_write_int);
+        // 0x821b - void  write_string(int address, string value)
+        interpreterRegisterOpcode(0x821B, op_write_string);
 
-    // VOODOO call_offset opcodes — registered as safe no-ops pushing 0.
-    // CE cannot call arbitrary engine-internal functions at arbitrary
-    // addresses. These push 0 so scripts that check return values can
-    // skip the VOODOO patch and use CE-native alternatives.
-    // 0x81d2 - void  call_offset_v0(int address)
-    interpreterRegisterOpcode(0x81D2, op_call_offset_v0);
-    // 0x81d3 - void  call_offset_v1(int address, int arg1)
-    interpreterRegisterOpcode(0x81D3, op_call_offset_v1);
-    // 0x81d4 - void  call_offset_v2(int address, int arg1, int arg2)
-    interpreterRegisterOpcode(0x81D4, op_call_offset_v2);
-    // 0x81d5 - void  call_offset_v3(int address, int arg1, int arg2, int arg3)
-    interpreterRegisterOpcode(0x81D5, op_call_offset_v3);
-    // 0x81d6 - void  call_offset_v4(int address, int arg1, int arg2, int arg3, int arg4)
-    interpreterRegisterOpcode(0x81D6, op_call_offset_v4);
-    // 0x81d7 - int   call_offset_r0(int address)
-    interpreterRegisterOpcode(0x81D7, op_call_offset_r0);
-    // 0x81d8 - int   call_offset_r1(int address, int arg1)
-    interpreterRegisterOpcode(0x81D8, op_call_offset_r1);
-    // 0x81d9 - int   call_offset_r2(int address, int arg1, int arg2)
-    interpreterRegisterOpcode(0x81D9, op_call_offset_r2);
-    // 0x81da - int   call_offset_r3(int address, int arg1, int arg2, int arg3)
-    interpreterRegisterOpcode(0x81DA, op_call_offset_r3);
-    // 0x81db - int   call_offset_r4(int address, int arg1, int arg2, int arg3, int arg4)
-    interpreterRegisterOpcode(0x81DB, op_call_offset_r4);
+        // VOODOO call_offset opcodes — registered as safe no-ops pushing 0.
+        // CE cannot call arbitrary engine-internal functions at arbitrary
+        // addresses. These push 0 so scripts that check return values can
+        // skip the VOODOO patch and use CE-native alternatives.
+        // 0x81d2 - void  call_offset_v0(int address)
+        interpreterRegisterOpcode(0x81D2, op_call_offset_v0);
+        // 0x81d3 - void  call_offset_v1(int address, int arg1)
+        interpreterRegisterOpcode(0x81D3, op_call_offset_v1);
+        // 0x81d4 - void  call_offset_v2(int address, int arg1, int arg2)
+        interpreterRegisterOpcode(0x81D4, op_call_offset_v2);
+        // 0x81d5 - void  call_offset_v3(int address, int arg1, int arg2, int arg3)
+        interpreterRegisterOpcode(0x81D5, op_call_offset_v3);
+        // 0x81d6 - void  call_offset_v4(int address, int arg1, int arg2, int arg3, int arg4)
+        interpreterRegisterOpcode(0x81D6, op_call_offset_v4);
+        // 0x81d7 - int   call_offset_r0(int address)
+        interpreterRegisterOpcode(0x81D7, op_call_offset_r0);
+        // 0x81d8 - int   call_offset_r1(int address, int arg1)
+        interpreterRegisterOpcode(0x81D8, op_call_offset_r1);
+        // 0x81d9 - int   call_offset_r2(int address, int arg1, int arg2)
+        interpreterRegisterOpcode(0x81D9, op_call_offset_r2);
+        // 0x81da - int   call_offset_r3(int address, int arg1, int arg2, int arg3)
+        interpreterRegisterOpcode(0x81DA, op_call_offset_r3);
+        // 0x81db - int   call_offset_r4(int address, int arg1, int arg2, int arg3, int arg4)
+        interpreterRegisterOpcode(0x81DB, op_call_offset_r4);
+    } // gAllowUnsafeScripting
 
     // 0x815a - void set_pc_base_stat(int StatID, int value)
     interpreterRegisterOpcode(0x815A, op_set_pc_base_stat);

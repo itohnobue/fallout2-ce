@@ -39,15 +39,16 @@
 #include "scripts.h"
 #include "sfall_animation.h"
 #include "sfall_arrays.h" // For CreateTempArray, SetArray
-#include "sfall_ini.h"
 #include "sfall_global_scripts.h"
 #include "sfall_global_vars.h"
+#include "sfall_ini.h"
 #include "sfall_opcodes.h"
 #include "sfall_script_hooks.h"
 #include "skilldex.h"
 #include "stat.h"
 #include "text_font.h"
 #include "tile.h"
+#include "trait.h"
 #include "window.h"
 #include "window_manager.h"
 #include "worldmap.h"
@@ -226,6 +227,14 @@ static int gMapEnterX = -1;
 static int gMapEnterY = -1;
 static int gMapEnterElevation = -1;
 
+// Unjam locks time override (set by set_unjam_locks_time metarule).
+// Stores the number of game hours before jammed locks auto-unjam.
+// NOTE: Full engine integration (timer-based auto-unjam) requires deeper
+// changes — the engine currently only unjams unconditionally on map entry
+// via objectUnjamAll() in map.cc:1149. This global stores the override
+// for future script queries and eventual engine integration.
+static int gUnjamLocksTimeHours = -1;
+
 // Explosive properties set via item_make_explosive metarule.
 // Key: proto PID, Value: {pattern, radius, delay}
 struct ExplosiveProperties {
@@ -249,16 +258,21 @@ struct SpraySettings {
 };
 static SpraySettings gSpraySettings;
 
+// Maximum number of pending timer events allowed.
+#define MAX_TIMER_EVENTS 256
+
 // Stored timer events for add_g_timer_event metarule.
 // Each entry records an opcode and delay that a script requested to fire
-// after the specified number of ticks. These are preserved for script-
-// level tracking until full timer event infrastructure exists.
-// TODO: integrate with engine timer system (scripts.h:scriptAddTimerEvent).
+// after the specified number of ticks. timerId is an incrementing counter
+// used for removal by ID. Engine persistence is handled via scriptAddTimerEvent
+// in scripts.cc — gPendingTimerEvents is NOT serialized to avoid double-persistence.
 struct PendingTimerEvent {
     int opcode;
     int delay;
+    int timerId;
 };
 static std::vector<PendingTimerEvent> gPendingTimerEvents;
+static int gNextTimerId = 1;
 
 // Stored drug data overrides for set_drugs_data metarule.
 // Maps drug index to {addictionRate, effectDuration}.
@@ -279,6 +293,7 @@ struct InterfaceOverlayState {
     int arg2 = 0;
     int arg3 = 0;
     int arg4 = 0;
+    int windowHandle = -1;
     bool active = false;
 };
 static InterfaceOverlayState gInterfaceOverlayState;
@@ -1595,7 +1610,7 @@ void mf_string_format(OpcodeContext& ctx)
                 if ((c == 's' && !arg.isString()) || c == 'n') {
                     c = 'd';
                 }
-        newFmt[j++] = c;
+                newFmt[j++] = c;
                 newFmt[j] = '\0';
                 partLen = arg.isFloat()
                     ? snprintf(outBuf, bufCount, newFmt.get(), arg.floatValue)
@@ -1824,7 +1839,7 @@ void mf_set_terrain_name(OpcodeContext& ctx)
     int x = ctx.arg(0).asInt();
     int y = ctx.arg(1).asInt();
     const char* name = ctx.stringArg(2);
-    gTerrainNameOverrides[{x, y}] = name;
+    gTerrainNameOverrides[{ x, y }] = name;
 }
 
 // get_terrain_name(int x, int y): returns the terrain name override for the given
@@ -1841,7 +1856,7 @@ void mf_get_terrain_name(OpcodeContext& ctx)
 
     int x = ctx.arg(0).asInt();
     int y = ctx.arg(1).asInt();
-    auto it = gTerrainNameOverrides.find({x, y});
+    auto it = gTerrainNameOverrides.find({ x, y });
     if (it != gTerrainNameOverrides.end()) {
         ctx.setReturn(it->second.c_str());
     } else {
@@ -1934,22 +1949,37 @@ void mf_has_fake_perk_npc(OpcodeContext& ctx)
 }
 
 // has_fake_trait_npc(Object* critter, string name): returns 1 if the given NPC
-// critter has the named fake trait, 0 otherwise.
+// critter has the named fake trait, 0 otherwise. Checks both the NPC-keyed
+// gFakeTraitsNpc set (populated via set_fake_trait_npc) and, when critter is
+// the player, the gAddedTraits set (populated via add_trait metarule). The
+// gAddedTraits bridge converts trait type IDs to display names via traitGetName().
 void mf_has_fake_trait_npc(OpcodeContext& ctx)
 {
     Object* critter = ctx.arg(0).asObject();
     const char* name = ctx.stringArg(1);
 
-    if (critter == nullptr) {
+    if (critter == nullptr || name == nullptr) {
         ctx.setReturn(0);
         return;
     }
+    // Check NPC-keyed fake traits (set via set_fake_trait_npc).
     auto it = gFakeTraitsNpc.find(critter->cid);
     if (it != gFakeTraitsNpc.end() && it->second.find(name) != it->second.end()) {
         ctx.setReturn(1);
-    } else {
-        ctx.setReturn(0);
+        return;
     }
+    // Bridge: when queried for the player character, also check traits
+    // added via the add_trait() metarule (gAddedTraits stores int trait IDs).
+    if (critter == gDude) {
+        for (int traitId : gAddedTraits) {
+            char* traitName = traitGetName(traitId);
+            if (traitName != nullptr && strcmp(traitName, name) == 0) {
+                ctx.setReturn(1);
+                return;
+            }
+        }
+    }
+    ctx.setReturn(0);
 }
 
 // set_fake_perk_npc(Object* critter, string name, int level, int image, string desc):
@@ -2236,18 +2266,31 @@ void mf_lock_is_jammed(OpcodeContext& ctx)
 
 // remove_timer_event(int timerId): removes a timer event by ID.
 // Called with 0 args to remove ALL timer events.
-// TODO: integrate with timer event system.
+// Note: only removes from the local tracking vector. Timer events already
+// submitted to the engine queue via scriptAddTimerEvent cannot be cancelled
+// individually — the engine does not support single-timer removal by
+// caller-assigned ID (scriptAddTimerEvent returns 0/-1, not a timer ID).
 void mf_remove_timer_event(OpcodeContext& ctx)
 {
     if (ctx.numArgs() == 0) {
-        // Remove all timer events
-        debugPrint("%s(): removing all timer events — not yet implemented", ctx.name());
+        // Remove all timer events from local tracking.
+        int removed = (int)gPendingTimerEvents.size();
+        gPendingTimerEvents.clear();
+        ctx.setReturn(removed);
     } else {
         int timerId = ctx.arg(0).asInt();
-        (void)timerId;
-        debugPrint("%s(): removing timer %d — not yet implemented", ctx.name(), timerId);
+        int removed = 0;
+        auto it = gPendingTimerEvents.begin();
+        while (it != gPendingTimerEvents.end()) {
+            if (it->timerId == timerId) {
+                it = gPendingTimerEvents.erase(it);
+                removed++;
+            } else {
+                ++it;
+            }
+        }
+        ctx.setReturn(removed);
     }
-    ctx.setReturn(0);
 }
 
 // set_can_rest_on_map(int elevation, int tile, int canRest):
@@ -2350,22 +2393,37 @@ void mf_interface_overlay(OpcodeContext& ctx)
 
     switch (action) {
     case 0: { // destroy
-        // Clear tracked overlay state for this window type.
-        if (gInterfaceOverlayState.active && gInterfaceOverlayState.winType == winType) {
-            gInterfaceOverlayState.active = false;
-            gInterfaceOverlayState.winType = -1;
+        // Destroy the overlay window if it exists.
+        if (gInterfaceOverlayState.active && gInterfaceOverlayState.windowHandle != -1) {
+            windowDestroy(gInterfaceOverlayState.windowHandle);
         }
+        gInterfaceOverlayState.active = false;
+        gInterfaceOverlayState.winType = -1;
+        gInterfaceOverlayState.windowHandle = -1;
         break;
     }
     case 1: { // create
         // Store overlay parameters for script-level tracking.
-        // Full rendering requires overlay subsystem integration.
         gInterfaceOverlayState.winType = winType;
         gInterfaceOverlayState.arg1 = ctx.numArgs() > 2 ? ctx.arg(2).asInt() : 0;
         gInterfaceOverlayState.arg2 = ctx.numArgs() > 3 ? ctx.arg(3).asInt() : 0;
         gInterfaceOverlayState.arg3 = ctx.numArgs() > 4 ? ctx.arg(4).asInt() : 0;
         gInterfaceOverlayState.arg4 = ctx.numArgs() > 5 ? ctx.arg(5).asInt() : 0;
-        gInterfaceOverlayState.active = true;
+
+        // Validate dimensions before creating window.
+        int x = gInterfaceOverlayState.arg1;
+        int y = gInterfaceOverlayState.arg2;
+        int w = gInterfaceOverlayState.arg3;
+        int h = gInterfaceOverlayState.arg4;
+        if (w <= 0 || h <= 0) {
+            debugPrint("%s(): invalid overlay dimensions (%d x %d)", ctx.name(), w, h);
+            ctx.setReturn(0);
+            break;
+        }
+        gInterfaceOverlayState.windowHandle = windowCreate(x, y, w, h, _colorTable[0], WINDOW_TRANSPARENT);
+        if (gInterfaceOverlayState.windowHandle != -1) {
+            gInterfaceOverlayState.active = true;
+        }
         break;
     }
     case 2: { // clear — refresh the interface window to remove drawn overlay content
@@ -2437,20 +2495,41 @@ void mf_interface_print(OpcodeContext& ctx)
 
 // add_g_timer_event(int opcode, int delay): registers a timed event to fire
 // the given script opcode/procedure after the specified delay (in ticks).
-// Events are stored in gPendingTimerEvents for script-level tracking.
-// TODO: integrate with engine timer system (scripts.h:scriptAddTimerEvent)
-// once global timer event infrastructure supports opcode-based dispatch.
+// Submits the event to the engine timer system via scriptAddTimerEvent, which
+// dispatches it as EVENT_TYPE_SCRIPT with the opcode as fixedParam consumed
+// by the script's SCRIPT_PROC_TIMED_EVENT_PROC handler.
+// Returns a positive timerId on success, -1 on failure.
 void mf_add_g_timer_event(OpcodeContext& ctx)
 {
     int opcode = ctx.arg(0).asInt();
     int delay = ctx.arg(1).asInt();
-    if (delay > 0) {
-        gPendingTimerEvents.push_back({opcode, delay});
-        ctx.setReturn(1);
-    } else {
+    if (delay <= 0) {
         debugPrint("%s(opcode=%d, delay=%d): delay must be positive", ctx.name(), opcode, delay);
-        ctx.setReturn(0);
+        ctx.setReturn(-1);
+        return;
     }
+    if ((int)gPendingTimerEvents.size() >= MAX_TIMER_EVENTS) {
+        debugPrint("%s(): max timer events (%d) exceeded", ctx.name(), MAX_TIMER_EVENTS);
+        ctx.setReturn(-1);
+        return;
+    }
+    int sid = scriptGetSid(ctx.program());
+    if (sid == -1) {
+        debugPrint("%s(): cannot get SID for current program", ctx.name());
+        ctx.setReturn(-1);
+        return;
+    }
+    // Submit to engine timer system. The opcode is passed as the data param
+    // and delivered to the script's timed-event handler as fixedParam.
+    if (scriptAddTimerEvent(sid, delay, opcode) != 0) {
+        debugPrint("%s(): scriptAddTimerEvent failed for sid=%d", ctx.name(), sid);
+        ctx.setReturn(-1);
+        return;
+    }
+    // Track locally for script-level removal queries.
+    int timerId = gNextTimerId++;
+    gPendingTimerEvents.push_back({ opcode, delay, timerId });
+    ctx.setReturn(timerId);
 }
 
 // add_trait(int trait_type): adds a trait to the player by numeric ID.
@@ -2512,7 +2591,7 @@ void mf_set_drugs_data(OpcodeContext& ctx)
     int drugIndex = ctx.arg(0).asInt();
     int addictionRate = ctx.arg(1).asInt();
     int effectDuration = ctx.arg(2).asInt();
-    gDrugDataOverrides[drugIndex] = {addictionRate, effectDuration};
+    gDrugDataOverrides[drugIndex] = { addictionRate, effectDuration };
     ctx.setReturn(0);
 }
 
@@ -2560,23 +2639,34 @@ void mf_get_town_title(OpcodeContext& ctx)
 }
 
 // set_unjam_locks_time(int hours): overrides the number of game hours before
-// jammed locks automatically unjam. TODO: integrate with lock/unlock system.
+// jammed locks automatically unjam. Stores the override in gUnjamLocksTimeHours.
+// NOTE: Full engine integration (timer-based auto-unjam) requires deeper
+// changes — the engine currently calls objectUnjamAll() unconditionally on
+// every map entry (map.cc:1149) regardless of elapsed game time. This metarule
+// stores the configured value for script queries and eventual engine wiring.
 void mf_set_unjam_locks_time(OpcodeContext& ctx)
 {
-    int /*hours*/ _ = ctx.arg(0).asInt();
-    (void)_;
-    debugPrint("%s(): not yet implemented", ctx.name());
+    int hours = ctx.arg(0).asInt();
+    if (hours < 0) {
+        hours = -1; // -1 disables time override, revert to engine default
+    }
+    gUnjamLocksTimeHours = hours;
     ctx.setReturn(0);
 }
 
 // unjam_lock(Object* obj): unjams a locked container or door, allowing it to
-// be picked or forced. TODO: integrate with lock/unlock system.
+// be picked or forced. Wraps the engine's objectUnjamLock() (proto_instance.cc:2208)
+// which clears the JAMMED flag on lockable containers and scenery doors.
+// Returns 1 on success, 0 if the object is not lockable or is null.
 void mf_unjam_lock(OpcodeContext& ctx)
 {
-    Object* /*obj*/ _ = ctx.arg(0).asObject();
-    (void)_;
-    debugPrint("%s(): not yet implemented", ctx.name());
-    ctx.setReturn(0);
+    Object* obj = ctx.arg(0).asObject();
+    if (obj == nullptr) {
+        ctx.setReturn(0);
+        return;
+    }
+    int result = objectUnjamLock(obj);
+    ctx.setReturn(result == 0 ? 1 : 0);
 }
 
 // --- End F-033 handlers ---
@@ -2697,8 +2787,10 @@ void sfall_metarules_reset()
     gMapEnterX = -1;
     gMapEnterY = -1;
     gMapEnterElevation = -1;
+    gUnjamLocksTimeHours = -1;
     gSpraySettings = {};
     gPendingTimerEvents.clear();
+    gNextTimerId = 1;
     gDrugDataOverrides.clear();
     gInterfaceOverlayState = {};
 }
@@ -2706,7 +2798,7 @@ void sfall_metarules_reset()
 // --- Metarule state save/load ---
 //
 // Persistence format (simple tagged binary):
-//   Version int32 (currently 1)
+//   Version int32 (currently 2)
 //   For each scalar: int32 value
 //   For each map: int32 count, then (key, value) pairs
 //   For each set: int32 count, then values
@@ -2716,7 +2808,7 @@ void sfall_metarules_reset()
 // On load, if the version marker doesn't match, the function returns early
 // (sfall_metarules_reset() has already restored defaults) — forward compatibility.
 
-#define METARULES_SAVE_VERSION 1
+#define METARULES_SAVE_VERSION 2
 
 static bool metarulesSaveStringMap(File* stream, const std::map<int, std::string>& map)
 {
@@ -2773,7 +2865,7 @@ static bool metarulesLoadCoordMap(File* stream, std::map<std::pair<int, int>, st
         if (fileReadString(value, sizeof(value), stream) == nullptr) return false;
         size_t vlen = strlen(value);
         if (vlen > 0 && value[vlen - 1] == '\n') value[vlen - 1] = '\0';
-        map[{x, y}] = value;
+        map[{ x, y }] = value;
     }
     return true;
 }
@@ -2851,6 +2943,34 @@ static bool metarulesLoadExplosiveMap(File* stream, std::map<int, ExplosivePrope
         if (fileReadInt32(stream, &radius) == -1) return false;
         if (fileReadInt32(stream, &delay) == -1) return false;
         map[pid] = { pattern, radius, delay };
+    }
+    return true;
+}
+
+// Drug data overrides save/load — keyed by drug index.
+static bool metarulesSaveDrugDataMap(File* stream, const std::map<int, DrugData>& map)
+{
+    int count = static_cast<int>(map.size());
+    if (fileWriteInt32(stream, count) == -1) return false;
+    for (const auto& entry : map) {
+        if (fileWriteInt32(stream, entry.first) == -1) return false;
+        if (fileWriteInt32(stream, entry.second.addictionRate) == -1) return false;
+        if (fileWriteInt32(stream, entry.second.effectDuration) == -1) return false;
+    }
+    return true;
+}
+
+static bool metarulesLoadDrugDataMap(File* stream, std::map<int, DrugData>& map)
+{
+    int count;
+    if (fileReadInt32(stream, &count) == -1) return false;
+    map.clear();
+    for (int i = 0; i < count; i++) {
+        int drugIndex, addictionRate, effectDuration;
+        if (fileReadInt32(stream, &drugIndex) == -1) return false;
+        if (fileReadInt32(stream, &addictionRate) == -1) return false;
+        if (fileReadInt32(stream, &effectDuration) == -1) return false;
+        map[drugIndex] = { addictionRate, effectDuration };
     }
     return true;
 }
@@ -2939,24 +3059,39 @@ void sfall_metarules_save(File* stream)
     // gSavedOriginalDude: save as CID
     int originalDudeCid = (gSavedOriginalDude != nullptr) ? gSavedOriginalDude->cid : -1;
     fileWriteInt32(stream, originalDudeCid);
+
+    // Version 2 additions: spray settings, drug data overrides, interface overlay state.
+    fileWriteInt32(stream, gSpraySettings.flags);
+    fileWriteInt32(stream, gSpraySettings.pid);
+    fileWriteInt32(stream, gSpraySettings.radius);
+    fileWriteInt32(stream, gSpraySettings.count);
+    fileWriteInt32(stream, gSpraySettings.active ? 1 : 0);
+    metarulesSaveDrugDataMap(stream, gDrugDataOverrides);
+    fileWriteInt32(stream, gInterfaceOverlayState.winType);
+    fileWriteInt32(stream, gInterfaceOverlayState.arg1);
+    fileWriteInt32(stream, gInterfaceOverlayState.arg2);
+    fileWriteInt32(stream, gInterfaceOverlayState.arg3);
+    fileWriteInt32(stream, gInterfaceOverlayState.arg4);
+    fileWriteInt32(stream, gInterfaceOverlayState.windowHandle);
+    fileWriteInt32(stream, gInterfaceOverlayState.active ? 1 : 0);
 }
 
 void sfall_metarules_load(File* stream)
 {
     int version;
     if (fileReadInt32(stream, &version) == -1) return;
-    if (version != METARULES_SAVE_VERSION) {
+    if (version > METARULES_SAVE_VERSION || version < 1) {
         debugPrint("sfall_metarules_load(): unknown save version %d, skipping", version);
         return;
     }
 
     // Scalars
-    fileReadInt32(stream, &sfall_metarules_dialogShowCount);
-    fileReadInt32(stream, &gNpcEngineLevelUpEnabled);
-    fileReadInt32(stream, &gWorldmapHealTime);
-    fileReadInt32(stream, &gRestHealTime);
-    fileReadInt32(stream, &gCarIntfaceArtFid);
-    fileReadInt32(stream, &gRestMode);
+    if (fileReadInt32(stream, &sfall_metarules_dialogShowCount) == -1) return;
+    if (fileReadInt32(stream, &gNpcEngineLevelUpEnabled) == -1) return;
+    if (fileReadInt32(stream, &gWorldmapHealTime) == -1) return;
+    if (fileReadInt32(stream, &gRestHealTime) == -1) return;
+    if (fileReadInt32(stream, &gCarIntfaceArtFid) == -1) return;
+    if (fileReadInt32(stream, &gRestMode) == -1) return;
 
     // Replay restored healing/rest values to the worldmap system so that
     // consumers (worldmap.cc:3258, wmMapCanRestHere, wmGetRestMode) see the
@@ -2968,9 +3103,9 @@ void sfall_metarules_load(File* stream)
     if (fileReadInt32(stream, &hiddenState) != -1) {
         sIntfaceHiddenState = (hiddenState != 0);
     }
-    fileReadInt32(stream, &gMapEnterX);
-    fileReadInt32(stream, &gMapEnterY);
-    fileReadInt32(stream, &gMapEnterElevation);
+    if (fileReadInt32(stream, &gMapEnterX) == -1) return;
+    if (fileReadInt32(stream, &gMapEnterY) == -1) return;
+    if (fileReadInt32(stream, &gMapEnterElevation) == -1) return;
 
     // String
     char nameBuf[256];
@@ -3010,6 +3145,47 @@ void sfall_metarules_load(File* stream)
             }
         }
     }
+
+    // Version 2 additions: spray settings, drug data overrides, interface overlay state.
+    // For version 1 saves, these fields are absent — sfall_metarules_reset() has
+    // already set defaults, so no explicit fallback is needed.
+    if (version >= 2) {
+        if (fileReadInt32(stream, &gSpraySettings.flags) == -1) return;
+        if (fileReadInt32(stream, &gSpraySettings.pid) == -1) return;
+        if (fileReadInt32(stream, &gSpraySettings.radius) == -1) return;
+        if (fileReadInt32(stream, &gSpraySettings.count) == -1) return;
+        int sprayActive;
+        if (fileReadInt32(stream, &sprayActive) == -1) return;
+        gSpraySettings.active = (sprayActive != 0);
+        if (!metarulesLoadDrugDataMap(stream, gDrugDataOverrides)) return;
+        if (fileReadInt32(stream, &gInterfaceOverlayState.winType) == -1) return;
+        if (fileReadInt32(stream, &gInterfaceOverlayState.arg1) == -1) return;
+        if (fileReadInt32(stream, &gInterfaceOverlayState.arg2) == -1) return;
+        if (fileReadInt32(stream, &gInterfaceOverlayState.arg3) == -1) return;
+        if (fileReadInt32(stream, &gInterfaceOverlayState.arg4) == -1) return;
+        if (fileReadInt32(stream, &gInterfaceOverlayState.windowHandle) == -1) return;
+        int overlayActive;
+        if (fileReadInt32(stream, &overlayActive) == -1) return;
+        gInterfaceOverlayState.active = (overlayActive != 0);
+    }
+}
+
+// Public accessor: returns the override town title for the given area index,
+// or nullptr if no override has been set via set_town_title metarule.
+const char* sfallGetTownTitleOverride(int areaIndex)
+{
+    auto it = gTownTitleOverrides.find(areaIndex);
+    if (it != gTownTitleOverrides.end()) {
+        return it->second.c_str();
+    }
+    return nullptr;
+}
+
+// Public accessor: returns the override car interface art FID,
+// or -1 if no override has been set via set_car_intface_art metarule.
+int sfallGetCarIntfaceArtFid()
+{
+    return gCarIntfaceArtFid;
 }
 
 } // namespace fallout

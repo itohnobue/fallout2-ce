@@ -4,6 +4,8 @@
 
 namespace fallout {
 
+extern bool gFallout1Behavior;
+
 // 0x4A29D0 reaction_set
 int reactionSetValue(Object* critter, int value)
 {
@@ -17,9 +19,13 @@ int reactionSetValue(Object* critter, int value)
 // 0x4A29E8 reaction_to_level
 int reactionTranslateValue(int value)
 {
-    if (value > 10) {
+    // F-025: FO1 uses 25/-25 reaction thresholds, FO2 uses 10/-10.
+    int goodThreshold = gFallout1Behavior ? 25 : 10;
+    int neutralThreshold = gFallout1Behavior ? -25 : -10;
+
+    if (value > goodThreshold) {
         return NPC_REACTION_GOOD;
-    } else if (value > -10) {
+    } else if (value > neutralThreshold) {
         return NPC_REACTION_NEUTRAL;
     } else if (value > -25) {
         return NPC_REACTION_BAD;

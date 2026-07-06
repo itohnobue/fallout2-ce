@@ -4629,14 +4629,18 @@ static int attackDetermineToHit(Object* attacker, int tile, Object* defender, in
         toHit += 40;
     }
 
-    if (attacker->data.critter.combat.team != gDude->data.critter.combat.team) {
-        switch (settings.preferences.combat_difficulty) {
-        case 0:
-            toHit -= 20;
-            break;
-        case 2:
-            toHit += 20;
-            break;
+    // F-005: FO2 ±20 team-vs-difficulty to-hit modifier. FO1 has no such
+    // modifier — skip the entire block in FO1 mode.
+    if (!gFallout1Behavior) {
+        if (attacker->data.critter.combat.team != gDude->data.critter.combat.team) {
+            switch (settings.preferences.combat_difficulty) {
+            case 0:
+                toHit -= 20;
+                break;
+            case 2:
+                toHit += 20;
+                break;
+            }
         }
     }
 
@@ -4716,14 +4720,18 @@ static void attackComputeDamage(Attack* attack, int numRounds, int baseDamageMul
     }
 
     int difficultyDamagePercent = 100;
-    if (attack->attacker->data.critter.combat.team != gDude->data.critter.combat.team) {
-        switch (settings.preferences.combat_difficulty) {
-        case COMBAT_DIFFICULTY_EASY:
-            difficultyDamagePercent = 75;
-            break;
-        case COMBAT_DIFFICULTY_HARD:
-            difficultyDamagePercent = 125;
-            break;
+    // F-005/F-135: FO2 team-vs-difficulty damage modifier (same pattern as
+    // to-hit modifier above). FO1 has no such modifier.
+    if (!gFallout1Behavior) {
+        if (attack->attacker->data.critter.combat.team != gDude->data.critter.combat.team) {
+            switch (settings.preferences.combat_difficulty) {
+            case COMBAT_DIFFICULTY_EASY:
+                difficultyDamagePercent = 75;
+                break;
+            case COMBAT_DIFFICULTY_HARD:
+                difficultyDamagePercent = 125;
+                break;
+            }
         }
     }
 

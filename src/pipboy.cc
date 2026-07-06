@@ -48,6 +48,8 @@
 
 namespace fallout {
 
+extern bool gFallout1Behavior;
+
 #define PIPBOY_WINDOW_WIDTH (640)
 #define PIPBOY_WINDOW_HEIGHT (480)
 
@@ -2078,7 +2080,8 @@ static void pipboyHandleAlarmClock(int eventCode)
             pipboyRest(duration - 1, 0, 0);
             break;
         case PIPBOY_REST_DURATION_UNTIL_MORNING:
-            _ClacTime(&hours, &minutes, 8);
+            // F-027: FO1 wakes at 6, FO2 wakes at 8.
+            _ClacTime(&hours, &minutes, gFallout1Behavior ? 6 : 8);
             pipboyRest(hours, minutes, 0);
             break;
         case PIPBOY_REST_DURATION_UNTIL_NOON:
@@ -2137,10 +2140,10 @@ static void pipboyWindowRenderRestOptions(int a1)
     // NOTE: I don't know if this +1 was a result of compiler optimization or it
     // was written like this in the first place.
     for (int option = 1; option < gPipboyRestOptionsCount + 1; option++) {
-        // 302 - Rest for ten minutes
+        // 302 - Rest for ten minutes (FO2) / 321 - Rest for ten minutes (FO1)
         // ...
         // 315 - Rest until party is healed
-        text = getmsg(&gPipboyMessageList, &gPipboyMessageListItem, 302 + option - 1);
+        text = getmsg(&gPipboyMessageList, &gPipboyMessageListItem, (gFallout1Behavior ? 321 : 302) + option - 1);
         int color = option == a1 ? _colorTable[32747] : _colorTable[992];
 
         pipboyDrawText(text, 0, color);
@@ -2237,7 +2240,10 @@ static bool pipboyRestSetGameTime(unsigned int newGameTime, RestEventType eventT
 {
     gameTimeSetTime(newGameTime);
 
-    if (healingMinutes > 0 && _Check4Health(healingMinutes)) {
+    // F-022: RESTMODE_NO_HEALING (mode=2) suppresses healing during rest.
+    // wmGetRestMode() returns current rest mode: -1=default, 0=disabled,
+    // 1=strict, 2=no healing.
+    if (healingMinutes > 0 && wmGetRestMode() != 2 && _Check4Health(healingMinutes)) {
         _AddHealth();
     }
 

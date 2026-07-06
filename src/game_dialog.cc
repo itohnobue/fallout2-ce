@@ -174,10 +174,13 @@ typedef enum PartyMemberCustomizationOption {
 } PartyMemberCustomizationOption;
 
 // 0x444D10 Dogs
-static int _Dogs[3] = {
+// F-024: Added 0x100007A (Dogmeat PID) which was missing from the array.
+// FO1 Dogmeat would otherwise get generic combat dialog instead of dog-specific.
+static int _Dogs[4] = {
     0x1000088,
     0x1000156,
     0x1000180,
+    0x100007A,
 };
 
 // 0x5186D4 dialog_state_fix
@@ -3872,10 +3875,10 @@ void gameDialogCombatControlButtonOnMouseUp(int btn, int keyCode)
 // 0x4492D0
 int _gdPickAIUpdateMsg(Object* critter)
 {
-    int pids[3];
+    int pids[4];
     memcpy(pids, _Dogs, sizeof(pids));
 
-    for (int index = 0; index < 3; index++) {
+    for (int index = 0; index < 4; index++) {
         if (critter->pid == pids[index]) {
             return 677 + randomBetween(0, 1);
         }

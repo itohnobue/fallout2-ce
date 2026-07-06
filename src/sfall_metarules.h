@@ -40,6 +40,11 @@ void sfall_metarules_save(File* stream);
 void sfall_metarules_load(File* stream);
 void mf_string_format(OpcodeContext& ctx);
 
+// Returns override town title for given area index, or nullptr if no override set.
+const char* sfallGetTownTitleOverride(int areaIndex);
+// Returns override car interface art FID, or -1 if no override set.
+int sfallGetCarIntfaceArtFid();
+
 } // namespace fallout
 
 #endif /* FALLOUT_SFALL_METARULES_H_ */

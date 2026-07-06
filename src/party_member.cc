@@ -32,6 +32,7 @@
 #include "text_object.h"
 #include "tile.h"
 #include "window_manager.h"
+#include "worldmap.h"
 
 namespace fallout {
 
@@ -847,6 +848,12 @@ int _partyMemberSyncPosition()
 // 0x494EB8 partyMemberRestingHeal
 int _partyMemberRestingHeal(int hours)
 {
+    // F-022: RESTMODE_NO_HEALING (mode=2) suppresses healing during rest.
+    // Return early without healing when rest mode is set to no healing.
+    if (wmGetRestMode() == 2) {
+        return 0;
+    }
+
     int healingTicks = hours / 3;
     if (healingTicks == 0) {
         return 0;

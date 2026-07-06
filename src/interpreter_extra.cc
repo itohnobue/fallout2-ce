@@ -2073,7 +2073,9 @@ static void opMetarule3(Program* program)
         break;
     case METARULE3_SET_WM_MUSIC:
         if (1) {
-            debugPrint("\nIntextra: metarule3: set_wm_music: not implemented");
+            const char* musicName = programGetString(program, param2.opcode, param2.integerValue);
+            wmSetMapMusic(param1.integerValue, musicName);
+            result.integerValue = 1;
         }
         break;
     case METARULE3_MAP_GET_LOAD_AREA:

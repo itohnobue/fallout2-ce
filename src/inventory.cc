@@ -53,6 +53,10 @@
 
 namespace fallout {
 
+// F-124: Forward declaration for accessor added by Impl-B1 metarules agent.
+// Returns the car interface art FID override, or -1 if none set.
+int sfallGetCarIntfaceArtFid();
+
 #define INVENTORY_WINDOW_X 80
 #define INVENTORY_WINDOW_Y 0
 
@@ -1339,8 +1343,12 @@ static bool _setup_inventory(int inventoryWindowType)
             assert(inventoryLootFrmImage.isLocked());
             blitBuffer2D(inventoryLootFrmImage.getBuffer(), destBuf);
         } else {
+            // F-021: Check gCarIntfaceArtFid override set via set_car_intface_art.
+            // When a valid FID override is set (>= 0), use it instead of the default.
             FrmImage backgroundFrmImage;
-            if (backgroundFrmImage.lock(buildFid(OBJ_TYPE_INTERFACE, windowDescription->frmId, 0, 0, 0))) {
+            int carIntfaceArtFid = sfallGetCarIntfaceArtFid();
+            int frmId = (carIntfaceArtFid >= 0) ? carIntfaceArtFid : windowDescription->frmId;
+            if (backgroundFrmImage.lock(buildFid(OBJ_TYPE_INTERFACE, frmId, 0, 0, 0))) {
                 blitBuffer2D(backgroundFrmImage.getBuffer(), destBuf);
             }
         }

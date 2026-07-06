@@ -48,7 +48,7 @@ bool sfallParseGlobalScriptPaths()
     }
 
     // Split on commas.
-    std::string pathsStr{rawPaths};
+    std::string pathsStr { rawPaths };
     size_t pos = 0;
     while (pos < pathsStr.size()) {
         // Skip leading whitespace.
