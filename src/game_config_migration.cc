@@ -230,6 +230,12 @@ namespace {
         { kSfallMisc, "DisableHorrigan", CONTENT_CONFIG_WORLDMAP_SECTION, "disable_horrigan", "0" },
         { kSfallMisc, "CityRepsList", CONTENT_CONFIG_WORLDMAP_SECTION, "city_reputation_list" },
         { kSfallInterface, "WorldMapTravelMarkers", CONTENT_CONFIG_WORLDMAP_SECTION, "trail_markers", "0" },
+        // FO1 worldmap position keys — migrated from ddraw.ini [Misc] to
+        // content_config worldmap section for et tu compatibility.
+        { kSfallMisc, "StartXPos", CONTENT_CONFIG_WORLDMAP_SECTION, "start_x_pos" },
+        { kSfallMisc, "StartYPos", CONTENT_CONFIG_WORLDMAP_SECTION, "start_y_pos" },
+        { kSfallMisc, "ViewXPos", CONTENT_CONFIG_WORLDMAP_SECTION, "view_x_pos" },
+        { kSfallMisc, "ViewYPos", CONTENT_CONFIG_WORLDMAP_SECTION, "view_y_pos" },
         // WorldMapSlots migration intentionally removed — `encounter_slots` is never read
         // from game.cfg and `scriptsGetWorldMapSlots()` has zero callers, making the
         // entire WorldMapSlots → encounter_slots pipeline dead code.

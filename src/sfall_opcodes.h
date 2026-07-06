@@ -102,6 +102,120 @@ extern int sfallHitChanceMax;
 // ============================================================
 extern int gPipboyAvailableOverride;
 
+// ============================================================
+// HP per level modifier (F-007). Set via opcode 0x81CE.
+// Integration point: stat.cc HP-per-level calculation should add
+// this modifier to endurance/2 + 2 + lifegiver bonus.
+// ============================================================
+int sfallGetHpPerLevelMod();
+
+// ============================================================
+// Pyromaniac damage modifier (F-030). Set via opcode 0x81CB.
+// Integration point: combat.cc attackComputeDamage pyromaniac
+// calculation should add this modifier.
+// ============================================================
+int sfallGetPyromaniacMod();
+
+// ============================================================
+// Swift Learner XP modifier (F-033). Set via opcode 0x81CD.
+// Integration point: stat.cc XP calculation (Swift Learner perk)
+// should add this modifier to perkGetRank(PERK_SWIFT_LEARNER) * 5.
+// ============================================================
+int sfallGetSwiftLearnerMod();
+
+// ============================================================
+// Perk level modifier (F-035). Set via opcode 0x81AB.
+// Integration point: character_editor.cc characterEditorUpdateLevel()
+// should subtract this from the perk frequency progression.
+// ============================================================
+int sfallGetPerkLevelMod();
+
+// ============================================================
+// Skill modifier globals (F-034). Set via opcodes 0x81C7/0x81C8.
+// Integration point: skill.cc skillGetValue() should add these
+// modifiers to the skill value calculation.
+// ============================================================
+int sfallGetCritterSkillMod();
+int sfallGetBaseSkillMod();
+
+// ============================================================
+// Perk add mode and clear-selectable-perks flags (F-036).
+// Set via opcodes 0x81C3/0x81C4.
+// Integration point: character_editor.cc perk selection dialog
+// should consult these when building the perk list.
+// ============================================================
+int sfallGetPerkAddMode();
+bool sfallGetClearSelectablePerks();
+int sfallGetHideRealPerks();
+
+// ============================================================
+// Fake perk/trait arrays (F-037). Populated via opcodes
+// 0x81BB (set_fake_perk), 0x81BC (set_fake_trait),
+// 0x81BD (set_selectable_perk).
+// Integration point: character_editor.cc perk dialog should iterate
+// these entries alongside built-in engine perks.
+// ============================================================
+struct FakePerkEntry {
+    char* name;
+    int level;
+    int image;
+    char* desc;
+    bool active;
+};
+struct FakeTraitEntry {
+    char* name;
+    int active;
+    int image;
+    char* desc;
+};
+const FakePerkEntry* sfallGetFakePerks(int* outCount);
+int sfallGetFakePerkCount();
+const FakeTraitEntry* sfallGetFakeTraits(int* outCount);
+
+// ============================================================
+// Per-critter aimed-shot override flags (F-016).
+// Set via opcodes 0x823E (force_aimed_shots) and 0x823F
+// (disable_aimed_shots). Keyed by proto ID (PID).
+// Returns true if the critter PID has a forced aimed-shot override.
+// ============================================================
+bool sfallGetForceAimedShots(int pid);
+bool sfallGetDisableAimedShots(int pid);
+
+// ============================================================
+// Per-critter hit chance modifier entry (F-019).
+// Separate from the global sfallHitChanceMod/sfallHitChanceMax
+// which are used by set_base_hit_chance_mod (0x81C6).
+// Set via opcode 0x81C5 (set_critter_hit_chance_mod).
+// ============================================================
+bool sfallGetCritterHitChanceMod(Object* critter, int& outMod, int& outMax);
+
+// ============================================================
+// Perk property override arrays (F-015). Each is indexed by
+// perk ID (PERK_COUNT entries). -1 sentinel = no override set.
+// Set via opcodes 0x8178-0x8188 (set_perk_*),
+// 0x817A (set_perk_level routed through perkSetMinLevel).
+// Integration point: perk.cc should check these arrays before
+// returning gPerkDescriptions[] values.
+// ============================================================
+int sfallGetPerkImageOverride(int perkID);
+int sfallGetPerkRanksOverride(int perkID);
+int sfallGetPerkStatOverride(int perkID);
+int sfallGetPerkStatMagOverride(int perkID);
+int sfallGetPerkSkill1Override(int perkID);
+int sfallGetPerkSkill1MagOverride(int perkID);
+int sfallGetPerkSkill2Override(int perkID);
+int sfallGetPerkSkill2MagOverride(int perkID);
+int sfallGetPerkTypeOverride(int perkID);
+int sfallGetPerkSpecialOverride(int perkID, int statIdx);
+
+// ============================================================
+// Movie path override (F-021). Set via opcode 0x8177.
+// Returns nullptr if no override set for the given movie ID.
+// Integration point: movie.cc should check this override when
+// resolving movie file paths.
+// ============================================================
+const char* sfallGetMoviePathOverride(int movieId);
+
 } // namespace fallout
 
 #endif /* FALLOUT_SFALL_OPCODES_H_ */

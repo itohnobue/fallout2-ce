@@ -247,15 +247,8 @@ static std::map<int, ExplosiveProperties> gExplosiveOverrides;
 // Stored spray settings for set_spray_settings metarule.
 // Parameters configure burst fire spray pattern: flags, proto PID filter,
 // burst radius (in hexes), and count of bullets per burst.
-// Consumer: combat burst system (src/combat.cc:burstSpread computation).
-// TODO: integrate with combat burst system once burst API is available.
-struct SpraySettings {
-    int flags = 0;
-    int pid = -1;
-    int radius = 0;
-    int count = 0;
-    bool active = false;
-};
+// Consumer: combat burst system (src/combat.cc _compute_spray).
+// Struct definition in sfall_metarules.h.
 static SpraySettings gSpraySettings;
 
 // Maximum number of pending timer events allowed.
@@ -277,11 +270,7 @@ static int gNextTimerId = 1;
 // Stored drug data overrides for set_drugs_data metarule.
 // Maps drug index to {addictionRate, effectDuration}.
 // Consumer: drug/chem system (src/item.cc, src/stat.cc drug processing).
-// TODO: integrate with drug application pipeline.
-struct DrugData {
-    int addictionRate = 0;
-    int effectDuration = 0;
-};
+// Struct definition in sfall_metarules.h.
 static std::map<int, DrugData> gDrugDataOverrides;
 
 // Stored interface overlay state for interface_overlay metarule.
@@ -3186,6 +3175,33 @@ const char* sfallGetTownTitleOverride(int areaIndex)
 int sfallGetCarIntfaceArtFid()
 {
     return gCarIntfaceArtFid;
+}
+
+// Public accessor: returns pointer to spray settings struct.
+// Always returns a valid pointer — check .active before using values.
+const SpraySettings* sfallGetSpraySettings()
+{
+    return &gSpraySettings;
+}
+
+// Public accessor: looks up drug data override for the given drug index.
+// Returns true if an override exists, populating outAddictionRate/outEffectDuration.
+bool sfallGetDrugDataOverride(int drugIndex, int* outAddictionRate, int* outEffectDuration)
+{
+    auto it = gDrugDataOverrides.find(drugIndex);
+    if (it != gDrugDataOverrides.end()) {
+        *outAddictionRate = it->second.addictionRate;
+        *outEffectDuration = it->second.effectDuration;
+        return true;
+    }
+    return false;
+}
+
+// Public accessor: returns true if the specified trait has been added
+// via the add_trait metarule and participates in stat/skill modifiers.
+bool sfallIsTraitAdded(int traitId)
+{
+    return gAddedTraits.find(traitId) != gAddedTraits.end();
 }
 
 } // namespace fallout

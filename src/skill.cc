@@ -249,11 +249,11 @@ int skillGetValue(Object* critter, int skill)
         statValueSum += critterGetStat(critter, skillDescription->stat2);
     }
 
-    int value = skillDescription->defaultValue + skillDescription->statModifier * statValueSum + baseValue * skillDescription->baseValueMult;
+    int value = skillDescription->defaultValue + skillDescription->statModifier * statValueSum + (baseValue + sfallGetBaseSkillMod()) * skillDescription->baseValueMult;
 
     if (critter == gDude) {
         if (skillIsTagged(skill)) {
-            value += baseValue * skillDescription->baseValueMult;
+            value += (baseValue + sfallGetBaseSkillMod()) * skillDescription->baseValueMult;
 
             if (!perkGetRank(critter, PERK_TAG) || skill != gTaggedSkills[3]) {
                 value += 20;
@@ -263,6 +263,11 @@ int skillGetValue(Object* critter, int skill)
         value += traitGetSkillModifier(skill);
         value += perkGetSkillModifier(critter, skill);
         value += skillGetGameDifficultyModifier(skill);
+        // F-34: Apply sfall skill modifiers set via opcodes 0x81C7/0x81C8.
+        // sfallGetBaseSkillMod() is applied before baseValue multipliers
+        // (inline at line 252); sfallGetCritterSkillMod() is a flat addition
+        // after all other calculations (alongside trait/perk/difficulty mods).
+        value += sfallGetCritterSkillMod();
     }
 
     // Use gSkillMaxCap if set by set_skill_max metarule;

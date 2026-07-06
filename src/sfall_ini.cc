@@ -13,6 +13,7 @@
 #include "opcode_context.h"
 #include "platform_compat.h"
 #include "sfall_arrays.h"
+#include "sfall_config.h"
 
 namespace fallout {
 
@@ -196,24 +197,50 @@ static bool sfall_ini_get_string_internal(const char* triplet, char* value, size
     return true;
 }
 
+// Return codes for sfall_ini_get_int_detailed to distinguish failure modes
+// at the script level. Matches sfall convention for RPU compatibility:
+//   -1 = key not found (file and section exist, key doesn't)
+//   -2 = file not found / cannot be read
+//   -3 = invalid triplet format ("file|section|key" parse failure)
+enum {
+    SFALL_INI_OK = 0,
+    SFALL_INI_KEY_NOT_FOUND = -1,
+    SFALL_INI_FILE_NOT_FOUND = -2,
+    SFALL_INI_PARSE_ERROR = -3
+};
+
+// Reads integer key identified by "fileName|section|key" triplet into `value`,
+// returning a detailed status code that distinguishes missing-key from
+// missing-file from parse-error. See SFALL_INI_* enum above.
+static int sfall_ini_get_int_detailed(const char* triplet, int* value)
+{
+    char fileName[kFileNameMaxSize];
+    char section[kSectionMaxSize];
+    const char* key = parse_ini_triplet(triplet, fileName, section);
+    if (key == nullptr) {
+        return SFALL_INI_PARSE_ERROR;
+    }
+
+    Config* config = sfall_get_ini_config(fileName);
+    if (config == nullptr) {
+        return SFALL_INI_FILE_NOT_FOUND;
+    }
+
+    char* stringValue;
+    if (!configGetString(config, section, key, &stringValue)) {
+        return SFALL_INI_KEY_NOT_FOUND;
+    }
+
+    *value = atol(stringValue);
+    return SFALL_INI_OK;
+}
+
 // false: on error
 // true: on key found
 // If the key exists but is the empty string, returns true and value to 0
 bool sfall_ini_get_int(const char* triplet, int* value)
 {
-    char string[20];
-    bool found;
-    if (!sfall_ini_get_string_internal(triplet, string, sizeof(string), &found)) {
-        return false;
-    }
-
-    if (!found) {
-        return false;
-    }
-
-    *value = atol(string);
-
-    return true;
+    return sfall_ini_get_int_detailed(triplet, value) == SFALL_INI_OK;
 }
 
 bool sfall_ini_get_string(const char* triplet, char* value, size_t size)
@@ -311,20 +338,33 @@ void mf_set_ini_setting(OpcodeContext& ctx)
     const char* triplet = ctx.stringArg(0);
     ProgramValue value = ctx.arg(1);
 
+    bool wrote = false;
     if (value.isString()) {
         const char* stringValue = value.asString(ctx.program());
-        if (!sfall_ini_set_string(triplet, stringValue)) {
+        wrote = sfall_ini_set_string(triplet, stringValue);
+        if (!wrote) {
             debugPrint("set_ini_setting: unable to write '%s' to '%s'",
                 stringValue,
                 triplet);
         }
     } else {
         int integerValue = value.asInt();
-        if (!sfall_ini_set_int(triplet, integerValue)) {
+        wrote = sfall_ini_set_int(triplet, integerValue);
+        if (!wrote) {
             debugPrint("set_ini_setting: unable to write '%d' to '%s'",
                 integerValue,
                 triplet);
         }
+    }
+
+    // After writing to disk, update gAllowUnsafeScripting so it reflects
+    // the current config value. Note: VOODOO opcode registration is a
+    // one-time init operation that runs before any script executes, so
+    // this runtime toggle only takes effect after a restart/reload.
+    // See sfall_config.cc for key definitions.
+    if (wrote && compat_stricmp(triplet, "ddraw.ini|Debugging|AllowUnsafeScripting") == 0) {
+        int intVal = value.isString() ? atoi(value.asString(ctx.program())) : value.asInt();
+        gAllowUnsafeScripting = (intVal != 0);
     }
 }
 
@@ -459,9 +499,13 @@ void op_get_ini_setting(Program* program)
     const char* string = programStackPopString(program);
 
     int value;
-    if (sfall_ini_get_int(string, &value)) {
+    int status = sfall_ini_get_int_detailed(string, &value);
+    if (status == SFALL_INI_OK) {
         programStackPushInteger(program, value);
     } else {
+        // Return -1 for ALL error conditions (key not found, file not found,
+        // parse error). Returning distinct codes (-2, -3) collides with valid
+        // INI values and breaks scripts that check result == -1 for failure.
         programStackPushInteger(program, -1);
     }
 }

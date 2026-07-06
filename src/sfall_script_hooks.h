@@ -37,7 +37,8 @@ typedef enum {
     // Critter death.
     HOOK_ONDEATH = 6,
 
-    //    HOOK_FINDTARGET = 7,
+    // AI target selection hook. Fires at combat_ai.cc:1679,1706,1760.
+    HOOK_FINDTARGET = 7,
 
     // Using item on critter or scenery, before normal script proc.
     // TODO: rename to USEITEMON
@@ -253,6 +254,12 @@ public:
     ProgramValue getArgAt(int idx) const;
     ProgramValue getReturnValueAt(int idx) const;
 
+    // Returns the Program* that set the return value at the given index.
+    // For string return values, this is the program whose string table should
+    // be used for resolution. Falls back to _lastProgram if no program was
+    // recorded for this slot (e.g., return values set outside the call loop).
+    Program* programForReturnValueAt(int idx) const;
+
     // Returns the Program* of the last script that ran during call(),
     // so hook consumers can resolve string-table-based return values.
     Program* lastProgram() const { return _lastProgram; }
@@ -266,6 +273,7 @@ private:
     ProgramValue _args[HOOKS_MAX_ARGUMENTS] = {};
     int _numArgs = 0;
     ProgramValue _retVals[HOOKS_MAX_RETURN_VALUES] = {};
+    Program* _retValPrograms[HOOKS_MAX_RETURN_VALUES] = {};
     int _numRetVals = 0;
 
     int _scriptArgs = 0;

@@ -30,6 +30,7 @@
 #include "random.h"
 #include "scripts.h"
 #include "sfall_config.h"
+#include "sfall_metarules.h"
 #include "sfall_script_hooks.h"
 #include "skill.h"
 #include "stat.h"
@@ -2914,12 +2915,32 @@ UseItemResultCode drugItemTakeDrug(Object* critter, Object* item)
     _wd_gvar = drugGetAddictionGvarByPid(item->pid);
     _wd_onset = proto->item.data.drug.withdrawalOnset;
 
+    // F-009/F-022: Check for drug data overrides set via set_drugs_data metarule.
+    // gDrugDataOverrides maps drugIndex → {addictionRate, effectDuration}.
+    // Find the drug index from the item PID, then apply overrides to the
+    // addiction chance and effect durations.
+    int drugIndex = -1;
+    for (int di = 0; di < ADDICTION_COUNT; di++) {
+        if (gDrugDescriptions[di].drugPid == item->pid) {
+            drugIndex = di;
+            break;
+        }
+    }
+    int overrideAddictionRate = -1;
+    int overrideEffectDuration = -1;
+    if (drugIndex != -1) {
+        sfallGetDrugDataOverride(drugIndex, &overrideAddictionRate, &overrideEffectDuration);
+    }
+    int duration1 = (overrideEffectDuration > 0) ? overrideEffectDuration : proto->item.data.drug.duration1;
+    int duration2 = (overrideEffectDuration > 0) ? overrideEffectDuration : proto->item.data.drug.duration2;
+    int addictionChance = (overrideAddictionRate >= 0) ? overrideAddictionRate : proto->item.data.drug.addictionChance;
+
     queueClearByEventType(EVENT_TYPE_WITHDRAWAL, _item_wd_clear_all);
 
     if (_drug_effect_allowed(critter, item->pid)) {
         _perform_drug_effect(critter, proto->item.data.drug.stat, proto->item.data.drug.amount, true);
-        _insert_drug_effect(critter, item, proto->item.data.drug.duration1, proto->item.data.drug.stat, proto->item.data.drug.amount1);
-        _insert_drug_effect(critter, item, proto->item.data.drug.duration2, proto->item.data.drug.stat, proto->item.data.drug.amount2);
+        _insert_drug_effect(critter, item, duration1, proto->item.data.drug.stat, proto->item.data.drug.amount1);
+        _insert_drug_effect(critter, item, duration2, proto->item.data.drug.stat, proto->item.data.drug.amount2);
     } else {
         if (critter == gDude) {
             MessageListItem messageListItem;
@@ -2930,7 +2951,7 @@ UseItemResultCode drugItemTakeDrug(Object* critter, Object* item)
     }
 
     if (!dudeIsAddicted(item->pid)) {
-        int addictionChance = proto->item.data.drug.addictionChance;
+        // addictionChance is already set above with override support.
         if (critter == gDude) {
             if (traitIsSelected(TRAIT_CHEM_RELIANT)) {
                 addictionChance *= 2;

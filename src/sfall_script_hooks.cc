@@ -69,7 +69,9 @@ void ScriptHookCall::addReturnValueFromScript(ProgramValue value)
     if (_scriptRetVals >= _maxRetVals)
         return;
 
-    _retVals[_scriptRetVals++] = value;
+    _retVals[_scriptRetVals] = value;
+    _retValPrograms[_scriptRetVals] = _lastProgram;
+    _scriptRetVals++;
 
     if (_scriptRetVals > _numRetVals) {
         _numRetVals = _scriptRetVals;
@@ -86,6 +88,13 @@ ProgramValue ScriptHookCall::getReturnValueAt(int idx) const
 {
     assert(idx >= 0 && idx < _numRetVals);
     return _retVals[idx];
+}
+
+Program* ScriptHookCall::programForReturnValueAt(int idx) const
+{
+    assert(idx >= 0 && idx < _numRetVals);
+    Program* prog = _retValPrograms[idx];
+    return prog != nullptr ? prog : _lastProgram;
 }
 
 int ScriptHookCall::numArgs() const { return _numArgs; }
@@ -121,6 +130,7 @@ void ScriptHookCall::call()
         const auto& hook = hooksOfType[i];
         _scriptArgs = 0;
         _scriptRetVals = 0;
+        _numRetVals = 0;
         _lastProgram = hook.program;
         programExecuteProcedure(hook.program, hook.procedureIndex);
     }
@@ -1175,7 +1185,7 @@ void scriptHooks_DescriptionObj(Object* examiner, Object* target, std::string& d
 
     ProgramValue retVal = hook.getReturnValueAt(0);
     const char* overrideDesc = retVal.isString()
-        ? retVal.asString(hook.lastProgram())
+        ? retVal.asString(hook.programForReturnValueAt(0))
         : "";
     if (overrideDesc != nullptr && overrideDesc[0] != '\0') {
         description = overrideDesc;

@@ -51,6 +51,12 @@ namespace fallout {
 // SFALL: Number of message lists for scripted dialogs.
 #define SCRIPT_DIALOG_MESSAGE_LIST_MAX_CAPACITY 10000
 
+// Runtime capacity for dialog message lists, configurable via
+// content_config dialog.boost_dialog_limit (migrated from ddraw.ini
+// [Misc] BoostScriptDialogLimit). Capped at SCRIPT_DIALOG_MESSAGE_LIST_MAX_CAPACITY
+// since the backing array is statically allocated.
+static int gScriptDialogMessageListCapacity = SCRIPT_DIALOG_MESSAGE_LIST_MAX_CAPACITY;
+
 typedef struct ScriptsListEntry {
     char name[16];
     int local_vars_num;
@@ -1634,6 +1640,18 @@ int scriptsInit()
     configGetInt(&gContentConfig, CONTENT_CONFIG_MOVIES_SECTION, "artimer3", &gMovieTimerArtimer3, 270);
     configGetInt(&gContentConfig, CONTENT_CONFIG_MOVIES_SECTION, "artimer4", &gMovieTimerArtimer4, 360);
 
+    // Read BoostScriptDialogLimit from content_config to adjust dialog message
+    // list capacity at runtime. Clamped to the statically-allocated array limit.
+    int boostDialogLimit;
+    if (configGetInt(&gContentConfig, CONTENT_CONFIG_DIALOG_SECTION, "boost_dialog_limit", &boostDialogLimit, 0)
+        && boostDialogLimit > 0) {
+        if (boostDialogLimit <= SCRIPT_DIALOG_MESSAGE_LIST_MAX_CAPACITY) {
+            gScriptDialogMessageListCapacity = boostDialogLimit;
+        } else {
+            gScriptDialogMessageListCapacity = SCRIPT_DIALOG_MESSAGE_LIST_MAX_CAPACITY;
+        }
+    }
+
     checkScriptsOpcodes();
 
     return 0;
@@ -2798,7 +2816,7 @@ static int scriptsGetMessageList(int messageListId, MessageList** messageListPtr
     }
 
     int messageListIndex = messageListId - 1;
-    if (messageListIndex < 0 || messageListIndex >= SCRIPT_DIALOG_MESSAGE_LIST_MAX_CAPACITY) {
+    if (messageListIndex < 0 || messageListIndex >= gScriptDialogMessageListCapacity) {
         return -1;
     }
 

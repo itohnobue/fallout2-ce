@@ -2,6 +2,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <unordered_set>
 
 #include "art.h"
 #include "character_editor.h"
@@ -84,6 +85,9 @@ static const size_t _proto_sizes[11] = {
 
 // 0x51C36C protos_been_initialized
 static int _protos_been_initialized = 0;
+
+// Track PIDs modified via set_proto_data for write-back on LRU eviction.
+static std::unordered_set<int> gProtoDirtyPids;
 
 // obj_dude_proto
 // 0x51C370 pc_proto
@@ -1339,6 +1343,8 @@ int protoInit()
     char path[COMPAT_MAX_PATH];
     int i;
 
+    gProtoDirtyPids.clear();
+
     snprintf(path, sizeof(path), "%s\\proto", settings.system.master_patches_path.c_str());
     len = strlen(path);
 
@@ -1468,6 +1474,9 @@ int protoInit()
 void protoReset()
 {
     int i;
+
+    // Clear dirty proto tracking — all protos are being reloaded from disk.
+    gProtoDirtyPids.clear();
 
     // TODO: Get rid of cast.
     proto_critter_init((Proto*)&gDudeProto, 0x1000000);
@@ -1945,6 +1954,10 @@ int _proto_save_pid(int pid)
 
     fileClose(stream);
 
+    if (rc == 0) {
+        gProtoDirtyPids.erase(pid);
+    }
+
     return rc;
 }
 
@@ -2081,6 +2094,19 @@ static void _proto_remove_some_list(int type)
     ProtoList* protoList = &(_protoLists[type]);
     ProtoListExtent* protoListExtent = protoList->head;
     if (protoListExtent != nullptr) {
+        // Save dirty protos to disk before eviction so
+        // set_proto_data modifications are not lost.
+        // Must be done BEFORE disconnecting the head extent,
+        // since _proto_save_pid calls protoGetProto internally.
+        for (int index = 0; index < protoListExtent->length; index++) {
+            Proto* proto = protoListExtent->proto[index];
+            int pid = proto->pid;
+
+            if (gProtoDirtyPids.count(pid) > 0) {
+                _proto_save_pid(pid);
+            }
+        }
+
         protoList->length--;
         protoList->head = protoListExtent->next;
 
@@ -2174,6 +2200,13 @@ static int _proto_new_id(int type)
 int proto_max_id(int type)
 {
     return _protoLists[type].max_entries_num;
+}
+
+// Mark a PID as modified by set_proto_data so it gets written to disk
+// on cache eviction.
+void protoMarkDirty(int pid)
+{
+    gProtoDirtyPids.insert(pid);
 }
 
 // 0x4A22C0 ResetPlayer

@@ -817,7 +817,10 @@ int pcAddExperienceWithOptions(int xp, bool doParty, int* xpGained)
 
     int64_t newXp = gPcStatValues[PC_STAT_EXPERIENCE];
     newXp += adjustedXp;
-    newXp += static_cast<int64_t>(perkGetRank(gDude, PERK_SWIFT_LEARNER)) * 5 * adjustedXp / 100;
+    // F-33: Apply sfall Swift Learner modifier (opcode 0x81CD) along with
+    // the base Swift Learner perk bonus (5% XP per rank).
+    int64_t swiftLearnerPct = static_cast<int64_t>(perkGetRank(gDude, PERK_SWIFT_LEARNER)) * 5 + sfallGetSwiftLearnerMod();
+    newXp += swiftLearnerPct * adjustedXp / 100;
 
     if (newXp < gPcStatDescriptions[PC_STAT_EXPERIENCE].minimumValue) {
         newXp = gPcStatDescriptions[PC_STAT_EXPERIENCE].minimumValue;
@@ -852,7 +855,12 @@ int pcAddExperienceWithOptions(int xp, bool doParty, int* xpGained)
             int endurance = critterGetBaseStatWithTraitModifier(gDude, STAT_ENDURANCE);
 
             int hpPerLevel = endurance / 2 + 2;
+            // F-07: Apply sfall HP-per-level modifier set via opcode 0x81CE.
+            hpPerLevel += sfallGetHpPerLevelMod();
             hpPerLevel += perkGetRank(gDude, PERK_LIFEGIVER) * 4;
+            if (hpPerLevel < 0) {
+                hpPerLevel = 0;
+            }
 
             int bonusHp = critterGetBonusStat(gDude, STAT_MAXIMUM_HIT_POINTS);
             critterSetBonusStat(gDude, STAT_MAXIMUM_HIT_POINTS, bonusHp + hpPerLevel);
@@ -901,7 +909,11 @@ int pcSetExperience(int xp)
     int endurance = critterGetBaseStatWithTraitModifier(gDude, STAT_ENDURANCE);
 
     int hpPerLevel = endurance / 2 + 2;
+    hpPerLevel += sfallGetHpPerLevelMod();
     hpPerLevel += perkGetRank(gDude, PERK_LIFEGIVER) * 4;
+    if (hpPerLevel < 0) {
+        hpPerLevel = 0;
+    }
 
     int deltaHp = (oldLevel - newLevel) * hpPerLevel;
     critterAdjustHitPoints(gDude, -deltaHp);

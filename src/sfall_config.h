@@ -49,6 +49,10 @@ extern bool gExtraSaveSlots; // TODO: wire to save slot count
 bool sfallConfigInit(int argc, char** argv);
 void sfallConfigExit();
 
+// Provides read-only access to gEnableHeroAppearanceMod for consumption
+// in the hero appearance opcode registration pipeline (sfall_opcodes.cc).
+bool sfallConfigGetHeroAppearanceMod();
+
 } // namespace fallout
 
 #endif /* SFALL_CONFIG_H */

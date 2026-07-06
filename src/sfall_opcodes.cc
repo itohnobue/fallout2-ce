@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdio>
 #include <limits.h>
 #include <math.h>
 #include <string.h>
@@ -858,6 +859,7 @@ static void op_set_proto_data(Program* program)
     }
 
     *reinterpret_cast<int*>(reinterpret_cast<unsigned char*>(proto) + offset) = value;
+    protoMarkDirty(pid);
 }
 
 // set_self
@@ -2829,7 +2831,8 @@ static void op_write_byte(Program* program)
     int value = programStackPopInteger(program);
     int addr = programStackPopInteger(program);
 
-    debugPrint("VOODOO write_byte(0x%08X, %d) — no-op in CE engine\n", addr, value);
+    programPrintError("VOODOO write_byte(0x%08X, %d) — NOT SUPPORTED in CE engine (different address space). "
+                       "Use CE-native opcodes or metarules instead.\n", addr, value);
 }
 
 static void op_write_short(Program* program)
@@ -2837,7 +2840,8 @@ static void op_write_short(Program* program)
     int value = programStackPopInteger(program);
     int addr = programStackPopInteger(program);
 
-    debugPrint("VOODOO write_short(0x%08X, %d) — no-op in CE engine\n", addr, value);
+    programPrintError("VOODOO write_short(0x%08X, %d) — NOT SUPPORTED in CE engine (different address space). "
+                       "Use CE-native opcodes or metarules instead.\n", addr, value);
 }
 
 static void op_write_int(Program* program)
@@ -2845,7 +2849,8 @@ static void op_write_int(Program* program)
     int value = programStackPopInteger(program);
     int addr = programStackPopInteger(program);
 
-    debugPrint("VOODOO write_int(0x%08X, %d) — no-op in CE engine\n", addr, value);
+    programPrintError("VOODOO write_int(0x%08X, %d) — NOT SUPPORTED in CE engine (different address space). "
+                       "Use CE-native opcodes or metarules instead.\n", addr, value);
 }
 
 static void op_write_string(Program* program)
@@ -2853,7 +2858,8 @@ static void op_write_string(Program* program)
     const char* value = programStackPopString(program);
     int addr = programStackPopInteger(program);
 
-    debugPrint("VOODOO write_string(0x%08X, \"%s\") — no-op in CE engine\n", addr, value != nullptr ? value : "(null)");
+    programPrintError("VOODOO write_string(0x%08X, \"%s\") — NOT SUPPORTED in CE engine (different address space). "
+                       "Use CE-native opcodes or metarules instead.\n", addr, value != nullptr ? value : "(null)");
 }
 
 // ============================================================
@@ -2870,7 +2876,8 @@ static void op_write_string(Program* program)
 static void op_call_offset_v0(Program* program)
 {
     int addr = programStackPopInteger(program);
-    debugPrint("VOODOO call_offset_v0(0x%08X) — no-op in CE engine\n", addr);
+    programPrintError("VOODOO call_offset_v0(0x%08X) — NOT SUPPORTED in CE engine (different address space). "
+                       "Use CE-native opcodes or metarules instead.\n", addr);
     programStackPushInteger(program, 0);
 }
 
@@ -2878,7 +2885,8 @@ static void op_call_offset_v1(Program* program)
 {
     int arg1 = programStackPopInteger(program);
     int addr = programStackPopInteger(program);
-    debugPrint("VOODOO call_offset_v1(0x%08X, %d) — no-op in CE engine\n", addr, arg1);
+    programPrintError("VOODOO call_offset_v1(0x%08X, %d) — NOT SUPPORTED in CE engine (different address space). "
+                       "Use CE-native opcodes or metarules instead.\n", addr, arg1);
     programStackPushInteger(program, 0);
 }
 
@@ -2887,7 +2895,8 @@ static void op_call_offset_v2(Program* program)
     int arg2 = programStackPopInteger(program);
     int arg1 = programStackPopInteger(program);
     int addr = programStackPopInteger(program);
-    debugPrint("VOODOO call_offset_v2(0x%08X, %d, %d) — no-op in CE engine\n", addr, arg1, arg2);
+    programPrintError("VOODOO call_offset_v2(0x%08X, %d, %d) — NOT SUPPORTED in CE engine (different address space). "
+                       "Use CE-native opcodes or metarules instead.\n", addr, arg1, arg2);
     programStackPushInteger(program, 0);
 }
 
@@ -2897,7 +2906,8 @@ static void op_call_offset_v3(Program* program)
     int arg2 = programStackPopInteger(program);
     int arg1 = programStackPopInteger(program);
     int addr = programStackPopInteger(program);
-    debugPrint("VOODOO call_offset_v3(0x%08X, %d, %d, %d) — no-op in CE engine\n", addr, arg1, arg2, arg3);
+    programPrintError("VOODOO call_offset_v3(0x%08X, %d, %d, %d) — NOT SUPPORTED in CE engine (different address space). "
+                       "Use CE-native opcodes or metarules instead.\n", addr, arg1, arg2, arg3);
     programStackPushInteger(program, 0);
 }
 
@@ -2908,7 +2918,8 @@ static void op_call_offset_v4(Program* program)
     int arg2 = programStackPopInteger(program);
     int arg1 = programStackPopInteger(program);
     int addr = programStackPopInteger(program);
-    debugPrint("VOODOO call_offset_v4(0x%08X, %d, %d, %d, %d) — no-op in CE engine\n", addr, arg1, arg2, arg3, arg4);
+    programPrintError("VOODOO call_offset_v4(0x%08X, %d, %d, %d, %d) — NOT SUPPORTED in CE engine (different address space). "
+                       "Use CE-native opcodes or metarules instead.\n", addr, arg1, arg2, arg3, arg4);
     programStackPushInteger(program, 0);
 }
 
@@ -2917,7 +2928,8 @@ static void op_call_offset_v4(Program* program)
 static void op_call_offset_r0(Program* program)
 {
     int addr = programStackPopInteger(program);
-    debugPrint("VOODOO call_offset_r0(0x%08X) — no-op in CE engine\n", addr);
+    programPrintError("VOODOO call_offset_r0(0x%08X) — NOT SUPPORTED in CE engine (different address space). "
+                       "Use CE-native opcodes or metarules instead.\n", addr);
     programStackPushInteger(program, 0);
 }
 
@@ -2925,7 +2937,8 @@ static void op_call_offset_r1(Program* program)
 {
     int arg1 = programStackPopInteger(program);
     int addr = programStackPopInteger(program);
-    debugPrint("VOODOO call_offset_r1(0x%08X, %d) — no-op in CE engine\n", addr, arg1);
+    programPrintError("VOODOO call_offset_r1(0x%08X, %d) — NOT SUPPORTED in CE engine (different address space). "
+                       "Use CE-native opcodes or metarules instead.\n", addr, arg1);
     programStackPushInteger(program, 0);
 }
 
@@ -2934,7 +2947,8 @@ static void op_call_offset_r2(Program* program)
     int arg2 = programStackPopInteger(program);
     int arg1 = programStackPopInteger(program);
     int addr = programStackPopInteger(program);
-    debugPrint("VOODOO call_offset_r2(0x%08X, %d, %d) — no-op in CE engine\n", addr, arg1, arg2);
+    programPrintError("VOODOO call_offset_r2(0x%08X, %d, %d) — NOT SUPPORTED in CE engine (different address space). "
+                       "Use CE-native opcodes or metarules instead.\n", addr, arg1, arg2);
     programStackPushInteger(program, 0);
 }
 
@@ -2944,7 +2958,8 @@ static void op_call_offset_r3(Program* program)
     int arg2 = programStackPopInteger(program);
     int arg1 = programStackPopInteger(program);
     int addr = programStackPopInteger(program);
-    debugPrint("VOODOO call_offset_r3(0x%08X, %d, %d, %d) — no-op in CE engine\n", addr, arg1, arg2, arg3);
+    programPrintError("VOODOO call_offset_r3(0x%08X, %d, %d, %d) — NOT SUPPORTED in CE engine (different address space). "
+                       "Use CE-native opcodes or metarules instead.\n", addr, arg1, arg2, arg3);
     programStackPushInteger(program, 0);
 }
 
@@ -2955,7 +2970,8 @@ static void op_call_offset_r4(Program* program)
     int arg2 = programStackPopInteger(program);
     int arg1 = programStackPopInteger(program);
     int addr = programStackPopInteger(program);
-    debugPrint("VOODOO call_offset_r4(0x%08X, %d, %d, %d, %d) — no-op in CE engine\n", addr, arg1, arg2, arg3, arg4);
+    programPrintError("VOODOO call_offset_r4(0x%08X, %d, %d, %d, %d) — NOT SUPPORTED in CE engine (different address space). "
+                       "Use CE-native opcodes or metarules instead.\n", addr, arg1, arg2, arg3, arg4);
     programStackPushInteger(program, 0);
 }
 
@@ -3171,6 +3187,296 @@ static void op_set_perk_desc(Program* program)
 }
 
 // ============================================================
+// Perk property override arrays (F-015) — set_perk_* opcodes.
+//
+// These arrays store script-level overrides for gPerkDescriptions[]
+// fields. Indexed by perk ID, initialized to -1 (no override).
+// Integration point: perk.cc should check these arrays when
+// returning perk property values (similar to how perkGetName()
+// should check sfallPerkNameOverrides for name overrides).
+//
+// Opcode listing (from sfall opcode list):
+//   0x8178 set_perk_image     — sets frmId
+//   0x8179 set_perk_ranks     — sets maxRank
+//   0x817b set_perk_stat      — sets stat (stat to modify per rank)
+//   0x817c set_perk_stat_mag  — sets statModifier
+//   0x817d set_perk_skill1    — sets param1 (primary skill/gvar)
+//   0x817e set_perk_skill1_mag — sets value1
+//   0x817f set_perk_type      — sets paramMode (AND/OR mode)
+//   0x8180 set_perk_skill2    — sets param2 (secondary skill/gvar)
+//   0x8181 set_perk_skill2_mag — sets value2
+//   0x8182 set_perk_str       — sets stats[STAT_STRENGTH]
+//   0x8183 set_perk_per       — sets stats[STAT_PERCEPTION]
+//   0x8184 set_perk_end       — sets stats[STAT_ENDURANCE]
+//   0x8185 set_perk_chr       — sets stats[STAT_CHARISMA]
+//   0x8186 set_perk_int       — sets stats[STAT_INTELLIGENCE]
+//   0x8187 set_perk_agl       — sets stats[STAT_AGILITY]
+//   0x8188 set_perk_lck       — sets stats[STAT_LUCK]
+// ============================================================
+static constexpr int kMaxPerkPropertyOverrides = PERK_COUNT;
+static int sfallPerkImageOverrides[PERK_COUNT] = {};
+static int sfallPerkRanksOverrides[PERK_COUNT] = {};
+static int sfallPerkStatOverrides[PERK_COUNT] = {};
+static int sfallPerkStatMagOverrides[PERK_COUNT] = {};
+static int sfallPerkSkill1Overrides[PERK_COUNT] = {};
+static int sfallPerkSkill1MagOverrides[PERK_COUNT] = {};
+static int sfallPerkSkill2Overrides[PERK_COUNT] = {};
+static int sfallPerkSkill2MagOverrides[PERK_COUNT] = {};
+static int sfallPerkTypeOverrides[PERK_COUNT] = {};
+static int sfallPerkSpecialOverrides[PERK_COUNT][PRIMARY_STAT_COUNT] = {};
+static bool sfallPerkOverridesInited = false;
+
+static void sfallInitPerkOverrideArrays()
+{
+    if (sfallPerkOverridesInited) {
+        return;
+    }
+    for (int i = 0; i < PERK_COUNT; i++) {
+        sfallPerkImageOverrides[i] = -1;
+        sfallPerkRanksOverrides[i] = -1;
+        sfallPerkStatOverrides[i] = -1000; // distinct sentinel from -1 (valid stat)
+        sfallPerkStatMagOverrides[i] = -1000;
+        sfallPerkSkill1Overrides[i] = -1;
+        sfallPerkSkill1MagOverrides[i] = -1000;
+        sfallPerkSkill2Overrides[i] = -1;
+        sfallPerkSkill2MagOverrides[i] = -1000;
+        sfallPerkTypeOverrides[i] = -1;
+        for (int s = 0; s < PRIMARY_STAT_COUNT; s++) {
+            sfallPerkSpecialOverrides[i][s] = -1;
+        }
+    }
+    sfallPerkOverridesInited = true;
+}
+
+// Getter implementations for perk override arrays.
+int sfallGetPerkImageOverride(int perkID) { return (perkIsValid(perkID)) ? sfallPerkImageOverrides[perkID] : -1; }
+int sfallGetPerkRanksOverride(int perkID) { return (perkIsValid(perkID)) ? sfallPerkRanksOverrides[perkID] : -1; }
+int sfallGetPerkStatOverride(int perkID) { return (perkIsValid(perkID)) ? sfallPerkStatOverrides[perkID] : -1000; }
+int sfallGetPerkStatMagOverride(int perkID) { return (perkIsValid(perkID)) ? sfallPerkStatMagOverrides[perkID] : -1000; }
+int sfallGetPerkSkill1Override(int perkID) { return (perkIsValid(perkID)) ? sfallPerkSkill1Overrides[perkID] : -1; }
+int sfallGetPerkSkill1MagOverride(int perkID) { return (perkIsValid(perkID)) ? sfallPerkSkill1MagOverrides[perkID] : -1000; }
+int sfallGetPerkSkill2Override(int perkID) { return (perkIsValid(perkID)) ? sfallPerkSkill2Overrides[perkID] : -1; }
+int sfallGetPerkSkill2MagOverride(int perkID) { return (perkIsValid(perkID)) ? sfallPerkSkill2MagOverrides[perkID] : -1000; }
+int sfallGetPerkTypeOverride(int perkID) { return (perkIsValid(perkID)) ? sfallPerkTypeOverrides[perkID] : -1; }
+int sfallGetPerkSpecialOverride(int perkID, int statIdx)
+{
+    if (!perkIsValid(perkID) || statIdx < 0 || statIdx >= PRIMARY_STAT_COUNT) {
+        return -1;
+    }
+    return sfallPerkSpecialOverrides[perkID][statIdx];
+}
+
+// set_perk_image(int perkID, int value) — 0x8178
+static void op_set_perk_image(Program* program)
+{
+    int value = programStackPopInteger(program);
+    int perkID = programStackPopInteger(program);
+    if (!perkIsValid(perkID)) {
+        programPrintError("set_perk_image: invalid perk ID %d (valid range 0-%d)", perkID, PERK_COUNT - 1);
+        return;
+    }
+    sfallInitPerkOverrideArrays();
+    sfallPerkImageOverrides[perkID] = value;
+}
+
+// set_perk_ranks(int perkID, int value) — 0x8179
+static void op_set_perk_ranks(Program* program)
+{
+    int value = programStackPopInteger(program);
+    int perkID = programStackPopInteger(program);
+    if (!perkIsValid(perkID)) {
+        programPrintError("set_perk_ranks: invalid perk ID %d (valid range 0-%d)", perkID, PERK_COUNT - 1);
+        return;
+    }
+    sfallInitPerkOverrideArrays();
+    sfallPerkRanksOverrides[perkID] = value;
+}
+
+// set_perk_stat(int perkID, int value) — 0x817B
+static void op_set_perk_stat(Program* program)
+{
+    int value = programStackPopInteger(program);
+    int perkID = programStackPopInteger(program);
+    if (!perkIsValid(perkID)) {
+        programPrintError("set_perk_stat: invalid perk ID %d (valid range 0-%d)", perkID, PERK_COUNT - 1);
+        return;
+    }
+    sfallInitPerkOverrideArrays();
+    sfallPerkStatOverrides[perkID] = value;
+}
+
+// set_perk_stat_mag(int perkID, int value) — 0x817C
+static void op_set_perk_stat_mag(Program* program)
+{
+    int value = programStackPopInteger(program);
+    int perkID = programStackPopInteger(program);
+    if (!perkIsValid(perkID)) {
+        programPrintError("set_perk_stat_mag: invalid perk ID %d (valid range 0-%d)", perkID, PERK_COUNT - 1);
+        return;
+    }
+    sfallInitPerkOverrideArrays();
+    sfallPerkStatMagOverrides[perkID] = value;
+}
+
+// set_perk_skill1(int perkID, int value) — 0x817D
+static void op_set_perk_skill1(Program* program)
+{
+    int value = programStackPopInteger(program);
+    int perkID = programStackPopInteger(program);
+    if (!perkIsValid(perkID)) {
+        programPrintError("set_perk_skill1: invalid perk ID %d (valid range 0-%d)", perkID, PERK_COUNT - 1);
+        return;
+    }
+    sfallInitPerkOverrideArrays();
+    sfallPerkSkill1Overrides[perkID] = value;
+}
+
+// set_perk_skill1_mag(int perkID, int value) — 0x817E
+static void op_set_perk_skill1_mag(Program* program)
+{
+    int value = programStackPopInteger(program);
+    int perkID = programStackPopInteger(program);
+    if (!perkIsValid(perkID)) {
+        programPrintError("set_perk_skill1_mag: invalid perk ID %d (valid range 0-%d)", perkID, PERK_COUNT - 1);
+        return;
+    }
+    sfallInitPerkOverrideArrays();
+    sfallPerkSkill1MagOverrides[perkID] = value;
+}
+
+// set_perk_type(int perkID, int value) — 0x817F
+static void op_set_perk_type(Program* program)
+{
+    int value = programStackPopInteger(program);
+    int perkID = programStackPopInteger(program);
+    if (!perkIsValid(perkID)) {
+        programPrintError("set_perk_type: invalid perk ID %d (valid range 0-%d)", perkID, PERK_COUNT - 1);
+        return;
+    }
+    sfallInitPerkOverrideArrays();
+    sfallPerkTypeOverrides[perkID] = value;
+}
+
+// set_perk_skill2(int perkID, int value) — 0x8180
+static void op_set_perk_skill2(Program* program)
+{
+    int value = programStackPopInteger(program);
+    int perkID = programStackPopInteger(program);
+    if (!perkIsValid(perkID)) {
+        programPrintError("set_perk_skill2: invalid perk ID %d (valid range 0-%d)", perkID, PERK_COUNT - 1);
+        return;
+    }
+    sfallInitPerkOverrideArrays();
+    sfallPerkSkill2Overrides[perkID] = value;
+}
+
+// set_perk_skill2_mag(int perkID, int value) — 0x8181
+static void op_set_perk_skill2_mag(Program* program)
+{
+    int value = programStackPopInteger(program);
+    int perkID = programStackPopInteger(program);
+    if (!perkIsValid(perkID)) {
+        programPrintError("set_perk_skill2_mag: invalid perk ID %d (valid range 0-%d)", perkID, PERK_COUNT - 1);
+        return;
+    }
+    sfallInitPerkOverrideArrays();
+    sfallPerkSkill2MagOverrides[perkID] = value;
+}
+
+// set_perk_str(int perkID, int value) — 0x8182
+static void op_set_perk_str(Program* program)
+{
+    int value = programStackPopInteger(program);
+    int perkID = programStackPopInteger(program);
+    if (!perkIsValid(perkID)) {
+        programPrintError("set_perk_str: invalid perk ID %d (valid range 0-%d)", perkID, PERK_COUNT - 1);
+        return;
+    }
+    sfallInitPerkOverrideArrays();
+    sfallPerkSpecialOverrides[perkID][STAT_STRENGTH] = value;
+}
+
+// set_perk_per(int perkID, int value) — 0x8183
+static void op_set_perk_per(Program* program)
+{
+    int value = programStackPopInteger(program);
+    int perkID = programStackPopInteger(program);
+    if (!perkIsValid(perkID)) {
+        programPrintError("set_perk_per: invalid perk ID %d (valid range 0-%d)", perkID, PERK_COUNT - 1);
+        return;
+    }
+    sfallInitPerkOverrideArrays();
+    sfallPerkSpecialOverrides[perkID][STAT_PERCEPTION] = value;
+}
+
+// set_perk_end(int perkID, int value) — 0x8184
+static void op_set_perk_end(Program* program)
+{
+    int value = programStackPopInteger(program);
+    int perkID = programStackPopInteger(program);
+    if (!perkIsValid(perkID)) {
+        programPrintError("set_perk_end: invalid perk ID %d (valid range 0-%d)", perkID, PERK_COUNT - 1);
+        return;
+    }
+    sfallInitPerkOverrideArrays();
+    sfallPerkSpecialOverrides[perkID][STAT_ENDURANCE] = value;
+}
+
+// set_perk_chr(int perkID, int value) — 0x8185
+static void op_set_perk_chr(Program* program)
+{
+    int value = programStackPopInteger(program);
+    int perkID = programStackPopInteger(program);
+    if (!perkIsValid(perkID)) {
+        programPrintError("set_perk_chr: invalid perk ID %d (valid range 0-%d)", perkID, PERK_COUNT - 1);
+        return;
+    }
+    sfallInitPerkOverrideArrays();
+    sfallPerkSpecialOverrides[perkID][STAT_CHARISMA] = value;
+}
+
+// set_perk_int(int perkID, int value) — 0x8186
+// NOTE: Correct opcode is 0x8186. The original comment referenced
+// 0x8196 which is used by set_target_knockback.
+static void op_set_perk_int(Program* program)
+{
+    int value = programStackPopInteger(program);
+    int perkID = programStackPopInteger(program);
+    if (!perkIsValid(perkID)) {
+        programPrintError("set_perk_int: invalid perk ID %d (valid range 0-%d)", perkID, PERK_COUNT - 1);
+        return;
+    }
+    sfallInitPerkOverrideArrays();
+    sfallPerkSpecialOverrides[perkID][STAT_INTELLIGENCE] = value;
+}
+
+// set_perk_agl(int perkID, int value) — 0x8187
+static void op_set_perk_agl(Program* program)
+{
+    int value = programStackPopInteger(program);
+    int perkID = programStackPopInteger(program);
+    if (!perkIsValid(perkID)) {
+        programPrintError("set_perk_agl: invalid perk ID %d (valid range 0-%d)", perkID, PERK_COUNT - 1);
+        return;
+    }
+    sfallInitPerkOverrideArrays();
+    sfallPerkSpecialOverrides[perkID][STAT_AGILITY] = value;
+}
+
+// set_perk_lck(int perkID, int value) — 0x8188
+static void op_set_perk_lck(Program* program)
+{
+    int value = programStackPopInteger(program);
+    int perkID = programStackPopInteger(program);
+    if (!perkIsValid(perkID)) {
+        programPrintError("set_perk_lck: invalid perk ID %d (valid range 0-%d)", perkID, PERK_COUNT - 1);
+        return;
+    }
+    sfallInitPerkOverrideArrays();
+    sfallPerkSpecialOverrides[perkID][STAT_LUCK] = value;
+}
+
+// ============================================================
 // get_perk_available (0x8190) — returns 1 if perk is selectable.
 // Checks against perk availability criteria using the dude.
 // ============================================================
@@ -3313,23 +3619,10 @@ static void op_set_xp_mod(Program* program)
 // requires UI changes in perk_dialog.cc and character_editor.cc.
 // ============================================================
 static constexpr int kMaxFakePerks = 64;
-struct FakePerkEntry {
-    char* name;
-    int level;
-    int image;
-    char* desc;
-    bool active;
-};
 static FakePerkEntry sfallFakePerks[kMaxFakePerks] = {};
 static int sfallFakePerkCount = 0;
 
 static constexpr int kMaxFakeTraits = 16;
-struct FakeTraitEntry {
-    char* name;
-    int active; // 0 = inactive, 1 = active
-    int image;
-    char* desc;
-};
 static FakeTraitEntry sfallFakeTraits[kMaxFakeTraits] = {};
 static int sfallFakeTraitCount = 0;
 
@@ -3597,20 +3890,38 @@ static void op_set_hp_per_level_mod(Program* program)
 }
 
 // ============================================================
-// set_critter_hit_chance_mod (0x81C5) — modifies hit chance.
-// Stores max and mod values; exposed via sfall_opcodes.h for combat
-// integration in combat.cc (attackDetermineToHit).
+// set_critter_hit_chance_mod (0x81C5) — modifies hit chance per-critter.
+// set_base_hit_chance_mod (0x81C6) — modifies hit chance globally.
 //
-// NOTE (F-033, F-103): Like all critter-modifier opcodes in CE, these values
-// are stored globally, not per-critter. The critter object parameter is
-// accepted for API compatibility but the max/mod values apply universally.
-// Both set_critter_hit_chance_mod (0x81C5) and set_base_hit_chance_mod
-// (0x81C6) write to the same sfallHitChanceMax / sfallHitChanceMod globals
-// — whichever is called last takes effect. Clamping matches set_hit_chance_max
-// and set_base_hit_chance_mod for consistency.
+// Per-critter storage (set_critter_hit_chance_mod) uses a map keyed by
+// Object::id so different critters can have independent mods. The global
+// sfallHitChanceMod/sfallHitChanceMax are used by set_base_hit_chance_mod
+// for a universal floor/ceiling applied to ALL attack rolls.
+//
+// getter: sfallGetCritterHitChanceMod() returns per-critter override if set.
 // ============================================================
 int sfallHitChanceMod = 0;
 int sfallHitChanceMax = 95;
+
+struct CritterHitChanceEntry {
+    int mod;
+    int max;
+};
+static std::unordered_map<int, CritterHitChanceEntry> gCritterHitChanceOverrides;
+
+bool sfallGetCritterHitChanceMod(Object* critter, int& outMod, int& outMax)
+{
+    if (critter == nullptr) {
+        return false;
+    }
+    auto it = gCritterHitChanceOverrides.find(critter->id);
+    if (it != gCritterHitChanceOverrides.end()) {
+        outMod = it->second.mod;
+        outMax = it->second.max;
+        return true;
+    }
+    return false;
+}
 
 static void op_set_critter_hit_chance_mod(Program* program)
 {
@@ -3629,10 +3940,12 @@ static void op_set_critter_hit_chance_mod(Program* program)
         max = 100;
     }
 
-    sfallHitChanceMax = max;
-    sfallHitChanceMod = mod;
-    debugPrint("set_critter_hit_chance_mod(obj=%p, max=%d, mod=%d) — combat integration pending\n",
-        static_cast<void*>(critter), max, mod);
+    CritterHitChanceEntry entry;
+    entry.mod = mod;
+    entry.max = max;
+    gCritterHitChanceOverrides[critter->id] = entry;
+    debugPrint("set_critter_hit_chance_mod(obj=%p(id=%d), max=%d, mod=%d) — per-critter override stored\n",
+        static_cast<void*>(critter), critter->id, max, mod);
 }
 
 // ============================================================
@@ -3658,10 +3971,9 @@ static void op_set_hit_chance_max(Program* program)
 // Previously commented out; now registered (F-006). ET Tu uses this
 // for Fallout 1 hit mechanics where base chance is adjusted globally.
 //
-// NOTE (F-103): Shares sfallHitChanceMax/sfallHitChanceMod globals with
-// set_critter_hit_chance_mod (0x81C5). See set_critter_hit_chance_mod
-// above for full explanation. In sfall these opcodes are documented as
-// distinct ("base" vs "critter") but CE does not differentiate.
+// Writes to global sfallHitChanceMax/sfallHitChanceMod. Per-critter
+// hit chance mod (0x81C5) uses separate per-object storage via
+// gCritterHitChanceOverrides and sfallGetCritterHitChanceMod().
 // ============================================================
 static void op_set_base_hit_chance_mod(Program* program)
 {
@@ -3675,6 +3987,42 @@ static void op_set_base_hit_chance_mod(Program* program)
     }
     sfallHitChanceMax = max;
     sfallHitChanceMod = mod;
+}
+
+// ============================================================
+// Per-critter aimed-shot override flags (F-016).
+// force_aimed_shots(pid) forces aimed shots for critter type PID.
+// disable_aimed_shots(pid) disables aimed shots for critter type PID.
+// Keyed by proto ID (PID). Integration point: combat.cc aimed-shot
+// decision should check sfallGetForceAimedShots/sfallGetDisableAimedShots.
+// ============================================================
+static std::unordered_map<int, bool> gForceAimedShotsMap;
+static std::unordered_map<int, bool> gDisableAimedShotsMap;
+
+bool sfallGetForceAimedShots(int pid)
+{
+    auto it = gForceAimedShotsMap.find(pid);
+    return it != gForceAimedShotsMap.end() && it->second;
+}
+
+bool sfallGetDisableAimedShots(int pid)
+{
+    auto it = gDisableAimedShotsMap.find(pid);
+    return it != gDisableAimedShotsMap.end() && it->second;
+}
+
+static void op_force_aimed_shots(Program* program)
+{
+    int pid = programStackPopInteger(program);
+    gForceAimedShotsMap[pid] = true;
+    debugPrint("force_aimed_shots(pid=%d) — per-critter aimed-shot override stored, combat integration pending\n", pid);
+}
+
+static void op_disable_aimed_shots(Program* program)
+{
+    int pid = programStackPopInteger(program);
+    gDisableAimedShotsMap[pid] = true;
+    debugPrint("disable_aimed_shots(pid=%d) — per-critter aimed-shot override stored, combat integration pending\n", pid);
 }
 
 // ============================================================
@@ -4132,6 +4480,11 @@ void sfallAnimCallbackInvoke(Object* object)
     // Already cleared above; no need to reset again.
 }
 
+// Movie path override storage (F-021). Set via set_movie_path (0x8177).
+// Declared at file scope (referenced by sfallOpcodesReset).
+static constexpr int kMaxMoviePathOverrides = 32;
+static char* sfallMoviePathOverrides[kMaxMoviePathOverrides] = {};
+
 void sfallOpcodesReset()
 {
     // Free and clear fake perk entries.
@@ -4226,6 +4579,23 @@ void sfallOpcodesReset()
     sfallPyromaniacMod = 0;
     sfallSwiftLearnerMod = 0;
     sfallHpPerLevelMod = 0;
+
+    // Reset per-critter hit chance overrides (F-019).
+    gCritterHitChanceOverrides.clear();
+
+    // Reset aimed-shot per-critter override maps (F-016).
+    gForceAimedShotsMap.clear();
+    gDisableAimedShotsMap.clear();
+
+    // Reset movie path overrides (F-021).
+    for (int i = 0; i < kMaxMoviePathOverrides; i++) {
+        delete[] sfallMoviePathOverrides[i];
+        sfallMoviePathOverrides[i] = nullptr;
+    }
+
+    // Reset perk property override arrays (F-015).
+    sfallPerkOverridesInited = false;
+    sfallInitPerkOverrideArrays();
 }
 
 // Persist all opcode-related global state into the sfall global vars map
@@ -4233,10 +4603,148 @@ void sfallOpcodesReset()
 // Keys match the 8-character sfall convention.
 void sfallOpcodeStateSave()
 {
+    // Core opcode globals (already persisted before F-001 fix).
     sfall_gl_vars_store("SFXpMod%", gXpModPercentage);
     sfall_gl_vars_store("SFSkillM", gSkillMaxCap);
     sfall_gl_vars_store("SFPerkFr", gPerkFrequencyOverride);
     sfall_gl_vars_store("SFSkillP", gSkillPointsPerLevelMod);
+
+    // Hit chance globals (extern in header, owned here).
+    sfall_gl_vars_store("SFHCMod ", sfallHitChanceMod);
+    sfall_gl_vars_store("SFHCMax ", sfallHitChanceMax);
+
+    // Knockback globals (extern in header, owned here).
+    sfall_gl_vars_store("SFWKnTyp", sfallWeaponKnockbackType);
+    sfall_gl_vars_store_float("SFWKnVl ", sfallWeaponKnockbackValue);
+    sfall_gl_vars_store("SFTKnTyp", sfallTargetKnockbackType);
+    sfall_gl_vars_store_float("SFTKnVl ", sfallTargetKnockbackValue);
+    sfall_gl_vars_store("SFAKnTyp", sfallAttackerKnockbackType);
+    sfall_gl_vars_store_float("SFAKnVl ", sfallAttackerKnockbackValue);
+
+    // Pipboy availability override.
+    sfall_gl_vars_store("SFPipboy", gPipboyAvailableOverride);
+
+    // Perk/trait modifier opcodes — storage-only globals.
+    sfall_gl_vars_store("SFPerkAM", sfallPerkAddMode);
+    sfall_gl_vars_store("SFPerkCS", sfallClearSelectablePerks ? 1 : 0);
+    sfall_gl_vars_store("SFPyroMd", sfallPyromaniacMod);
+    sfall_gl_vars_store("SFSwiftM", sfallSwiftLearnerMod);
+    sfall_gl_vars_store("SFHpPMd ", sfallHpPerLevelMod);
+
+    // Pickpocket modifier opcodes.
+    sfall_gl_vars_store("SFPkpMax", sfallPickpocketMax);
+    sfall_gl_vars_store("SFCrtPMx", sfallCritterPickpocketMax);
+    sfall_gl_vars_store("SFBasePx", sfallBasePickpocketMax);
+    sfall_gl_vars_store("SFCrtPMn", sfallCritterPickpocketMod);
+    sfall_gl_vars_store("SFBasePn", sfallBasePickpocketMod);
+
+    // Perk level modifier.
+    sfall_gl_vars_store("SFPerkLM", sfallPerkLevelMod);
+
+    // Skill modifier globals.
+    sfall_gl_vars_store("SFCrtSM ", sfallCritterSkillMod);
+    sfall_gl_vars_store("SFBaseSM", sfallBaseSkillMod);
+
+    // Perk owed counter.
+    sfall_gl_vars_store("SFPerkOw", gSfallPerkOwed);
+
+    // Hide real perks flag.
+    sfall_gl_vars_store("SFHideRP", sfallHideRealPerks ? 1 : 0);
+
+    // Perk property override arrays — persisted as indexed key/value pairs.
+    // Each array stores its count (always PERK_COUNT) followed by per-index entries.
+    sfall_gl_vars_store("SFPicnt ", PERK_COUNT);
+    for (int i = 0; i < PERK_COUNT; i++) {
+        char key[16] = {};
+        sprintf(key, "SFPi%03d", i);
+        sfall_gl_vars_store(key, sfallPerkImageOverrides[i]);
+    }
+    sfall_gl_vars_store("SFPRcnt ", PERK_COUNT);
+    for (int i = 0; i < PERK_COUNT; i++) {
+        char key[16] = {};
+        sprintf(key, "SFPr%03d", i);
+        sfall_gl_vars_store(key, sfallPerkRanksOverrides[i]);
+    }
+    sfall_gl_vars_store("SFPscnt ", PERK_COUNT);
+    for (int i = 0; i < PERK_COUNT; i++) {
+        char key[16] = {};
+        sprintf(key, "SFPs%03d", i);
+        sfall_gl_vars_store(key, sfallPerkStatOverrides[i]);
+    }
+    sfall_gl_vars_store("SFPmcnt ", PERK_COUNT);
+    for (int i = 0; i < PERK_COUNT; i++) {
+        char key[16] = {};
+        sprintf(key, "SFPm%03d", i);
+        sfall_gl_vars_store(key, sfallPerkStatMagOverrides[i]);
+    }
+    sfall_gl_vars_store("SFs1cnt ", PERK_COUNT);
+    for (int i = 0; i < PERK_COUNT; i++) {
+        char key[16] = {};
+        sprintf(key, "SFs1%03d", i);
+        sfall_gl_vars_store(key, sfallPerkSkill1Overrides[i]);
+    }
+    sfall_gl_vars_store("SF1Mcnt ", PERK_COUNT);
+    for (int i = 0; i < PERK_COUNT; i++) {
+        char key[16] = {};
+        sprintf(key, "SF1M%03d", i);
+        sfall_gl_vars_store(key, sfallPerkSkill1MagOverrides[i]);
+    }
+    sfall_gl_vars_store("SFs2cnt ", PERK_COUNT);
+    for (int i = 0; i < PERK_COUNT; i++) {
+        char key[16] = {};
+        sprintf(key, "SFs2%03d", i);
+        sfall_gl_vars_store(key, sfallPerkSkill2Overrides[i]);
+    }
+    sfall_gl_vars_store("SF2Mcnt ", PERK_COUNT);
+    for (int i = 0; i < PERK_COUNT; i++) {
+        char key[16] = {};
+        sprintf(key, "SF2M%03d", i);
+        sfall_gl_vars_store(key, sfallPerkSkill2MagOverrides[i]);
+    }
+    sfall_gl_vars_store("SFPtcnt ", PERK_COUNT);
+    for (int i = 0; i < PERK_COUNT; i++) {
+        char key[16] = {};
+        sprintf(key, "SFPt%03d", i);
+        sfall_gl_vars_store(key, sfallPerkTypeOverrides[i]);
+    }
+    sfall_gl_vars_store("SFSacnt ", PERK_COUNT);
+    for (int i = 0; i < PERK_COUNT; i++) {
+        for (int s = 0; s < PRIMARY_STAT_COUNT; s++) {
+            char key[16] = {};
+            sprintf(key, "SFS%02d%03d", s, i);
+            sfall_gl_vars_store(key, sfallPerkSpecialOverrides[i][s]);
+        }
+    }
+
+    // Kill counters — persisted as indexed key/value pairs.
+    // Format: "SFKCcnt" stores entry count, "SFKCkNNN" stores key (critter type),
+    // "SFKCvNNN" stores value (count) for entry index NNN.
+    int kcCount = static_cast<int>(gSfallKillCounters.size());
+    sfall_gl_vars_store("SFKCcnt ", kcCount);
+    int idx = 0;
+    for (const auto& entry : gSfallKillCounters) {
+        char key[16] = {};
+        sprintf(key, "SFKCk%03d", idx);
+        sfall_gl_vars_store(key, entry.first);
+        sprintf(key, "SFKCv%03d", idx);
+        sfall_gl_vars_store(key, entry.second);
+        idx++;
+    }
+
+    // Per-critter hit chance overrides.
+    int hcCount = static_cast<int>(gCritterHitChanceOverrides.size());
+    sfall_gl_vars_store("SFHCcnt ", hcCount);
+    idx = 0;
+    for (const auto& entry : gCritterHitChanceOverrides) {
+        char key[16] = {};
+        sprintf(key, "SFHCk%03d", idx);
+        sfall_gl_vars_store(key, entry.first);           // critter Object::id
+        sprintf(key, "SFHCv%03d", idx);
+        sfall_gl_vars_store(key, entry.second.mod);      // mod value
+        sprintf(key, "SFHCx%03d", idx);
+        sfall_gl_vars_store(key, entry.second.max);      // max value
+        idx++;
+    }
 }
 
 // Restore opcode globals from the sfall global vars map after
@@ -4244,6 +4752,7 @@ void sfallOpcodeStateSave()
 void sfallOpcodeStateLoad()
 {
     int val;
+    // Core opcode globals.
     if (sfall_gl_vars_fetch("SFXpMod%", val)) {
         gXpModPercentage = val;
     }
@@ -4256,6 +4765,338 @@ void sfallOpcodeStateLoad()
     if (sfall_gl_vars_fetch("SFSkillP", val)) {
         gSkillPointsPerLevelMod = val;
     }
+
+    // Hit chance globals.
+    if (sfall_gl_vars_fetch("SFHCMod ", val)) {
+        sfallHitChanceMod = val;
+    }
+    if (sfall_gl_vars_fetch("SFHCMax ", val)) {
+        sfallHitChanceMax = val;
+    }
+
+    // Knockback globals.
+    if (sfall_gl_vars_fetch("SFWKnTyp", val)) {
+        sfallWeaponKnockbackType = val;
+    }
+    {
+        float fval;
+        if (sfall_gl_vars_fetch_float("SFWKnVl ", fval)) {
+            sfallWeaponKnockbackValue = fval;
+        }
+    }
+    if (sfall_gl_vars_fetch("SFTKnTyp", val)) {
+        sfallTargetKnockbackType = val;
+    }
+    {
+        float fval;
+        if (sfall_gl_vars_fetch_float("SFTKnVl ", fval)) {
+            sfallTargetKnockbackValue = fval;
+        }
+    }
+    if (sfall_gl_vars_fetch("SFAKnTyp", val)) {
+        sfallAttackerKnockbackType = val;
+    }
+    {
+        float fval;
+        if (sfall_gl_vars_fetch_float("SFAKnVl ", fval)) {
+            sfallAttackerKnockbackValue = fval;
+        }
+    }
+
+    // Pipboy availability override.
+    if (sfall_gl_vars_fetch("SFPipboy", val)) {
+        gPipboyAvailableOverride = val;
+    }
+
+    // Perk/trait modifier opcodes.
+    if (sfall_gl_vars_fetch("SFPerkAM", val)) {
+        sfallPerkAddMode = val;
+    }
+    if (sfall_gl_vars_fetch("SFPerkCS", val)) {
+        sfallClearSelectablePerks = (val != 0);
+    }
+    if (sfall_gl_vars_fetch("SFPyroMd", val)) {
+        sfallPyromaniacMod = val;
+    }
+    if (sfall_gl_vars_fetch("SFSwiftM", val)) {
+        sfallSwiftLearnerMod = val;
+    }
+    if (sfall_gl_vars_fetch("SFHpPMd ", val)) {
+        sfallHpPerLevelMod = val;
+    }
+
+    // Pickpocket modifier opcodes.
+    if (sfall_gl_vars_fetch("SFPkpMax", val)) {
+        sfallPickpocketMax = val;
+    }
+    if (sfall_gl_vars_fetch("SFCrtPMx", val)) {
+        sfallCritterPickpocketMax = val;
+    }
+    if (sfall_gl_vars_fetch("SFBasePx", val)) {
+        sfallBasePickpocketMax = val;
+    }
+    if (sfall_gl_vars_fetch("SFCrtPMn", val)) {
+        sfallCritterPickpocketMod = val;
+    }
+    if (sfall_gl_vars_fetch("SFBasePn", val)) {
+        sfallBasePickpocketMod = val;
+    }
+
+    // Perk level modifier.
+    if (sfall_gl_vars_fetch("SFPerkLM", val)) {
+        sfallPerkLevelMod = val;
+    }
+
+    // Skill modifier globals.
+    if (sfall_gl_vars_fetch("SFCrtSM ", val)) {
+        sfallCritterSkillMod = val;
+    }
+    if (sfall_gl_vars_fetch("SFBaseSM", val)) {
+        sfallBaseSkillMod = val;
+    }
+
+    // Perk owed counter.
+    if (sfall_gl_vars_fetch("SFPerkOw", val)) {
+        gSfallPerkOwed = val;
+    }
+
+    // Hide real perks flag.
+    if (sfall_gl_vars_fetch("SFHideRP", val)) {
+        sfallHideRealPerks = (val != 0);
+    }
+
+    // Perk property override arrays — restore from indexed key/value pairs.
+    {
+        int count = 0;
+        if (sfall_gl_vars_fetch("SFPicnt ", count) && count == PERK_COUNT) {
+            for (int i = 0; i < count; i++) {
+                char key[16] = {};
+                sprintf(key, "SFPi%03d", i);
+                sfall_gl_vars_fetch(key, sfallPerkImageOverrides[i]);
+            }
+        }
+    }
+    {
+        int count = 0;
+        if (sfall_gl_vars_fetch("SFPRcnt ", count) && count == PERK_COUNT) {
+            for (int i = 0; i < count; i++) {
+                char key[16] = {};
+                sprintf(key, "SFPr%03d", i);
+                sfall_gl_vars_fetch(key, sfallPerkRanksOverrides[i]);
+            }
+        }
+    }
+    {
+        int count = 0;
+        if (sfall_gl_vars_fetch("SFPscnt ", count) && count == PERK_COUNT) {
+            for (int i = 0; i < count; i++) {
+                char key[16] = {};
+                sprintf(key, "SFPs%03d", i);
+                sfall_gl_vars_fetch(key, sfallPerkStatOverrides[i]);
+            }
+        }
+    }
+    {
+        int count = 0;
+        if (sfall_gl_vars_fetch("SFPmcnt ", count) && count == PERK_COUNT) {
+            for (int i = 0; i < count; i++) {
+                char key[16] = {};
+                sprintf(key, "SFPm%03d", i);
+                sfall_gl_vars_fetch(key, sfallPerkStatMagOverrides[i]);
+            }
+        }
+    }
+    {
+        int count = 0;
+        if (sfall_gl_vars_fetch("SFs1cnt ", count) && count == PERK_COUNT) {
+            for (int i = 0; i < count; i++) {
+                char key[16] = {};
+                sprintf(key, "SFs1%03d", i);
+                sfall_gl_vars_fetch(key, sfallPerkSkill1Overrides[i]);
+            }
+        }
+    }
+    {
+        int count = 0;
+        if (sfall_gl_vars_fetch("SF1Mcnt ", count) && count == PERK_COUNT) {
+            for (int i = 0; i < count; i++) {
+                char key[16] = {};
+                sprintf(key, "SF1M%03d", i);
+                sfall_gl_vars_fetch(key, sfallPerkSkill1MagOverrides[i]);
+            }
+        }
+    }
+    {
+        int count = 0;
+        if (sfall_gl_vars_fetch("SFs2cnt ", count) && count == PERK_COUNT) {
+            for (int i = 0; i < count; i++) {
+                char key[16] = {};
+                sprintf(key, "SFs2%03d", i);
+                sfall_gl_vars_fetch(key, sfallPerkSkill2Overrides[i]);
+            }
+        }
+    }
+    {
+        int count = 0;
+        if (sfall_gl_vars_fetch("SF2Mcnt ", count) && count == PERK_COUNT) {
+            for (int i = 0; i < count; i++) {
+                char key[16] = {};
+                sprintf(key, "SF2M%03d", i);
+                sfall_gl_vars_fetch(key, sfallPerkSkill2MagOverrides[i]);
+            }
+        }
+    }
+    {
+        int count = 0;
+        if (sfall_gl_vars_fetch("SFPtcnt ", count) && count == PERK_COUNT) {
+            for (int i = 0; i < count; i++) {
+                char key[16] = {};
+                sprintf(key, "SFPt%03d", i);
+                sfall_gl_vars_fetch(key, sfallPerkTypeOverrides[i]);
+            }
+        }
+    }
+    {
+        int count = 0;
+        if (sfall_gl_vars_fetch("SFSacnt ", count) && count == PERK_COUNT) {
+            for (int i = 0; i < count; i++) {
+                for (int s = 0; s < PRIMARY_STAT_COUNT; s++) {
+                    char key[16] = {};
+                    sprintf(key, "SFS%02d%03d", s, i);
+                    sfall_gl_vars_fetch(key, sfallPerkSpecialOverrides[i][s]);
+                }
+            }
+        }
+    }
+
+    // Mark perk overrides as initialized so sfallInitPerkOverrideArrays()
+    // does not re-initialize with sentinel values after load.
+    sfallPerkOverridesInited = true;
+
+    // Kill counters — restore from indexed key/value pairs.
+    {
+        int kcCount = 0;
+        if (sfall_gl_vars_fetch("SFKCcnt ", kcCount)) {
+            gSfallKillCounters.clear();
+            for (int idx2 = 0; idx2 < kcCount; idx2++) {
+                char key[16] = {};
+                sprintf(key, "SFKCk%03d", idx2);
+                int critterType = 0;
+                if (sfall_gl_vars_fetch(key, critterType)) {
+                    sprintf(key, "SFKCv%03d", idx2);
+                    int count = 0;
+                    sfall_gl_vars_fetch(key, count);
+                    gSfallKillCounters[critterType] = count;
+                }
+            }
+        }
+    }
+
+    // Per-critter hit chance overrides.
+    {
+        int hcCount = 0;
+        if (sfall_gl_vars_fetch("SFHCcnt ", hcCount)) {
+            gCritterHitChanceOverrides.clear();
+            for (int idx2 = 0; idx2 < hcCount; idx2++) {
+                char key[16] = {};
+                sprintf(key, "SFHCk%03d", idx2);
+                int critterId = 0;
+                if (sfall_gl_vars_fetch(key, critterId)) {
+                    CritterHitChanceEntry entry;
+                    int ival = 0;
+                    sprintf(key, "SFHCv%03d", idx2);
+                    sfall_gl_vars_fetch(key, ival);
+                    entry.mod = ival;
+                    ival = 0;
+                    sprintf(key, "SFHCx%03d", idx2);
+                    sfall_gl_vars_fetch(key, ival);
+                    entry.max = ival;
+                    gCritterHitChanceOverrides[critterId] = entry;
+                }
+            }
+        }
+    }
+}
+
+// ============================================================
+// Getter functions for storage-only opcode globals (F-007/F-030/F-033/F-034/F-035/F-036/F-037).
+// These provide access to file-scope static variables for engine
+// integration by other translation units (stat.cc, combat.cc, skill.cc,
+// character_editor.cc, etc.).
+// ============================================================
+
+// F-007: HP per level modifier (0x81CE).
+int sfallGetHpPerLevelMod()
+{
+    return sfallHpPerLevelMod;
+}
+
+// F-030: Pyromaniac damage modifier (0x81CB).
+int sfallGetPyromaniacMod()
+{
+    return sfallPyromaniacMod;
+}
+
+// F-033: Swift Learner XP modifier (0x81CD).
+int sfallGetSwiftLearnerMod()
+{
+    return sfallSwiftLearnerMod;
+}
+
+// F-034: Skill modifier globals (0x81C7/0x81C8).
+int sfallGetCritterSkillMod()
+{
+    return sfallCritterSkillMod;
+}
+
+int sfallGetBaseSkillMod()
+{
+    return sfallBaseSkillMod;
+}
+
+// F-035: Perk level modifier (0x81AB).
+int sfallGetPerkLevelMod()
+{
+    return sfallPerkLevelMod;
+}
+
+// F-036: Perk add mode and clear-selectable-perks flag (0x81C3/0x81C4).
+int sfallGetPerkAddMode()
+{
+    return sfallPerkAddMode;
+}
+
+bool sfallGetClearSelectablePerks()
+{
+    return sfallClearSelectablePerks;
+}
+
+// F-037: Fake perk/trait arrays.
+const FakePerkEntry* sfallGetFakePerks(int* outCount)
+{
+    if (outCount != nullptr) {
+        *outCount = sfallFakePerkCount;
+    }
+    return sfallFakePerks;
+}
+
+int sfallGetFakePerkCount()
+{
+    return sfallFakePerkCount;
+}
+
+const FakeTraitEntry* sfallGetFakeTraits(int* outCount)
+{
+    if (outCount != nullptr) {
+        *outCount = sfallFakeTraitCount;
+    }
+    return sfallFakeTraits;
+}
+
+// F-08: Hide real perks flag (0x81BF).
+int sfallGetHideRealPerks()
+{
+    return sfallHideRealPerks;
 }
 
 // ============================================================
@@ -4265,16 +5106,44 @@ void sfallOpcodeStateLoad()
 // expected arguments and returns a safe default value.
 // ============================================================
 
+// Movie path override storage (F-021). Set via set_movie_path (0x8177).
+// Keyed by movie ID. Integration point: movie.cc should check
+// sfallGetMoviePathOverride() before resolving movie file paths.
+// (Declarations for kMaxMoviePathOverrides and sfallMoviePathOverrides[]
+// are at file scope before sfallOpcodesReset.)
+
+const char* sfallGetMoviePathOverride(int movieId)
+{
+    if (movieId >= 0 && movieId < kMaxMoviePathOverrides) {
+        return sfallMoviePathOverrides[movieId];
+    }
+    return nullptr;
+}
+
 // set_movie_path(string name, int movieid) — 0x8177
 // Replaces a movie file path for the given movie ID.
-// CE handles movie paths through the VFS and movie_lib configuration;
-// this stub pops the arguments without applying them.
+// Stores the override; movie.cc integration is pending (separate agent).
 static void op_set_movie_path(Program* program)
 {
     int movieid = programStackPopInteger(program);
     const char* name = programStackPopString(program);
-    (void)movieid;
-    (void)name;
+
+    if (movieid < 0 || movieid >= kMaxMoviePathOverrides) {
+        programPrintError("set_movie_path: movieid %d out of range (max %d)", movieid, kMaxMoviePathOverrides - 1);
+        return;
+    }
+
+    // Free previous override for this movie ID.
+    delete[] sfallMoviePathOverrides[movieid];
+    sfallMoviePathOverrides[movieid] = nullptr;
+
+    if (name != nullptr && name[0] != '\0') {
+        size_t len = strlen(name) + 1;
+        sfallMoviePathOverrides[movieid] = new char[len];
+        memcpy(sfallMoviePathOverrides[movieid], name, len);
+    }
+    debugPrint("set_movie_path(movieid=%d, name=\"%s\") — override stored, movie.cc integration pending\n",
+        movieid, name != nullptr ? name : "(null)");
 }
 
 // get_shader_version() -> int — 0x81AD
@@ -4472,30 +5341,48 @@ void sfallOpcodesInit()
     interpreterRegisterOpcode(0x8174, op_get_world_map_y_pos);
 
     // 0x8175 - void set_dm_model(string name)
-    interpreterRegisterOpcode(0x8175, op_set_dm_model);
     // 0x8176 - void set_df_model(string name)
-    interpreterRegisterOpcode(0x8176, op_set_df_model);
     // 0x8177 - void set_movie_path(string filename, int movieid)
-    interpreterRegisterOpcode(0x8177, op_set_movie_path);
+    if (sfallConfigGetHeroAppearanceMod()) {
+        interpreterRegisterOpcode(0x8175, op_set_dm_model);
+        interpreterRegisterOpcode(0x8176, op_set_df_model);
+        interpreterRegisterOpcode(0x8177, op_set_movie_path);
+    }
 
     // 0x8178 - void set_perk_image(int perkID, int value)
+    interpreterRegisterOpcode(0x8178, op_set_perk_image);
     // 0x8179 - void set_perk_ranks(int perkID, int value)
+    interpreterRegisterOpcode(0x8179, op_set_perk_ranks);
     // 0x817a - void set_perk_level(int perkID, int value)
     interpreterRegisterOpcode(0x817A, op_set_perk_level);
     // 0x817b - void set_perk_stat(int perkID, int value)
+    interpreterRegisterOpcode(0x817B, op_set_perk_stat);
     // 0x817c - void set_perk_stat_mag(int perkID, int value)
+    interpreterRegisterOpcode(0x817C, op_set_perk_stat_mag);
     // 0x817d - void set_perk_skill1(int perkID, int value)
+    interpreterRegisterOpcode(0x817D, op_set_perk_skill1);
     // 0x817e - void set_perk_skill1_mag(int perkID, int value)
+    interpreterRegisterOpcode(0x817E, op_set_perk_skill1_mag);
     // 0x817f - void set_perk_type(int perkID, int value)
+    interpreterRegisterOpcode(0x817F, op_set_perk_type);
     // 0x8180 - void set_perk_skill2(int perkID, int value)
+    interpreterRegisterOpcode(0x8180, op_set_perk_skill2);
     // 0x8181 - void set_perk_skill2_mag(int perkID, int value)
+    interpreterRegisterOpcode(0x8181, op_set_perk_skill2_mag);
     // 0x8182 - void set_perk_str(int perkID, int value)
+    interpreterRegisterOpcode(0x8182, op_set_perk_str);
     // 0x8183 - void set_perk_per(int perkID, int value)
+    interpreterRegisterOpcode(0x8183, op_set_perk_per);
     // 0x8184 - void set_perk_end(int perkID, int value)
+    interpreterRegisterOpcode(0x8184, op_set_perk_end);
     // 0x8185 - void set_perk_chr(int perkID, int value)
-    // 0x8196 - void set_perk_int(int perkID, int value)
+    interpreterRegisterOpcode(0x8185, op_set_perk_chr);
+    // 0x8186 - void set_perk_int(int perkID, int value)
+    interpreterRegisterOpcode(0x8186, op_set_perk_int);
     // 0x8187 - void set_perk_agl(int perkID, int value)
+    interpreterRegisterOpcode(0x8187, op_set_perk_agl);
     // 0x8188 - void set_perk_lck(int perkID, int value)
+    interpreterRegisterOpcode(0x8188, op_set_perk_lck);
     // 0x8189 - void set_perk_name(int perkID, string value)
     interpreterRegisterOpcode(0x8189, op_set_perk_name);
     // 0x818a - void set_perk_desc(int perkID, string value)
@@ -4800,11 +5687,13 @@ void sfallOpcodesInit()
     interpreterRegisterOpcode(0x8212, op_get_version_patch);
 
     // 0x8213 - void hero_select_win(int)
-    interpreterRegisterOpcode(0x8213, op_hero_select_win);
     // 0x8214 - void set_hero_race(int race)
-    interpreterRegisterOpcode(0x8214, op_set_hero_race);
     // 0x8215 - void set_hero_style(int style)
-    interpreterRegisterOpcode(0x8215, op_set_hero_style);
+    if (sfallConfigGetHeroAppearanceMod()) {
+        interpreterRegisterOpcode(0x8213, op_hero_select_win);
+        interpreterRegisterOpcode(0x8214, op_set_hero_race);
+        interpreterRegisterOpcode(0x8215, op_set_hero_style);
+    }
 
     // 0x8216 - void set_critter_burst_disable(object critter, int disable)
     interpreterRegisterOpcode(0x8216, op_set_critter_burst_disable);
@@ -4867,7 +5756,9 @@ void sfallOpcodesInit()
     // 0x823b - int modified_ini() // deprecated: do not implement
 
     // 0x823e - void force_aimed_shots(int pid)
+    interpreterRegisterOpcode(0x823E, op_force_aimed_shots);
     // 0x823f - void disable_aimed_shots(int pid)
+    interpreterRegisterOpcode(0x823F, op_disable_aimed_shots);
 
     // 0x8240 - void mark_movie_played(int id)
 

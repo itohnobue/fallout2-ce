@@ -40,6 +40,7 @@
 #include "sfall_callbacks.h"
 #include "sfall_config.h"
 #include "sfall_global_scripts.h"
+#include "sfall_metarules.h"
 #include "sfall_opcodes.h"
 #include "sfall_script_hooks.h"
 #include "skill.h"
@@ -3381,18 +3382,30 @@ static int combatTurnHooked(Object* obj, bool reloadedDuringCombat)
     combatTurnHookResult = _combat_turn(obj, reloadedDuringCombat);
 
     if (_combat_end_due_to_load != 0 && combatTurnHookResult == -1) {
-        // don't call end combat hook on the "synthetic" player turn after reloading during combat
+        // F-028 fix: fire the end-of-turn HOOK_COMBATTURN notification even
+        // after a synthetic player turn post-load, so scripts (e.g. et tu
+        // gl_autodoors.ssl) can reset their turn-tracking state.
+        scriptHooks_CombatTurnEnd(obj, combatTurnHookResult, reloadedDuringCombat);
         return combatTurnHookResult;
     }
 
     if (scriptHooks_CombatTurnEnd(obj, combatTurnHookResult, reloadedDuringCombat)) {
-        // Matches sfall: if the end-of-turn HOOK_COMBATTURN callback forces
-        // combat termination, other hook scripts do not get a follow-up
-        // arg0 == -1 notification. The only end-of-turn callback they saw was
-        // the original engine result in `combatTurnHookResult`. If we want
-        // cleaner semantics later, a possible follow-up is to emit an
-        // additional HOOK_COMBATTURN call with arg0 == -1 here, but that would
-        // be a deliberate compatibility deviation from sfall.
+        // F-024 fix: after the first handler forces combat termination (ret0=-1),
+        // fire an explicit arg0=-1 notification so ALL registered handlers see
+        // the force-termination event, not just the handler that triggered it.
+        // This is a deliberate compatibility deviation from sfall — sfall stops
+        // dispatching after the first ret0=-1, leaving other handlers unaware.
+
+        // Avoid double-dispatch when combatTurnHookResult is already -1:
+        // scriptHooks_CombatTurnEnd already dispatched arg0=-1 to all handlers,
+        // so a second dispatch with the same value is redundant and would
+        // break non-idempotent handlers (counters, flag toggles). When
+        // combatTurnHookResult != -1, the second dispatch is the force-
+        // termination override that scripts rely on to distinguish forced
+        // termination from normal turn-end.
+        if (combatTurnHookResult != -1) {
+            ScriptHookCall(HOOK_COMBATTURN, 0, { -1, obj, reloadedDuringCombat ? 1 : 0 }).call();
+        }
         combatTurnHookResult = -1;
     }
     return combatTurnHookResult;
@@ -3546,9 +3559,12 @@ void _combat(CombatStartData* csd)
             _gmouse_disable_scrolling();
             interfaceBarEndButtonsHide(true);
             _gmouse_enable_scrolling();
-            if (combatTurnHookResult >= 0) {
-                scriptHooks_CombatTurnCombatEnd(_combat_turn_obj);
-            }
+            // F-029 fix: always fire the end-of-combat HOOK_COMBATTURN
+            // notification (arg0=-2) regardless of combatTurnHookResult.
+            // The old gate (>= 0) suppressed the notification when combat
+            // was force-ended by hook ret0=-1, starving scripts of the -2
+            // cleanup signal they rely on.
+            scriptHooks_CombatTurnCombatEnd(_combat_turn_obj);
             _combat_over();
             scriptsExecMapUpdateProc();
         }
@@ -3832,6 +3848,39 @@ static int _compute_spray(Attack* attack, int accuracy, int* roundsHitMainTarget
 
     int ammoQuantity = *roundsFiredPtr;
 
+    // F-005: Apply spray settings override for burst fire pattern.
+    // gSpraySettings is set via set_spray_settings metarule and configures
+    // the number of bullets per burst (count), spread radius (radius),
+    // per-weapon filtering (pid), and behavioral flags (flags).
+    const SpraySettings* spraySettings = sfallGetSpraySettings();
+    bool useSpraySettings = spraySettings != nullptr && spraySettings->active;
+    if (useSpraySettings && spraySettings->pid != -1) {
+        useSpraySettings = (spraySettings->pid == attack->weapon->pid);
+    }
+    int sprayCount = ammoQuantity;
+    int sprayRadius = 0;
+    if (useSpraySettings) {
+        if (spraySettings->count > 0) {
+            sprayCount = spraySettings->count;
+        }
+        sprayRadius = spraySettings->radius;
+    }
+
+    // F-E4: Clamp sprayCount to available ammunition to prevent phantom
+    // bullets — a script override of count must not exceed actual ammo,
+    // otherwise the weapon fires more rounds than it consumes.
+    if (sprayCount > ammoQuantity) {
+        sprayCount = ammoQuantity;
+    }
+
+    // F-E23: Absolute upper bound on spray rounds — unvalidated
+    // spraySettings->count with extreme values produces billions of
+    // randomBetween calls, effectively freezing the game.
+    constexpr int kMaxSprayRounds = 100;
+    if (sprayCount > kMaxSprayRounds) {
+        sprayCount = kMaxSprayRounds;
+    }
+
     int criticalChance = critterGetStat(attack->attacker, STAT_CRITICAL_CHANCE);
     int roll = randomRoll(accuracy, criticalChance, nullptr);
 
@@ -3850,15 +3899,15 @@ static int _compute_spray(Attack* attack, int accuracy, int* roundsHitMainTarget
     if (anim == ANIM_FIRE_BURST) {
         // SFALL: Burst mod.
         if (gBurstModEnabled) {
-            mainTargetRounds = burstModComputeRounds(ammoQuantity, &centerRounds, &leftRounds, &rightRounds);
+            mainTargetRounds = burstModComputeRounds(sprayCount, &centerRounds, &leftRounds, &rightRounds);
         } else {
-            centerRounds = ammoQuantity / 3;
+            centerRounds = sprayCount / 3;
             if (centerRounds == 0) {
                 centerRounds = 1;
             }
 
-            leftRounds = ammoQuantity / 3;
-            rightRounds = ammoQuantity - centerRounds - leftRounds;
+            leftRounds = sprayCount / 3;
+            rightRounds = sprayCount - centerRounds - leftRounds;
             mainTargetRounds = centerRounds / 2;
             if (mainTargetRounds == 0) {
                 mainTargetRounds = 1;
@@ -3894,12 +3943,13 @@ static int _compute_spray(Attack* attack, int accuracy, int* roundsHitMainTarget
     }
 
     int rotation = tileGetRotationTo(centerTile, attack->attacker->tile);
+    int sprayOffset = std::max(1, sprayRadius);
 
-    int leftTile = tileGetTileInDirection(centerTile, (rotation + 1) % ROTATION_COUNT, 1);
+    int leftTile = tileGetTileInDirection(centerTile, (rotation + 1) % ROTATION_COUNT, sprayOffset);
     int leftEndTile = _tile_num_beyond(attack->attacker->tile, leftTile, range);
     *roundsHitMainTargetPtr += _shoot_along_path(attack, leftEndTile, leftRounds, anim);
 
-    int rightTile = tileGetTileInDirection(centerTile, (rotation + 5) % ROTATION_COUNT, 1);
+    int rightTile = tileGetTileInDirection(centerTile, (rotation + 5) % ROTATION_COUNT, sprayOffset);
     int rightEndTile = _tile_num_beyond(attack->attacker->tile, rightTile, range);
     *roundsHitMainTargetPtr += _shoot_along_path(attack, rightEndTile, rightRounds, anim);
 
@@ -4803,7 +4853,9 @@ static void attackComputeDamage(Attack* attack, int numRounds, int baseDamageMul
 
         if (perkGetRank(attack->attacker, PERK_PYROMANIAC) != 0) {
             if (weaponGetDamageType(attack->attacker, attack->weapon) == DAMAGE_TYPE_FIRE) {
-                *damagePtr += 5;
+                // F-030: apply the sfall pyromaniac mod (set via opcode 0x81CB)
+                // on top of the base +5 damage from the pyromaniac perk.
+                *damagePtr += 5 + sfallGetPyromaniacMod();
             }
         }
     }

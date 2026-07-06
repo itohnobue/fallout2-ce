@@ -49,6 +49,7 @@
 #include "scripts.h"
 #include "settings.h"
 #include "sfall_callbacks.h"
+#include "sfall_config.h"
 #include "sfall_ext.h"
 #include "sfall_global_scripts.h"
 #include "sfall_global_vars.h"
@@ -195,10 +196,14 @@ static const int gLoadSaveFrmIds[LOAD_SAVE_FRM_COUNT] = {
     200, // uparwon.frm - character editor
 };
 
-// Control max number of save/load pages
-const int saveLoadPages = 10;
+// Control max number of save/load pages.
+// Page count is initialized from sfall config in _InitLoadSave():
+//   gExtraSaveSlots=true  → 1 page  (10 slots,  FO1/et tu mode)
+//   gExtraSaveSlots=false → 10 pages (100 slots, FO2 default)
+constexpr int kMaxSaveTotalSlots = 100;
+int saveLoadPages = 10;
 constexpr int slotsPerPage = 10;
-const int saveLoadTotalSlots = saveLoadPages * slotsPerPage;
+int saveLoadTotalSlots = saveLoadPages * slotsPerPage;
 constexpr int kLoadSaveActionDone = 500;
 
 // Global variable to track the current slot page
@@ -295,10 +300,10 @@ static bool _loadingGame = false;
 static MessageList gLoadSaveMessageList;
 
 // 0x613D30 LSData
-static LoadSaveSlotData _LSData[saveLoadTotalSlots];
+static LoadSaveSlotData _LSData[kMaxSaveTotalSlots];
 
 // 0x614280 LSstatus
-static int _LSstatus[saveLoadTotalSlots];
+static int _LSstatus[kMaxSaveTotalSlots];
 
 // 0x6142A8 thumbnail_image
 static unsigned char* _thumbnail_image;
@@ -398,6 +403,13 @@ void _InitLoadSave()
 {
     _quick_done = false;
     _patches = settings.system.master_patches_path.c_str();
+
+    // Initialize save slot page count from sfall config.
+    // gExtraSaveSlots=true  → 1 page  (10 slots,  FO1/et tu mode)
+    // gExtraSaveSlots=false → 10 pages (100 slots, FO2 default)
+    saveLoadPages = gExtraSaveSlots ? 1 : 10;
+    saveLoadTotalSlots = saveLoadPages * slotsPerPage;
+
     loadSaveRememberSelectedSlot();
 
     MapDirErase("MAPS\\", "SAV");

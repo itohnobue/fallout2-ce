@@ -38,6 +38,7 @@
 #include "platform_compat.h"
 #include "proto.h"
 #include "scripts.h"
+#include "sfall_metarules.h"
 #include "sfall_opcodes.h"
 #include "skill.h"
 #include "stat.h"
@@ -2142,6 +2143,22 @@ static void characterEditorDrawPerksFolder()
                 gCharacterEditorFolderCardSubtitle = nullptr;
                 gCharacterEditorFolderCardDescription = traitGetDescription(gCharacterEditorTempTraits[1]);
                 hasContent = true;
+            }
+        }
+
+        // F-06: Display traits added via the add_trait metarule (gAddedTraits).
+        // These traits are in addition to the two player-selected traits and
+        // participate in stat/skill modifier calculations.
+        for (int traitId = 0; traitId < TRAIT_COUNT; traitId++) {
+            if (sfallIsTraitAdded(traitId)) {
+                string = traitGetName(traitId);
+                if (characterEditorFolderViewDrawString(string)) {
+                    gCharacterEditorFolderCardFrmId = traitGetFrmId(traitId);
+                    gCharacterEditorFolderCardTitle = traitGetName(traitId);
+                    gCharacterEditorFolderCardSubtitle = nullptr;
+                    gCharacterEditorFolderCardDescription = traitGetDescription(traitId);
+                    hasContent = true;
+                }
             }
         }
     }
@@ -5781,9 +5798,17 @@ static int characterEditorUpdateLevel()
             if (selectedPerksCount < 37) {
                 // Use gPerkFrequencyOverride if set by set_perk_freq metarule;
                 // otherwise fall back to engine default of 3 levels per perk.
+                // F-35: Apply sfall perk level modifier (opcode 0x81AB).
                 int progression = (gPerkFrequencyOverride > 0) ? gPerkFrequencyOverride : 3;
+                progression -= sfallGetPerkLevelMod();
                 if (traitIsSelected(TRAIT_SKILLED)) {
                     progression += 1;
+                }
+
+                // Clamp to minimum of 1 level per perk to avoid divide-by-zero
+                // and nonsensical frequency.
+                if (progression < 1) {
+                    progression = 1;
                 }
 
                 if (nextLevel % progression == 0) {
@@ -5830,16 +5855,36 @@ static void perkDialogRefreshPerks()
 
     // NOTE: Original code is slightly different, but basically does the same thing.
     int perk = gPerkDialogOptionList[gPerkDialogTopLine + gPerkDialogCurrentLine].value;
-    int perkFrmId = perkGetFrmId(perk);
-    char* perkName = perkGetName(perk);
-    char* perkDescription = perkGetDescription(perk);
+    int perkFrmId;
+    char* perkName;
+    char* perkDescription;
     char* perkRank = nullptr;
     char perkRankBuffer[32];
 
-    int rank = perkGetRank(gDude, perk);
-    if (rank != 0) {
-        snprintf(perkRankBuffer, sizeof(perkRankBuffer), "(%d)", rank);
-        perkRank = perkRankBuffer;
+    // F-37: Handle fake perks (negative value) in card refresh.
+    if (perk < 0) {
+        int fakeIdx = -(perk + 1);
+        const FakePerkEntry* fakePerks = sfallGetFakePerks(nullptr);
+        if (fakeIdx >= 0 && fakeIdx < sfallGetFakePerkCount()) {
+            const FakePerkEntry& fp = fakePerks[fakeIdx];
+            perkFrmId = fp.image;
+            perkName = fp.name;
+            perkDescription = fp.desc;
+        } else {
+            perkFrmId = 0;
+            perkName = nullptr;
+            perkDescription = nullptr;
+        }
+    } else {
+        perkFrmId = perkGetFrmId(perk);
+        perkName = perkGetName(perk);
+        perkDescription = perkGetDescription(perk);
+
+        int rank = perkGetRank(gDude, perk);
+        if (rank != 0) {
+            snprintf(perkRankBuffer, sizeof(perkRankBuffer), "(%d)", rank);
+            perkRank = perkRankBuffer;
+        }
     }
 
     perkDialogDrawCard(perkFrmId, perkName, perkRank, perkDescription);
@@ -5983,16 +6028,42 @@ static int perkDialogShow()
 
     // NOTE: Original code is slightly different, but does the same thing.
     int perk = gPerkDialogOptionList[gPerkDialogTopLine + gPerkDialogCurrentLine].value;
-    int perkFrmId = perkGetFrmId(perk);
-    char* perkName = perkGetName(perk);
-    char* perkDescription = perkGetDescription(perk);
+    int perkFrmId;
+    char* perkName;
+    char* perkDescription;
     char* perkRank = nullptr;
     char perkRankBuffer[32];
 
-    int rank = perkGetRank(gDude, perk);
-    if (rank != 0) {
-        snprintf(perkRankBuffer, sizeof(perkRankBuffer), "(%d)", rank);
-        perkRank = perkRankBuffer;
+    // F-37: Handle fake perks (negative value = -(fakeIndex + 1)).
+    // Fake perks use their own image/name/description from FakePerkEntry;
+    // real perks use the engine's perkGet* functions.
+    if (perk < 0) {
+        int fakeIdx = -(perk + 1);
+        const FakePerkEntry* fakePerks = sfallGetFakePerks(nullptr);
+        int fakeCount = sfallGetFakePerkCount();
+        if (fakeIdx >= 0 && fakeIdx < fakeCount) {
+            const FakePerkEntry& fp = fakePerks[fakeIdx];
+            perkFrmId = fp.image;
+            perkName = fp.name;
+            perkDescription = fp.desc;
+            // Fake perks don't have ranks in the engine perk system;
+            // perkRank stays nullptr so no rank is drawn.
+        } else {
+            // Safety: invalid fake perk index — fall through with defaults.
+            perkFrmId = 0;
+            perkName = nullptr;
+            perkDescription = nullptr;
+        }
+    } else {
+        perkFrmId = perkGetFrmId(perk);
+        perkName = perkGetName(perk);
+        perkDescription = perkGetDescription(perk);
+
+        int rank = perkGetRank(gDude, perk);
+        if (rank != 0) {
+            snprintf(perkRankBuffer, sizeof(perkRankBuffer), "(%d)", rank);
+            perkRank = perkRankBuffer;
+        }
     }
 
     perkDialogDrawCard(perkFrmId, perkName, perkRank, perkDescription);
@@ -6001,9 +6072,16 @@ static int perkDialogShow()
     int rc = perkDialogHandleInput(count, perkDialogRefreshPerks);
 
     if (rc == 1) {
-        if (perkAdd(gDude, gPerkDialogOptionList[gPerkDialogTopLine + gPerkDialogCurrentLine].value) == -1) {
-            debugPrint("\n*** Unable to add perk! ***\n");
-            rc = 2;
+        int selectedValue = gPerkDialogOptionList[gPerkDialogTopLine + gPerkDialogCurrentLine].value;
+        // F-37: Fake perks (negative value) cannot be added through the
+        // engine's perkAdd() — their effects are managed by scripts via
+        // set_fake_perk/has_fake_perk opcodes. Skip perkAdd for fake perks
+        // and simply acknowledge the selection.
+        if (selectedValue >= 0) {
+            if (perkAdd(gDude, selectedValue) == -1) {
+                debugPrint("\n*** Unable to add perk! ***\n");
+                rc = 2;
+            }
         }
     }
 
@@ -6336,8 +6414,43 @@ static int perkDialogDrawPerks()
     fontSetCurrent(101);
 
     int perks[PERK_COUNT];
-    int count = perkGetAvailablePerks(gDude, perks);
-    if (count == 0) {
+    int count = 0;
+
+    // If sfall hide_real_perks (opcode 0x81CB) is set, hide the real
+    // engine perk list so the dialog shows only fake perks.
+    bool hideReal = sfallGetHideRealPerks();
+
+    // F-36: Check sfall perk selection mode flags.
+    // clear_selectable_perks (opcode 0x81C4): when set, empty the selectable
+    // engine perk list. Fake perks (F-37) are appended regardless.
+    bool clearPerks = sfallGetClearSelectablePerks();
+
+    // F-36: perk_add_mode (opcode 0x81C3): controls perk selection behavior.
+    // Non-zero values may modify how the dialog handles perk availability;
+    // consumed downstream in the selection handler.
+    int perkAddModeVal = sfallGetPerkAddMode();
+
+    if (!clearPerks && !hideReal) {
+        count = perkGetAvailablePerks(gDude, perks);
+    }
+
+    // F-37: Gather fake perks from sfall opcodes (set_fake_perk /
+    // set_selectable_perk, opcodes 0x81BB/0x81BD). These are appended
+    // after engine perks in the option list and use negative indices
+    // (-(i+1)) as their value to distinguish them from real perk IDs.
+    int fakePerkCount = sfallGetFakePerkCount();
+    const FakePerkEntry* fakePerks = sfallGetFakePerks(nullptr);
+
+    // Check if there are any active fake perks to display.
+    bool hasFakePerks = false;
+    for (int i = 0; i < fakePerkCount; i++) {
+        if (fakePerks[i].active) {
+            hasFakePerks = true;
+            break;
+        }
+    }
+
+    if (count == 0 && !hasFakePerks) {
         return 0;
     }
 
@@ -6349,6 +6462,16 @@ static int perkDialogDrawPerks()
     for (int index = 0; index < count; index++) {
         gPerkDialogOptionList[index].value = perks[index];
         gPerkDialogOptionList[index].name = perkGetName(perks[index]);
+    }
+
+    // F-37: Append active fake perks after engine perks.
+    // Use negative values (-(i + 1)) to identify fake perks downstream.
+    for (int i = 0; i < fakePerkCount && count < PERK_COUNT; i++) {
+        if (fakePerks[i].active) {
+            gPerkDialogOptionList[count].value = -(i + 1);
+            gPerkDialogOptionList[count].name = fakePerks[i].name;
+            count++;
+        }
     }
 
     qsort(gPerkDialogOptionList, count, sizeof(*gPerkDialogOptionList), perkDialogOptionCompare);
@@ -6372,9 +6495,11 @@ static int perkDialogDrawPerks()
 
         fontDrawText(gPerkDialogWindowBuffer + PERK_WINDOW_WIDTH * y + 45, gPerkDialogOptionList[index].name, PERK_WINDOW_WIDTH, PERK_WINDOW_WIDTH, color);
 
-        if (perkGetRank(gDude, gPerkDialogOptionList[index].value) != 0) {
+        // Only show rank for real engine perks (value >= 0).
+        int perkValue = gPerkDialogOptionList[index].value;
+        if (perkValue >= 0 && perkGetRank(gDude, perkValue) != 0) {
             char rankString[256];
-            snprintf(rankString, sizeof(rankString), "(%d)", perkGetRank(gDude, gPerkDialogOptionList[index].value));
+            snprintf(rankString, sizeof(rankString), "(%d)", perkGetRank(gDude, perkValue));
             fontDrawText(gPerkDialogWindowBuffer + PERK_WINDOW_WIDTH * y + 207, rankString, PERK_WINDOW_WIDTH, PERK_WINDOW_WIDTH, color);
         }
 

@@ -96,4 +96,9 @@ void sfallConfigExit()
     }
 }
 
+bool sfallConfigGetHeroAppearanceMod()
+{
+    return gEnableHeroAppearanceMod;
+}
+
 } // namespace fallout

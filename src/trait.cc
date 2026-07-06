@@ -8,6 +8,7 @@
 #include "platform_compat.h"
 #include "skill.h"
 #include "stat.h"
+#include "sfall_metarules.h"
 
 namespace fallout {
 
@@ -190,93 +191,93 @@ int traitGetStatModifier(int stat)
 
     switch (stat) {
     case STAT_STRENGTH:
-        if (traitIsSelected(TRAIT_GIFTED)) {
+        if (traitIsSelected(TRAIT_GIFTED) || sfallIsTraitAdded(TRAIT_GIFTED)) {
             modifier += 1;
         }
-        if (traitIsSelected(TRAIT_BRUISER)) {
+        if (traitIsSelected(TRAIT_BRUISER) || sfallIsTraitAdded(TRAIT_BRUISER)) {
             modifier += 2;
         }
         break;
     case STAT_PERCEPTION:
-        if (traitIsSelected(TRAIT_GIFTED)) {
+        if (traitIsSelected(TRAIT_GIFTED) || sfallIsTraitAdded(TRAIT_GIFTED)) {
             modifier += 1;
         }
         break;
     case STAT_ENDURANCE:
-        if (traitIsSelected(TRAIT_GIFTED)) {
+        if (traitIsSelected(TRAIT_GIFTED) || sfallIsTraitAdded(TRAIT_GIFTED)) {
             modifier += 1;
         }
         break;
     case STAT_CHARISMA:
-        if (traitIsSelected(TRAIT_GIFTED)) {
+        if (traitIsSelected(TRAIT_GIFTED) || sfallIsTraitAdded(TRAIT_GIFTED)) {
             modifier += 1;
         }
         break;
     case STAT_INTELLIGENCE:
-        if (traitIsSelected(TRAIT_GIFTED)) {
+        if (traitIsSelected(TRAIT_GIFTED) || sfallIsTraitAdded(TRAIT_GIFTED)) {
             modifier += 1;
         }
         break;
     case STAT_AGILITY:
-        if (traitIsSelected(TRAIT_GIFTED)) {
+        if (traitIsSelected(TRAIT_GIFTED) || sfallIsTraitAdded(TRAIT_GIFTED)) {
             modifier += 1;
         }
-        if (traitIsSelected(TRAIT_SMALL_FRAME)) {
+        if (traitIsSelected(TRAIT_SMALL_FRAME) || sfallIsTraitAdded(TRAIT_SMALL_FRAME)) {
             modifier += 1;
         }
         break;
     case STAT_LUCK:
-        if (traitIsSelected(TRAIT_GIFTED)) {
+        if (traitIsSelected(TRAIT_GIFTED) || sfallIsTraitAdded(TRAIT_GIFTED)) {
             modifier += 1;
         }
         break;
     case STAT_MAXIMUM_ACTION_POINTS:
-        if (traitIsSelected(TRAIT_BRUISER)) {
+        if (traitIsSelected(TRAIT_BRUISER) || sfallIsTraitAdded(TRAIT_BRUISER)) {
             modifier -= 2;
         }
         break;
     case STAT_ARMOR_CLASS:
-        if (traitIsSelected(TRAIT_KAMIKAZE)) {
+        if (traitIsSelected(TRAIT_KAMIKAZE) || sfallIsTraitAdded(TRAIT_KAMIKAZE)) {
             modifier -= critterGetBaseStat(gDude, STAT_ARMOR_CLASS);
         }
         break;
     case STAT_MELEE_DAMAGE:
-        if (traitIsSelected(TRAIT_HEAVY_HANDED)) {
+        if (traitIsSelected(TRAIT_HEAVY_HANDED) || sfallIsTraitAdded(TRAIT_HEAVY_HANDED)) {
             modifier += 4;
         }
         break;
     case STAT_CARRY_WEIGHT:
-        if (traitIsSelected(TRAIT_SMALL_FRAME)) {
+        if (traitIsSelected(TRAIT_SMALL_FRAME) || sfallIsTraitAdded(TRAIT_SMALL_FRAME)) {
             modifier -= 10 * critterGetBaseStat(gDude, STAT_STRENGTH);
         }
         break;
     case STAT_SEQUENCE:
-        if (traitIsSelected(TRAIT_KAMIKAZE)) {
+        if (traitIsSelected(TRAIT_KAMIKAZE) || sfallIsTraitAdded(TRAIT_KAMIKAZE)) {
             modifier += 5;
         }
         break;
     case STAT_HEALING_RATE:
-        if (traitIsSelected(TRAIT_FAST_METABOLISM)) {
+        if (traitIsSelected(TRAIT_FAST_METABOLISM) || sfallIsTraitAdded(TRAIT_FAST_METABOLISM)) {
             modifier += 2;
         }
         break;
     case STAT_CRITICAL_CHANCE:
-        if (traitIsSelected(TRAIT_FINESSE)) {
+        if (traitIsSelected(TRAIT_FINESSE) || sfallIsTraitAdded(TRAIT_FINESSE)) {
             modifier += 10;
         }
         break;
     case STAT_BETTER_CRITICALS:
-        if (traitIsSelected(TRAIT_HEAVY_HANDED)) {
+        if (traitIsSelected(TRAIT_HEAVY_HANDED) || sfallIsTraitAdded(TRAIT_HEAVY_HANDED)) {
             modifier -= 30;
         }
         break;
     case STAT_RADIATION_RESISTANCE:
-        if (traitIsSelected(TRAIT_FAST_METABOLISM)) {
+        if (traitIsSelected(TRAIT_FAST_METABOLISM) || sfallIsTraitAdded(TRAIT_FAST_METABOLISM)) {
             modifier -= critterGetBaseStat(gDude, STAT_RADIATION_RESISTANCE);
         }
         break;
     case STAT_POISON_RESISTANCE:
-        if (traitIsSelected(TRAIT_FAST_METABOLISM)) {
+        if (traitIsSelected(TRAIT_FAST_METABOLISM) || sfallIsTraitAdded(TRAIT_FAST_METABOLISM)) {
             modifier -= critterGetBaseStat(gDude, STAT_POISON_RESISTANCE);
         }
         break;
@@ -292,11 +293,11 @@ int traitGetSkillModifier(int skill)
 {
     int modifier = 0;
 
-    if (traitIsSelected(TRAIT_GIFTED)) {
+    if (traitIsSelected(TRAIT_GIFTED) || sfallIsTraitAdded(TRAIT_GIFTED)) {
         modifier -= 10;
     }
 
-    if (traitIsSelected(TRAIT_GOOD_NATURED)) {
+    if (traitIsSelected(TRAIT_GOOD_NATURED) || sfallIsTraitAdded(TRAIT_GOOD_NATURED)) {
         switch (skill) {
         case SKILL_SMALL_GUNS:
         case SKILL_BIG_GUNS:
