@@ -73,3 +73,21 @@ MEMORY.md
 *.log
 *.tlog
 TestResult.xml
+
+# Temporary / working files
+tmp/
+
+# macOS / Xcode build artifacts
+*.dSYM
+*.dSYM.zip
+DerivedData/
+xcuserdata/
+*.xccheckout
+*.xcscmblueprint
+*.pbxuser
+*.mode*
+*.perspective*
+*.moved-aside
+*.hmap
+compile_commands.json
+*.dmg
