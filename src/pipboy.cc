@@ -2492,7 +2492,11 @@ static bool _Check4Health(int minutes)
 // NOTE: Inlined.
 static bool _AddHealth()
 {
-    _partyMemberRestingHeal(3);
+    // F2-027: Use scriptable rest heal time override if set.
+    // wmGetRestHealTime() returns -1 when no override is configured (use default 3h).
+    int restHealTime = wmGetRestHealTime();
+    int healHours = (restHealTime >= 0) ? restHealTime : 3;
+    _partyMemberRestingHeal(healHours);
 
     int currentHp = critterGetHitPoints(gDude);
     int maxHp = critterGetStat(gDude, STAT_MAXIMUM_HIT_POINTS);

@@ -10,6 +10,7 @@
 #include "party_member.h"
 #include "platform_compat.h"
 #include "skill.h"
+#include "sfall_opcodes.h"
 #include "stat.h"
 
 namespace fallout {
@@ -560,6 +561,11 @@ char* perkGetName(int perk)
     if (!perkIsValid(perk)) {
         return nullptr;
     }
+    // F2-041: Check sfall script-level name override (set_perk_name opcode 0x8189).
+    const char* nameOverride = sfallGetPerkNameOverride(perk);
+    if (nameOverride != nullptr) {
+        return const_cast<char*>(nameOverride);
+    }
     return gPerkDescriptions[perk].name ? gPerkDescriptions[perk].name : (char*)"";
 }
 
@@ -571,6 +577,11 @@ char* perkGetDescription(int perk)
     if (!perkIsValid(perk)) {
         return nullptr;
     }
+    // F2-041: Check sfall script-level description override (set_perk_desc opcode 0x818A).
+    const char* descOverride = sfallGetPerkDescOverride(perk);
+    if (descOverride != nullptr) {
+        return const_cast<char*>(descOverride);
+    }
     return gPerkDescriptions[perk].description ? gPerkDescriptions[perk].description : (char*)"";
 }
 
@@ -579,6 +590,11 @@ int perkGetFrmId(int perk)
 {
     if (!perkIsValid(perk)) {
         return 0;
+    }
+    // F2-041: Check sfall script-level image override (set_perk_image opcode 0x8178).
+    int imageOverride = sfallGetPerkImageOverride(perk);
+    if (imageOverride != -1) {
+        return imageOverride;
     }
     return gPerkDescriptions[perk].frmId;
 }

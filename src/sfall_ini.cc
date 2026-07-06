@@ -8,6 +8,7 @@
 #include <unordered_map>
 
 #include "config.h"
+#include "content_config.h"
 #include "debug.h"
 #include "interpreter.h"
 #include "opcode_context.h"
@@ -58,6 +59,16 @@ static const char* parse_ini_triplet(const char* triplet, char* fileName, char* 
 
     strncpy(fileName, triplet, fileNameLength);
     fileName[fileNameLength] = '\0';
+
+    // Reject filenames containing ".." to prevent directory traversal
+    // out of the mods/config directory. After stripping path separators
+    // and parent-directory references, a traversal attempt like
+    // "..\\system.ini" or "mods\\..\\ddraw.ini" would bypass access
+    // controls, so we reject any filename component that contains "..".
+    // This matches the existing guard in VFS and mod loading paths.
+    if (strstr(fileName, "..") != nullptr) {
+        return nullptr;
+    }
 
     strncpy(section, fileNameSectionSep + 1, sectionLength);
     section[sectionLength] = '\0';
@@ -357,14 +368,23 @@ void mf_set_ini_setting(OpcodeContext& ctx)
         }
     }
 
-    // After writing to disk, update gAllowUnsafeScripting so it reflects
-    // the current config value. Note: VOODOO opcode registration is a
+    // After writing to disk, update in-memory globals so they reflect
+    // the current config value. Note: opcode registration gating is a
     // one-time init operation that runs before any script executes, so
-    // this runtime toggle only takes effect after a restart/reload.
+    // runtime toggles for those globals only take effect after a restart.
     // See sfall_config.cc for key definitions.
-    if (wrote && compat_stricmp(triplet, "ddraw.ini|Debugging|AllowUnsafeScripting") == 0) {
+    if (wrote) {
         int intVal = value.isString() ? atoi(value.asString(ctx.program())) : value.asInt();
-        gAllowUnsafeScripting = (intVal != 0);
+
+        if (compat_stricmp(triplet, "ddraw.ini|Debugging|AllowUnsafeScripting") == 0) {
+            gAllowUnsafeScripting = (intVal != 0);
+        } else if (compat_stricmp(triplet, "ddraw.ini|Misc|Fallout1Behavior") == 0) {
+            gFallout1Behavior = (intVal != 0);
+        } else if (compat_stricmp(triplet, "ddraw.ini|Misc|ExtraSaveSlots") == 0) {
+            gExtraSaveSlots = (intVal != 0);
+        } else if (compat_stricmp(triplet, "ddraw.ini|Misc|EnableHeroAppearanceMod") == 0) {
+            gEnableHeroAppearanceMod = (intVal != 0);
+        }
     }
 }
 
@@ -498,10 +518,31 @@ void op_get_ini_setting(Program* program)
 {
     const char* string = programStackPopString(program);
 
+    // Parse the triplet to identify section and key for fallback lookup.
+    char fileName[kFileNameMaxSize];
+    char section[kSectionMaxSize];
+    const char* keyPtr = parse_ini_triplet(string, fileName, section);
+
     int value;
-    int status = sfall_ini_get_int_detailed(string, &value);
+    int status = SFALL_INI_PARSE_ERROR;
+    if (keyPtr != nullptr) {
+        status = sfall_ini_get_int_detailed(string, &value);
+    }
+
     if (status == SFALL_INI_OK) {
         programStackPushInteger(program, value);
+    } else if (keyPtr != nullptr) {
+        // Config bridge: when a ddraw.ini key is not found, fall back to
+        // gContentConfig (game.cfg). This enables RPU/Et Tu scripts that
+        // call get_ini_setting("ddraw.ini|Misc|BoostScriptDialogLimit") to
+        // receive the correct value from the migrated config even when
+        // ddraw.ini does not exist on disk.
+        int fallbackValue = contentConfigLookupSfallInt(section, keyPtr);
+        if (fallbackValue >= 0) {
+            programStackPushInteger(program, fallbackValue);
+        } else {
+            programStackPushInteger(program, -1);
+        }
     } else {
         // Return -1 for ALL error conditions (key not found, file not found,
         // parse error). Returning distinct codes (-2, -3) collides with valid
@@ -519,7 +560,11 @@ void op_get_ini_string(Program* program)
     if (sfall_ini_get_string(string, value, sizeof(value))) {
         programStackPushString(program, value);
     } else {
-        programStackPushInteger(program, -1);
+        // Return an empty string for not-found (consistent with the name
+        // "get_ini_string"). Returning -1 as integer would cause a type
+        // mismatch on the script stack — callers expecting a string would
+        // get an integer, which trashes the string pointer slot.
+        programStackPushString(program, "");
     }
 }
 

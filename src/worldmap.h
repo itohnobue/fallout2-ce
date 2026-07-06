@@ -306,6 +306,11 @@ void wmClearCanRestOnTile(int elevation, int tile);
 void wmSetRestMode(int mode);
 int wmGetRestMode();
 
+// CE/SFALL: map enter position override (F-011, F-071).
+void wmSetMapEnterPosition(int x, int y, int elevation);
+bool wmHasMapEnterPosition();
+void wmGetMapEnterPosition(int* x, int* y, int* elevation);
+
 int worldmapGetWindow();
 
 } // namespace fallout

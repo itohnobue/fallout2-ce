@@ -130,6 +130,10 @@ static void mf_has_fake_trait_npc(OpcodeContext& ctx);
 static void mf_set_fake_perk_npc(OpcodeContext& ctx);
 static void mf_set_fake_trait_npc(OpcodeContext& ctx);
 static void mf_set_selectable_perk_npc(OpcodeContext& ctx);
+static void mf_get_fake_perk_npc(OpcodeContext& ctx);
+static void mf_get_fake_trait_npc(OpcodeContext& ctx);
+static void mf_get_selectable_perk_npc(OpcodeContext& ctx);
+static void mf_has_selectable_perk_npc(OpcodeContext& ctx);
 // F-002: 14 HIGH-priority metarules (needed by RPU/ET Tu) — commented out, now implemented
 static void mf_exec_map_update_scripts(OpcodeContext& ctx);
 static void mf_get_can_rest_on_map(OpcodeContext& ctx);
@@ -167,6 +171,7 @@ static void mf_set_map_enter_position(OpcodeContext& ctx);
 static void mf_set_town_title(OpcodeContext& ctx);
 static void mf_get_town_title(OpcodeContext& ctx);
 static void mf_set_unjam_locks_time(OpcodeContext& ctx);
+static void mf_get_unjam_locks_time(OpcodeContext& ctx);
 static void mf_unjam_lock(OpcodeContext& ctx);
 
 // Tracks nesting depth of mf_message_box calls.
@@ -211,11 +216,12 @@ static int gCarIntfaceArtFid = -1;
 static int gRestMode = -1;
 
 // Fake perk/trait storage for NPC critters.
-// Key: CID (int, stable across save/load), Value: set of perk/trait name strings.
+// Key: CID (int, stable across save/load), Value: map of perk/trait name → metadata.
+// Each entry stores level, image, and description alongside the name.
 // Keys are Object::cid — the unique per-object identifier serialized in save games.
-static std::unordered_map<int, std::unordered_set<std::string>> gFakePerksNpc;
-static std::unordered_map<int, std::unordered_set<std::string>> gFakeTraitsNpc;
-static std::unordered_map<int, std::unordered_set<std::string>> gFakeSelectablePerksNpc;
+static std::unordered_map<int, std::unordered_map<std::string, FakePerkNpcEntry>> gFakePerksNpc;
+static std::unordered_map<int, std::unordered_map<std::string, FakePerkNpcEntry>> gFakeTraitsNpc;
+static std::unordered_map<int, std::unordered_map<std::string, FakePerkNpcEntry>> gFakeSelectablePerksNpc;
 
 // Traits added via the add_trait / remove_trait metarules.
 // Stores trait type IDs (integers) for the player character.
@@ -285,7 +291,9 @@ struct InterfaceOverlayState {
     int windowHandle = -1;
     bool active = false;
 };
-static InterfaceOverlayState gInterfaceOverlayState;
+// F-074 + F2-031: Non-static so interface.cc can access via extern for
+// overlay rendering and stale-window recreation after save/load.
+InterfaceOverlayState gInterfaceOverlayState;
 
 // F-003: intface hidden state tracker. gInterfaceBarHidden is file-static in
 // interface.cc, so we maintain our own mirror for tracking state set via
@@ -341,9 +349,14 @@ const MetaruleInfo kMetarules[] = {
     { "get_terrain_name", mf_get_terrain_name, 0, 2, -1, { ARG_INT, ARG_INT } },
     { "get_text_width", mf_get_text_width, 1, 1, 0, { ARG_STRING } },
     { "get_town_title", mf_get_town_title, 1, 1, 0, { ARG_INT } },
+    { "get_unjam_locks_time", mf_get_unjam_locks_time, 0, 0 },
     { "get_window_attribute", mf_get_window_attribute, 1, 2, -1, { ARG_INT, ARG_INT } },
     { "has_fake_perk_npc", mf_has_fake_perk_npc, 2, 2, 0, { ARG_OBJECT, ARG_STRING } },
     { "has_fake_trait_npc", mf_has_fake_trait_npc, 2, 2, 0, { ARG_OBJECT, ARG_STRING } },
+    { "get_fake_perk_npc", mf_get_fake_perk_npc, 2, 2, 0, { ARG_OBJECT, ARG_STRING } },
+    { "get_fake_trait_npc", mf_get_fake_trait_npc, 2, 2, 0, { ARG_OBJECT, ARG_STRING } },
+    { "get_selectable_perk_npc", mf_get_selectable_perk_npc, 2, 2, 0, { ARG_OBJECT, ARG_STRING } },
+    { "has_selectable_perk_npc", mf_has_selectable_perk_npc, 2, 2, 0, { ARG_OBJECT, ARG_STRING } },
     { "hide_window", mf_hide_window, 0, 1, -1, { ARG_STRING } },
     { "interface_art_draw", mf_interface_art_draw, 4, 6, -1, { ARG_INT, ARG_INTSTR, ARG_INT, ARG_INT, ARG_INT, ARG_INT } },
     { "interface_overlay", mf_interface_overlay, 2, 6, -1, { ARG_INT, ARG_INT, ARG_INT, ARG_INT, ARG_INT, ARG_INT } },
@@ -1750,6 +1763,9 @@ void mf_npc_engine_level_up(OpcodeContext& ctx)
 // set_dude_obj(Object* newDude): saves the current gDude pointer and replaces it
 // with the given object. Used for cutscene player swaps (e.g., controlling another
 // character temporarily). Call real_dude_obj() to restore the original.
+// Guard: only save gDude to gSavedOriginalDude on the first call — subsequent
+// chained swaps (e.g., two cutscene transitions in sequence) should not overwrite
+// the original reference.
 void mf_set_dude_obj(OpcodeContext& ctx)
 {
     Object* newDude = ctx.arg(0).asObject();
@@ -1758,7 +1774,10 @@ void mf_set_dude_obj(OpcodeContext& ctx)
         ctx.setReturn(-1);
         return;
     }
-    gSavedOriginalDude = gDude;
+    // Only save the original on first call; chained swaps preserve the real dude.
+    if (gSavedOriginalDude == nullptr) {
+        gSavedOriginalDude = gDude;
+    }
     gDude = newDude;
     ctx.setReturn(0);
 }
@@ -1972,13 +1991,15 @@ void mf_has_fake_trait_npc(OpcodeContext& ctx)
 }
 
 // set_fake_perk_npc(Object* critter, string name, int level, int image, string desc):
-// stores a fake perk for the given NPC critter. The name + level + image + desc are
-// stored as metadata for script-level use. To remove a fake perk, set level=0.
+// stores a fake perk for the given NPC critter. All metadata (level, image, desc)
+// is preserved in the data structure. To remove a fake perk, set level=0.
 void mf_set_fake_perk_npc(OpcodeContext& ctx)
 {
     Object* critter = ctx.arg(0).asObject();
     const char* name = ctx.stringArg(1);
     int level = ctx.arg(2).asInt();
+    int image = ctx.arg(3).asInt();
+    const char* desc = ctx.stringArg(4);
 
     if (critter == nullptr) {
         ctx.printError("%s() - null object argument.", ctx.name());
@@ -1991,20 +2012,20 @@ void mf_set_fake_perk_npc(OpcodeContext& ctx)
             it->second.erase(name);
         }
     } else {
-        gFakePerksNpc[critter->cid].insert(name);
+        gFakePerksNpc[critter->cid][name] = { name, level, image, desc ? desc : "" };
     }
-    // level, image, desc (args 3-4) are stored implicitly via the set membership
-    // for future retrieval by matching has_fake_perk_npc calls.
     ctx.setReturn(0);
 }
 
 // set_fake_trait_npc(Object* critter, string name, int active, int image, string desc):
-// stores a fake trait for the given NPC critter. Set active=0 to remove.
+// stores a fake trait for the given NPC critter with full metadata. Set active=0 to remove.
 void mf_set_fake_trait_npc(OpcodeContext& ctx)
 {
     Object* critter = ctx.arg(0).asObject();
     const char* name = ctx.stringArg(1);
     int active = ctx.arg(2).asInt();
+    int image = ctx.arg(3).asInt();
+    const char* desc = ctx.stringArg(4);
 
     if (critter == nullptr) {
         ctx.printError("%s() - null object argument.", ctx.name());
@@ -2017,18 +2038,20 @@ void mf_set_fake_trait_npc(OpcodeContext& ctx)
             it->second.erase(name);
         }
     } else {
-        gFakeTraitsNpc[critter->cid].insert(name);
+        gFakeTraitsNpc[critter->cid][name] = { name, active, image, desc ? desc : "" };
     }
     ctx.setReturn(0);
 }
 
 // set_selectable_perk_npc(Object* critter, string name, int active, int image, string desc):
-// stores a selectable fake perk for the given NPC critter. Set active=0 to remove.
+// stores a selectable fake perk for the given NPC critter with full metadata. Set active=0 to remove.
 void mf_set_selectable_perk_npc(OpcodeContext& ctx)
 {
     Object* critter = ctx.arg(0).asObject();
     const char* name = ctx.stringArg(1);
     int active = ctx.arg(2).asInt();
+    int image = ctx.arg(3).asInt();
+    const char* desc = ctx.stringArg(4);
 
     if (critter == nullptr) {
         ctx.printError("%s() - null object argument.", ctx.name());
@@ -2041,9 +2064,119 @@ void mf_set_selectable_perk_npc(OpcodeContext& ctx)
             it->second.erase(name);
         }
     } else {
-        gFakeSelectablePerksNpc[critter->cid].insert(name);
+        gFakeSelectablePerksNpc[critter->cid][name] = { name, active, image, desc ? desc : "" };
     }
     ctx.setReturn(0);
+}
+
+// get_fake_perk_npc(Object* critter, string name): returns a 3-element temp
+// array [level, image, desc] for the given fake perk, or 0 if not found.
+void mf_get_fake_perk_npc(OpcodeContext& ctx)
+{
+    Object* critter = ctx.arg(0).asObject();
+    const char* name = ctx.stringArg(1);
+
+    if (critter == nullptr) {
+        ctx.setReturn(0);
+        return;
+    }
+    auto critIt = gFakePerksNpc.find(critter->cid);
+    if (critIt == gFakePerksNpc.end()) {
+        ctx.setReturn(0);
+        return;
+    }
+    auto it = critIt->second.find(name);
+    if (it == critIt->second.end()) {
+        ctx.setReturn(0);
+        return;
+    }
+
+    const FakePerkNpcEntry& entry = it->second;
+    ArrayId arrayId = CreateTempArray(3, 0);
+    SetArray(arrayId, ProgramValue(0), ProgramValue(entry.level), false, ctx.program());
+    SetArray(arrayId, ProgramValue(1), ProgramValue(entry.image), false, ctx.program());
+    SetArray(arrayId, ProgramValue(2), programMakeString(ctx.program(), entry.desc.c_str()), false, ctx.program());
+    ctx.setReturn(ProgramValue(arrayId));
+}
+
+// get_fake_trait_npc(Object* critter, string name): returns a 3-element temp
+// array [level, image, desc] for the given fake trait, or 0 if not found.
+void mf_get_fake_trait_npc(OpcodeContext& ctx)
+{
+    Object* critter = ctx.arg(0).asObject();
+    const char* name = ctx.stringArg(1);
+
+    if (critter == nullptr) {
+        ctx.setReturn(0);
+        return;
+    }
+    auto critIt = gFakeTraitsNpc.find(critter->cid);
+    if (critIt == gFakeTraitsNpc.end()) {
+        ctx.setReturn(0);
+        return;
+    }
+    auto it = critIt->second.find(name);
+    if (it == critIt->second.end()) {
+        ctx.setReturn(0);
+        return;
+    }
+
+    const FakePerkNpcEntry& entry = it->second;
+    ArrayId arrayId = CreateTempArray(3, 0);
+    SetArray(arrayId, ProgramValue(0), ProgramValue(entry.level), false, ctx.program());
+    SetArray(arrayId, ProgramValue(1), ProgramValue(entry.image), false, ctx.program());
+    SetArray(arrayId, ProgramValue(2), programMakeString(ctx.program(), entry.desc.c_str()), false, ctx.program());
+    ctx.setReturn(ProgramValue(arrayId));
+}
+
+// get_selectable_perk_npc(Object* critter, string name): returns a 3-element
+// temp array [level, image, desc] for the given selectable perk, or 0 if not
+// found.
+void mf_get_selectable_perk_npc(OpcodeContext& ctx)
+{
+    Object* critter = ctx.arg(0).asObject();
+    const char* name = ctx.stringArg(1);
+
+    if (critter == nullptr) {
+        ctx.setReturn(0);
+        return;
+    }
+    auto critIt = gFakeSelectablePerksNpc.find(critter->cid);
+    if (critIt == gFakeSelectablePerksNpc.end()) {
+        ctx.setReturn(0);
+        return;
+    }
+    auto it = critIt->second.find(name);
+    if (it == critIt->second.end()) {
+        ctx.setReturn(0);
+        return;
+    }
+
+    const FakePerkNpcEntry& entry = it->second;
+    ArrayId arrayId = CreateTempArray(3, 0);
+    SetArray(arrayId, ProgramValue(0), ProgramValue(entry.level), false, ctx.program());
+    SetArray(arrayId, ProgramValue(1), ProgramValue(entry.image), false, ctx.program());
+    SetArray(arrayId, ProgramValue(2), programMakeString(ctx.program(), entry.desc.c_str()), false, ctx.program());
+    ctx.setReturn(ProgramValue(arrayId));
+}
+
+// has_selectable_perk_npc(Object* critter, string name): returns 1 if the given
+// NPC critter has the named selectable perk, 0 otherwise.
+void mf_has_selectable_perk_npc(OpcodeContext& ctx)
+{
+    Object* critter = ctx.arg(0).asObject();
+    const char* name = ctx.stringArg(1);
+
+    if (critter == nullptr) {
+        ctx.setReturn(0);
+        return;
+    }
+    auto it = gFakeSelectablePerksNpc.find(critter->cid);
+    if (it != gFakeSelectablePerksNpc.end() && it->second.find(name) != it->second.end()) {
+        ctx.setReturn(1);
+    } else {
+        ctx.setReturn(0);
+    }
 }
 
 // F-002: 14 HIGH-priority metarules (needed by RPU/ET Tu)
@@ -2590,9 +2723,13 @@ void mf_set_drugs_data(OpcodeContext& ctx)
 // (checking the override in mapEnter() or similar) requires deeper engine changes.
 void mf_set_map_enter_position(OpcodeContext& ctx)
 {
-    gMapEnterX = ctx.arg(0).asInt();
-    gMapEnterY = ctx.arg(1).asInt();
-    gMapEnterElevation = ctx.arg(2).asInt();
+    int x = ctx.arg(0).asInt();
+    int y = ctx.arg(1).asInt();
+    int elevation = ctx.arg(2).asInt();
+    gMapEnterX = x;
+    gMapEnterY = y;
+    gMapEnterElevation = elevation;
+    wmSetMapEnterPosition(x, y, elevation);
     ctx.setReturn(0);
 }
 
@@ -2641,6 +2778,13 @@ void mf_set_unjam_locks_time(OpcodeContext& ctx)
     }
     gUnjamLocksTimeHours = hours;
     ctx.setReturn(0);
+}
+
+// get_unjam_locks_time(): returns the stored unjam locks time override in game
+// hours (-1 = disabled/engine default). Companion getter for set_unjam_locks_time.
+void mf_get_unjam_locks_time(OpcodeContext& ctx)
+{
+    ctx.setReturn(gUnjamLocksTimeHours);
 }
 
 // unjam_lock(Object* obj): unjams a locked container or door, allowing it to
@@ -2787,7 +2931,7 @@ void sfall_metarules_reset()
 // --- Metarule state save/load ---
 //
 // Persistence format (simple tagged binary):
-//   Version int32 (currently 2)
+//   Version int32 (currently 3)
 //   For each scalar: int32 value
 //   For each map: int32 count, then (key, value) pairs
 //   For each set: int32 count, then values
@@ -2797,7 +2941,7 @@ void sfall_metarules_reset()
 // On load, if the version marker doesn't match, the function returns early
 // (sfall_metarules_reset() has already restored defaults) — forward compatibility.
 
-#define METARULES_SAVE_VERSION 2
+#define METARULES_SAVE_VERSION 3
 
 static bool metarulesSaveStringMap(File* stream, const std::map<int, std::string>& map)
 {
@@ -2968,9 +3112,11 @@ static bool metarulesLoadDrugDataMap(File* stream, std::map<int, DrugData>& map)
 // Keyed by CID (int) — the unique per-object identifier that survives
 // save/load. Consumers use critter->cid for lookup, so data loaded from
 // saves is immediately reachable without post-load Object* fixup.
+// Each entry stores {name, level, image, desc} metadata.
+// New format (v3+): includes level/image/desc per entry.
 
-static bool metarulesSaveNpcFakeData(File* stream,
-    const std::unordered_map<int, std::unordered_set<std::string>>& map)
+static bool metarulesSaveNpcFakeDataV3(File* stream,
+    const std::unordered_map<int, std::unordered_map<std::string, FakePerkNpcEntry>>& map)
 {
     int count = static_cast<int>(map.size());
     if (fileWriteInt32(stream, count) == -1) return false;
@@ -2979,16 +3125,20 @@ static bool metarulesSaveNpcFakeData(File* stream,
         if (fileWriteInt32(stream, cid) == -1) return false;
         int nameCount = static_cast<int>(entry.second.size());
         if (fileWriteInt32(stream, nameCount) == -1) return false;
-        for (const auto& name : entry.second) {
-            if (fileWriteString(name.c_str(), stream) == -1) return false;
+        for (const auto& kv : entry.second) {
+            if (fileWriteString(kv.second.name.c_str(), stream) == -1) return false;
+            if (xfileWriteChar('\n', stream) == -1) return false;
+            if (fileWriteInt32(stream, kv.second.level) == -1) return false;
+            if (fileWriteInt32(stream, kv.second.image) == -1) return false;
+            if (fileWriteString(kv.second.desc.c_str(), stream) == -1) return false;
             if (xfileWriteChar('\n', stream) == -1) return false;
         }
     }
     return true;
 }
 
-static bool metarulesLoadNpcFakeData(File* stream,
-    std::unordered_map<int, std::unordered_set<std::string>>& map)
+static bool metarulesLoadNpcFakeDataV3(File* stream,
+    std::unordered_map<int, std::unordered_map<std::string, FakePerkNpcEntry>>& map)
 {
     int count;
     if (fileReadInt32(stream, &count) == -1) return false;
@@ -2998,16 +3148,50 @@ static bool metarulesLoadNpcFakeData(File* stream,
         if (fileReadInt32(stream, &cid) == -1) return false;
         int nameCount;
         if (fileReadInt32(stream, &nameCount) == -1) return false;
-        std::unordered_set<std::string> names;
+        std::unordered_map<std::string, FakePerkNpcEntry> names;
         for (int j = 0; j < nameCount; j++) {
             char nameBuf[256];
             if (fileReadString(nameBuf, sizeof(nameBuf), stream) == nullptr) return false;
             size_t nlen = strlen(nameBuf);
             if (nlen > 0 && nameBuf[nlen - 1] == '\n') nameBuf[nlen - 1] = '\0';
-            names.insert(nameBuf);
+            std::string name = nameBuf;
+            int level, image;
+            if (fileReadInt32(stream, &level) == -1) return false;
+            if (fileReadInt32(stream, &image) == -1) return false;
+            char descBuf[256];
+            if (fileReadString(descBuf, sizeof(descBuf), stream) == nullptr) return false;
+            size_t dlen = strlen(descBuf);
+            if (dlen > 0 && descBuf[dlen - 1] == '\n') descBuf[dlen - 1] = '\0';
+            names[name] = { name, level, image, descBuf };
         }
-        // Key by CID directly — consumers use critter->cid for lookup,
-        // so the data is reachable immediately after load.
+        map[cid] = std::move(names);
+    }
+    return true;
+}
+
+// Legacy v2 load: reads names as a set (no metadata), creating entries
+// with default metadata for backward compatibility.
+static bool metarulesLoadNpcFakeDataV2(File* stream,
+    std::unordered_map<int, std::unordered_map<std::string, FakePerkNpcEntry>>& map)
+{
+    int count;
+    if (fileReadInt32(stream, &count) == -1) return false;
+    map.clear();
+    for (int i = 0; i < count; i++) {
+        int cid;
+        if (fileReadInt32(stream, &cid) == -1) return false;
+        int nameCount;
+        if (fileReadInt32(stream, &nameCount) == -1) return false;
+        std::unordered_map<std::string, FakePerkNpcEntry> names;
+        for (int j = 0; j < nameCount; j++) {
+            char nameBuf[256];
+            if (fileReadString(nameBuf, sizeof(nameBuf), stream) == nullptr) return false;
+            size_t nlen = strlen(nameBuf);
+            if (nlen > 0 && nameBuf[nlen - 1] == '\n') nameBuf[nlen - 1] = '\0';
+            std::string name = nameBuf;
+            // v2 saves have no metadata — use sensible defaults.
+            names[name] = { name, 1, -1, "" };
+        }
         map[cid] = std::move(names);
     }
     return true;
@@ -3040,10 +3224,10 @@ void sfall_metarules_save(File* stream)
     metarulesSaveIntSet(stream, gAddedTraits);
     metarulesSaveExplosiveMap(stream, gExplosiveOverrides);
 
-    // NPC-keyed data
-    metarulesSaveNpcFakeData(stream, gFakePerksNpc);
-    metarulesSaveNpcFakeData(stream, gFakeTraitsNpc);
-    metarulesSaveNpcFakeData(stream, gFakeSelectablePerksNpc);
+    // NPC-keyed data (v3 format includes metadata: level, image, desc)
+    metarulesSaveNpcFakeDataV3(stream, gFakePerksNpc);
+    metarulesSaveNpcFakeDataV3(stream, gFakeTraitsNpc);
+    metarulesSaveNpcFakeDataV3(stream, gFakeSelectablePerksNpc);
 
     // gSavedOriginalDude: save as CID
     int originalDudeCid = (gSavedOriginalDude != nullptr) ? gSavedOriginalDude->cid : -1;
@@ -3063,6 +3247,9 @@ void sfall_metarules_save(File* stream)
     fileWriteInt32(stream, gInterfaceOverlayState.arg4);
     fileWriteInt32(stream, gInterfaceOverlayState.windowHandle);
     fileWriteInt32(stream, gInterfaceOverlayState.active ? 1 : 0);
+
+    // Version 3 additions: unjam locks time, NPC fake data with metadata.
+    fileWriteInt32(stream, gUnjamLocksTimeHours);
 }
 
 void sfall_metarules_load(File* stream)
@@ -3076,6 +3263,11 @@ void sfall_metarules_load(File* stream)
 
     // Scalars
     if (fileReadInt32(stream, &sfall_metarules_dialogShowCount) == -1) return;
+    // Reconcile after load: if a save was made while a message box was displayed
+    // (dialogShowCount > 0), the engine re-enables scripts during post-load init.
+    // Using the saved count would cause the next message_box to decrement to 1
+    // instead of 0, permanently disabling scripts. Always reset to 0 on load.
+    sfall_metarules_dialogShowCount = 0;
     if (fileReadInt32(stream, &gNpcEngineLevelUpEnabled) == -1) return;
     if (fileReadInt32(stream, &gWorldmapHealTime) == -1) return;
     if (fileReadInt32(stream, &gRestHealTime) == -1) return;
@@ -3112,9 +3304,17 @@ void sfall_metarules_load(File* stream)
     metarulesLoadExplosiveMap(stream, gExplosiveOverrides);
 
     // NPC-keyed data: keyed by CID (int), no post-load fixup needed.
-    metarulesLoadNpcFakeData(stream, gFakePerksNpc);
-    metarulesLoadNpcFakeData(stream, gFakeTraitsNpc);
-    metarulesLoadNpcFakeData(stream, gFakeSelectablePerksNpc);
+    // v3+ format includes per-entry metadata (level, image, desc);
+    // v1-v2 format stores only names — loaded with default metadata.
+    if (version >= 3) {
+        metarulesLoadNpcFakeDataV3(stream, gFakePerksNpc);
+        metarulesLoadNpcFakeDataV3(stream, gFakeTraitsNpc);
+        metarulesLoadNpcFakeDataV3(stream, gFakeSelectablePerksNpc);
+    } else {
+        metarulesLoadNpcFakeDataV2(stream, gFakePerksNpc);
+        metarulesLoadNpcFakeDataV2(stream, gFakeTraitsNpc);
+        metarulesLoadNpcFakeDataV2(stream, gFakeSelectablePerksNpc);
+    }
 
     // gSavedOriginalDude: restore Object* from CID.
     // Objects are already loaded when sfall_metarules_load() is called
@@ -3156,6 +3356,12 @@ void sfall_metarules_load(File* stream)
         int overlayActive;
         if (fileReadInt32(stream, &overlayActive) == -1) return;
         gInterfaceOverlayState.active = (overlayActive != 0);
+    }
+
+    // Version 3 additions: unjam locks time.
+    // For version 1-2 saves, sfall_metarules_reset() already sets -1 as default.
+    if (version >= 3) {
+        if (fileReadInt32(stream, &gUnjamLocksTimeHours) == -1) return;
     }
 }
 
@@ -3202,6 +3408,48 @@ bool sfallGetDrugDataOverride(int drugIndex, int* outAddictionRate, int* outEffe
 bool sfallIsTraitAdded(int traitId)
 {
     return gAddedTraits.find(traitId) != gAddedTraits.end();
+}
+
+// Public accessor: returns whether npc_engine_level_up is enabled.
+// 1 = enabled (NPCs auto-level), 0 = disabled (scripts control leveling).
+int sfallGetNpcEngineLevelUpEnabled()
+{
+    return gNpcEngineLevelUpEnabled;
+}
+
+// Public accessor: returns true if the given PID has an explosive override
+// set via the item_make_explosive metarule.
+bool sfallIsExplosiveOverride(int pid)
+{
+    return gExplosiveOverrides.count(pid) > 0;
+}
+
+// Public accessor: returns the stored unjam locks time in game hours.
+// -1 = disabled/engine default. Consumer: map.cc lock unjam logic.
+int sfallGetUnjamLocksTime()
+{
+    return gUnjamLocksTimeHours;
+}
+
+// Public accessor: returns the stored map enter X position override.
+// -1 = no override. Consumer: map entry code in map.cc.
+int sfallGetMapEnterX()
+{
+    return gMapEnterX;
+}
+
+// Public accessor: returns the stored map enter Y position override.
+// -1 = no override. Consumer: map entry code in map.cc.
+int sfallGetMapEnterY()
+{
+    return gMapEnterY;
+}
+
+// Public accessor: returns the stored map enter elevation override.
+// -1 = no override. Consumer: map entry code in map.cc.
+int sfallGetMapEnterElevation()
+{
+    return gMapEnterElevation;
 }
 
 } // namespace fallout

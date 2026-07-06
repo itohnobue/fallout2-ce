@@ -42,6 +42,21 @@
 
 namespace fallout {
 
+// F-074 + F2-031: Access interface overlay state from sfall_metarules.cc.
+// The struct is not declared in a header, so we replicate the layout here
+// and declare the extern symbol (non-static in sfall_metarules.cc since the
+// F-074/F2-031 fix removed the 'static' keyword to enable external access).
+struct InterfaceOverlayState {
+    int winType = -1;
+    int arg1 = 0;
+    int arg2 = 0;
+    int arg3 = 0;
+    int arg4 = 0;
+    int windowHandle = -1;
+    bool active = false;
+};
+extern InterfaceOverlayState gInterfaceOverlayState;
+
 // The width of connectors in the indicator box.
 //
 // There are male connectors on the left, and female connectors on the right.
@@ -935,6 +950,114 @@ bool interfaceBarIsHidden()
     return gInterfaceBarHidden;
 }
 
+// F-074 + F2-031: Render the script-created interface overlay onto the screen.
+// The overlay is a transparent window created via the interface_overlay metarule
+// (in sfall_metarules.cc). This function blits the overlay's backing buffer onto
+// the interface bar window so that drawn content becomes visible.
+//
+// F2-031: On save/load, window handles become stale (all windows are destroyed
+// and recreated). If the overlay was active when saved, the restored
+// gInterfaceOverlayState.windowHandle points to a non-existent window. Detect
+// this by checking if the window buffer is valid; if not, recreate the overlay
+// window from the saved parameters.
+static void interfaceOverlayRender()
+{
+    if (!gInterfaceOverlayState.active) {
+        return;
+    }
+
+    // F2-031: Detect stale window handle after load.
+    // windowGetBuffer returns nullptr for invalid/non-existent windows.
+    if (gInterfaceOverlayState.windowHandle == -1
+        || windowGetBuffer(gInterfaceOverlayState.windowHandle) == nullptr) {
+        // Recreate the overlay window from saved parameters.
+        if (gInterfaceOverlayState.arg3 <= 0 || gInterfaceOverlayState.arg4 <= 0) {
+            // Invalid dimensions — deactivate.
+            gInterfaceOverlayState.active = false;
+            return;
+        }
+        int newWin = windowCreate(
+            gInterfaceOverlayState.arg1,
+            gInterfaceOverlayState.arg2,
+            gInterfaceOverlayState.arg3,
+            gInterfaceOverlayState.arg4,
+            _colorTable[0],
+            WINDOW_TRANSPARENT);
+        if (newWin == -1) {
+            gInterfaceOverlayState.active = false;
+            return;
+        }
+        // Destroy the old stale handle if it existed before recreation.
+        // (The old window is already gone post-load, but this is safe.)
+        gInterfaceOverlayState.windowHandle = newWin;
+    }
+
+    // F-074: Blit the overlay window buffer onto the interface bar window.
+    if (gInterfaceBarWindow == -1) {
+        return;
+    }
+
+    unsigned char* overlayBuf = windowGetBuffer(gInterfaceOverlayState.windowHandle);
+    if (overlayBuf == nullptr) {
+        return;
+    }
+
+    int overlayWidth = windowGetWidth(gInterfaceOverlayState.windowHandle);
+    int overlayHeight = windowGetHeight(gInterfaceOverlayState.windowHandle);
+    int overlayPitch = overlayWidth; // save original pitch before clamping
+    if (overlayWidth <= 0 || overlayHeight <= 0) {
+        return;
+    }
+
+    unsigned char* interfaceBuf = windowGetBuffer(gInterfaceBarWindow);
+    if (interfaceBuf == nullptr) {
+        return;
+    }
+
+    // Compute destination offset within the interface bar window.
+    // The overlay is positioned at absolute screen coordinates (arg1, arg2),
+    // but the interface bar window may also be offset. Adjust overlay
+    // coordinates to be relative to the interface bar window origin.
+    Rect ifaceRect;
+    windowGetRect(gInterfaceBarWindow, &ifaceRect);
+    int destX = gInterfaceOverlayState.arg1 - ifaceRect.left;
+    int destY = gInterfaceOverlayState.arg2 - ifaceRect.top;
+
+    // Clamp destination to the interface bar window bounds.
+    int ifaceWidth = windowGetWidth(gInterfaceBarWindow);
+    int ifaceHeight = windowGetHeight(gInterfaceBarWindow);
+    if (destX < 0) {
+        overlayBuf += -destX;
+        overlayWidth += destX;
+        destX = 0;
+    }
+    if (destY < 0) {
+        overlayBuf += overlayPitch * -destY;
+        overlayHeight += destY;
+        destY = 0;
+    }
+    if (destX + overlayWidth > ifaceWidth) {
+        overlayWidth = ifaceWidth - destX;
+    }
+    if (destY + overlayHeight > ifaceHeight) {
+        overlayHeight = ifaceHeight - destY;
+    }
+    if (overlayWidth <= 0 || overlayHeight <= 0) {
+        return;
+    }
+
+    // Blit the overlay content onto the interface bar buffer.
+    // Use the transparent blit so the overlay's transparent pixels
+    // (color index 0) don't overwrite the interface bar background.
+    blitBufferToBufferTrans(
+        overlayBuf,
+        overlayWidth,
+        overlayHeight,
+        overlayPitch,
+        interfaceBuf + destY * ifaceWidth + destX,
+        ifaceWidth);
+}
+
 // 0x45EB98 intface_redraw
 void interfaceBarRefresh()
 {
@@ -943,6 +1066,8 @@ void interfaceBarRefresh()
         interfaceRenderHitPoints(false);
         interfaceRenderArmorClass(false);
         indicatorBarRefresh();
+        // F-074 + F2-031: Render active interface overlay on top of other elements.
+        interfaceOverlayRender();
         windowRefresh(gInterfaceBarWindow);
     }
     indicatorBarRefresh();

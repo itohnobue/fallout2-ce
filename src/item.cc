@@ -271,7 +271,10 @@ int itemAttemptAdd(Object* owner, Object* itemToAdd, int quantity)
 
             int currentSize = containerGetTotalSize(owner);
             int maxSize = containerGetMaxSize(owner);
-            if (currentSize + sizeToAdd >= maxSize) {
+            // F-078: Use > instead of >= so the container can be filled
+            // to its exact maximum capacity. Matches the critter weight check
+            // below (line 286) which correctly uses > for same semantics.
+            if (currentSize + sizeToAdd > maxSize) {
                 return -6;
             }
 
@@ -3567,6 +3570,9 @@ bool explosiveIsExplosive(int pid)
         if (explosive.pid == pid) return true;
     }
 
+    // F-014: Check custom explosives registered via item_make_explosive metarule.
+    if (sfallIsExplosiveOverride(pid)) return true;
+
     return false;
 }
 
@@ -3578,6 +3584,10 @@ bool explosiveIsActiveExplosive(int pid)
     for (const auto& explosive : gExplosives) {
         if (explosive.activePid == pid) return true;
     }
+
+    // F-014: Custom explosives from item_make_explosive metarule have no
+    // separate active PID — the item IS the explosive in its active state.
+    if (sfallIsExplosiveOverride(pid)) return true;
 
     return false;
 }
@@ -3599,6 +3609,13 @@ bool explosiveActivate(int* pidPtr)
             *pidPtr = explosive.activePid;
             return true;
         }
+    }
+
+    // F-014: Custom explosives registered via item_make_explosive metarule
+    // have no separate active PID — the item IS the explosive. Return true
+    // to signal activation is handled (script manages the active state).
+    if (sfallIsExplosiveOverride(*pidPtr)) {
+        return true;
     }
 
     return false;

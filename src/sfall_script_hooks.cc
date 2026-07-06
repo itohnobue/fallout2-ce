@@ -222,7 +222,12 @@ bool scriptHooks_StdProcedure(int procedureNumber, Object* self, Object* source,
         return false;
     }
 
-    ScriptHookCall hook(after ? HOOK_STDPROCEDURE_END : HOOK_STDPROCEDURE, after ? 0 : 1,
+    const HookType hookType = after ? HOOK_STDPROCEDURE_END : HOOK_STDPROCEDURE;
+    if (scriptHooks[hookType].empty()) {
+        return false;
+    }
+
+    ScriptHookCall hook(hookType, after ? 0 : 1,
         { procedureNumber, self, source, after ? 1 : 0, target, fixedParam });
     hook.call();
 
@@ -267,6 +272,10 @@ int arg1 - the previous game mode
 */
 void scriptHooks_GameModeChange(int exit, int previousGameMode)
 {
+    if (scriptHooks[HOOK_GAMEMODECHANGE].empty()) {
+        return;
+    }
+
     ScriptHookCall(HOOK_GAMEMODECHANGE, 0, { exit, previousGameMode }).call();
 }
 
@@ -285,6 +294,10 @@ bool scriptHooks_RestTimer(unsigned int gameTime, RestEventType eventType, int h
     assert(eventType == REST_EVENT_TYPE_CANCEL || eventType == REST_EVENT_TYPE_PROGRESS || eventType == REST_EVENT_TYPE_COMPLETE);
     assert(hours >= 0);
     assert(minutes >= 0 && minutes < 60);
+
+    if (scriptHooks[HOOK_RESTTIMER].empty()) {
+        return eventType == REST_EVENT_TYPE_CANCEL;
+    }
 
     ScriptHookCall hook(HOOK_RESTTIMER, 1, { normalizeGameTimeForScript(gameTime), eventType, hours, minutes });
     hook.call();
@@ -326,6 +339,10 @@ int scriptHooks_ExplosiveTimer(Object* explosive, int delay, int eventType)
     assert(explosive != nullptr);
     assert(delay >= 0);
     assert(eventType == EVENT_TYPE_EXPLOSION || eventType == EVENT_TYPE_EXPLOSION_FAILURE);
+
+    if (scriptHooks[HOOK_EXPLOSIVETIMER].empty()) {
+        return -1;
+    }
 
     int hookResult = eventType == EVENT_TYPE_EXPLOSION_FAILURE ? ROLL_FAILURE : ROLL_SUCCESS;
 
@@ -373,6 +390,10 @@ void scriptHooks_ItemDamage(Object* weapon, Object* critter, int hitMode, bool i
     assert(minDamagePtr != nullptr);
     assert(maxDamagePtr != nullptr);
 
+    if (scriptHooks[HOOK_ITEMDAMAGE].empty()) {
+        return;
+    }
+
     ScriptHookCall hook(HOOK_ITEMDAMAGE, 2, { *minDamagePtr, *maxDamagePtr, weapon, critter, hitMode, isMeleeWeaponAttack ? 1 : 0 });
     hook.call();
 
@@ -404,6 +425,10 @@ int     ret0 - The new ammo amount/cost. Values below 0 are ignored.
 */
 int scriptHooks_AmmoCost(Object* weapon, int rounds, int ammoCost, AmmoCostHookType hookType)
 {
+    if (scriptHooks[HOOK_AMMOCOST].empty()) {
+        return ammoCost;
+    }
+
     ScriptHookCall hook(HOOK_AMMOCOST, 1, { weapon, rounds, ammoCost, hookType });
     hook.call();
 
@@ -439,6 +464,11 @@ int scriptHooks_Steal(Object* thief, Object* target, Object* item, bool isPlanti
     assert(quantity >= 0);
     assert(xpOverride != nullptr);
 
+    if (scriptHooks[HOOK_STEAL].empty()) {
+        *xpOverride = -1;
+        return -1;
+    }
+
     *xpOverride = -1;
 
     ScriptHookCall hook(HOOK_STEAL, 2, { thief, target, item, isPlanting ? 1 : 0, quantity });
@@ -470,6 +500,10 @@ Critter arg0 - The critter that just died
 */
 void scriptHooks_OnDeath(Object* critter)
 {
+    if (scriptHooks[HOOK_ONDEATH].empty()) {
+        return;
+    }
+
     ScriptHookCall(HOOK_ONDEATH, 0, { critter }).call();
 }
 
@@ -489,6 +523,10 @@ int     ret1 - pass 1 to cancel the encounter and load the specified map from th
 EncounterHookResult scriptHooks_Encounter(EncounterHookEventType eventType, int* mapIdPtr, bool isSpecial, int tableId, int entryId)
 {
     assert(mapIdPtr != nullptr);
+
+    if (scriptHooks[HOOK_ENCOUNTER].empty()) {
+        return EncounterHookResult::ContinueEncounter;
+    }
 
     const int maxReturnValues = eventType == EncounterHookEventType::RandomEncounter ? 2 : 1;
     ScriptHookCall hook(HOOK_ENCOUNTER, maxReturnValues,
@@ -543,6 +581,10 @@ int     ret0 - pass 1 at the start of turn to skip the turn, pass -1 at the end 
 // returns true if turn should be skipped
 bool scriptHooks_CombatTurnStart(Object* critter, bool reloadedDuringCombat)
 {
+    if (scriptHooks[HOOK_COMBATTURN].empty()) {
+        return false;
+    }
+
     ScriptHookCall hook(HOOK_COMBATTURN, 1, { 1, critter, reloadedDuringCombat ? 1 : 0 });
     hook.call();
 
@@ -552,6 +594,10 @@ bool scriptHooks_CombatTurnStart(Object* critter, bool reloadedDuringCombat)
 // returns true if combat should end immediately
 bool scriptHooks_CombatTurnEnd(Object* critter, int turnResult, bool reloadedDuringCombat)
 {
+    if (scriptHooks[HOOK_COMBATTURN].empty()) {
+        return false;
+    }
+
     ScriptHookCall hook(HOOK_COMBATTURN, 1, { turnResult, critter, reloadedDuringCombat ? 1 : 0 });
     hook.call();
 
@@ -560,6 +606,10 @@ bool scriptHooks_CombatTurnEnd(Object* critter, int turnResult, bool reloadedDur
 
 void scriptHooks_CombatTurnCombatEnd(Object* critter)
 {
+    if (scriptHooks[HOOK_COMBATTURN].empty()) {
+        return;
+    }
+
     ScriptHookCall(HOOK_COMBATTURN, 0, { -2, critter, 0 }).call();
 }
 
@@ -582,6 +632,10 @@ int     ret0 - Override the engine result:
 */
 PerceptionResult scriptHooks_WithinPerception(Object* watcher, Object* target, PerceptionType type, PerceptionResult result)
 {
+    if (scriptHooks[HOOK_WITHINPERCEPTION].empty()) {
+        return result;
+    }
+
     ScriptHookCall hook(HOOK_WITHINPERCEPTION, 1, { watcher, target, result, type });
     hook.call();
 
@@ -616,6 +670,10 @@ int     ret0 - The new AP cost
 */
 int scriptHooks_CalcApCost(Object* critter, int hitMode, bool aiming, int actionPoints, Object* weapon)
 {
+    if (scriptHooks[HOOK_CALCAPCOST].empty()) {
+        return actionPoints;
+    }
+
     ScriptHookCall hook(HOOK_CALCAPCOST, 1, { critter, hitMode, aiming ? 1 : 0, actionPoints, weapon });
     hook.call();
 
@@ -687,6 +745,10 @@ int     ret0 - Override setting (-1 - use engine handler, any other value - prev
 */
 bool scriptHooks_InventoryMove(HookInventoryMoveType actionType, Object* item, Object* targetItem)
 {
+    if (scriptHooks[HOOK_INVENTORYMOVE].empty()) {
+        return true;
+    }
+
     ScriptHookCall hook(HOOK_INVENTORYMOVE, 1, { actionType, item, targetItem });
     hook.call();
 
@@ -714,6 +776,10 @@ int     ret0 - The new hit chance. The value is limited to the range of -99 to 9
 */
 int scriptHooks_ToHit(Object* attacker, Object* defender, int tile, int hitMode, int hitLocation, int hitChance, int hitChanceUncapped, bool useDistance)
 {
+    if (scriptHooks[HOOK_TOHIT].empty()) {
+        return hitChance;
+    }
+
     ScriptHookCall hook(HOOK_TOHIT, 1,
         { hitChance,
             attacker,
@@ -748,6 +814,10 @@ Critter ret2 - Override the target of the attack
 int scriptHooks_AfterHitRoll(Object* attacker, Object** defenderPtr, int* hitLocationPtr, int hitChance, int roll)
 {
     assert(defenderPtr != nullptr && hitLocationPtr != nullptr);
+
+    if (scriptHooks[HOOK_AFTERHITROLL].empty()) {
+        return roll;
+    }
 
     ScriptHookCall hook(HOOK_AFTERHITROLL, 3, { roll, attacker, *defenderPtr, *hitLocationPtr, hitChance });
     hook.call();
@@ -794,6 +864,10 @@ int     ret0 - The death anim id to override with
 */
 void scriptHooks_DeathAnim(Object* attacker, Object* defender, Object* weapon, int damage, int* anim)
 {
+    if (scriptHooks[HOOK_DEATHANIM2].empty()) {
+        return;
+    }
+
     ScriptHookCall hook(HOOK_DEATHANIM2, 1,
         { weapon != nullptr ? weapon->pid : -1,
             attacker,
@@ -825,6 +899,10 @@ UseSkillOnHookResult scriptHooks_UseSkillOn(Object** userPtr, Object* target, in
     assert(userPtr != nullptr);
     assert(*userPtr != nullptr);
     assert(target != nullptr);
+
+    if (scriptHooks[HOOK_USESKILLON].empty()) {
+        return { true, false, false };
+    }
 
     UseSkillOnHookResult result = { true, false, false };
 
@@ -876,6 +954,10 @@ int     ret0 - overrides hard-coded handler (-1 - use engine handler, any other 
 */
 int scriptHooks_UseSkill(Object* user, Object* target, int skill, int skillBonus)
 {
+    if (scriptHooks[HOOK_USESKILL].empty()) {
+        return -1;
+    }
+
     ScriptHookCall hook(HOOK_USESKILL, 1, { user, target, skill, skillBonus });
     hook.call();
 
@@ -904,6 +986,10 @@ int     ret0 - overrides hard-coded handler and selects what should happen with 
 // TODO: there's an inconsistency with the use of rc = 2. It drops items when used from the main interface, but not from inventory context menu. This matches sfall, but should probably be improved.
 int scriptHooks_UseItem(Object* user, Object* objUsed)
 {
+    if (scriptHooks[HOOK_USEOBJ].empty()) {
+        return -1;
+    }
+
     ScriptHookCall hook(HOOK_USEOBJ, 1, { user, objUsed });
     hook.call();
 
@@ -931,6 +1017,10 @@ int     ret0 - overrides hard-coded handler and selects what should happen with 
 */
 int scriptHooks_UseItemOn(Object* user, Object* target, Object* objUsed)
 {
+    if (scriptHooks[HOOK_USEOBJON].empty()) {
+        return -1;
+    }
+
     ScriptHookCall hook(HOOK_USEOBJON, 1, { target, user, objUsed });
     hook.call();
 
@@ -970,6 +1060,10 @@ int     ret4 - The amount of knockback to the target
 */
 void scriptHooks_ComputeDamage(Attack* attack, int numRounds, int baseDmgMult)
 {
+    if (scriptHooks[HOOK_COMBATDAMAGE].empty()) {
+        return;
+    }
+
     ScriptHookCall hook(HOOK_COMBATDAMAGE, 5,
         {
             attack->defender,
@@ -1026,6 +1120,10 @@ void scriptHooks_BarterPrice(BarterPriceContext* ctx)
 {
     assert(ctx != nullptr);
 
+    if (scriptHooks[HOOK_BARTERPRICE].empty()) {
+        return;
+    }
+
     ScriptHookCall hook(HOOK_BARTERPRICE, 2,
         { ctx->dude,
             ctx->npc,
@@ -1066,6 +1164,10 @@ void scriptHooks_BarterPrice(BarterPriceContext* ctx)
 */
 int scriptHooks_AdjustFid(int vanillaFid, int modifiedFid)
 {
+    if (scriptHooks[HOOK_ADJUSTFID].empty()) {
+        return modifiedFid;
+    }
+
     ScriptHookCall hook(HOOK_ADJUSTFID, 1, { vanillaFid, modifiedFid });
     hook.call();
 
@@ -1107,6 +1209,10 @@ bool scriptHooks_InvenWield(Object* critter, Object* item, InvenSlot slot, int i
         }
     }
 
+    if (scriptHooks[HOOK_INVENWIELD].empty()) {
+        return true;
+    }
+
     ScriptHookCall hook(HOOK_INVENWIELD, 1, { critter, item, static_cast<int>(slot), isWield, isRemove });
     hook.call();
 
@@ -1132,6 +1238,10 @@ bool scriptHooks_InvenWield(Object* critter, Object* item, InvenSlot slot, int i
 */
 bool scriptHooks_CanUseWeapon(bool result, Object* critter, Object* weapon, int hitMode)
 {
+    if (scriptHooks[HOOK_CANUSEWEAPON].empty()) {
+        return result;
+    }
+
     ScriptHookCall hook(HOOK_CANUSEWEAPON, 1, { critter, weapon, hitMode, result ? 1 : 0 });
     hook.call();
 
@@ -1281,6 +1391,10 @@ int     ret0 - overrides the value of the global variable
 */
 int scriptHooks_SetGlobalVar(int varIndex, int value)
 {
+    if (scriptHooks[HOOK_SETGLOBALVAR].empty()) {
+        return value;
+    }
+
     ScriptHookCall hook(HOOK_SETGLOBALVAR, 1, { varIndex, value });
     hook.call();
 
@@ -1357,6 +1471,49 @@ void scriptHooks_TargetObject(Object* attacker, Object* defender, int hitMode, i
     }
 
     ScriptHookCall(HOOK_TARGETOBJECT, 0, { attacker, defender, hitMode, hitLocation }).call();
+}
+
+/*
+HOOK_GAMEMODECHANGE slideshow scaffolding — fires during endgame slideshow
+transitions.
+
+Wire-in points (in endgame.cc or game.cc):
+  scriptHooks_SlideshowStart() → call at the start of endgamePlaySlideshow()
+    (endgame.cc:214) after the slideshow window is created but before slides
+    start rendering. This notifies scripts that the game is entering the
+    slideshow mode. Passes exit=0, previous=GameMode::getCurrentGameMode().
+
+  scriptHooks_SlideshowEnd() → call after endgamePlaySlideshow() returns
+    (endgame.cc:233) and before endgameEndingSlideshowWindowFree(). This
+    notifies scripts that the game is leaving slideshow mode. Passes exit=0,
+    previous=GameMode::getCurrentGameMode().
+
+These are scaffolding — until wired in at the above call sites, HOOK_GAMEMODECHANGE
+will not fire for slideshow transitions. Scripts that listen for
+HOOK_GAMEMODECHANGE to detect slideshow start/end will not receive callbacks
+during the endgame sequence.
+
+When wired, the hook fires with:
+  arg0 - 0 (not exiting the game; normal mode transition)
+  arg1 - the game mode before entering/leaving the slideshow
+         (typically 0 or kWorldmap at start; 0 at end)
+*/
+void scriptHooks_SlideshowStart()
+{
+    if (scriptHooks[HOOK_GAMEMODECHANGE].empty()) {
+        return;
+    }
+
+    ScriptHookCall(HOOK_GAMEMODECHANGE, 0, { 0, GameMode::getCurrentGameMode() }).call();
+}
+
+void scriptHooks_SlideshowEnd()
+{
+    if (scriptHooks[HOOK_GAMEMODECHANGE].empty()) {
+        return;
+    }
+
+    ScriptHookCall(HOOK_GAMEMODECHANGE, 0, { 0, GameMode::getCurrentGameMode() }).call();
 }
 
 } // namespace fallout

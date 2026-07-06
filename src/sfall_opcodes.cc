@@ -1849,6 +1849,18 @@ static void sfallVfsFreeHandle(int id)
             fclose(sfallVfsFiles[id]);
             sfallVfsFiles[id] = nullptr;
         }
+        // F2-062: fs_delete must actually delete the file, not just close the
+        // handle and drop the in-memory slot. Call compat_remove() on the stored
+        // path to remove the file from disk. fs_find handles (read-only, mode 1)
+        // should NOT delete the file — only write handles (mode 2) created via
+        // fs_create/fs_copy should be deletable. The mode check prevents
+        // accidental deletion of data files opened via fs_find.
+        if (sfallVfsFileMode[id] == 2 && sfallVfsFilePath[id] != nullptr) {
+            if (compat_remove(sfallVfsFilePath[id]) != 0) {
+                debugPrint("sfallVfsFreeHandle: compat_remove failed for '%s'\n",
+                    sfallVfsFilePath[id]);
+            }
+        }
         sfallVfsFileOpen[id] = false;
         sfallVfsFileMode[id] = 0;
         // F-270: free the owned path copy to prevent use-after-free
@@ -1895,6 +1907,59 @@ static bool sfallVfsPathContainsTraversal(const char* path)
     return false;
 }
 
+// F-083: VFS root directory for sandbox enforcement.
+// When set, all VFS paths are resolved relative to this root.
+// Absolute paths (starting with '/' or '\') are always rejected.
+// Paths containing ".." are rejected by sfallVfsPathContainsTraversal.
+// This prevents scripts from accessing files outside the game directory.
+static char* sfallVfsRootDir = nullptr;
+
+void sfallVfsSetRoot(const char* root)
+{
+    if (sfallVfsRootDir != nullptr) {
+        internal_free(sfallVfsRootDir);
+        sfallVfsRootDir = nullptr;
+    }
+    if (root != nullptr && root[0] != '\0') {
+        sfallVfsRootDir = internal_strdup(root);
+    }
+}
+
+// Resolve a VFS path against the sandbox root. Returns true and writes
+// the resolved path to outBuf (size COMPAT_MAX_PATH) on success.
+// Returns false if the path is invalid (absolute, empty, contains "..",
+// or the resolved path would exceed COMPAT_MAX_PATH).
+static bool sfallVfsResolvePath(const char* rawPath, char* outBuf, size_t outBufSize)
+{
+    if (rawPath == nullptr || rawPath[0] == '\0') {
+        return false;
+    }
+
+    // 1. Check for ".." traversal (redundant with caller checks; defense-in-depth).
+    if (sfallVfsPathContainsTraversal(rawPath)) {
+        return false;
+    }
+
+    // 2. Reject absolute paths unconditionally (F-083).
+    // Scripts should only use relative paths within the game directory.
+    if (rawPath[0] == '/' || rawPath[0] == '\\') {
+        return false;
+    }
+
+    // 3. If root is set, prepend it.
+    if (sfallVfsRootDir != nullptr) {
+        int written = snprintf(outBuf, outBufSize, "%s/%s", sfallVfsRootDir, rawPath);
+        if (written < 0 || static_cast<size_t>(written) >= outBufSize) {
+            return false;
+        }
+    } else {
+        // No sandbox root — use path as-is.
+        strncpy(outBuf, rawPath, outBufSize - 1);
+        outBuf[outBufSize - 1] = '\0';
+    }
+    return true;
+}
+
 // fs_create(path, size) -> fileId (or -1 on error)
 static void op_fs_create(Program* program)
 {
@@ -1907,6 +1972,14 @@ static void op_fs_create(Program* program)
         return;
     }
 
+    // F-083: Resolve path against sandbox root.
+    char resolvedPath[COMPAT_MAX_PATH];
+    if (!sfallVfsResolvePath(path, resolvedPath, sizeof(resolvedPath))) {
+        programPrintError("fs_create: path rejected by sandbox '%s'", path);
+        programStackPushInteger(program, -1);
+        return;
+    }
+
     int handle = sfallVfsAllocHandle();
     if (handle < 0) {
         programPrintError("fs_create: no free VFS handles");
@@ -1914,9 +1987,9 @@ static void op_fs_create(Program* program)
         return;
     }
 
-    FILE* file = compat_fopen(path, "w+b");
+    FILE* file = compat_fopen(resolvedPath, "w+b");
     if (file == nullptr) {
-        programPrintError("fs_create: cannot create file '%s'", path);
+        programPrintError("fs_create: cannot create file '%s'", resolvedPath);
         sfallVfsFileOpen[handle] = false;
         programStackPushInteger(program, -1);
         return;
@@ -1933,14 +2006,20 @@ static void op_fs_create(Program* program)
 
     // Allocate the requested size (simple approach: seek + write)
     fseek(file, static_cast<long>(size) - 1, SEEK_SET);
-    fputc(0, file);
+    if (fputc(0, file) == EOF) {
+        programPrintError("fs_create: fputc failed for '%s'", resolvedPath);
+        fclose(file);
+        sfallVfsFileOpen[handle] = false;
+        programStackPushInteger(program, -1);
+        return;
+    }
     rewind(file);
 
     sfallVfsFiles[handle] = file;
     sfallVfsFileMode[handle] = 2; // read-write ("w+b")
     // F-270: store an owned copy to prevent use-after-free when the
     // program exits and frees its dynamicStrings backing store.
-    sfallVfsFilePath[handle] = internal_strdup(path);
+    sfallVfsFilePath[handle] = internal_strdup(resolvedPath);
     programStackPushInteger(program, handle);
 }
 
@@ -1961,10 +2040,24 @@ static void op_fs_copy(Program* program)
         return;
     }
 
+    // F-083: Resolve paths against sandbox root.
+    char resolvedSrc[COMPAT_MAX_PATH];
+    char resolvedDst[COMPAT_MAX_PATH];
+    if (!sfallVfsResolvePath(sourcePath, resolvedSrc, sizeof(resolvedSrc))) {
+        programPrintError("fs_copy: source path rejected by sandbox '%s'", sourcePath);
+        programStackPushInteger(program, -1);
+        return;
+    }
+    if (!sfallVfsResolvePath(destPath, resolvedDst, sizeof(resolvedDst))) {
+        programPrintError("fs_copy: dest path rejected by sandbox '%s'", destPath);
+        programStackPushInteger(program, -1);
+        return;
+    }
+
     // Open source file for reading
-    FILE* srcFile = compat_fopen(sourcePath, "rb");
+    FILE* srcFile = compat_fopen(resolvedSrc, "rb");
     if (srcFile == nullptr) {
-        programPrintError("fs_copy: cannot open source '%s'", sourcePath);
+        programPrintError("fs_copy: cannot open source '%s'", resolvedSrc);
         programStackPushInteger(program, -1);
         return;
     }
@@ -1977,29 +2070,45 @@ static void op_fs_copy(Program* program)
         return;
     }
 
-    FILE* destFile = compat_fopen(destPath, "w+b");
+    FILE* destFile = compat_fopen(resolvedDst, "w+b");
     if (destFile == nullptr) {
-        programPrintError("fs_copy: cannot create dest '%s'", destPath);
+        programPrintError("fs_copy: cannot create dest '%s'", resolvedDst);
         fclose(srcFile);
         sfallVfsFileOpen[handle] = false;
         programStackPushInteger(program, -1);
         return;
     }
 
-    // Copy file contents
+    // Copy file contents with fwrite error checking (F2-064).
     char buf[4096];
     size_t n;
+    bool writeError = false;
     while ((n = fread(buf, 1, sizeof(buf), srcFile)) > 0) {
-        fwrite(buf, 1, n, destFile);
+        size_t written = fwrite(buf, 1, n, destFile);
+        if (written != n) {
+            programPrintError("fs_copy: fwrite failed (wrote %zu of %zu bytes) for '%s'",
+                written, n, resolvedDst);
+            writeError = true;
+            break;
+        }
     }
 
     fclose(srcFile);
+
+    if (writeError) {
+        fclose(destFile);
+        sfallVfsFileOpen[handle] = false;
+        compat_remove(resolvedDst);
+        programStackPushInteger(program, -1);
+        return;
+    }
+
     rewind(destFile); // position at start for reading
     sfallVfsFiles[handle] = destFile;
     sfallVfsFileMode[handle] = 2; // read-write ("w+b")
     // F-270: store an owned copy to prevent use-after-free when the
     // program exits and frees its dynamicStrings backing store.
-    sfallVfsFilePath[handle] = internal_strdup(destPath);
+    sfallVfsFilePath[handle] = internal_strdup(resolvedDst);
     programStackPushInteger(program, handle);
 }
 
@@ -2014,7 +2123,15 @@ static void op_fs_find(Program* program)
         return;
     }
 
-    FILE* file = compat_fopen(path, "rb");
+    // F-083: Resolve path against sandbox root.
+    char resolvedPath[COMPAT_MAX_PATH];
+    if (!sfallVfsResolvePath(path, resolvedPath, sizeof(resolvedPath))) {
+        programPrintError("fs_find: path rejected by sandbox '%s'", path);
+        programStackPushInteger(program, -1);
+        return;
+    }
+
+    FILE* file = compat_fopen(resolvedPath, "rb");
     if (file == nullptr) {
         programStackPushInteger(program, -1);
         return;
@@ -2032,7 +2149,7 @@ static void op_fs_find(Program* program)
     sfallVfsFileMode[handle] = 1; // read-only ("rb")
     // F-270: store an owned copy to prevent use-after-free when the
     // program exits and frees its dynamicStrings backing store.
-    sfallVfsFilePath[handle] = internal_strdup(path);
+    sfallVfsFilePath[handle] = internal_strdup(resolvedPath);
     programStackPushInteger(program, handle);
 }
 
@@ -2052,7 +2169,10 @@ static void op_fs_write_byte(Program* program)
         return;
     }
 
-    fputc(data & 0xFF, sfallVfsFiles[id]);
+    // F2-064: check fputc return value.
+    if (fputc(data & 0xFF, sfallVfsFiles[id]) == EOF) {
+        programPrintError("fs_write_byte: fputc failed on handle %d", id);
+    }
 }
 
 // fs_write_short(id, data)
@@ -2072,7 +2192,10 @@ static void op_fs_write_short(Program* program)
     }
 
     uint16_t value = static_cast<uint16_t>(data);
-    fwrite(&value, sizeof(value), 1, sfallVfsFiles[id]);
+    // F2-064: check fwrite return value.
+    if (fwrite(&value, sizeof(value), 1, sfallVfsFiles[id]) != 1) {
+        programPrintError("fs_write_short: fwrite failed on handle %d", id);
+    }
 }
 
 // fs_write_int(id, data)
@@ -2092,7 +2215,10 @@ static void op_fs_write_int(Program* program)
     }
 
     int32_t value = static_cast<int32_t>(data);
-    fwrite(&value, sizeof(value), 1, sfallVfsFiles[id]);
+    // F2-064: check fwrite return value.
+    if (fwrite(&value, sizeof(value), 1, sfallVfsFiles[id]) != 1) {
+        programPrintError("fs_write_int: fwrite failed on handle %d", id);
+    }
 }
 
 // fs_write_float(id, data)
@@ -2112,7 +2238,10 @@ static void op_fs_write_float(Program* program)
     }
 
     float value = pv.asFloat();
-    fwrite(&value, sizeof(value), 1, sfallVfsFiles[id]);
+    // F2-064: check fwrite return value.
+    if (fwrite(&value, sizeof(value), 1, sfallVfsFiles[id]) != 1) {
+        programPrintError("fs_write_float: fwrite failed on handle %d", id);
+    }
 }
 
 // fs_write_string(id, string)
@@ -2131,7 +2260,10 @@ static void op_fs_write_string(Program* program)
         return;
     }
 
-    fputs(string, sfallVfsFiles[id]);
+    // F2-064: check fputs return value.
+    if (fputs(string, sfallVfsFiles[id]) == EOF) {
+        programPrintError("fs_write_string: fputs failed on handle %d", id);
+    }
 }
 
 // fs_write_bstring(id, string) — writes a length-prefixed byte string
@@ -2152,8 +2284,14 @@ static void op_fs_write_bstring(Program* program)
 
     int len = static_cast<int>(strlen(string));
     uint8_t lenByte = static_cast<uint8_t>(len > 255 ? 255 : len);
-    fwrite(&lenByte, 1, 1, sfallVfsFiles[id]);
-    fwrite(string, 1, lenByte, sfallVfsFiles[id]);
+    // F2-064: check fwrite return values.
+    if (fwrite(&lenByte, 1, 1, sfallVfsFiles[id]) != 1) {
+        programPrintError("fs_write_bstring: fwrite (length byte) failed on handle %d", id);
+        return;
+    }
+    if (fwrite(string, 1, lenByte, sfallVfsFiles[id]) != lenByte) {
+        programPrintError("fs_write_bstring: fwrite (string data) failed on handle %d", id);
+    }
 }
 
 // fs_read_byte(id) -> int (-1 on error)
@@ -2320,7 +2458,10 @@ static void op_fs_resize(Program* program)
     }
 
     fseek(sfallVfsFiles[id], static_cast<long>(size) - 1, SEEK_SET);
-    fputc(0, sfallVfsFiles[id]);
+    // F2-064: check fputc return value.
+    if (fputc(0, sfallVfsFiles[id]) == EOF) {
+        programPrintError("fs_resize: fputc failed on handle %d", id);
+    }
 }
 
 // ============================================================
@@ -2541,6 +2682,36 @@ static void op_is_iface_tag_active(fallout::Program* program)
 // TODO: move opcodes into several files
 // TODO: reduce code duplication by introducing something like OpcodeContext in sfall
 
+// Returns true if the given hook type has a fire site (dispatch point) in the
+// engine code. Several hooks exist in the enum for sfall compatibility but
+// have no ScriptHookCall::call() invocation anywhere — registering them
+// silently succeeds but the handler never fires.
+// See sfall_script_hooks.h for the full enum and SFALL_COMPATIBILITY.md
+// for per-hook status.
+static bool sfallHookHasFireSite(HookType hookId)
+{
+    switch (hookId) {
+    // Values below match the HOOK_* enum in sfall_script_hooks.h.
+    // These hooks are commented out / deliberately absent — their enum
+    // entries are not compiled, so we use numeric literals.
+    case static_cast<HookType>(3): // HOOK_DEATHANIM1: use DEATHANIM2 instead
+    case static_cast<HookType>(9): // HOOK_REMOVEINVENOBJ: requires RMOBJ_* infrastructure
+    case static_cast<HookType>(12): // HOOK_HEXMOVEBLOCKING: obsolete
+    case static_cast<HookType>(13): // HOOK_HEXAIBLOCKING: obsolete
+    case static_cast<HookType>(14): // HOOK_HEXSHOOTBLOCKING: obsolete
+    case static_cast<HookType>(15): // HOOK_HEXSIGHTBLOCKING: obsolete
+    case static_cast<HookType>(37): // HOOK_SUBCOMBATDAMAGE: per-hit not supported
+    case static_cast<HookType>(44): // HOOK_ADJUSTPOISON: requires engine refactor
+    case static_cast<HookType>(45): // HOOK_ADJUSTRADS: requires engine refactor
+    case static_cast<HookType>(46): // HOOK_ROLLCHECK: 30+ call sites, lacks context
+    case static_cast<HookType>(47): // HOOK_BESTWEAPON: 10+ return points, lifetime issues
+    case static_cast<HookType>(61): // HOOK_BUILDSFXWEAPON: static buffer, lifetime issues
+        return false;
+    default:
+        return true;
+    }
+}
+
 static void op_register_hook(Program* program)
 {
     constexpr char opcodeName[] = "register_hook";
@@ -2549,6 +2720,9 @@ static void op_register_hook(Program* program)
     if (hookId < 0 || hookId >= HOOK_COUNT) {
         programPrintError("%s: invalid hook ID: %d", opcodeName, hookId);
         return;
+    }
+    if (!sfallHookHasFireSite(static_cast<HookType>(hookId))) {
+        debugPrint("%s: hook %d has no fire site — handler will never be called\n", opcodeName, hookId);
     }
     // NOTE (F-106): register_hook (0x8207) only registers the "start"
     // procedure. In original sfall this opcode accepts an optional procedure
@@ -2577,12 +2751,13 @@ static void op_register_hook_proc(Program* program)
         programPrintError("%s: invalid hook ID: %d", opcodeName, hookId);
         return;
     }
+    if (!sfallHookHasFireSite(static_cast<HookType>(hookId))) {
+        debugPrint("%s: hook %d has no fire site — handler will never be called\n", opcodeName, hookId);
+    }
     if (procedureIndex < 0 || procedureIndex >= program->procedureCount()) {
         programPrintError("%s: procedure index %d is out of range [0; %d]", opcodeName, procedureIndex, program->procedureCount());
         return;
     }
-
-    // Note: in sfall, register_hook_proc by default adds the next hook to the beginning of the hook order.
     // Meaning the last script to be registered will be executed first.
     // There was a special opcode `register_hook_proc_spec` that adds to the end of hook order instead.
     // In CE we assume that this order shouldn't matter, and giving script a choice like that doesn't solve anything, since several scripts from different mods can use either opcode.
@@ -2613,6 +2788,9 @@ static void op_register_hook_proc_spec(Program* program)
         programPrintError("%s: invalid hook ID: %d", opcodeName, hookId);
         return;
     }
+    if (!sfallHookHasFireSite(static_cast<HookType>(hookId))) {
+        debugPrint("%s: hook %d has no fire site — handler will never be called\n", opcodeName, hookId);
+    }
     if (procedureIndex < 0 || procedureIndex >= program->procedureCount()) {
         programPrintError("%s: procedure index %d is out of range [0; %d]", opcodeName, procedureIndex, program->procedureCount());
         return;
@@ -2635,6 +2813,18 @@ static void op_register_hook_proc_spec(Program* program)
 
 static Program* sfallAnimCallbackProgram = nullptr;
 static int sfallAnimCallbackProcedureIndex = -1;
+
+// F-084 NOTE: sfallAnimCallbackProgram is set by reg_anim_callback and
+// used by sfallAnimCallbackInvoke (which snap-and-clears before invoke).
+// However, programFree() in interpreter.cc does NOT clear this pointer.
+// When a program is freed after reg_anim_callback registered it, this
+// global becomes a dangling pointer. The snap-and-clear pattern in
+// sfallAnimCallbackInvoke handles the invocation-time UAF but doesn't
+// prevent post-free reads in other code paths. The permanent fix requires
+// clearing sfallAnimCallbackProgram inside programFree() (interpreter.cc
+// line ~475), which is outside this translation unit.
+// sfallAnimCallbackReset() provides a manual cleanup path called from
+// sfallOpcodesExit() and sfallScriptHooksReset().
 
 static void op_reg_anim_callback(Program* program)
 {
@@ -2752,6 +2942,11 @@ static void op_set_critter_skill_points(Program* program)
     }
 
     proto->critter.data.skills[skill] = value;
+
+    // F2-043: Mark proto dirty so skill mutations survive LRU eviction.
+    // This opcode accepts any critter (no gDude guard), following the
+    // pattern used by op_set_proto_data at sfall_opcodes.cc:861-862.
+    protoMarkDirty(critter->pid);
 }
 
 // get_critter_skill_points(object critter, int skill) -> int
@@ -4063,15 +4258,29 @@ static void op_set_perk_level_mod(Program* program)
 static int sfallCritterSkillMod = 0;
 static int sfallBaseSkillMod = 0;
 
+// F-001: Per-critter skill mod storage. Key is critter proto ID (pid).
+// Previously op_set_critter_skill_mod discarded the critter parameter and
+// stored a single global, collapsing per-entity semantics. Now each critter
+// can have an independent max skill override.
+static std::unordered_map<int, int> gCritterSkillModMap;
+
 static void op_set_critter_skill_mod(Program* program)
 {
     int max = programStackPopInteger(program);
     Object* critter = static_cast<Object*>(programStackPopPointer(program));
-    (void)critter;
     if (max < 1) {
         max = 1;
     }
-    sfallCritterSkillMod = max;
+    if (critter == nullptr) {
+        // No critter object — fall back to global modifier for backward compat.
+        sfallCritterSkillMod = max;
+        return;
+    }
+    if (FID_TYPE(critter->fid) != OBJ_TYPE_CRITTER) {
+        programPrintError("set_critter_skill_mod: object is not a critter");
+        return;
+    }
+    gCritterSkillModMap[critter->pid] = max;
 }
 
 static void op_set_base_skill_mod(Program* program)
@@ -4089,20 +4298,40 @@ static int sfallBasePickpocketMod = 0;
 static int sfallCritterPickpocketMax = 0;
 static int sfallBasePickpocketMax = 0;
 
+// F-001: Per-critter pickpocket mod storage. Key is critter proto ID (pid).
+// Previously op_set_critter_pickpocket_mod discarded the critter parameter.
+// Each entry stores both the mod value and the max percentage cap.
+struct CritterPickpocketEntry {
+    int mod;
+    int max;
+};
+static std::unordered_map<int, CritterPickpocketEntry> gCritterPickpocketModMap;
+
 static void op_set_critter_pickpocket_mod(Program* program)
 {
     int mod = programStackPopInteger(program);
     int max = programStackPopInteger(program);
     Object* critter = static_cast<Object*>(programStackPopPointer(program));
-    (void)critter;
     if (max < 1) {
         max = 1;
     }
-    sfallCritterPickpocketMod = mod;
     if (max > 100) {
         max = 100;
     }
-    sfallCritterPickpocketMax = max;
+    if (critter == nullptr) {
+        // No critter object — fall back to global modifiers for backward compat.
+        sfallCritterPickpocketMod = mod;
+        sfallCritterPickpocketMax = max;
+        return;
+    }
+    if (FID_TYPE(critter->fid) != OBJ_TYPE_CRITTER) {
+        programPrintError("set_critter_pickpocket_mod: object is not a critter");
+        return;
+    }
+    CritterPickpocketEntry entry;
+    entry.mod = mod;
+    entry.max = max;
+    gCritterPickpocketModMap[critter->pid] = entry;
 }
 
 static void op_set_base_pickpocket_mod(Program* program)
@@ -4117,6 +4346,60 @@ static void op_set_base_pickpocket_mod(Program* program)
     }
     sfallBasePickpocketMod = mod;
     sfallBasePickpocketMax = max;
+}
+
+// ============================================================
+// Pickpocket accessor functions — exposed for skill.cc integration.
+// These return the values set by set_pickpocket_max (0x81A0),
+// set_critter_pickpocket_mod (0x81C9), and set_base_pickpocket_mod (0x81CA).
+// Integration point: skillDetermineStealResult() in skill.cc should consult
+// sfallGetPickpocketMax() when clamping stealChance at line 1107,
+// sfallGetCritterPickpocketMod() / sfallGetBasePickpocketMod() when computing
+// stealModifier before line 1105, and the max globals when clamping per-critter
+// or global pickpocket caps. See F-021 / F-029 in stage summary.
+// ============================================================
+int sfallGetPickpocketMax()
+{
+    return sfallPickpocketMax;
+}
+
+int sfallGetCritterPickpocketMod()
+{
+    return sfallCritterPickpocketMod;
+}
+
+int sfallGetBasePickpocketMod()
+{
+    return sfallBasePickpocketMod;
+}
+
+int sfallGetCritterPickpocketMax()
+{
+    return sfallCritterPickpocketMax;
+}
+
+int sfallGetBasePickpocketMax()
+{
+    return sfallBasePickpocketMax;
+}
+
+// F-001: Per-critter pickpocket mod accessor.
+// Returns the per-critter pickpocket override if one was set via
+// set_critter_pickpocket_mod for this specific critter. Returns false
+// if no per-critter override exists; caller should fall back to the
+// global sfallGetCritterPickpocketMod() / sfallGetCritterPickpocketMax().
+bool sfallGetCritterPickpocketModForCritter(Object* critter, int& outMod, int& outMax)
+{
+    if (critter == nullptr) {
+        return false;
+    }
+    auto it = gCritterPickpocketModMap.find(critter->pid);
+    if (it != gCritterPickpocketModMap.end()) {
+        outMod = it->second.mod;
+        outMax = it->second.max;
+        return true;
+    }
+    return false;
 }
 
 // ============================================================
@@ -4205,10 +4488,13 @@ static void op_create_spatial(Program* program)
     }
 
     // Create a marker object at the spatial location (matches mapper pattern).
-    // The object is invisible — it serves as the spatial position anchor
-    // and is returned as the spatial handle that scripts can query.
+    // The object is invisible — it serves as the spatial position anchor.
+    // In sfall, create_spatial returns this object handle (Object*), which is
+    // compatible with spatial_radius and other spatial metarules. Previously
+    // we returned the SID (integer), but that caused type mismatch failures
+    // in metarule calls (F-002).
+    Object* obj = nullptr;
     int markerFid = buildFid(OBJ_TYPE_INTERFACE, 3, 0, 0, 0);
-    Object* obj;
     if (objectCreateWithFidPid(&obj, markerFid, -1) != -1) {
         obj->flags |= OBJECT_NO_SAVE;
         objectHide(obj, nullptr);
@@ -4216,10 +4502,13 @@ static void op_create_spatial(Program* program)
         objectSetLocation(obj, tile, elevation, nullptr);
     }
 
-    // Return the spatial SID. In sfall, create_spatial returns the spatial
-    // object handle; CE returns the SID which scripts can use to interact
-    // with the spatial (e.g., spatial_radius metarule).
-    programStackPushInteger(program, sid);
+    // Return the spatial object handle (match sfall behavior).
+    // If no object was created, return nullptr (0) to signal failure.
+    if (obj != nullptr) {
+        programStackPushPointer(program, obj);
+    } else {
+        programStackPushInteger(program, 0);
+    }
 }
 
 // ============================================================
@@ -4571,6 +4860,10 @@ void sfallOpcodesReset()
     sfallCritterPickpocketMax = 0;
     sfallBasePickpocketMax = 0;
 
+    // Reset per-critter skill/pickpocket mod maps (F-001).
+    gCritterSkillModMap.clear();
+    gCritterPickpocketModMap.clear();
+
     // Reset perk add mode and selectable perks flag.
     sfallPerkAddMode = 0;
     sfallClearSelectablePerks = false;
@@ -4742,6 +5035,34 @@ void sfallOpcodeStateSave()
         sprintf(key, "SFHCv%03d", idx);
         sfall_gl_vars_store(key, entry.second.mod);      // mod value
         sprintf(key, "SFHCx%03d", idx);
+        sfall_gl_vars_store(key, entry.second.max);      // max value
+        idx++;
+    }
+
+    // F-001: Per-critter skill mod map.
+    int csmCount = static_cast<int>(gCritterSkillModMap.size());
+    sfall_gl_vars_store("SFCSMcnt", csmCount);
+    idx = 0;
+    for (const auto& entry : gCritterSkillModMap) {
+        char key[16] = {};
+        sprintf(key, "SFCSMk%03d", idx);
+        sfall_gl_vars_store(key, entry.first);           // critter PID
+        sprintf(key, "SFCSMv%03d", idx);
+        sfall_gl_vars_store(key, entry.second);           // max value
+        idx++;
+    }
+
+    // F-001: Per-critter pickpocket mod map.
+    int cpmCount = static_cast<int>(gCritterPickpocketModMap.size());
+    sfall_gl_vars_store("SFCPMcnt", cpmCount);
+    idx = 0;
+    for (const auto& entry : gCritterPickpocketModMap) {
+        char key[16] = {};
+        sprintf(key, "SFCPMk%03d", idx);
+        sfall_gl_vars_store(key, entry.first);           // critter PID
+        sprintf(key, "SFCPMv%03d", idx);
+        sfall_gl_vars_store(key, entry.second.mod);      // mod value
+        sprintf(key, "SFCPMx%03d", idx);
         sfall_gl_vars_store(key, entry.second.max);      // max value
         idx++;
     }
@@ -5016,6 +5337,50 @@ void sfallOpcodeStateLoad()
             }
         }
     }
+
+    // F-001: Per-critter skill mod map.
+    {
+        int csmCount = 0;
+        if (sfall_gl_vars_fetch("SFCSMcnt", csmCount)) {
+            gCritterSkillModMap.clear();
+            for (int idx2 = 0; idx2 < csmCount; idx2++) {
+                char key[16] = {};
+                sprintf(key, "SFCSMk%03d", idx2);
+                int critterPid = 0;
+                if (sfall_gl_vars_fetch(key, critterPid)) {
+                    int maxVal = 0;
+                    sprintf(key, "SFCSMv%03d", idx2);
+                    sfall_gl_vars_fetch(key, maxVal);
+                    gCritterSkillModMap[critterPid] = maxVal;
+                }
+            }
+        }
+    }
+
+    // F-001: Per-critter pickpocket mod map.
+    {
+        int cpmCount = 0;
+        if (sfall_gl_vars_fetch("SFCPMcnt", cpmCount)) {
+            gCritterPickpocketModMap.clear();
+            for (int idx2 = 0; idx2 < cpmCount; idx2++) {
+                char key[16] = {};
+                sprintf(key, "SFCPMk%03d", idx2);
+                int critterPid = 0;
+                if (sfall_gl_vars_fetch(key, critterPid)) {
+                    CritterPickpocketEntry entry;
+                    int ival = 0;
+                    sprintf(key, "SFCPMv%03d", idx2);
+                    sfall_gl_vars_fetch(key, ival);
+                    entry.mod = ival;
+                    ival = 0;
+                    sprintf(key, "SFCPMx%03d", idx2);
+                    sfall_gl_vars_fetch(key, ival);
+                    entry.max = ival;
+                    gCritterPickpocketModMap[critterPid] = entry;
+                }
+            }
+        }
+    }
 }
 
 // ============================================================
@@ -5054,6 +5419,23 @@ int sfallGetBaseSkillMod()
     return sfallBaseSkillMod;
 }
 
+// F-001: Per-critter skill mod accessor.
+// Returns the per-critter max skill override if one was set via
+// set_critter_skill_mod for this specific critter. Returns 0 if
+// no per-critter override exists. The caller should then check
+// sfallGetCritterSkillMod() for the global fallback.
+int sfallGetCritterSkillModForCritter(Object* critter)
+{
+    if (critter == nullptr) {
+        return 0;
+    }
+    auto it = gCritterSkillModMap.find(critter->pid);
+    if (it != gCritterSkillModMap.end()) {
+        return it->second;
+    }
+    return 0;
+}
+
 // F-035: Perk level modifier (0x81AB).
 int sfallGetPerkLevelMod()
 {
@@ -5069,6 +5451,35 @@ int sfallGetPerkAddMode()
 bool sfallGetClearSelectablePerks()
 {
     return sfallClearSelectablePerks;
+}
+
+// F-036: Perk owed counter (get/set_perk_owed 0x81AC).
+int sfallGetPerkOwed()
+{
+    return gSfallPerkOwed;
+}
+
+void sfallSetPerkOwed(int value)
+{
+    gSfallPerkOwed = value;
+}
+
+// F2-041: Perk name/description overrides from set_perk_name (0x8189) /
+// set_perk_desc (0x818A). Returns nullptr if no override set.
+const char* sfallGetPerkNameOverride(int perkID)
+{
+    if (perkID >= 0 && perkID < kMaxPerkNameOverrides && sfallPerkNameOverrides[perkID] != nullptr) {
+        return sfallPerkNameOverrides[perkID];
+    }
+    return nullptr;
+}
+
+const char* sfallGetPerkDescOverride(int perkID)
+{
+    if (perkID >= 0 && perkID < kMaxPerkNameOverrides && sfallPerkDescOverrides[perkID] != nullptr) {
+        return sfallPerkDescOverrides[perkID];
+    }
+    return nullptr;
 }
 
 // F-037: Fake perk/trait arrays.
@@ -5181,6 +5592,69 @@ static void op_resume_game(Program* program)
 }
 
 // ============================================================
+// Viewport opcode stubs — 0x81A6-0x81A9
+// CE uses SDL2 hardware rendering with scroll managed by the engine;
+// viewport override is not currently supported. Registered as safe
+// stubs for script compatibility with RPU scroll/camera scripts.
+// get_viewport_* return 0 (default viewport origin).
+// ============================================================
+static void op_get_viewport_x(Program* program)
+{
+    programStackPushInteger(program, 0);
+}
+
+static void op_get_viewport_y(Program* program)
+{
+    programStackPushInteger(program, 0);
+}
+
+static void op_set_viewport_x(Program* program)
+{
+    int viewX = programStackPopInteger(program);
+    (void)viewX;
+}
+
+static void op_set_viewport_y(Program* program)
+{
+    int viewY = programStackPopInteger(program);
+    (void)viewY;
+}
+
+// ============================================================
+// set_palette(string path) — 0x81F2
+// Sets a custom palette file for rendering. CE uses SDL2 hardware
+// rendering; palette override is not currently supported.
+// Registered as a safe no-op for script compatibility.
+// ============================================================
+static void op_set_palette(Program* program)
+{
+    const char* path = programStackPopString(program);
+    (void)path;
+}
+
+// ============================================================
+// mark_movie_played(int id) — 0x8240
+// Marks a movie as played so it won't play again. CE movie tracking
+// is handled internally; this opcode is a safe no-op for script
+// compatibility (RPU/Et Tu movie tracking scripts).
+// ============================================================
+static void op_mark_movie_played(Program* program)
+{
+    int movieId = programStackPopInteger(program);
+    (void)movieId;
+}
+
+// ============================================================
+// block_combat(int enable) — 0x824A
+// Blocks or enables combat for the calling critter. CE combat control
+// is handled internally; this opcode is a safe no-op for script
+// compatibility with gl_combat_enhance.ssl.
+// ============================================================
+static void op_block_combat(Program* program)
+{
+    int enable = programStackPopInteger(program);
+    (void)enable;
+}
 
 // Note: opcodes should pop arguments off the stack in reverse order
 void sfallOpcodesInit()
@@ -5495,9 +5969,13 @@ void sfallOpcodesInit()
     interpreterRegisterOpcode(0x8241, op_get_npc_level);
 
     // 0x81a6 - int get_viewport_x()
+    interpreterRegisterOpcode(0x81A6, op_get_viewport_x);
     // 0x81a7 - int get_viewport_y()
+    interpreterRegisterOpcode(0x81A7, op_get_viewport_y);
     // 0x81a8 - void set_viewport_x(int view_x)
+    interpreterRegisterOpcode(0x81A8, op_set_viewport_x);
     // 0x81a9 - void set_viewport_y(int view_y)
+    interpreterRegisterOpcode(0x81A9, op_set_viewport_y);
 
     // 0x81ac - int   get_ini_setting(string setting)
     interpreterRegisterOpcode(0x81AC, op_get_ini_setting);
@@ -5613,6 +6091,7 @@ void sfallOpcodesInit()
     interpreterRegisterOpcode(0x827F, op_div);
 
     // 0x81f2 - void set_palette(string path)
+    interpreterRegisterOpcode(0x81F2, op_set_palette);
 
     // 0x81f3 - void remove_script(object)
     interpreterRegisterOpcode(0x81F3, op_remove_script);
@@ -5761,12 +6240,14 @@ void sfallOpcodesInit()
     interpreterRegisterOpcode(0x823F, op_disable_aimed_shots);
 
     // 0x8240 - void mark_movie_played(int id)
+    interpreterRegisterOpcode(0x8240, op_mark_movie_played);
 
     // 0x8248 - object get_last_target(object critter)
     interpreterRegisterOpcode(0x8248, op_get_last_target);
     // 0x8249 - object get_last_attacker(object critter)
     interpreterRegisterOpcode(0x8249, op_get_last_attacker);
     // 0x824a - void block_combat(int enable)
+    interpreterRegisterOpcode(0x824A, op_block_combat);
 
     // 0x824b - int tile_under_cursor()
     interpreterRegisterOpcode(0x824B, op_tile_under_cursor);
@@ -5848,6 +6329,8 @@ void sfallOpcodesExit()
 {
     sfallAnimCallbackReset();
     sfallVfsCloseAll();
+    // F-083: clean up VFS sandbox root.
+    sfallVfsSetRoot(nullptr);
 }
 
 } // namespace fallout

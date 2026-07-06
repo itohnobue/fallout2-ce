@@ -5,6 +5,7 @@
 #include "opcode_context.h"
 
 #include <map>
+#include <string>
 
 namespace fallout {
 
@@ -23,6 +24,19 @@ struct SpraySettings {
 struct DrugData {
     int addictionRate = 0;
     int effectDuration = 0;
+};
+
+// Fake perk/trait entry for NPC critters.
+// Stores per-entry metadata (level, image, description) alongside
+// the perk/trait name. Used by set_fake_perk_npc / set_fake_trait_npc /
+// set_selectable_perk_npc metarules. Consumers include has_fake_perk_npc
+// and has_fake_trait_npc which check membership by name; the metadata
+// fields are available for script-level queries and display.
+struct FakePerkNpcEntry {
+    std::string name;
+    int level = 0;
+    int image = -1;
+    std::string desc;
 };
 
 typedef void(MetaruleHandler)(OpcodeContext& ctx);
@@ -76,6 +90,22 @@ bool sfallGetDrugDataOverride(int drugIndex, int* outAddictionRate, int* outEffe
 // calculations alongside the two player-selected traits.
 // Implementation is in sfall_metarules.cc.
 bool sfallIsTraitAdded(int traitId);
+
+// Returns the stored unjam lock time override in game hours (-1 = disabled).
+int sfallGetUnjamLocksTime();
+
+// Returns whether npc_engine_level_up is enabled (1 = enabled, 0 = disabled).
+int sfallGetNpcEngineLevelUpEnabled();
+
+// Returns the stored map enter position override values (-1 = no override).
+int sfallGetMapEnterX();
+int sfallGetMapEnterY();
+int sfallGetMapEnterElevation();
+
+// Returns true if the given PID has an explosive override set via
+// item_make_explosive metarule. Used by explosiveIsExplosive() and
+// explosiveActivate() in item.cc.
+bool sfallIsExplosiveOverride(int pid);
 
 } // namespace fallout
 

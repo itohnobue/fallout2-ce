@@ -1,6 +1,7 @@
 #include "game_config_migration.h"
 
 #include <assert.h>
+#include <iterator>
 #include <stdio.h>
 #include <string.h>
 
@@ -236,9 +237,15 @@ namespace {
         { kSfallMisc, "StartYPos", CONTENT_CONFIG_WORLDMAP_SECTION, "start_y_pos" },
         { kSfallMisc, "ViewXPos", CONTENT_CONFIG_WORLDMAP_SECTION, "view_x_pos" },
         { kSfallMisc, "ViewYPos", CONTENT_CONFIG_WORLDMAP_SECTION, "view_y_pos" },
-        // WorldMapSlots migration intentionally removed — `encounter_slots` is never read
-        // from game.cfg and `scriptsGetWorldMapSlots()` has zero callers, making the
-        // entire WorldMapSlots → encounter_slots pipeline dead code.
+        // WorldMapSlots — migrated to worldmap encounter_slots. Scripts
+        // can access this value via get_ini_setting and the config bridge
+        // (contentConfigLookupSfallInt) when ddraw.ini is not present.
+        { kSfallMisc, "WorldMapSlots", CONTENT_CONFIG_WORLDMAP_SECTION, "encounter_slots" },
+        // ElevatorsFile — migrated to worldmap elevators_file. The
+        // elevator system reads this from gSfallConfig; the migration
+        // preserves the value for use via the config bridge and future
+        // consumers that read from gContentConfig.
+        { kSfallMisc, "ElevatorsFile", CONTENT_CONFIG_WORLDMAP_SECTION, "elevators_file" },
 
         // BoxBarCount migration intentionally removed — `add_iface_tag` metarule provides
         // equivalent functionality and 5 pre-allocated tag slots match the sfall baseline.
@@ -249,8 +256,17 @@ namespace {
         { kSfallMisc, "PremadePaths", CONTENT_CONFIG_CHARACTERS_SECTION, "premade_paths" },
         { kSfallMisc, "PremadeFIDs", CONTENT_CONFIG_CHARACTERS_SECTION, "premade_fids" },
         // [text]
-        { kSfallMisc, "ExtraGameMsgFileList", CONTENT_CONFIG_TEXT_SECTION, "extra_msg_file_list" },
-    };
+    { kSfallMisc, "ExtraGameMsgFileList", CONTENT_CONFIG_TEXT_SECTION, "extra_msg_file_list" },
+};
+
+// SYNC WARNING: kSfallMigrationEntries MUST be kept synchronized with
+// kSfallContentMappings in content_config.cc (same ddraw.ini keys
+// covering the same target sections). When adding or removing entries
+// here, update kSfallContentMappings and kSfallMigrationEntryCount
+// in game_config_migration.h to match.
+static_assert(std::size(kSfallMigrationEntries) == kSfallMigrationEntryCount,
+    "kSfallMigrationEntries entry count does not match kSfallMigrationEntryCount; "
+    "update BOTH tables in game_config_migration.cc and content_config.cc");
 
 } // anonymous namespace
 
@@ -320,6 +336,7 @@ static bool contentConfigMigrateFromSfall(Config* sfallConfig, const char* conte
 void contentConfigTryMigrateFromSfall(const char* contentConfigPath)
 {
     if (!gSfallConfig.isInitialized() || gSfallConfig.entriesLength == 0) {
+        debugPrint("Skipping ddraw.ini migration: sfall config not initialized or empty.\n");
         // Nothing to migrate.
         return;
     }
@@ -330,6 +347,7 @@ void contentConfigTryMigrateFromSfall(const char* contentConfigPath)
     }
     if (!compat_is_dir(masterPatches.c_str())) {
         // master_patches must point to an existing folder. Don't migrate when it's missing or not a directory.
+        debugPrint("Skipping ddraw.ini migration: master_patches \"%s\" is not a directory.\n", masterPatches.c_str());
         return;
     }
     char contentCfgPath[COMPAT_MAX_PATH];

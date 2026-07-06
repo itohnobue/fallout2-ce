@@ -24,6 +24,15 @@ extern Config gContentConfig;
 void contentConfigInit();
 void contentConfigExit();
 
+// Look up a ddraw.ini [section] key in gContentConfig, using the
+// migration mapping. Returns the int value or -1 if not found.
+// This bridges scripts that still read ddraw.ini keys via get_ini_setting
+// to the migrated game.cfg values, ensuring compatibility with RPU/Et Tu
+// mods that check migrated config keys (e.g., BoostScriptDialogLimit,
+// WorldMapSlots, ElevatorsFile).
+int contentConfigLookupSfallInt(const char* section, const char* key);
+const char* contentConfigLookupSfallString(const char* section, const char* key);
+
 } // namespace fallout
 
 #endif // CONTENT_CONFIG_H

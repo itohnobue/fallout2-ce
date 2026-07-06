@@ -1132,8 +1132,8 @@ void opAddButtonGfx(Program* program)
     char* buttonName = programStackPopString(program);
 
     if (((v3.opcode & VALUE_TYPE_MASK) == VALUE_TYPE_STRING || ((v3.opcode & VALUE_TYPE_MASK) == VALUE_TYPE_INT && v3.integerValue == 0))
-        || ((v2.opcode & VALUE_TYPE_MASK) == VALUE_TYPE_STRING || ((v2.opcode & VALUE_TYPE_MASK) == VALUE_TYPE_INT && v2.integerValue == 0))
-        || ((v1.opcode & VALUE_TYPE_MASK) == VALUE_TYPE_STRING || ((v1.opcode & VALUE_TYPE_MASK) == VALUE_TYPE_INT && v1.integerValue == 0))) {
+        && ((v2.opcode & VALUE_TYPE_MASK) == VALUE_TYPE_STRING || ((v2.opcode & VALUE_TYPE_MASK) == VALUE_TYPE_INT && v2.integerValue == 0))
+        && ((v1.opcode & VALUE_TYPE_MASK) == VALUE_TYPE_STRING || ((v1.opcode & VALUE_TYPE_MASK) == VALUE_TYPE_INT && v1.integerValue == 0))) {
         char* pressedFileName = _interpretMangleName(programGetString(program, v3.opcode, v3.integerValue));
         char* normalFileName = _interpretMangleName(programGetString(program, v2.opcode, v2.integerValue));
         char* hoverFileName = _interpretMangleName(programGetString(program, v1.opcode, v1.integerValue));

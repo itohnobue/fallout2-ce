@@ -74,6 +74,10 @@ extern float sfallAttackerKnockbackValue;
 extern int sfallHitChanceMod;
 extern int sfallHitChanceMax;
 
+// SFALL: block_combat (0x824A) — global flag set by sfall opcode handler.
+// Non-zero = combat blocked (no new combat initiations). Default 0.
+int gBlockCombat = 0;
+
 #define CALLED_SHOT_WINDOW_Y (20)
 #define CALLED_SHOT_WINDOW_WIDTH (504)
 #define CALLED_SHOT_WINDOW_HEIGHT (309)
@@ -3474,6 +3478,11 @@ void _combat(CombatStartData* csd)
 {
     ScopedGameMode gm(GameMode::kCombat);
 
+    // SFALL: block_combat (0x824A) — abort combat if blocked.
+    if (gBlockCombat != 0) {
+        return;
+    }
+
     if (csd == nullptr
         || (csd->attacker == nullptr || csd->attacker->elevation == gElevation)
         || (csd->defender == nullptr || csd->defender->elevation == gElevation)) {
@@ -3616,6 +3625,16 @@ int _combat_attack(Object* attacker, Object* defender, int hitMode, int hitLocat
     // sfall_opcodes.cc handlers and persist across combat rounds.
     gLastAttacker = attacker->id;
     gLastTarget = defender->id;
+
+    // F-058: Override hitLocation based on per-PID forced/disabled aimed shot flags.
+    // force_aimed_shots(pid): convert unaimed shots to aimed (HEAD default).
+    // disable_aimed_shots(pid): convert aimed shots to unaimed.
+    // disable takes precedence when both flags are set for the same PID.
+    if (sfallGetDisableAimedShots(attacker->pid) && hitLocation != HIT_LOCATION_TORSO && hitLocation != HIT_LOCATION_UNCALLED) {
+        hitLocation = HIT_LOCATION_UNCALLED;
+    } else if (sfallGetForceAimedShots(attacker->pid) && hitLocation == HIT_LOCATION_UNCALLED) {
+        hitLocation = HIT_LOCATION_HEAD;
+    }
 
     attackInit(&_main_ctd, attacker, defender, hitMode, hitLocation);
     debugPrint("computing attack...\n");
@@ -4696,14 +4715,28 @@ static int attackDetermineToHit(Object* attacker, int tile, Object* defender, in
 
     int toHitUncapped = toHit;
 
-    // SFALL: Fix F-005 — apply critter hit chance modifier set by
-    // set_critter_hit_chance_mod (0x81C5). Default is 0 (no modification).
+    // SFALL: Apply global hit chance modifier (set_base_hit_chance_mod, 0x81C6).
+    // Default is 0 (no modification).
     toHit += sfallHitChanceMod;
 
-    // SFALL: Fix F-005 — use script-controlled hit chance cap instead of
-    // hardcoded 95. Default is 95 (vanilla match).
-    if (toHit > sfallHitChanceMax) {
-        toHit = sfallHitChanceMax;
+    // F-008: Apply per-critter hit chance override (set_critter_hit_chance_mod, 0x81C5).
+    // Per-critter modifiers are additive with the global modifier.
+    // If a per-critter max is set and is stricter than the global max, use it.
+    int hitChanceMax = sfallHitChanceMax;
+    {
+        int critterMod = 0, critterMax = 0;
+        if (sfallGetCritterHitChanceMod(attacker, critterMod, critterMax)) {
+            toHit += critterMod;
+            if (critterMax < hitChanceMax) {
+                hitChanceMax = critterMax;
+            }
+        }
+    }
+
+    // SFALL: Use script-controlled hit chance cap instead of hardcoded 95.
+    // Default is 95 (vanilla match).
+    if (toHit > hitChanceMax) {
+        toHit = hitChanceMax;
     }
 
     if (toHit < -100) {
@@ -6011,10 +6044,25 @@ void _combat_attack_this(Object* target)
         return;
     }
 
+    // SFALL: block_combat (0x824A) — abort attack if combat is blocked.
+    if (gBlockCombat != 0) {
+        return;
+    }
+
     int hitMode;
     bool aiming;
     if (interfaceGetCurrentHitMode(&hitMode, &aiming) == -1) {
         return;
+    }
+
+    // F-058: Override aiming based on per-PID forced/disabled aimed shot flags.
+    // force_aimed_shots(pid): force critter to always use aimed shots.
+    // disable_aimed_shots(pid): force critter to always use unaimed shots.
+    // disable takes precedence when both are set for the same PID.
+    if (sfallGetDisableAimedShots(gDude->pid)) {
+        aiming = false;
+    } else if (sfallGetForceAimedShots(gDude->pid)) {
+        aiming = true;
     }
 
     MessageListItem messageListItem;

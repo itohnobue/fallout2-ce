@@ -406,6 +406,23 @@ static int tileIsVisible(int tile)
     return 0;
 }
 
+// SFALL: Wrapper around scriptGetSelf that respects op_set_self override.
+// Returns the overridden self if one was set, otherwise the script's owner.
+// The override is cleared after one use (matching existing op_set_self semantics).
+static Object* scriptGetSelfWithOverride(Program* program)
+{
+    Object* self = scriptGetSelf(program);
+
+    int sid = scriptGetSid(program);
+    Script* script;
+    if (scriptGetScript(sid, &script) != -1 && script->overriddenSelf != nullptr) {
+        self = script->overriddenSelf;
+        script->overriddenSelf = nullptr;
+    }
+
+    return self;
+}
+
 // 0x45409C correctFidForRemovedItem
 int correctFidForRemovedItem(Object* critter, Object* item, int flags)
 {
@@ -976,7 +993,7 @@ static void opDestroyObject(Program* program)
         }
     }
 
-    bool isSelf = object == scriptGetSelf(program);
+    bool isSelf = object == scriptGetSelfWithOverride(program);
 
     if (PID_TYPE(object->pid) == OBJ_TYPE_CRITTER) {
         _combat_delete_critter(object);
@@ -1086,7 +1103,7 @@ static void opTileContainsObjectWithPid(Program* program)
 // 0x455600 op_self_obj
 static void opGetSelf(Program* program)
 {
-    Object* object = scriptGetSelf(program);
+    Object* object = scriptGetSelfWithOverride(program);
     programStackPushPointer(program, object);
 }
 
@@ -1357,7 +1374,7 @@ static void opAnimateStand(Program* program)
             return;
         }
 
-        object = scriptGetSelf(program);
+        object = scriptGetSelfWithOverride(program);
     }
 
     if (!animationCheckCombatMode()) {
@@ -1382,7 +1399,7 @@ static void opAnimateStandReverse(Program* program)
             return;
         }
 
-        object = scriptGetSelf(program);
+        object = scriptGetSelfWithOverride(program);
     }
 
     if (!animationCheckCombatMode()) {
@@ -1778,7 +1795,7 @@ static void opUseObject(Program* program)
         return;
     }
 
-    Object* self = scriptGetSelf(program);
+    Object* self = scriptGetSelfWithOverride(program);
     if (PID_TYPE(self->pid) == OBJ_TYPE_CRITTER) {
         _action_use_an_object(script->target, object);
     } else {
@@ -1837,7 +1854,7 @@ static void opAttackComplex(Program* program)
 
     program->flags |= PROGRAM_FLAG_CHILD_CALL;
 
-    Object* self = scriptGetSelf(program);
+    Object* self = scriptGetSelfWithOverride(program);
     if (self == nullptr) {
         program->flags &= ~PROGRAM_FLAG_CHILD_CALL;
         return;
@@ -1950,7 +1967,7 @@ static void opStartGameDialog(Program* program)
     }
 
     gGameDialogSid = scriptGetSid(program);
-    gGameDialogSpeaker = scriptGetSelf(program);
+    gGameDialogSpeaker = scriptGetSelfWithOverride(program);
     _gdialogInitFromScript(gGameDialogHeadFid, gGameDialogReactionOrFidget);
 }
 
@@ -2350,7 +2367,7 @@ static void opKillCritter(Program* program)
 
     program->flags |= PROGRAM_FLAG_CHILD_CALL;
 
-    Object* self = scriptGetSelf(program);
+    Object* self = scriptGetSelfWithOverride(program);
     bool isSelf = self == object;
 
     reg_anim_clear(object);
@@ -2525,7 +2542,7 @@ static void opCritterDamage(Program* program)
         return;
     }
 
-    Object* self = scriptGetSelf(program);
+    Object* self = scriptGetSelfWithOverride(program);
     if (object->data.critter.combat.whoHitMeCid == -1) {
         object->data.critter.combat.whoHitMe = nullptr;
     }
@@ -2728,7 +2745,7 @@ static void opGameDialogSystemEnter(Program* program)
         return;
     }
 
-    Object* self = scriptGetSelf(program);
+    Object* self = scriptGetSelfWithOverride(program);
     if (PID_TYPE(self->pid) == OBJ_TYPE_CRITTER) {
         if (!critterIsActive(self)) {
             return;
@@ -2743,7 +2760,7 @@ static void opGameDialogSystemEnter(Program* program)
         return;
     }
 
-    gGameDialogSpeaker = scriptGetSelf(program);
+    gGameDialogSpeaker = scriptGetSelfWithOverride(program);
 }
 
 // action_being_used
@@ -3256,7 +3273,7 @@ static void opMetarule(Program* program)
         result = (gMapHeader.flags & MAP_SAVED) == 0;
         break;
     case METARULE_ELEVATOR:
-        scriptsRequestElevator(scriptGetSelf(program), param.integerValue);
+        scriptsRequestElevator(scriptGetSelfWithOverride(program), param.integerValue);
         result = 0;
         break;
     case METARULE_PARTY_COUNT:
@@ -4123,8 +4140,12 @@ static void _op_inven_unwield(Program* program)
     Object* obj;
     int hand;
 
-    obj = scriptGetSelf(program);
+    obj = scriptGetSelfWithOverride(program);
     hand = HAND_RIGHT;
+
+    if (obj == nullptr) {
+        return;
+    }
 
     if (obj == gDude && interfaceGetCurrentHand() == HAND_LEFT) {
         hand = HAND_LEFT;
@@ -4553,7 +4574,7 @@ static void opDestroyMultipleObjects(Program* program)
         return;
     }
 
-    Object* self = scriptGetSelf(program);
+    Object* self = scriptGetSelfWithOverride(program);
     bool isSelf = self == object;
 
     int result = 0;
@@ -4629,15 +4650,7 @@ static void opUseObjectOnObject(Program* program)
         return;
     }
 
-    Object* self = scriptGetSelf(program);
-
-    // SFALL: Override `self` via `op_set_self`.
-    // CE: Implementation is different. Sfall integrates via `scriptGetSid` by
-    // returning fake script with overridden `self`.
-    if (script->overriddenSelf != nullptr) {
-        self = script->overriddenSelf;
-        script->overriddenSelf = nullptr;
-    }
+    Object* self = scriptGetSelfWithOverride(program);
 
     if (PID_TYPE(self->pid) == OBJ_TYPE_CRITTER) {
         _action_use_an_item_on_object(self, target, item);
@@ -4872,7 +4885,7 @@ static void opTerminateCombat(Program* program)
 {
     if (isInCombat()) {
         _game_user_wants_to_quit = GAME_QUIT_REQUEST_END_COMBAT;
-        Object* self = scriptGetSelf(program);
+    Object* self = scriptGetSelfWithOverride(program);
         if (self != nullptr) {
             if (PID_TYPE(self->pid) == OBJ_TYPE_CRITTER) {
                 self->data.critter.combat.maneuver |= CRITTER_MANEUVER_DISENGAGING;

@@ -847,10 +847,13 @@ static bool characterSelectorWindowRenderStats()
     }
 
     // TRAITS
-    int traits[TRAITS_MAX_SELECTED_COUNT];
+    // F-076: Array sized for FO1 max (3), but only 2 slots are populated by
+    // traitsGetSelected. Zero-initialize the local array so the third slot
+    // is not left uninitialized on the stack.
+    int traits[TRAITS_MAX_SELECTED_COUNT] = {};
     traitsGetSelected(&(traits[0]), &(traits[1]));
 
-    for (int index = 0; index < TRAITS_MAX_SELECTED_COUNT; index++) {
+    for (int index = 0; index < traitGetMaxSelectedCount(); index++) {
         y += vh;
 
         str = traitGetName(traits[index]);

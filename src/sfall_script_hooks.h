@@ -26,7 +26,17 @@ typedef enum {
     // AP cost of attacks.
     HOOK_CALCAPCOST = 2,
 
-    //    HOOK_DEATHANIM1 = 3,
+    // Death animation v1 — variant of the standard procedure that fires before
+    // the death animation is selected (as opposed to HOOK_DEATHANIM2 which fires
+    // after). Not implemented because sfall's DEATHANIM1 fires from a distinct
+    // engine callback (action_destroy_p_proc → combatDamage) that does not
+    // exist in CE's cleaned-up combat pipeline. Mods that need death animation
+    // overrides should use HOOK_DEATHANIM2 (id 4), which provides the same
+    // anim-override capability from the standard death animation path.
+    // Engine change needed to implement: add a fire call in
+    // endgameEndingDestroyStuff or the combatDeath handler before
+    // HOOK_DEATHANIM2's fire site at actions.cc:325.
+    // HOOK_DEATHANIM1 = 3,
 
     // Death animation selection.
     HOOK_DEATHANIM2 = 4,
@@ -56,11 +66,20 @@ typedef enum {
     // Movement AP cost calculation. For AI triggers for every hex they move.
     HOOK_MOVECOST = 11,
 
-    // obsolete:
-    //    HOOK_HEXMOVEBLOCKING = 12,
-    //    HOOK_HEXAIBLOCKING = 13,
-    //    HOOK_HEXSHOOTBLOCKING = 14,
-    //    HOOK_HEXSIGHTBLOCKING = 15,
+    // Hex-level blocking overrides (pathfinding, AI, shooting, sight).
+    // Deliberately absent — these hooks intercepted low-level hex passability
+    // checks in sfall's tile_obstructs() / hex_blocking_*() callbacks, which
+    // ran on every hex evaluation during pathfinding and AI targeting.
+    // CE restructured pathfinding to use a different architecture where
+    // hex-by-hex blocking callbacks would require re-specialization of
+    // the entire pathfinding pipeline. Performance impact on AI-heavy
+    // encounters (30+ critters scanning hundreds of hexes per turn) makes
+    // per-hex script callbacks impractical. Mods needing hex-level overrides
+    // should use HOOK_FINDTARGET or HOOK_CANUSEWEAPON instead.
+    // HOOK_HEXMOVEBLOCKING = 12,
+    // HOOK_HEXAIBLOCKING = 13,
+    // HOOK_HEXSHOOTBLOCKING = 14,
+    // HOOK_HEXSIGHTBLOCKING = 15,
 
     // Weapon min/max damage calculation.
     HOOK_ITEMDAMAGE = 16,
@@ -124,7 +143,16 @@ typedef enum {
     HOOK_USESKILLON = 35,
 
     HOOK_ONEXPLOSION = 36,
-    //    HOOK_SUBCOMBATDAMAGE = 37,
+    // Sub-combat-damage hook — fires for each individual bullet/melee-hit within
+    // a single attack action, providing per-hit damage modification before
+    // HOOK_COMBATDAMAGE (which fires for the overall attack). Not implemented
+    // because sfall injects this at the damage application site inside
+    // compute_explosion_on_extras / computeAttack (which computes per-target
+    // damage). CE merged burst-handling logic into the main damage pipeline;
+    // separating per-hit and per-attack hooks requires restructuring the
+    // damage application loop. Most mods use HOOK_COMBATDAMAGE which provides
+    // the same total-damage override capability.
+    // HOOK_SUBCOMBATDAMAGE = 37,
     HOOK_SETLIGHTING = 38,
 
     // A continuous sneak check.
@@ -140,21 +168,43 @@ typedef enum {
     // Random encounter occurs. Override map or cancel the encounter.
     HOOK_ENCOUNTER = 43,
 
-    //    HOOK_ADJUSTPOISON = 44,
-    //    HOOK_ADJUSTRADS = 45,
+    // Poison/radiation adjustment hooks — fire when the engine applies
+    // per-tick poison or radiation damage to a critter (usually dude_obj).
+    // Not implemented because CE's poison and radiation systems use a
+    // simplified pipeline where per-tick adjustments are applied directly
+    // in critter.cc without sfall-style callback injection points.
+    // Implementing these would require refactoring the poison/radiation
+    // update loop to interpose a hook fire call, which must handle
+    // the case where multiple critters receive simultaneous adjustments.
+    // Mods tracking poison/radiation should use HOOK_ONDEATH or
+    // HOOK_GAMEMODECHANGE for high-level state tracking.
+    // HOOK_ADJUSTPOISON = 44,
+    // HOOK_ADJUSTRADS = 45,
 
-    // NOTE: Deliberately absent — randomRoll() has 30+ call sites but no
-    // event_type context. Adding hook at randomRoll level would fire on every
-    // skill check, combat roll, and AI roll indiscriminately, with no way to
-    // distinguish context. Pass-through hook would be too expensive; adding
-    // context to every call site is too invasive. See SFALL_COMPATIBILITY.md.
+    // NOTE: Deliberately absent — randomRoll() has 30+ call sites (skill
+    // checks, combat rolls, AI evaluations) but no event_type context to
+    // distinguish them. A pass-through hook at randomRoll() would fire on
+    // every roll indiscriminately — hundreds per turn in heavy combat,
+    // making per-roll script callbacks prohibitively expensive. Adding
+    // event-type context to all 30+ call sites requires invasive engine
+    // changes across skill.cc, combat.cc, combat_ai.cc, and critter.cc.
+    // Mods that need roll modification should use targeted hooks:
+    // HOOK_TOHIT (combat rolls), HOOK_AFTERHITROLL (hit/miss override),
+    // HOOK_USESKILL (skill rolls), HOOK_STEAL (steal checks).
+    // Engine change needed to implement: add event_type enum parameter
+    // to randomRoll() and all callers, then gate the hook fire on opt-in.
     // HOOK_ROLLCHECK = 46,
 
-    // NOTE: Deliberately absent — _ai_best_weapon() has 10+ return points
-    // with complex comparison logic. Adding post-hoc object override would
-    // change function contract and requires restructuring the comparison.
-    // Object lifetime in return value override also problematic.
-    // See SFALL_COMPATIBILITY.md.
+    // NOTE: Deliberately absent — _ai_best_weapon() is a comparison function
+    // with 10+ return points, each comparing the current best weapon against
+    // a candidate using nested if/else chains. Adding a post-hoc object
+    // override would require restructuring the comparison into a single-exit
+    // pattern, which changes the function contract for all callers (6 sites
+    // in combat_ai.cc, critter.cc). Script-returned Object* lifetime is
+    // also problematic: the returned weapon must outlive the AI decision
+    // cycle, but scripts don't own inventory objects.
+    // Engine change needed to implement: refactor _ai_best_weapon to single-
+    // exit, add Object* lifetime management for script-returned items.
     // HOOK_BESTWEAPON = 47,
 
     // Allows to prevent PC or NPC from using a weapon.
@@ -169,12 +219,18 @@ typedef enum {
     // Arguments: speaker (Object), reaction (int).
     HOOK_DIALOGREACTION = 50,
 
-    // RESERVED 51..60
+    // RESERVED 51..60 — available for future hook types. Hook registers for
+    // these IDs will be accepted by scriptHooksRegister() but never fire
+    // (no fire sites exist). Add fire sites before claiming a reserved slot.
 
     // NOTE: Deliberately absent — sfxBuildWeaponName() returns char* to a
-    // static buffer (_sfx_file_name). String return value override from scripts
-    // requires buffer management and lifetime semantics. The static buffer
-    // is 16 bytes; overridden strings may not fit. See SFALL_COMPATIBILITY.md.
+    // static 16-byte buffer (_sfx_file_name). Script string return values
+    // would require buffer management, lifetime semantics, and may overflow
+    // the static buffer. Audio system restructured in CE; weapon sound
+    // naming is handled through a different pipeline. Mods needing custom
+    // weapon sounds should modify proto data directly via set_weapon_sound.
+    // Engine change needed to implement: replace static 16-byte buffer with
+    // dynamic allocation, or add a string-table-based sound name resolver.
     // HOOK_BUILDSFXWEAPON = 61,
 
     HOOK_COUNT = 62,
@@ -318,9 +374,21 @@ enum class EncounterHookResult {
     LoadMapDirectly,
 };
 
-// atEnd: if true, inserts the hook at the end of the hook list
-// (last executed). Used by register_hook_proc_spec for hooks that
-// should run as final overrides after all other hooks.
+// Register a script procedure as a hook callback for the given hook type.
+//
+// Position behavior (matching sfall semantics):
+//   atEnd=false (register_hook_proc):  push_back → highest index → executed FIRST
+//                                      (last registered = highest priority).
+//   atEnd=true  (register_hook_proc_spec): emplace at index 0 → executed LAST
+//                                      (last registered = final override).
+//
+// NOTE: Only two positions are supported (start/highest-index and end/index-0).
+// Sfall's optional explicit position parameter (insert at specific index) is
+// not implemented — the binary atEnd flag covers all known RPU/Et Tu use cases.
+// Hook execution order is determined by registration order, not by a numeric
+// position parameter. Adding per-position insertion would require shifting
+// existing registrations, which changes the execution order contract for
+// scripts that registered earlier.
 bool scriptHooksRegister(Program* program, HookType hookType, int procedureIndex, bool atEnd = false);
 void scriptHooksUnregisterProgram(Program* program);
 bool scriptHooks_StdProcedure(int procedureNumber, Object* self, Object* source, Object* target, int fixedParam, bool after);
@@ -333,6 +401,26 @@ void scriptHooksReset();
 void scriptHooksExit();
 
 void scriptHooks_GameModeChange(int exit, int previousGameMode);
+
+// Slideshow transition hooks — fire HOOK_GAMEMODECHANGE during endgame
+// slideshow transitions. These must be called from the slideshow entry/exit
+// points in game.cc or endgame.cc.
+//
+// Wire-in points:
+//   scriptHooks_SlideshowStart() → call at endgame.cc:214 (start of endgamePlaySlideshow)
+//     or at the point where game mode transitions to slideshow/kSpecial in the
+//     endgame sequence. Passes exit=0, previous=GameMode::getCurrentGameMode().
+//   scriptHooks_SlideshowEnd()   → call at endgame.cc:233 (after endgamePlaySlideshow
+//     returns, before endgameEndingSlideshowWindowFree). Passes exit=0,
+//     previous=GameMode::getCurrentGameMode().
+//
+// These are scaffolding functions — the actual wire-in requires modifying the
+// slideshow code in endgame.cc. Until wired, slideshow transitions will not
+// trigger HOOK_GAMEMODECHANGE, and scripts listening for mode changes to
+// detect slideshow start/end will not receive callbacks.
+void scriptHooks_SlideshowStart();
+void scriptHooks_SlideshowEnd();
+
 bool scriptHooks_RestTimer(unsigned int gameTime, RestEventType eventType, int hours, int minutes);
 void scriptHooks_OnDeath(Object* critter);
 int scriptHooks_ExplosiveTimer(Object* explosive, int delay, int eventType);

@@ -20,6 +20,10 @@ bool traitIsSelected(int trait);
 int traitGetStatModifier(int stat);
 int traitGetSkillModifier(int skill);
 
+// Returns the max number of traits the player can select.
+// FO1 (gFallout1Behavior=true) allows 3; FO2 defaults to 2.
+int traitGetMaxSelectedCount();
+
 } // namespace fallout
 
 #endif /* TRAIT_H */

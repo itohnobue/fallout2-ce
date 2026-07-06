@@ -7,8 +7,9 @@
 #include "object.h"
 #include "platform_compat.h"
 #include "skill.h"
-#include "stat.h"
+#include "sfall_config.h"
 #include "sfall_metarules.h"
+#include "stat.h"
 
 namespace fallout {
 
@@ -111,7 +112,11 @@ void traitsExit()
 // 0x4B3B08 trait_load
 int traitsLoad(File* stream)
 {
-    return fileReadInt32List(stream, gSelectedTraits, TRAITS_MAX_SELECTED_COUNT);
+    // Use runtime max count: 2 for FO2, 3 for FO1.
+    // This ensures save format stays consistent with the runtime behavior.
+    // Old saves (written before the 3-trait FO1 feature) always had 2 ints,
+    // which matches FO2 mode's traitGetMaxSelectedCount() = 2.
+    return fileReadInt32List(stream, gSelectedTraits, traitGetMaxSelectedCount());
 }
 
 // Saves trait system state to save game.
@@ -119,7 +124,7 @@ int traitsLoad(File* stream)
 // 0x4B3B28 trait_save
 int traitsSave(File* stream)
 {
-    return fileWriteInt32List(stream, gSelectedTraits, TRAITS_MAX_SELECTED_COUNT);
+    return fileWriteInt32List(stream, gSelectedTraits, traitGetMaxSelectedCount());
 }
 
 // Sets selected traits.
@@ -179,7 +184,11 @@ int traitGetFrmId(int trait)
 // 0x4B3BC8 trait_level
 bool traitIsSelected(int trait)
 {
-    return gSelectedTraits[0] == trait || gSelectedTraits[1] == trait;
+    // F-076: In FO1 mode, check up to 3 selected traits instead of 2.
+    for (int i = 0; i < traitGetMaxSelectedCount(); i++) {
+        if (gSelectedTraits[i] == trait) return true;
+    }
+    return false;
 }
 
 // Returns stat modifier depending on selected traits.
@@ -317,6 +326,13 @@ int traitGetSkillModifier(int skill)
     }
 
     return modifier;
+}
+
+// F-076: Returns the max number of traits the player can select.
+// FO1 (gFallout1Behavior=true) allows 3 traits; FO2 defaults to 2.
+int traitGetMaxSelectedCount()
+{
+    return gFallout1Behavior ? 3 : 2;
 }
 
 } // namespace fallout

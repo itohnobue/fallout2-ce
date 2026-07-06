@@ -1502,6 +1502,19 @@ void protoExit()
 {
     int i;
 
+    // F2-039: Save dirty protos before removing the cache. LRU eviction
+    // (_proto_remove_some_list) saves to disk, but the exit path directly
+    // calls _proto_remove_list which discards all proto data without saving.
+    // Iterate gProtoDirtyPids and write each dirty proto to disk before
+    // the cache is freed so set_proto_data modifications are persisted.
+    // Iterate over a copy: _proto_save_pid() calls gProtoDirtyPids.erase(pid),
+    // which invalidates iterators on the set being iterated.
+    auto dirtyPidsCopy = gProtoDirtyPids;
+    for (int dirtyPid : dirtyPidsCopy) {
+        _proto_save_pid(dirtyPid);
+    }
+    gProtoDirtyPids.clear();
+
     for (i = 0; i < 6; i++) {
         _proto_remove_list(i);
     }

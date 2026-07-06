@@ -27,6 +27,7 @@
 #include "random.h"
 #include "scripts.h"
 #include "skill.h"
+#include "sfall_metarules.h"
 #include "stat.h"
 #include "string_parsers.h"
 #include "text_object.h"
@@ -1490,6 +1491,13 @@ bool partyMemberSupportsChemUse(Object* object, int chemUse)
 // 0x495B60 partyMemberIncLevels
 int _partyMemberIncLevels()
 {
+    // F-013: Honor npc_engine_level_up metarule. Scripts can disable
+    // auto-leveling via npc_engine_level_up(0). When disabled, skip
+    // all party member level-up processing.
+    if (!sfallGetNpcEngineLevelUpEnabled()) {
+        return 0;
+    }
+
     int i;
     PartyMemberListItem* listItem;
     Object* obj;

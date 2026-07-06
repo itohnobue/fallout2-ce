@@ -57,6 +57,15 @@ namespace fallout {
 
 extern bool gFallout1Behavior;
 
+// SFALL: WorldMapFPSPatch controls the worldmap frame rate independent of
+// the global FPS limiter. When > 0, applies an additional delay per frame.
+extern int gWorldMapFPSPatch;
+
+// SFALL: DisableSpecialMapIDs suppresses special encounter entries in
+// the random encounter table. When != 0, ENCOUNTER_ENTRY_SPECIAL flagged
+// encounters are excluded from candidate selection.
+extern int gDisableSpecialMapIDs;
+
 // Forward declaration: accessor added by Impl-B1 metasrules agent.
 // Returns the override title string for a given area index, or nullptr if none set.
 const char* sfallGetTownTitleOverride(int areaIndex);
@@ -525,6 +534,32 @@ bool wmGetCanRestOnTile(int elevation, int tile)
     }
     // No override — use default engine behavior.
     return true;
+}
+
+// CE/SFALL: Map enter position override (F-011, F-071).
+// Set by set_map_enter_position metarule (wired from sfall_metarules.cc).
+// -1 = no override stored. Consumed by map entry code at map.cc:mapLoad().
+static int gMapEnterPositionX = -1;
+static int gMapEnterPositionY = -1;
+static int gMapEnterPositionElevation = -1;
+
+void wmSetMapEnterPosition(int x, int y, int elevation)
+{
+    gMapEnterPositionX = x;
+    gMapEnterPositionY = y;
+    gMapEnterPositionElevation = elevation;
+}
+
+bool wmHasMapEnterPosition()
+{
+    return gMapEnterPositionX >= 0 && gMapEnterPositionY >= 0;
+}
+
+void wmGetMapEnterPosition(int* x, int* y, int* elevation)
+{
+    if (x) *x = gMapEnterPositionX;
+    if (y) *y = gMapEnterPositionY;
+    if (elevation) *elevation = gMapEnterPositionElevation;
 }
 
 // CE/SFALL: rest mode (-1 = default, 0 = disabled, 1 = strict areas only, 2 = no healing).
@@ -996,8 +1031,10 @@ static int wmGenDataInit()
 {
     gDidMeetFrankHorrigan = false;
     wmGenData.currentAreaId = -1;
-    wmGenData.worldPosX = 173;
-    wmGenData.worldPosY = 122;
+    // F-072: Read start position from content config, defaulting to FO2 Arroyo (173, 122).
+    // Et Tu mods set start_x_pos=823, start_y_pos=72 for FO1 Vault 13 entrance.
+    configGetInt(&gContentConfig, CONTENT_CONFIG_WORLDMAP_SECTION, "start_x_pos", &wmGenData.worldPosX, 173);
+    configGetInt(&gContentConfig, CONTENT_CONFIG_WORLDMAP_SECTION, "start_y_pos", &wmGenData.worldPosY, 122);
     wmGenData.currentSubtile = nullptr;
     wmGenData.dword_672E18 = 0;
     wmGenData.isWalking = false;
@@ -1062,8 +1099,9 @@ static int wmGenDataReset()
     wmGenData.encounterIconIsVisible = false;
     mousePressed = false;
     wmGenData.currentAreaId = -1;
-    wmGenData.worldPosX = 173;
-    wmGenData.worldPosY = 122;
+    // F-072: Read start position from content config, defaulting to FO2 Arroyo (173, 122).
+    configGetInt(&gContentConfig, CONTENT_CONFIG_WORLDMAP_SECTION, "start_x_pos", &wmGenData.worldPosX, 173);
+    configGetInt(&gContentConfig, CONTENT_CONFIG_WORLDMAP_SECTION, "start_y_pos", &wmGenData.worldPosY, 122);
     wmGenData.walkDestinationX = -1;
     wmGenData.walkDestinationY = -1;
     wmGenData.encounterMapId = -1;
@@ -2992,10 +3030,17 @@ bool wmMapCanRestHere(int elevation)
         return false;
     }
 
-    // CE/SFALL: Determine current worldmap tile from player position (F-015).
-    // Per-tile rest overrides key on tile index; previously hardcoded to 0.
-    int tile = wmGenData.worldPosY / WM_TILE_HEIGHT * wmNumHorizontalTiles
-        + wmGenData.worldPosX / WM_TILE_WIDTH % wmNumHorizontalTiles;
+    // CE/SFALL: Determine current tile from player context (F-015, F-012).
+    // On the worldmap, derive from world position as a subtile index.
+    // In a map, use the player's hex tile number so per-tile rest overrides
+    // set via set_can_rest_on_map are correctly matched.
+    int tile;
+    if (GameMode::isInGameMode(GameMode::kWorldmap)) {
+        tile = wmGenData.worldPosY / WM_TILE_HEIGHT * wmNumHorizontalTiles
+            + wmGenData.worldPosX / WM_TILE_WIDTH % wmNumHorizontalTiles;
+    } else {
+        tile = gCenterTile;
+    }
 
     // CE/SFALL: Rest mode override (F-017).
     int restMode = wmGetRestMode();
@@ -3265,8 +3310,15 @@ static int wmWorldMapFunc(int a1)
             wmInterfaceRefresh();
 
             if (getTicksBetween(now, partyHealTime) > 1000) {
-                // CE/SFALL: Use scriptable healing time override if set (F-016).
-                int healHours = (gWorldmapHealTime >= 0) ? gWorldmapHealTime : 3;
+                // CE/SFALL: Use scriptable healing time override if set (F-016, F2-027).
+                // Priority: worldmap-specific override, then rest override, then default 3h.
+                int healHours;
+                if (gWorldmapHealTime >= 0) {
+                    healHours = gWorldmapHealTime;
+                } else {
+                    int restHealTime = wmGetRestHealTime();
+                    healHours = (restHealTime >= 0) ? restHealTime : 3;
+                }
                 if (_partyMemberRestingHeal(healHours)) {
                     interfaceRenderHitPoints(false);
                     partyHealTime = now;
@@ -3471,6 +3523,18 @@ static int wmWorldMapFunc(int a1)
 
         renderPresent();
         sharedFpsLimiter.throttle();
+
+        // SFALL: WorldMapFPSPatch — apply additional worldmap-specific
+        // FPS cap. The shared limiter is fixed at construction; when
+        // gWorldMapFPSPatch is lower than the global cap, we add a
+        // compensating delay here.
+        if (gWorldMapFPSPatch > 0) {
+            unsigned int elapsed = getTicks() - now;
+            unsigned int target = 1000 / gWorldMapFPSPatch;
+            if (target > elapsed) {
+                SDL_Delay(target - elapsed);
+            }
+        }
     }
 
     if (wmInterfaceExit() == -1) {
@@ -3825,6 +3889,13 @@ static int wmRndEncounterPick()
         }
 
         if (encounterTableEntry->counter == 0) {
+            selected = false;
+        }
+
+        // SFALL: DisableSpecialMapIDs — when enabled, exclude special
+        // encounter entries from the candidate pool. This suppresses
+        // rare/special random encounters (e.g. Cafe of Broken Dreams).
+        if (gDisableSpecialMapIDs && (encounterTableEntry->flags & ENCOUNTER_ENTRY_SPECIAL) != 0) {
             selected = false;
         }
 
@@ -6103,8 +6174,15 @@ int wmGetAreaIdxName(int areaIdx, char* name)
 {
     MessageListItem messageListItem;
 
-    getmsg(&gMapMessageList, &messageListItem, 1500 + areaIdx);
-    strncpy(name, messageListItem.text, 40);
+    // F-073: Check gTownTitleOverrides before reading default msg, matching the
+    // pattern in wmGetAreaName(). FO1/Et Tu mods use set_town_title to override area names.
+    const char* overriddenTitle = sfallGetTownTitleOverride(areaIdx);
+    if (overriddenTitle != nullptr) {
+        strncpy(name, overriddenTitle, 40);
+    } else {
+        getmsg(&gMapMessageList, &messageListItem, 1500 + areaIdx);
+        strncpy(name, messageListItem.text, 40);
+    }
 
     return 0;
 }

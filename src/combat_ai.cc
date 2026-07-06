@@ -52,6 +52,16 @@ static constexpr int kChemUseAlwaysChance = 100;
 
 static constexpr int kRandomDrugPickingArraySize = 3;
 static std::unordered_set<Object*> burstDisabledCritters;
+// Per-critter PIDs for burst-disabled state persistence across save/load.
+// The Object* set provides fast runtime lookup; the PID set survives
+// save/load cycles and is restored in aiLoad.
+static std::unordered_set<int> burstDisabledCritterPids;
+// Magic number prepended to burst-disabled critter data in save files.
+// Distinguishes new saves (with burst PID persistence) from old saves
+// (without). If the magic is absent on load, the section is skipped.
+static constexpr int kAiBurstSectionMagic = 0x42315353;  // "B1SS" in ASCII
+
+extern bool gFallout1Behavior;
 
 typedef struct AiMessageRange {
     int start;
@@ -535,6 +545,7 @@ err:
 void aiReset()
 {
     burstDisabledCritters.clear();
+    burstDisabledCritterPids.clear();
 }
 
 // 0x4279FC
@@ -584,10 +595,47 @@ int aiLoad(File* stream)
             }
 
             AiPacket* ai = aiGetPacketByNum(proto->critter.aiPacket);
+            if (ai == nullptr) {
+                debugPrint("aiLoad: Missing AI packet %d for party member PID %d — consuming dummy disposition data to maintain stream alignment\n", proto->critter.aiPacket, pid);
+                // aiPacketRead consumes 45 int32 fields (180 bytes).
+                // Consume the same amount to keep the stream aligned with
+                // what aiSave wrote for this party member.
+                static constexpr int kAiPacketReadFieldCount = 45;
+                int dummy;
+                for (int j = 0; j < kAiPacketReadFieldCount; j++) {
+                    if (fileReadInt32(stream, &dummy) == -1) {
+                        return -1;
+                    }
+                }
+                continue;
+            }
             if (ai->disposition == 0) {
                 aiPacketRead(stream, ai);
             }
         }
+    }
+
+    // Restore burst-disabled critter state (F2-048).
+    // New format: [magic: int32] [count: int32] [pid0: int32] [pid1: int32] ...
+    // Old saves lack the magic number — seek back and skip the section.
+    long savedPos = fileTell(stream);
+    int magic;
+    if (fileReadInt32(stream, &magic) != -1 && magic == kAiBurstSectionMagic) {
+        int burstCount;
+        if (fileReadInt32(stream, &burstCount) != -1 && burstCount >= 0 && burstCount <= 1000) {
+            burstDisabledCritterPids.clear();
+            for (int i = 0; i < burstCount; i++) {
+                int critterPid;
+                if (fileReadInt32(stream, &critterPid) == -1) {
+                    break;
+                }
+                burstDisabledCritterPids.insert(critterPid);
+            }
+        }
+    } else {
+        // Old save — no burst section. Seek back to keep stream aligned
+        // for subsequent loaders that follow aiLoad.
+        fileSeek(stream, savedPos, SEEK_SET);
     }
 
     return 0;
@@ -605,9 +653,44 @@ int aiSave(File* stream)
             }
 
             AiPacket* ai = aiGetPacketByNum(proto->critter.aiPacket);
+            if (ai == nullptr) {
+                debugPrint("aiSave: Missing AI packet %d for party member PID %d — writing dummy disposition data to maintain stream alignment\n", proto->critter.aiPacket, pid);
+                // aiPacketWrite writes 45 int32 fields (180 bytes).
+                // Write the same amount to keep the stream aligned with what
+                // aiLoad expects for this party member.
+                static constexpr int kAiPacketWriteFieldCount = 45;
+                int zero = 0;
+                for (int j = 0; j < kAiPacketWriteFieldCount; j++) {
+                    if (fileWriteInt32(stream, zero) == -1) {
+                        return -1;
+                    }
+                }
+                continue;
+            }
             if (ai->disposition == 0) {
                 aiPacketWrite(stream, ai);
             }
+        }
+    }
+
+    // Persist burst-disabled critter state (F2-048).
+    // Collect unique PIDs from both the runtime set and the PID set.
+    std::unordered_set<int> savePids = burstDisabledCritterPids;
+    for (Object* critter : burstDisabledCritters) {
+        if (critter != nullptr) {
+            savePids.insert(critter->pid);
+        }
+    }
+    int burstCount = static_cast<int>(savePids.size());
+    if (fileWriteInt32(stream, kAiBurstSectionMagic) == -1) {
+        return -1;
+    }
+    if (fileWriteInt32(stream, burstCount) == -1) {
+        return -1;
+    }
+    for (int pid : savePids) {
+        if (fileWriteInt32(stream, pid) == -1) {
+            return -1;
         }
     }
 
@@ -766,15 +849,22 @@ static AiPacket* aiGetPacketByNum(int aiPacketId)
 int aiGetAreaAttackMode(Object* obj)
 {
     AiPacket* ai = aiGetPacket(obj);
+    if (ai == nullptr) {
+        return -1;
+    }
     return ai->area_attack_mode;
 }
 
 // 0x428190
 int aiGetRunAwayMode(Object* obj)
 {
+    AiPacket* ai = aiGetPacket(obj);
+    if (ai == nullptr) {
+        return -1;
+    }
+
     int runAwayMode = -1;
 
-    AiPacket* ai = aiGetPacket(obj);
     if (ai->run_away_mode != -1) {
         return ai->run_away_mode;
     }
@@ -793,6 +883,9 @@ int aiGetRunAwayMode(Object* obj)
 int aiGetBestWeapon(Object* obj)
 {
     AiPacket* ai = aiGetPacket(obj);
+    if (ai == nullptr) {
+        return -1;
+    }
     return ai->best_weapon;
 }
 
@@ -800,6 +893,9 @@ int aiGetBestWeapon(Object* obj)
 int aiGetDistance(Object* obj)
 {
     AiPacket* ai = aiGetPacket(obj);
+    if (ai == nullptr) {
+        return -1;
+    }
     return ai->distance;
 }
 
@@ -807,6 +903,9 @@ int aiGetDistance(Object* obj)
 int aiGetAttackWho(Object* obj)
 {
     AiPacket* ai = aiGetPacket(obj);
+    if (ai == nullptr) {
+        return -1;
+    }
     return ai->attack_who;
 }
 
@@ -814,6 +913,9 @@ int aiGetAttackWho(Object* obj)
 int aiGetChemUse(Object* obj)
 {
     AiPacket* ai = aiGetPacket(obj);
+    if (ai == nullptr) {
+        return -1;
+    }
     return ai->chem_use;
 }
 
@@ -825,6 +927,9 @@ int aiSetAreaAttackMode(Object* critter, int areaAttackMode)
     }
 
     AiPacket* ai = aiGetPacket(critter);
+    if (ai == nullptr) {
+        return -1;
+    }
     ai->area_attack_mode = areaAttackMode;
     return 0;
 }
@@ -837,6 +942,9 @@ int aiSetRunAwayMode(Object* obj, int runAwayMode)
     }
 
     AiPacket* ai = aiGetPacket(obj);
+    if (ai == nullptr) {
+        return -1;
+    }
     ai->run_away_mode = runAwayMode;
 
     int maximumHp = critterGetStat(obj, STAT_MAXIMUM_HIT_POINTS);
@@ -858,6 +966,9 @@ int aiSetBestWeapon(Object* critter, int bestWeapon)
     }
 
     AiPacket* ai = aiGetPacket(critter);
+    if (ai == nullptr) {
+        return -1;
+    }
     ai->best_weapon = bestWeapon;
     return 0;
 }
@@ -870,6 +981,9 @@ int aiSetDistance(Object* critter, int distance)
     }
 
     AiPacket* ai = aiGetPacket(critter);
+    if (ai == nullptr) {
+        return -1;
+    }
     ai->distance = distance;
     return 0;
 }
@@ -882,6 +996,9 @@ int aiSetAttackWho(Object* critter, int attackWho)
     }
 
     AiPacket* ai = aiGetPacket(critter);
+    if (ai == nullptr) {
+        return -1;
+    }
     ai->attack_who = attackWho;
     return 0;
 }
@@ -894,6 +1011,9 @@ int aiSetChemUse(Object* critter, int chemUse)
     }
 
     AiPacket* ai = aiGetPacket(critter);
+    if (ai == nullptr) {
+        return -1;
+    }
     ai->chem_use = chemUse;
     return 0;
 }
@@ -904,7 +1024,8 @@ bool aiIsBurstDisabled(Object* critter)
         return false;
     }
 
-    return burstDisabledCritters.find(critter) != burstDisabledCritters.end();
+    return burstDisabledCritters.find(critter) != burstDisabledCritters.end()
+        || burstDisabledCritterPids.find(critter->pid) != burstDisabledCritterPids.end();
 }
 
 void aiSetBurstDisabled(Object* critter, bool disable)
@@ -915,8 +1036,10 @@ void aiSetBurstDisabled(Object* critter, bool disable)
 
     if (disable) {
         burstDisabledCritters.insert(critter);
+        burstDisabledCritterPids.insert(critter->pid);
     } else {
         burstDisabledCritters.erase(critter);
+        burstDisabledCritterPids.erase(critter->pid);
     }
 }
 
@@ -927,6 +1050,7 @@ void aiRemoveBurstDisabled(Object* critter)
     }
 
     burstDisabledCritters.erase(critter);
+    burstDisabledCritterPids.erase(critter->pid);
 }
 
 // 0x428340
@@ -937,6 +1061,9 @@ int aiGetDisposition(Object* obj)
     }
 
     AiPacket* ai = aiGetPacket(obj);
+    if (ai == nullptr) {
+        return 0;
+    }
     return ai->disposition;
 }
 
@@ -955,7 +1082,22 @@ int aiSetDisposition(Object* obj, int disposition)
     }
 
     AiPacket* ai = aiGetPacket(obj);
-    obj->data.critter.combat.aiPacket = ai->packet_num - (disposition - ai->disposition);
+    if (ai == nullptr) {
+        return -1;
+    }
+
+    int newPacketNum = ai->packet_num - (disposition - ai->disposition);
+
+    // Validate that the computed packet number corresponds to a valid AI packet.
+    // The disposition shift formula can produce values outside the valid range
+    // (e.g., small packet_num with large disposition shift → negative result).
+    if (aiGetPacketByNum(newPacketNum) == nullptr) {
+        debugPrint("aiSetDisposition: disposition shift produced invalid AI packet %d (from %d - (%d - %d))\n",
+            newPacketNum, ai->packet_num, disposition, ai->disposition);
+        return -1;
+    }
+
+    obj->data.critter.combat.aiPacket = newPacketNum;
 
     return 0;
 }
@@ -999,6 +1141,12 @@ static int _ai_magic_hands(Object* critter, Object* item, int num)
 static int _ai_check_drugs(Object* critter)
 {
     if (critterGetBodyType(critter) != BODY_TYPE_BIPED) {
+        return 0;
+    }
+
+    // FO1 behavior: Fallout 1 critters do not use chems/stimpacks during
+    // combat — the original FO1 AI is simpler and lacks drug-use logic.
+    if (gFallout1Behavior) {
         return 0;
     }
 
@@ -1223,6 +1371,10 @@ static void _ai_run_away(Object* a1, Object* a2)
     CritterCombatData* combatData = &(a1->data.critter.combat);
 
     AiPacket* ai = aiGetPacket(a1);
+    if (ai == nullptr) {
+        return;
+    }
+
     int distance = objectGetDistanceBetween(a1, a2);
     if (distance < ai->max_dist) {
         combatData->maneuver |= CRITTER_MANUEVER_FLEEING;
@@ -1264,7 +1416,12 @@ static void _ai_run_away(Object* a1, Object* a2)
 // 0x42899C
 static int _ai_move_away(Object* a1, Object* a2, int a3)
 {
-    if (aiGetPacket(a1)->distance == DISTANCE_STAY) {
+    AiPacket* ai = aiGetPacket(a1);
+    if (ai == nullptr) {
+        return -1;
+    }
+
+    if (ai->distance == DISTANCE_STAY) {
         return -1;
     }
 
@@ -1925,7 +2082,9 @@ static Object* _ai_best_weapon(Object* attacker, Object* weapon1, Object* weapon
         }
 
         // SFALL: Fix for the incorrect item being checked.
-        if (weaponGetPerk(weapon1) != -1) {
+        // FO1 behavior: Fallout 1 has no weapon perks — skip the
+        // FO2-specific weapon score multiplier for perk weapons.
+        if (!gFallout1Behavior && weaponGetPerk(weapon1) != -1) {
             // SFALL: Lower weapon score multiplier for having perk.
             avgDamage1 *= 2;
         }
@@ -1969,7 +2128,7 @@ static Object* _ai_best_weapon(Object* attacker, Object* weapon1, Object* weapon
             avgDamage2 *= attack.extrasLength + 1;
         }
 
-        if (weaponGetPerk(weapon2) != -1) {
+        if (!gFallout1Behavior && weaponGetPerk(weapon2) != -1) {
             // SFALL: Lower weapon score multiplier for having perk.
             avgDamage2 *= 2;
         }
@@ -2354,6 +2513,17 @@ static int _ai_pick_hit_mode(Object* attacker, Object* weapon, Object* defender)
     if (aiIsBurstDisabled(attacker)) {
         int secondaryAnimation = weaponGetAnimationForHitMode(weapon, HIT_MODE_RIGHT_WEAPON_SECONDARY);
         if (secondaryAnimation == ANIM_FIRE_BURST || secondaryAnimation == ANIM_FIRE_CONTINUOUS) {
+            return HIT_MODE_RIGHT_WEAPON_PRIMARY;
+        }
+    }
+
+    // FO1 behavior: Fallout 1 has no continuous burst weapons.
+    // When Et Tu's Fallout1Behavior=1, prevent the AI from selecting
+    // continuous burst mode (ANIM_FIRE_CONTINUOUS), falling back to
+    // single-shot primary fire instead.
+    if (gFallout1Behavior) {
+        int secondaryAnimation = weaponGetAnimationForHitMode(weapon, HIT_MODE_RIGHT_WEAPON_SECONDARY);
+        if (secondaryAnimation == ANIM_FIRE_CONTINUOUS) {
             return HIT_MODE_RIGHT_WEAPON_PRIMARY;
         }
     }
@@ -3082,7 +3252,12 @@ int _cai_perform_distance_prefs(Object* a1, Object* a2)
         return -1;
     }
 
-    int distance = aiGetPacket(a1)->distance;
+    AiPacket* ai = aiGetPacket(a1);
+    if (ai == nullptr) {
+        return -1;
+    }
+
+    int distance = ai->distance;
 
     if (a2 != nullptr) {
         if ((a2->data.critter.combat.results & DAM_DEAD) != 0) {
@@ -3171,6 +3346,11 @@ void _combat_ai(Object* a1, Object* a2)
     };
 
     AiPacket* ai = aiGetPacket(a1);
+    if (ai == nullptr) {
+        debugPrint("_combat_ai: Missing AI packet for %s — aborting combat AI\n", critterGetName(a1));
+        return;
+    }
+
     int hpRatio = _cai_get_min_hp(ai);
     if (ai->run_away_mode != -1) {
         int v7 = critterGetStat(a1, STAT_MAXIMUM_HIT_POINTS) * hpRatio / 100;
@@ -3389,6 +3569,22 @@ int critterSetTeam(Object* obj, int team)
 int critterSetAiPacket(Object* object, int aiPacket)
 {
     if (PID_TYPE(object->pid) != OBJ_TYPE_CRITTER) {
+        return -1;
+    }
+
+    // Validate AI packet number against known packet range.
+    // Unvalidated packet numbers are the root cause of nullptr crashes
+    // at all aiGetPacket dereference sites — a script can pass any
+    // integer via critter_add_trait(CRITTER_TRAIT_OBJECT_AI_PACKET, N).
+    if (aiPacket < 0 || aiPacket >= gAiPacketsLength) {
+        debugPrint("critterSetAiPacket: AI packet %d out of bounds [0, %d)\n", aiPacket, gAiPacketsLength);
+        return -1;
+    }
+
+    // Double-check that the packet number actually resolves to a valid
+    // AI packet in gAiPackets (handles non-sequential packet_num values).
+    if (aiGetPacketByNum(aiPacket) == nullptr) {
+        debugPrint("critterSetAiPacket: AI packet %d not found in gAiPackets\n", aiPacket);
         return -1;
     }
 

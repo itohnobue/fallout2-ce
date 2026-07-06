@@ -29,6 +29,7 @@
 #include "random.h"
 #include "settings.h"
 #include "sfall_config.h"
+#include "sfall_script_hooks.h"
 #include "stat.h"
 #include "svga.h"
 #include "text_font.h"
@@ -217,6 +218,9 @@ void endgamePlaySlideshow()
         return;
     }
 
+    // Notify scripts that the game is entering the slideshow mode.
+    scriptHooks_SlideshowStart();
+
     for (int index = 0; index < gEndgameEndingsLength; index++) {
         EndgameEnding* ending = &(gEndgameEndings[index]);
         int value = gameGetGlobalVar(ending->gvar);
@@ -230,12 +234,18 @@ void endgamePlaySlideshow()
         }
     }
 
+    // Notify scripts that the game is leaving the slideshow mode.
+    scriptHooks_SlideshowEnd();
+
     endgameEndingSlideshowWindowFree();
 }
 
 // 0x43F810 endgame_movie
 void endgamePlayMovie()
 {
+    // Notify scripts that the game is entering the endgame movie (slideshow) mode.
+    scriptHooks_SlideshowStart();
+
     backgroundSoundDelete();
     isoDisable();
     paletteFadeTo(gPaletteBlack);
@@ -272,6 +282,9 @@ void endgamePlayMovie()
     paletteFadeTo(_cmap);
     isoEnable();
     endgameEndingHandleContinuePlaying();
+
+    // Notify scripts that the game is leaving the endgame movie (slideshow) mode.
+    scriptHooks_SlideshowEnd();
 }
 
 // 0x43F8C4 gameOverConfim

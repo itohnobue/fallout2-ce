@@ -37,14 +37,12 @@ extern Config gSfallConfig;
 
 extern bool gFallout1Behavior;
 
-// TODO: The following 5 config booleans are parsed from ddraw.ini but have
-// zero consumers in the engine. They need to be wired or removed.
-// See F-012 in the audit synthesis report.
-extern bool gAllowUnsafeScripting; // TODO: wire to scripting safety gates
-extern bool gEnableHeroAppearanceMod; // TODO: wire to hero appearance FID pipeline
-extern bool gUseFileSystemOverride; // TODO: wire to asset loading path selection
-extern bool gOverrideArtCacheSize; // TODO: wire to art cache size configuration
-extern bool gExtraSaveSlots; // TODO: wire to save slot count
+// Config booleans parsed from ddraw.ini. Wired status noted per-global.
+extern bool gAllowUnsafeScripting; // WIRED: gates unsafe opcode registration at sfall_opcodes.cc
+extern bool gEnableHeroAppearanceMod; // WIRED: consumed via sfallConfigGetHeroAppearanceMod()
+extern bool gUseFileSystemOverride; // INTENTIONALLY UNWIRED: VFS priority handles this
+extern bool gOverrideArtCacheSize; // UNWIRED: art.cc uses settings.system.art_cache_size instead
+extern bool gExtraSaveSlots; // WIRED: consumed at loadsave.cc for save slot page count
 
 bool sfallConfigInit(int argc, char** argv);
 void sfallConfigExit();

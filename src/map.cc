@@ -48,6 +48,15 @@
 
 namespace fallout {
 
+// F-011/F-071: Map enter position override accessors (implemented in worldmap.cc).
+// Set by set_map_enter_position metarule. -1 = no override.
+extern void wmSetMapEnterPosition(int x, int y, int elevation);
+extern bool wmHasMapEnterPosition();
+extern void wmGetMapEnterPosition(int* x, int* y, int* elevation);
+
+// F2-028: Town title override accessor (implemented in sfall_metarules.cc).
+extern const char* sfallGetTownTitleOverride(int areaIndex);
+
 const char* mapBuildPath(const char* name);
 static int mapLoad(File* stream);
 static int _map_age_dead_critters();
@@ -583,6 +592,16 @@ char* mapGetCityName(int map)
         return _aErrorF2;
     }
 
+    // F2-028: Check for town title override before falling back to the
+    // message list. Matches the pattern in wmGetAreaName() and wmGetAreaIdxName().
+    // Without this, 3 callers (pipboy.cc, automap.cc, loadsave.cc) display
+    // vanilla city names instead of script-overridden titles.
+    const char* overriddenTitle = sfallGetTownTitleOverride(city);
+    if (overriddenTitle != nullptr) {
+        strncpy(_scratchStr, overriddenTitle, 40);
+        return _scratchStr;
+    }
+
     MessageListItem messageListItem;
     char* name = getmsg(&gMapMessageList, &messageListItem, 1500 + city);
     return name;
@@ -916,8 +935,17 @@ static int mapLoad(File* stream)
     }
 
     if (gEnteringElevation == -1) {
-        // NOTE: Uninline.
-        mapSetEnteringLocation(gMapHeader.enteringElevation, gMapHeader.enteringTile, gMapHeader.enteringRotation);
+        // F-011/F-071: Check if a script has set a map enter position override
+        // via set_map_enter_position metarule. If so, use the overridden position
+        // instead of the .MAP file header defaults.
+        if (wmHasMapEnterPosition()) {
+            int overrideX, overrideY, overrideElevation;
+            wmGetMapEnterPosition(&overrideX, &overrideY, &overrideElevation);
+            mapSetEnteringLocation(overrideElevation, overrideX, overrideY);
+        } else {
+            // NOTE: Uninline.
+            mapSetEnteringLocation(gMapHeader.enteringElevation, gMapHeader.enteringTile, gMapHeader.enteringRotation);
+        }
     }
 
     _obj_remove_all();

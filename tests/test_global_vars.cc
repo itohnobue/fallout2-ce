@@ -117,14 +117,14 @@ TEST_CASE("sfall_gl_vars_store / sfall_gl_vars_fetch — int keys")
         CHECK(val == -1);
     }
 
-    SUBCASE("store value 0 on new key inserts with value 0")
+    SUBCASE("store value 0 on new key erases (sfall convention)")
     {
-        // Store 0 on a new key: emplace() inserts (key, 0).
-        // The erase-on-0 path only triggers when the key already exists.
+        // Store 0 on a new key: sfall convention is that value 0
+        // means "deleted/not set", so the key is erased regardless
+        // of whether it previously existed.
         sfall_gl_vars_store(999, 0);
         int val = -1;
-        CHECK(sfall_gl_vars_fetch(999, val));
-        CHECK(val == 0);
+        CHECK_FALSE(sfall_gl_vars_fetch(999, val));
     }
 
     sfall_gl_vars_exit();

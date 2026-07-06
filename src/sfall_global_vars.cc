@@ -242,15 +242,10 @@ bool sfall_gl_vars_fetch(int key, int& value)
 
 static bool sfall_gl_vars_store(uint64_t key, int value)
 {
-    auto it = sfall_gl_vars_state->vars.find(key);
-    if (it == sfall_gl_vars_state->vars.end()) {
-        sfall_gl_vars_state->vars.emplace(key, value);
+    if (value == 0) {
+        sfall_gl_vars_state->vars.erase(key);
     } else {
-        if (value == 0) {
-            sfall_gl_vars_state->vars.erase(it);
-        } else {
-            it->second = value;
-        }
+        sfall_gl_vars_state->vars[key] = value;
     }
 
     return true;

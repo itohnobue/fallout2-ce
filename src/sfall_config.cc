@@ -11,22 +11,23 @@ Config gSfallConfig;
 
 bool gFallout1Behavior = false;
 
-// Config globals parsed from ddraw.ini — stored correctly but currently
-// unwired to their respective engine subsystems. Each global below documents
-// the exact consumer file and function where wiring is needed.
+// Config globals parsed from ddraw.ini.
 //
 // Wiring status summary:
-//   gAllowUnsafeScripting   — UNWIRED: needs gate at sfall_opcodes.cc:4116-4147
-//                             (VOODOO write/call_offset opcode registration)
-//   gEnableHeroAppearanceMod — UNWIRED: needs integration in hero appearance
-//                               FID pipeline (object.cc critter art loading)
+//   gAllowUnsafeScripting   — WIRED: gates VOODOO write/call_offset opcode
+//                             registration at sfall_opcodes.cc; runtime-toggleable
+//                             via set_ini_setting at sfall_ini.cc.
+//   gEnableHeroAppearanceMod — WIRED: consumed by sfall_opcodes.cc hero
+//                               appearance opcode registration pipeline via
+//                               sfallConfigGetHeroAppearanceMod().
 //   gUseFileSystemOverride   — INTENTIONALLY UNWIRED: VFS priority ordering
 //                               provides equivalent override behavior without
-//                               this flag (master_patches/ dir > .dat files)
-//   gOverrideArtCacheSize     — UNWIRED: needs wiring to art cache allocation
-//                               in art.cc:artCacheInit() size computation
-//   gExtraSaveSlots           — UNWIRED: needs wiring to loadsave.cc:199
-//                               (saveLoadPages constant) to increase max slots
+//                               this flag (master_patches/ dir > .dat files).
+//   gOverrideArtCacheSize     — UNWIRED: art cache size is controlled by
+//                               settings.system.art_cache_size (art.cc),
+//                               not this flag. Needs wiring or removal.
+//   gExtraSaveSlots           — WIRED: consumed at loadsave.cc for save slot
+//                               page count (true → 10 pages / false → 1 page).
 bool gAllowUnsafeScripting = false;
 bool gEnableHeroAppearanceMod = false;
 bool gUseFileSystemOverride = false;

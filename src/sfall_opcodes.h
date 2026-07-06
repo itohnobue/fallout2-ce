@@ -42,6 +42,13 @@ void sfallAnimCallbackInvoke(Object* object);
 // prevent handle exhaustion across save/load cycles.
 void sfallVfsCloseAll();
 
+// F-083: Set the VFS sandbox root directory. When set, all VFS paths
+// are resolved relative to this root, and absolute paths are rejected.
+// Paths containing ".." are also rejected. Call with nullptr to clear
+// the root (no sandbox enforcement). The root string is owned by the
+// caller initially but duplicated internally via internal_strdup.
+void sfallVfsSetRoot(const char* root);
+
 // Perk frequency override set by set_perk_freq (0x8247).
 // 0 = use engine default (3 levels, or 4 with Skilled trait).
 // Positive value = use this number of levels between perk selections.
@@ -134,9 +141,47 @@ int sfallGetPerkLevelMod();
 // Skill modifier globals (F-034). Set via opcodes 0x81C7/0x81C8.
 // Integration point: skill.cc skillGetValue() should add these
 // modifiers to the skill value calculation.
+// NOTE: sfallGetCritterSkillMod() returns the global modifier.
+// For per-critter overrides set via set_critter_skill_mod (0x81C7), use
+// sfallGetCritterSkillModForCritter(Object*) which checks the per-critter
+// map keyed by critter PID.
 // ============================================================
 int sfallGetCritterSkillMod();
 int sfallGetBaseSkillMod();
+
+// F-001: Per-critter skill mod accessor. Returns the per-critter max
+// skill override set via set_critter_skill_mod (0x81C7) for the given
+// critter. Returns 0 if no per-critter override exists. The caller should
+// then consult sfallGetCritterSkillMod() for the global fallback.
+// Integration point: skill.cc skillGetValue() should call this with the
+// 'who' parameter before falling back to sfallGetCritterSkillMod().
+int sfallGetCritterSkillModForCritter(Object* critter);
+
+// ============================================================
+// Pickpocket modifier accessors (F-021).
+// Set via opcodes 0x81A0 (set_pickpocket_max), 0x81C9
+// (set_critter_pickpocket_mod), 0x81CA (set_base_pickpocket_mod).
+// Integration point: skillDetermineStealResult() in skill.cc should
+// consult these when computing stealChance and catchChance.
+//
+// For per-critter overrides set via set_critter_pickpocket_mod (0x81C9),
+// use sfallGetCritterPickpocketModForCritter(Object*, int&, int&) which
+// checks the per-critter map keyed by critter PID. Falls back to global
+// sfallGetCritterPickpocketMod() / sfallGetCritterPickpocketMax()
+// when no per-critter override is found.
+// ============================================================
+int sfallGetPickpocketMax();
+int sfallGetCritterPickpocketMod();
+int sfallGetBasePickpocketMod();
+int sfallGetCritterPickpocketMax();
+int sfallGetBasePickpocketMax();
+
+// F-001: Per-critter pickpocket mod accessor.
+// Returns true and populates outMod/outMax if a per-critter override was
+// set via set_critter_pickpocket_mod (0x81C9) for the given critter.
+// Returns false if no per-critter override exists; the caller should
+// fall back to the global accessors.
+bool sfallGetCritterPickpocketModForCritter(Object* critter, int& outMod, int& outMax);
 
 // ============================================================
 // Perk add mode and clear-selectable-perks flags (F-036).
@@ -207,6 +252,25 @@ int sfallGetPerkSkill2Override(int perkID);
 int sfallGetPerkSkill2MagOverride(int perkID);
 int sfallGetPerkTypeOverride(int perkID);
 int sfallGetPerkSpecialOverride(int perkID, int statIdx);
+
+// ============================================================
+// Perk name/description overrides set via set_perk_name (0x8189) and
+// set_perk_desc (0x818A). Returns nullptr if no override set.
+// Integration point: perk.cc perkGetName()/perkGetDescription() and
+// character_editor.cc perk card display.
+// ============================================================
+const char* sfallGetPerkNameOverride(int perkID);
+const char* sfallGetPerkDescOverride(int perkID);
+
+// ============================================================
+// Perk owed counter — set via get/set_perk_owed (0x81AC).
+// Tracks "extra" perks owed to the player outside the normal
+// level-based schedule. Integration point: character_editor.cc
+// characterEditorUpdateLevel() — if gSfallPerkOwed > 0, grant
+// a free perk at the next level-up.
+// ============================================================
+int sfallGetPerkOwed();
+void sfallSetPerkOwed(int value);
 
 // ============================================================
 // Movie path override (F-021). Set via opcode 0x8177.

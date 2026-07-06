@@ -17,6 +17,7 @@ target_link_libraries(test_stubs PUBLIC doctest)
 # Links against SDL2/zlib (vendored) to satisfy header includes.
 add_library(test_sources STATIC
     "${CMAKE_SOURCE_DIR}/src/config.cc"
+    "${CMAKE_SOURCE_DIR}/src/content_config.cc"
     "${CMAKE_SOURCE_DIR}/src/dictionary.cc"
     "${CMAKE_SOURCE_DIR}/src/memory.cc"
     "${CMAKE_SOURCE_DIR}/src/sfall_global_vars.cc"
@@ -406,3 +407,50 @@ add_executable(test_platform_compat
 )
 target_link_libraries(test_platform_compat PRIVATE doctest)
 add_test(NAME test_platform_compat COMMAND test_platform_compat)
+
+# ============================================================
+# Stage 5 Implementation — New Test Executables (4 entries)
+# Added by s6-impl-cmake agent (F2-018, F2-019, F2-060, F2-061)
+# ============================================================
+
+# ---- Test: sfall hooks register (F2-018: scriptHooksRegister zero tests) ----
+# Header-level + behavioral test for scriptHooksRegister() lifecycle.
+# Follows test_sfall_hooks pattern: engine headers cascade to SDL2/zlib.
+add_executable(test_sfall_hooks_register
+    test_sfall_hooks_register.cpp
+)
+target_include_directories(test_sfall_hooks_register PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_include_directories(test_sfall_hooks_register PRIVATE ${ZLIB_INCLUDE_DIRS})
+target_link_libraries(test_sfall_hooks_register PRIVATE test_stubs doctest ${SDL2_LIBRARIES})
+add_test(NAME test_sfall_hooks_register COMMAND test_sfall_hooks_register)
+
+# ---- Test: sfall hook call (F2-019: ScriptHookCall::call() zero tests) ----
+# Behavioral test for ScriptHookCall dispatch mechanism.
+# Follows test_sfall_hooks pattern: engine headers cascade to SDL2/zlib.
+add_executable(test_sfall_hook_call
+    test_sfall_hook_call.cpp
+)
+target_include_directories(test_sfall_hook_call PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_include_directories(test_sfall_hook_call PRIVATE ${ZLIB_INCLUDE_DIRS})
+target_link_libraries(test_sfall_hook_call PRIVATE test_stubs doctest ${SDL2_LIBRARIES})
+add_test(NAME test_sfall_hook_call COMMAND test_sfall_hook_call)
+
+# ---- Test: config migration (F2-060: contentConfigMigrateFromSfall zero tests) ----
+# Behavioral test for contentConfigMigrateFromSfall covering all 5 guard conditions.
+# game_config_migration.cc is in test_sources — links real implementation.
+add_executable(test_config_migration
+    test_config_migration.cpp
+)
+target_link_libraries(test_config_migration PRIVATE test_sources test_stubs doctest)
+add_test(NAME test_config_migration COMMAND test_config_migration)
+
+# ---- Test: sfall kb helpers (F2-061: sfall_kb_helpers.cc zero tests) ----
+# Tests DIK mapping, key simulation, synthetic event queue.
+# Follows test_sfall_hooks pattern: engine headers cascade to SDL2/zlib.
+add_executable(test_sfall_kb_helpers
+    test_sfall_kb_helpers.cpp
+)
+target_include_directories(test_sfall_kb_helpers PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_include_directories(test_sfall_kb_helpers PRIVATE ${ZLIB_INCLUDE_DIRS})
+target_link_libraries(test_sfall_kb_helpers PRIVATE test_stubs doctest ${SDL2_LIBRARIES})
+add_test(NAME test_sfall_kb_helpers COMMAND test_sfall_kb_helpers)

@@ -198,8 +198,8 @@ static const int gLoadSaveFrmIds[LOAD_SAVE_FRM_COUNT] = {
 
 // Control max number of save/load pages.
 // Page count is initialized from sfall config in _InitLoadSave():
-//   gExtraSaveSlots=true  → 1 page  (10 slots,  FO1/et tu mode)
-//   gExtraSaveSlots=false → 10 pages (100 slots, FO2 default)
+//   gExtraSaveSlots=true  → 10 pages (100 slots, extended mode)
+//   gExtraSaveSlots=false → 1 page  (10 slots,  FO1/FO2 default)
 constexpr int kMaxSaveTotalSlots = 100;
 int saveLoadPages = 10;
 constexpr int slotsPerPage = 10;
@@ -405,9 +405,9 @@ void _InitLoadSave()
     _patches = settings.system.master_patches_path.c_str();
 
     // Initialize save slot page count from sfall config.
-    // gExtraSaveSlots=true  → 1 page  (10 slots,  FO1/et tu mode)
-    // gExtraSaveSlots=false → 10 pages (100 slots, FO2 default)
-    saveLoadPages = gExtraSaveSlots ? 1 : 10;
+    // gExtraSaveSlots=true  → 10 pages (100 slots, extended mode)
+    // gExtraSaveSlots=false → 1 page  (10 slots,  FO1/FO2 default)
+    saveLoadPages = gExtraSaveSlots ? 10 : 1;
     saveLoadTotalSlots = saveLoadPages * slotsPerPage;
 
     loadSaveRememberSelectedSlot();

@@ -792,8 +792,16 @@ void SetArrayFromExpression(const ProgramValue& key, const ProgramValue& val, Pr
         return;
     }
 
-    if (key.asInt() >= size) {
-        arr->ResizeArray(size + 1);
+    int targetIndex = key.asInt();
+    if (targetIndex >= size) {
+        // Resize to key+1 so the element at key can be stored.
+        // Previous code grew by only 1 (size+1), which silently
+        // dropped non-sequential key assignments where key > size.
+        int newSize = targetIndex + 1;
+        if (newSize > ARRAY_MAX_SIZE) {
+            newSize = ARRAY_MAX_SIZE;
+        }
+        arr->ResizeArray(newSize);
     }
 
     SetArray(arrayId, key, val, false, program);

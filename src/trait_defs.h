@@ -4,7 +4,9 @@
 namespace fallout {
 
 // The maximum number of traits a player is allowed to select.
-#define TRAITS_MAX_SELECTED_COUNT 2
+// FO2 default is 2; FO1 allows 3. Array-bound sized for 3 (FO1 maximum).
+// Use traitGetMaxSelectedCount() for runtime selection limit.
+#define TRAITS_MAX_SELECTED_COUNT 3
 
 // Available traits.
 typedef enum Trait {

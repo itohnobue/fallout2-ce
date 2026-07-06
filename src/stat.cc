@@ -500,6 +500,14 @@ int critterSetBaseStat(Object* critter, int stat, int value)
         protoGetProto(critter->pid, &proto);
         proto->critter.data.baseStats[stat] = value;
 
+        // F2-040: Mark proto dirty for NPC targets so stat mutations
+        // survive LRU cache eviction. set_proto_data opcode already does
+        // this, but engine-level mutators like critterSetBaseStat were not.
+        // gDude uses GCD files, not proto files — skip marking for gDude.
+        if (critter != gDude) {
+            protoMarkDirty(critter->pid);
+        }
+
         if (stat >= STAT_STRENGTH && stat <= STAT_LUCK) {
             critterUpdateDerivedStats(critter);
         }
@@ -559,6 +567,14 @@ int critterSetBonusStat(Object* critter, int stat, int value)
         Proto* proto;
         protoGetProto(critter->pid, &proto);
         proto->critter.data.bonusStats[stat] = value;
+
+        // F2-040: Mark proto dirty for NPC targets so stat mutations
+        // survive LRU cache eviction. set_proto_data opcode already does
+        // this, but engine-level mutators like critterSetBonusStat were not.
+        // gDude uses GCD files, not proto files — skip marking for gDude.
+        if (critter != gDude) {
+            protoMarkDirty(critter->pid);
+        }
 
         if (stat >= STAT_STRENGTH && stat <= STAT_LUCK) {
             critterUpdateDerivedStats(critter);

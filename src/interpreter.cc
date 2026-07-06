@@ -2097,7 +2097,7 @@ static void opBitwiseOperatorAnd(Program* program)
         }
         break;
     default:
-        return;
+        programFatalError("Trying to perform bitwise AND on non-numeric types");
     }
 
     programStackPushInteger(program, result);
@@ -2135,7 +2135,7 @@ static void opBitwiseOperatorOr(Program* program)
         }
         break;
     default:
-        return;
+        programFatalError("Trying to perform bitwise OR on non-numeric types");
     }
 
     programStackPushInteger(program, result);
@@ -2173,7 +2173,7 @@ static void opBitwiseOperatorXor(Program* program)
         }
         break;
     default:
-        return;
+        programFatalError("Trying to perform bitwise XOR on non-numeric types");
     }
 
     programStackPushInteger(program, result);

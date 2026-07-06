@@ -4517,7 +4517,8 @@ static int characterPrintToFile(const char* fileName)
         fileWriteString(title1, stream);
 
         // NOTE: The original code does not use loop, or it was optimized away.
-        for (int index = 0; index < TRAITS_MAX_SELECTED_COUNT; index++) {
+        // F-076: Use dynamic max trait count for FO1 (3) vs FO2 (2).
+        for (int index = 0; index < traitGetMaxSelectedCount(); index++) {
             if (gCharacterEditorTempTraits[index] != -1) {
                 snprintf(title1, sizeof(title1), "  %s", traitGetName(gCharacterEditorTempTraits[index]));
                 fileWriteString(title1, stream);
@@ -5471,14 +5472,21 @@ static void characterEditorDrawOptionalTraits()
 // 0x43BB0C TraitSelect
 static void characterEditorToggleOptionalTrait(int trait)
 {
-    if (trait == gCharacterEditorTempTraits[0] || trait == gCharacterEditorTempTraits[1]) {
-        if (trait == gCharacterEditorTempTraits[0]) {
-            gCharacterEditorTempTraits[0] = gCharacterEditorTempTraits[1];
-            gCharacterEditorTempTraits[1] = -1;
-        } else {
-            gCharacterEditorTempTraits[1] = -1;
+    // F-076: Use dynamic max trait count for FO1 (3) vs FO2 (2) for removal too.
+    int traitSlots = traitGetMaxSelectedCount();
+    bool removed = false;
+    for (int index = 0; index < traitSlots; index++) {
+        if (trait == gCharacterEditorTempTraits[index]) {
+            // Shift remaining traits left to fill the gap, set last slot to -1.
+            for (int j = index; j < traitSlots - 1; j++) {
+                gCharacterEditorTempTraits[j] = gCharacterEditorTempTraits[j + 1];
+            }
+            gCharacterEditorTempTraits[traitSlots - 1] = -1;
+            removed = true;
+            break;
         }
-    } else {
+    }
+    if (!removed) {
         if (gCharacterEditorTempTraitCount == 0) {
             soundPlayFile("iisxxxx1");
 
@@ -5491,7 +5499,9 @@ static void characterEditorToggleOptionalTrait(int trait)
             const char* lines = { line2 };
             showDialogBox(line1, &lines, 1, 192, 126, _colorTable[32328], nullptr, _colorTable[32328], 0);
         } else {
-            for (int index = 0; index < 2; index++) {
+            // F-076: Use dynamic max trait count for FO1 (3) vs FO2 (2).
+            int maxTraits = traitGetMaxSelectedCount();
+            for (int index = 0; index < maxTraits; index++) {
                 if (gCharacterEditorTempTraits[index] == -1) {
                     gCharacterEditorTempTraits[index] = trait;
                     break;
@@ -5501,7 +5511,9 @@ static void characterEditorToggleOptionalTrait(int trait)
     }
 
     gCharacterEditorTempTraitCount = 0;
-    for (int index = 1; index != 0; index--) {
+    // F-076: Check all selected trait slots (up to 3 in FO1 mode).
+    int maxTraits = traitGetMaxSelectedCount();
+    for (int index = maxTraits - 1; index >= 0; index--) {
         if (gCharacterEditorTempTraits[index] != -1) {
             break;
         }
@@ -5814,6 +5826,18 @@ static int characterEditorUpdateLevel()
                 if (nextLevel % progression == 0) {
                     gCharacterEditorHasFreePerk = 1;
                 }
+
+                // F2-042: Grant "owed" perks from get/set_perk_owed (0x81AC).
+                // Scripts can track extra perks owed to the player independently
+                // of the level-based schedule. If owed > 0, force a free perk
+                // choice and decrement the owed count.
+                if (gCharacterEditorHasFreePerk == 0) {
+                    int perkOwed = sfallGetPerkOwed();
+                    if (perkOwed > 0) {
+                        gCharacterEditorHasFreePerk = 1;
+                        sfallSetPerkOwed(perkOwed - 1);
+                    }
+                }
             }
         }
     }
@@ -5895,6 +5919,30 @@ static void perkDialogRefreshPerks()
 // 0x43C4F0 perks_dialog
 static int perkDialogShow()
 {
+    // F-075: Honor perk_add_mode (opcode 0x81C3) set by scripts.
+    // Mode 1 = instant perk selection (auto-select first available perk).
+    // Mode 2 = auto-assign (not implemented — falls back to normal dialog).
+    int perkAddMode = sfallGetPerkAddMode();
+    if (perkAddMode == 1) {
+        // Auto-select the first available perk without opening the dialog.
+        int perks[PERK_COUNT];
+        int count = 0;
+        bool clearPerks = sfallGetClearSelectablePerks();
+        bool hideReal = sfallGetHideRealPerks();
+        if (!clearPerks && !hideReal) {
+            count = perkGetAvailablePerks(gDude, perks);
+        }
+        if (count > 0) {
+            int selectedPerk = perks[0];
+            if (perkAdd(gDude, selectedPerk) == -1) {
+                debugPrint("\n*** Unable to auto-add perk! ***\n");
+            }
+            return 1;
+        }
+        // Fall through to normal dialog if no perks available.
+    }
+    // Mode 2 (auto-assign) and any unrecognized mode: use normal dialog.
+
     gPerkDialogTopLine = 0;
     gPerkDialogCurrentLine = 0;
     gPerkDialogCardFrmId = -1;
@@ -6536,7 +6584,9 @@ static bool perkDialogHandleMutatePerk()
     gPerkDialogCardTitle[0] = '\0';
     gPerkDialogCardDrawn = false;
 
-    int traitCount = TRAITS_MAX_SELECTED_COUNT - 1;
+    // F-076: Use dynamic max trait count for FO1 (3) vs FO2 (2).
+    int maxTraits = traitGetMaxSelectedCount();
+    int traitCount = maxTraits - 1;
     int traitIndex = 0;
     while (traitCount >= 0) {
         if (gCharacterEditorTempTraits[traitIndex] != -1) {
@@ -6546,7 +6596,7 @@ static bool perkDialogHandleMutatePerk()
         traitIndex++;
     }
 
-    gCharacterEditorTempTraitCount = TRAITS_MAX_SELECTED_COUNT - traitIndex;
+    gCharacterEditorTempTraitCount = maxTraits - traitIndex;
 
     bool result = true;
     if (gCharacterEditorTempTraitCount >= 1) {

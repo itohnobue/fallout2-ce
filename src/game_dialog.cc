@@ -67,6 +67,11 @@ namespace fallout {
 #define GAME_DIALOG_OPTIONS_WINDOW_WIDTH 393
 #define GAME_DIALOG_OPTIONS_WINDOW_HEIGHT 117
 
+// F2-029: Maximum number of reply text pages in dialog review mode.
+// The original code used a fixed array of 10 ints; with enough formatted
+// text the auto-advance/page-down paths could overflow this into the stack.
+#define GAME_DIALOG_REPLY_MAX_PAGES 10
+
 #define GAME_DIALOG_REVIEW_WINDOW_WIDTH 640
 #define GAME_DIALOG_REVIEW_WINDOW_HEIGHT 480
 
@@ -1184,6 +1189,27 @@ void gameDialogRenderSupplementaryMessage(const char* msg)
     windowRefresh(gGameDialogReplyWindow);
 }
 
+// F2-030: Implements the missing _replyAddNew function that opSayOption's
+// _dialogReply stub intends to call. Uses the functional _replyAddOption
+// from the old dialog system to properly add reply text + option text.
+// The vanilla opcode 0x8052 (sayOption) calls _dialogReply, which has always
+// returned 0 silently — discarding both the reply text and option text.
+// To complete the fix, _dialogReply in dialog.cc:491 must be changed from:
+//   // _replyAddNew(a1, a2);
+// to:
+//   _replyAddNew(a1, a2);
+int _replyAddNew(const char* a1, const char* a2)
+{
+    // Check that dialog is active before adding a reply.
+    if (_dialogGetDialogDepth() == -1) {
+        return -1;
+    }
+
+    _replyAddOption(a1, a2, 0);
+
+    return 0;
+}
+
 // 0x4454FC
 int _gdialogStart()
 {
@@ -2046,7 +2072,7 @@ int gameDialogProcessUI()
     unsigned int tick = getTicks();
     int pageCount = 0;
     int pageIndex = 0;
-    int pageOffsets[10];
+    int pageOffsets[GAME_DIALOG_REPLY_MAX_PAGES];
     pageOffsets[0] = 0;
     for (;;) {
         sharedFpsLimiter.mark();
@@ -2123,7 +2149,14 @@ int gameDialogProcessUI()
                 if (getTicksBetween(now, tick) >= 10000 || keyCode == KEY_SPACE) {
                     pageCount++;
                     pageIndex++;
-                    pageOffsets[pageCount] = gDialogReplyTextOffset;
+                    // F2-029: Bounds check before writing to pageOffsets.
+                    // pageCount can grow unbounded with enough formatted text.
+                    if (pageCount < GAME_DIALOG_REPLY_MAX_PAGES) {
+                        pageOffsets[pageCount] = gDialogReplyTextOffset;
+                    } else {
+                        pageCount = GAME_DIALOG_REPLY_MAX_PAGES - 1;
+                        pageIndex = std::min(pageIndex, GAME_DIALOG_REPLY_MAX_PAGES - 1);
+                    }
                     gameDialogRenderReply();
                     tick = now;
                     if (!gDialogReplyTextOffset) {
@@ -2150,7 +2183,13 @@ int gameDialogProcessUI()
                         tick = now;
                         pageIndex++;
                         pageCount++;
-                        pageOffsets[pageCount] = gDialogReplyTextOffset;
+                        // F2-029: Bounds check before writing to pageOffsets.
+                        if (pageCount < GAME_DIALOG_REPLY_MAX_PAGES) {
+                            pageOffsets[pageCount] = gDialogReplyTextOffset;
+                        } else {
+                            pageCount = GAME_DIALOG_REPLY_MAX_PAGES - 1;
+                            pageIndex = std::min(pageIndex, GAME_DIALOG_REPLY_MAX_PAGES - 1);
+                        }
                         autoAdvance = false;
                         gameDialogRenderReply();
                     }
