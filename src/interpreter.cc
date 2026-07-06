@@ -855,7 +855,12 @@ static void opConditionalCall(Program* program)
 // 0x46817C
 static void opWait(Program* program)
 {
-    const int data = programStackPopInteger(program);
+    int data = programStackPopInteger(program);
+
+    if (data < 0) {
+        debugPrint("\nScript Error: %s: op_wait: negative wait duration %d, clamping to 0\n", program->name, data);
+        data = 0;
+    }
 
     program->waitStart = getInterpreterTime();
     program->waitEnd = program->waitStart + data;
@@ -1305,6 +1310,25 @@ static void opConditionalOperatorGreaterThanEquals(Program* program)
         case VALUE_TYPE_INT:
             result = value[1].integerValue >= value[0].integerValue;
             break;
+        case VALUE_TYPE_PTR:
+            result = (uintptr_t)(value[1].integerValue) >= (uintptr_t)(value[0].pointerValue);
+            break;
+        default:
+            assert(false && "Should be unreachable");
+        }
+        break;
+    case VALUE_TYPE_PTR:
+        switch (value[0].opcode) {
+        case VALUE_TYPE_INT:
+            if (value[0].integerValue > 0) {
+                result = (uintptr_t)value[1].pointerValue >= (uintptr_t)value[0].integerValue;
+            } else {
+                result = true;
+            }
+            break;
+        case VALUE_TYPE_PTR:
+            result = value[1].pointerValue >= value[0].pointerValue;
+            break;
         default:
             assert(false && "Should be unreachable");
         }
@@ -1385,6 +1409,25 @@ static void opConditionalOperatorLessThan(Program* program)
             break;
         case VALUE_TYPE_INT:
             result = value[1].integerValue < value[0].integerValue;
+            break;
+        case VALUE_TYPE_PTR:
+            result = (uintptr_t)(value[1].integerValue) < (uintptr_t)(value[0].pointerValue);
+            break;
+        default:
+            assert(false && "Should be unreachable");
+        }
+        break;
+    case VALUE_TYPE_PTR:
+        switch (value[0].opcode) {
+        case VALUE_TYPE_INT:
+            if (value[0].integerValue > 0) {
+                result = (uintptr_t)value[1].pointerValue < (uintptr_t)value[0].integerValue;
+            } else {
+                result = false;
+            }
+            break;
+        case VALUE_TYPE_PTR:
+            result = value[1].pointerValue < value[0].pointerValue;
             break;
         default:
             assert(false && "Should be unreachable");

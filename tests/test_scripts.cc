@@ -1,23 +1,20 @@
-// Unit tests for scripts.cc — data structure validation, accessor functions,
-// and sfall-mods.ini config loading.
+// Unit tests for scripts.cc — data structure validation and accessor functions.
 //
-// Tests: scriptsIsValidScriptIndex, scriptsGetWorldMapSlots,
-//        scriptsIsUniqueObjectId, sfallModsIniInit/Exit/GetInt,
-//        OBJECT_ID constants, SCRIPT_TYPE_COUNT, ScriptsListEntry layout.
+// Tests: scriptsIsValidScriptIndex, scriptsIsUniqueObjectId,
+//        OBJECT_ID constants, SCRIPT_TYPE_COUNT, ScriptProc/Flags enums,
+//        GAME_TIME constants, and fork behavior validation (N2-019/N2-020/N2-022).
 //
 // Uses test-local stubs mirroring scripts.cc internal functions where the
 // real source has 40+ engine dependencies (Object, Program, interpreter, etc.).
-// Links against test_sources (config.cc) for sfallModsIni config tests.
 //
 // All production constants and function bodies are verified against
-// src/scripts.cc 24199e9..HEAD diff.
+// src/scripts.cc.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest.h"
 
 #include <cstring>
 
-#include "config.h"
 #include "scripts.h"
 
 using namespace fallout;
@@ -34,14 +31,6 @@ static bool testScriptsIsValidScriptIndex(int scriptIndex)
     return scriptIndex >= 0 && scriptIndex < gTestScriptsListEntriesLength;
 }
 
-// Mirror of scripts.cc:1544-1547 — scriptsGetWorldMapSlots
-static int gTestWorldMapSlots = 0;
-
-static int testScriptsGetWorldMapSlots()
-{
-    return gTestWorldMapSlots;
-}
-
 // =============================================================
 // Object ID constants (mirrors scripts.cc:227-230, scripts.h:27)
 // =============================================================
@@ -56,51 +45,6 @@ static bool testScriptsIsUniqueObjectId(int objectId)
 {
     return objectId > TEST_OBJECT_ID_UNIQUE_START
         || (objectId >= TEST_OBJECT_ID_PLAYER && objectId < TEST_OBJECT_ID_PARTY_MEMBER_END);
-}
-
-// =============================================================
-// sfall-mods.ini config stubs (mirrors scripts.cc:1586-1619)
-// =============================================================
-
-static Config gTestSfallModsIni;
-static bool gTestSfallModsIniLoaded = false;
-
-// Mirror of scripts.cc:1586-1602 — sfallModsIniInit
-static bool testSfallModsIniInit()
-{
-    if (gTestSfallModsIniLoaded) {
-        return true;
-    }
-
-    if (!configInit(&gTestSfallModsIni)) {
-        return false;
-    }
-
-    // In production, configRead(&gSfallModsIni, "sfall-mods.ini", false) is
-    // called here; the stub fileOpen() returns nullptr so it gracefully fails.
-    // We skip the actual file read — the Config is left empty.
-
-    gTestSfallModsIniLoaded = true;
-    return true;
-}
-
-// Mirror of scripts.cc:1604-1609 — sfallModsIniExit
-static void testSfallModsIniExit()
-{
-    if (gTestSfallModsIniLoaded) {
-        configFree(&gTestSfallModsIni);
-        gTestSfallModsIniLoaded = false;
-    }
-}
-
-// Mirror of scripts.cc:1612-1619 — sfallModsIniGetInt
-static bool testSfallModsIniGetInt(const char* section, const char* key, int* value, int defaultValue)
-{
-    if (!gTestSfallModsIniLoaded) {
-        *value = defaultValue;
-        return false;
-    }
-    return configGetInt(&gTestSfallModsIni, section, key, value, defaultValue);
 }
 
 // =============================================================
@@ -240,39 +184,6 @@ TEST_CASE("scriptsIsValidScriptIndex — range validation")
     }
 }
 
-// ---- scriptsGetWorldMapSlots tests ----
-
-TEST_CASE("scriptsGetWorldMapSlots — getter")
-{
-    SUBCASE("default value is 0")
-    {
-        gTestWorldMapSlots = 0;
-        CHECK(testScriptsGetWorldMapSlots() == 0);
-    }
-
-    SUBCASE("RPU-compatible default of 21")
-    {
-        // RPU sets WorldMapSlots=21 in ddraw.ini [Misc]
-        gTestWorldMapSlots = 21;
-        CHECK(testScriptsGetWorldMapSlots() == 21);
-    }
-
-    SUBCASE("custom value")
-    {
-        gTestWorldMapSlots = 50;
-        CHECK(testScriptsGetWorldMapSlots() == 50);
-    }
-
-    SUBCASE("getter is const-correct (repeated reads stable)")
-    {
-        gTestWorldMapSlots = 42;
-        CHECK(testScriptsGetWorldMapSlots() == 42);
-        CHECK(testScriptsGetWorldMapSlots() == 42);
-        // Value unchanged after repeated reads
-        CHECK(testScriptsGetWorldMapSlots() == 42);
-    }
-}
-
 // ---- scriptsIsUniqueObjectId tests ----
 
 TEST_CASE("scriptsIsUniqueObjectId — player and party member range")
@@ -385,156 +296,6 @@ TEST_CASE("scriptsIsUniqueObjectId — boundary edge cases")
     }
 }
 
-// ---- sfallModsIni tests ----
-
-TEST_CASE("sfallModsIniInit / sfallModsIniExit lifecycle")
-{
-    // Reset state between subcases
-    gTestSfallModsIniLoaded = false;
-
-    SUBCASE("init succeeds and marks as loaded")
-    {
-        CHECK(testSfallModsIniInit());
-        CHECK(gTestSfallModsIniLoaded);
-
-        testSfallModsIniExit();
-        CHECK_FALSE(gTestSfallModsIniLoaded);
-    }
-
-    SUBCASE("double init returns true (idempotent)")
-    {
-        CHECK(testSfallModsIniInit());
-        CHECK(testSfallModsIniInit()); // Second call, already loaded
-        CHECK(gTestSfallModsIniLoaded);
-
-        testSfallModsIniExit();
-        CHECK_FALSE(gTestSfallModsIniLoaded);
-    }
-
-    SUBCASE("exit when not loaded is safe (no-op guard)")
-    {
-        // Call exit without init — guarded by gTestSfallModsIniLoaded check
-        testSfallModsIniExit();
-        CHECK_FALSE(gTestSfallModsIniLoaded);
-        // Should not crash
-    }
-
-    SUBCASE("double exit is safe")
-    {
-        CHECK(testSfallModsIniInit());
-        testSfallModsIniExit();
-        testSfallModsIniExit(); // Second exit — guarded by gTestSfallModsIniLoaded
-    }
-
-    SUBCASE("init → exit → init cycle")
-    {
-        CHECK(testSfallModsIniInit());
-        testSfallModsIniExit();
-
-        // Re-init after exit
-        CHECK(testSfallModsIniInit());
-        CHECK(gTestSfallModsIniLoaded);
-
-        testSfallModsIniExit();
-    }
-}
-
-TEST_CASE("sfallModsIniGetInt — config integration")
-{
-    // Clean state before each subcase
-    if (gTestSfallModsIniLoaded) testSfallModsIniExit();
-
-    SUBCASE("returns default when not loaded")
-    {
-        CHECK_FALSE(gTestSfallModsIniLoaded);
-        int value = -1;
-        bool result = testSfallModsIniGetInt("Section", "Key", &value, 42);
-        CHECK_FALSE(result);
-        CHECK(value == 42); // defaultValue is returned
-    }
-
-    SUBCASE("returns default when key not found")
-    {
-        CHECK(testSfallModsIniInit());
-        int value = -1;
-        bool result = testSfallModsIniGetInt("NoSection", "NoKey", &value, 99);
-        // configGetInt returns false when key not found AND value is default
-        CHECK(value == 99);
-
-        testSfallModsIniExit();
-    }
-
-    SUBCASE("retrieves stored integer after setting")
-    {
-        CHECK(testSfallModsIniInit());
-
-        // Set a value through the underlying Config
-        configSetInt(&gTestSfallModsIni, "TestSection", "TestKey", 777);
-
-        int value = 0;
-        bool result = testSfallModsIniGetInt("TestSection", "TestKey", &value, -1);
-        CHECK(result);
-        CHECK(value == 777);
-
-        testSfallModsIniExit();
-    }
-
-    SUBCASE("different sections and keys don't interfere")
-    {
-        CHECK(testSfallModsIniInit());
-
-        configSetInt(&gTestSfallModsIni, "Audio", "Volume", 75);
-        configSetInt(&gTestSfallModsIni, "Video", "Width", 1920);
-        configSetInt(&gTestSfallModsIni, "Misc", "Speed", 50);
-
-        int value = 0;
-        CHECK(testSfallModsIniGetInt("Audio", "Volume", &value, 0));
-        CHECK(value == 75);
-        CHECK(testSfallModsIniGetInt("Video", "Width", &value, 0));
-        CHECK(value == 1920);
-        CHECK(testSfallModsIniGetInt("Misc", "Speed", &value, 0));
-        CHECK(value == 50);
-
-        testSfallModsIniExit();
-    }
-
-    SUBCASE("values survive exit/re-init cycle")
-    {
-        CHECK(testSfallModsIniInit());
-        configSetInt(&gTestSfallModsIni, "Persist", "Count", 123);
-
-        int value = 0;
-        CHECK(testSfallModsIniGetInt("Persist", "Count", &value, 0));
-        CHECK(value == 123);
-
-        testSfallModsIniExit();
-
-        // After re-init, config is fresh (values gone)
-        CHECK(testSfallModsIniInit());
-        int value2 = -1;
-        testSfallModsIniGetInt("Persist", "Count", &value2, -1);
-        CHECK(value2 == -1); // defaultValue — old values are gone
-
-        testSfallModsIniExit();
-    }
-
-    SUBCASE("negative and zero values")
-    {
-        CHECK(testSfallModsIniInit());
-
-        configSetInt(&gTestSfallModsIni, "Negative", "Offset", -50);
-        configSetInt(&gTestSfallModsIni, "Negative", "Zero", 0);
-
-        int value = 1;
-        CHECK(testSfallModsIniGetInt("Negative", "Offset", &value, 0));
-        CHECK(value == -50);
-        CHECK(testSfallModsIniGetInt("Negative", "Zero", &value, 1));
-        CHECK(value == 0);
-
-        testSfallModsIniExit();
-    }
-}
-
 // ---- ScriptType enum validation ----
 
 TEST_CASE("ScriptType enum values")
@@ -588,70 +349,6 @@ TEST_CASE("GAME_TIME tick constants")
     // Consistency: 24 hours per day, 365 days per year
     CHECK(GAME_TIME_TICKS_PER_DAY == GAME_TIME_TICKS_PER_HOUR * 24);
     CHECK(GAME_TIME_TICKS_PER_YEAR == GAME_TIME_TICKS_PER_DAY * 365);
-}
-
-// ===========================================================================
-// M-014: sfallModsIni extended edge cases (scripts.cc:1586-1619)
-// ===========================================================================
-//
-// Finding M-014 (CONFIRMED, MEDIUM): The existing mirror tests cover lifecycle
-// and basic config integration, but the production code also has:
-//   - configRead returns false gracefully if file missing
-//   - multiple keys in different sections
-//   - int value boundaries (INT_MIN, INT_MAX)
-//   - double-init idempotency with state already loaded
-//
-// Research: RPU CONFIRMED (sfall-mods.ini for mod overrides),
-//           ETu CONFIRMED (fo1_settings.ini, 40+ GVAR settings)
-
-TEST_CASE("M-014: sfallModsIni — init succeeds even when configRead fails (scripts.cc:1598)")
-{
-    // Production calls configRead(&gSfallModsIni, "sfall-mods.ini", false) which
-    // returns false if the file doesn't exist. The function ignores the return
-    // value and marks loaded=true anyway. This mirrors that behavior.
-    if (gTestSfallModsIniLoaded) testSfallModsIniExit();
-
-    SUBCASE("init returns true regardless of file existence")
-    {
-        CHECK(testSfallModsIniInit());
-        CHECK(gTestSfallModsIniLoaded);
-
-        testSfallModsIniExit();
-    }
-}
-
-TEST_CASE("M-014: sfallModsIniGetInt — INT_MIN and INT_MAX boundaries (scripts.cc:1612-1619)")
-{
-    // Finding M-014: configGetInt handles extreme integer values.
-    if (gTestSfallModsIniLoaded) testSfallModsIniExit();
-    CHECK(testSfallModsIniInit());
-
-    configSetInt(&gTestSfallModsIni, "Bounds", "MinInt", -2147483647 - 1);
-    configSetInt(&gTestSfallModsIni, "Bounds", "MaxInt", 2147483647);
-    configSetInt(&gTestSfallModsIni, "Bounds", "Zero", 0);
-
-    int value = 1;
-    CHECK(testSfallModsIniGetInt("Bounds", "MinInt", &value, 0));
-    CHECK(value == -2147483647 - 1);
-    CHECK(testSfallModsIniGetInt("Bounds", "MaxInt", &value, 0));
-    CHECK(value == 2147483647);
-    CHECK(testSfallModsIniGetInt("Bounds", "Zero", &value, 1));
-    CHECK(value == 0);
-
-    testSfallModsIniExit();
-}
-
-TEST_CASE("M-014: sfallModsIniGetInt — returns false and default when not loaded (scripts.cc:1614-1616)")
-{
-    // Production: if (!gSfallModsIniLoaded) { *value = defaultValue; return false; }
-    if (gTestSfallModsIniLoaded) testSfallModsIniExit();
-    CHECK_FALSE(gTestSfallModsIniLoaded);
-
-    int value = 999;
-    bool result = testSfallModsIniGetInt("AnySection", "AnyKey", &value, 42);
-    CHECK_FALSE(result);
-    CHECK(value == 42); // defaultValue returned
-    // value pointer is always written, even on failure
 }
 
 // ===========================================================================
@@ -724,19 +421,6 @@ static bool testScriptsCreateProgramByNamePreCheck(bool fileExists)
     }
     return true; // proceed to programCreateByPath
 }
-
-// ===========================================================================
-// N2-021: sfallModsIniGetInt dead code documentation (scripts.cc:1612)
-// ===========================================================================
-//
-// Finding N2-021 (CONFIRMED, MEDIUM): sfallModsIniGetInt has ZERO production
-// callers. The entire sfall-mods.ini infrastructure is compiled, initialized,
-// and freed, but NO production code calls sfallModsIniGetInt to read from it.
-// This is dead code — init/exit run but the reader is never used.
-//
-// Tests below verify the infrastructure itself works correctly (the function
-// is still callable and returns correct values), serializing the design intent
-// that this dead code exist (potential future consumer from RPU/ETu compat).
 
 // ===========================================================================
 // N2-022: scriptsGetMessageList bounds check (scripts.cc:2852-2854)
@@ -854,40 +538,6 @@ TEST_CASE("N2-020: regression — OLD code would longjmp on missing .int file (s
     // returns nullptr cleanly vs. triggering the old fatal error.
     CHECK_FALSE(testScriptsCreateProgramByNamePreCheck(false)); // clean exit
     CHECK(testScriptsCreateProgramByNamePreCheck(true));        // proceed
-}
-
-// ===========================================================================
-// N2-021: sfallModsIniGetInt dead code documentation (scripts.cc:1612)
-// ===========================================================================
-
-TEST_CASE("N2-021: sfallModsIniGetInt — dead code survives init/exit lifecycle (scripts.cc:1586-1619)")
-{
-    // Finding N2-021 (CONFIRMED, MEDIUM): sfallModsIniGetInt has ZERO production
-    // callers. The infrastructure (init/exit/GetInt + gSfallModsIni Config +
-    // gSfallModsIniLoaded flag) is compiled, initialized, and freed, but no
-    // production code reads from it. The comment at scripts.cc:1583 states
-    // "RPU and ET Tu rely on this file being parsed" — but parsing into a
-    // never-read Config object provides zero value.
-    //
-    // Cross-file gap: scripts.h exports sfallModsIniGetInt but no consumer.
-    // This test verifies the function still works (it's callable and returns
-    // correct values) for when a future RPU/ETu consumer is added.
-
-    if (gTestSfallModsIniLoaded) testSfallModsIniExit();
-
-    // The dead-code lifecycle still works: init loads file, GetInt reads values.
-    CHECK(testSfallModsIniInit());
-
-    configSetInt(&gTestSfallModsIni, "DeadCode", "Value", 42);
-
-    int value = -1;
-    bool success = testSfallModsIniGetInt("DeadCode", "Value", &value, 0);
-    CHECK(success);
-    CHECK(value == 42);
-
-    // Cleanup still works (no leaked Config state)
-    testSfallModsIniExit();
-    CHECK_FALSE(gTestSfallModsIniLoaded);
 }
 
 // ===========================================================================

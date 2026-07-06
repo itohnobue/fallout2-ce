@@ -1771,8 +1771,8 @@ static int protoItemDataWrite(ItemProtoData* item_data, int type, File* stream)
         return 0;
     case ITEM_TYPE_WEAPON:
         if (fileWriteInt32(stream, item_data->weapon.animationCode) == -1) return -1;
-        if (fileWriteInt32(stream, item_data->weapon.maxDamage) == -1) return -1;
         if (fileWriteInt32(stream, item_data->weapon.minDamage) == -1) return -1;
+        if (fileWriteInt32(stream, item_data->weapon.maxDamage) == -1) return -1;
         if (fileWriteInt32(stream, item_data->weapon.damageType) == -1) return -1;
         if (fileWriteInt32(stream, item_data->weapon.maxRange1) == -1) return -1;
         if (fileWriteInt32(stream, item_data->weapon.maxRange2) == -1) return -1;

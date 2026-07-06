@@ -2583,6 +2583,9 @@ static int _cai_retargetTileFromFriendlyFire(Object* source, Object* target, int
             && obj != aiRetargetData.source) {
             int rating = _combatai_rating(obj);
             if (rating >= aiRetargetData.sourceRating) {
+                if (aiRetargetData.critterCount >= 100) {
+                    break;
+                }
                 aiRetargetData.critterList[aiRetargetData.critterCount] = obj;
                 aiRetargetData.ratingList[aiRetargetData.critterCount] = rating;
                 aiRetargetData.critterCount += 1;

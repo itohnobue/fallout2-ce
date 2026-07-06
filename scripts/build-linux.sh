@@ -84,10 +84,18 @@ install_deps() {
         fi
     elif command -v dnf &>/dev/null; then
         echo "[build-linux] Installing dependencies via dnf..."
-        sudo dnf install -y SDL2-devel zlib-devel
+        if [[ "$ARCH" == "x86" ]]; then
+            sudo dnf install -y glibc-devel.i686 libstdc++-devel.i686 SDL2-devel.i686 zlib-devel.i686
+        else
+            sudo dnf install -y SDL2-devel zlib-devel
+        fi
     elif command -v pacman &>/dev/null; then
         echo "[build-linux] Installing dependencies via pacman..."
-        sudo pacman -S --needed --noconfirm sdl2 zlib
+        if [[ "$ARCH" == "x86" ]]; then
+            sudo pacman -S --needed --noconfirm lib32-sdl2 lib32-zlib
+        else
+            sudo pacman -S --needed --noconfirm sdl2 zlib
+        fi
     else
         echo "[build-linux] WARNING: could not detect package manager."
         echo "  Please install SDL2 and zlib development headers manually."

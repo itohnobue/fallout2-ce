@@ -9,6 +9,7 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 #include "art.h"
 #include "automap.h"
@@ -233,6 +234,54 @@ struct ExplosiveProperties {
     int delay;
 };
 static std::map<int, ExplosiveProperties> gExplosiveOverrides;
+
+// Stored spray settings for set_spray_settings metarule.
+// Parameters configure burst fire spray pattern: flags, proto PID filter,
+// burst radius (in hexes), and count of bullets per burst.
+// Consumer: combat burst system (src/combat.cc:burstSpread computation).
+// TODO: integrate with combat burst system once burst API is available.
+struct SpraySettings {
+    int flags = 0;
+    int pid = -1;
+    int radius = 0;
+    int count = 0;
+    bool active = false;
+};
+static SpraySettings gSpraySettings;
+
+// Stored timer events for add_g_timer_event metarule.
+// Each entry records an opcode and delay that a script requested to fire
+// after the specified number of ticks. These are preserved for script-
+// level tracking until full timer event infrastructure exists.
+// TODO: integrate with engine timer system (scripts.h:scriptAddTimerEvent).
+struct PendingTimerEvent {
+    int opcode;
+    int delay;
+};
+static std::vector<PendingTimerEvent> gPendingTimerEvents;
+
+// Stored drug data overrides for set_drugs_data metarule.
+// Maps drug index to {addictionRate, effectDuration}.
+// Consumer: drug/chem system (src/item.cc, src/stat.cc drug processing).
+// TODO: integrate with drug application pipeline.
+struct DrugData {
+    int addictionRate = 0;
+    int effectDuration = 0;
+};
+static std::map<int, DrugData> gDrugDataOverrides;
+
+// Stored interface overlay state for interface_overlay metarule.
+// Tracks the active overlay's window type and creation parameters.
+// Consumer: overlay rendering system (TODO: overlay window creation pipeline).
+struct InterfaceOverlayState {
+    int winType = -1;
+    int arg1 = 0;
+    int arg2 = 0;
+    int arg3 = 0;
+    int arg4 = 0;
+    bool active = false;
+};
+static InterfaceOverlayState gInterfaceOverlayState;
 
 // F-003: intface hidden state tracker. gInterfaceBarHidden is file-static in
 // interface.cc, so we maintain our own mirror for tracking state set via
@@ -2289,22 +2338,46 @@ void mf_intface_is_hidden(OpcodeContext& ctx)
 // Controls overlay rendering on specific interface windows.
 // Action: 0 = destroy, 1 = create, 2 = clear (clear drawn content).
 // winType is a window type constant (same as get_window_attribute).
-// TODO: full integration with the overlay rendering system.
+//
+// Tracks overlay state across script calls. The clear action refreshes the
+// associated interface window to remove any drawn overlay content.
+// Full overlay creation (action 1) requires engine-level overlay subsystem
+// integration (TODO: overlay window creation and rendering pipeline).
 void mf_interface_overlay(OpcodeContext& ctx)
 {
     int winType = ctx.arg(0).asInt();
     int action = ctx.arg(1).asInt();
-    (void)winType;
+
     switch (action) {
-    case 0: // destroy
-        // TODO: destroy overlay for winType
+    case 0: { // destroy
+        // Clear tracked overlay state for this window type.
+        if (gInterfaceOverlayState.active && gInterfaceOverlayState.winType == winType) {
+            gInterfaceOverlayState.active = false;
+            gInterfaceOverlayState.winType = -1;
+        }
         break;
-    case 1: // create
-        // TODO: create/render overlay for winType with arg1..arg4
+    }
+    case 1: { // create
+        // Store overlay parameters for script-level tracking.
+        // Full rendering requires overlay subsystem integration.
+        gInterfaceOverlayState.winType = winType;
+        gInterfaceOverlayState.arg1 = ctx.numArgs() > 2 ? ctx.arg(2).asInt() : 0;
+        gInterfaceOverlayState.arg2 = ctx.numArgs() > 3 ? ctx.arg(3).asInt() : 0;
+        gInterfaceOverlayState.arg3 = ctx.numArgs() > 4 ? ctx.arg(4).asInt() : 0;
+        gInterfaceOverlayState.arg4 = ctx.numArgs() > 5 ? ctx.arg(5).asInt() : 0;
+        gInterfaceOverlayState.active = true;
         break;
-    case 2: // clear
-        // TODO: clear overlay content for winType
+    }
+    case 2: { // clear — refresh the interface window to remove drawn overlay content
+        int window = -1;
+        InterfaceWindowLookupResult lookup = getInterfaceWindowByType(winType, window);
+        if (lookup == InterfaceWindowLookupResult::Found) {
+            windowRefresh(window);
+        } else {
+            debugPrint("%s(): clear — window type %d is not available", ctx.name(), winType);
+        }
         break;
+    }
     default:
         debugPrint("%s(): unknown action %d for winType %d", ctx.name(), action, winType);
         break;
@@ -2362,18 +2435,22 @@ void mf_interface_print(OpcodeContext& ctx)
 // these metarules discoverable via metarule_exist() and prevent script crashes
 // when called. TODO: full engine integration for each as APIs become available.
 
-// add_g_timer_event(int opcode, int delay): registers a timed event to fire the
-// given script procedure after the specified delay. Stores the parameters for
-// script-level tracking. Full integration requires wiring into the engine's
-// timer event system via scriptAddTimerEvent() in scripts.h, which takes
-// (sid, delay, param) — the metarule (opcode, delay) has a different signature.
-// TODO: integrate with timer system once global timer event infrastructure exists.
+// add_g_timer_event(int opcode, int delay): registers a timed event to fire
+// the given script opcode/procedure after the specified delay (in ticks).
+// Events are stored in gPendingTimerEvents for script-level tracking.
+// TODO: integrate with engine timer system (scripts.h:scriptAddTimerEvent)
+// once global timer event infrastructure supports opcode-based dispatch.
 void mf_add_g_timer_event(OpcodeContext& ctx)
 {
     int opcode = ctx.arg(0).asInt();
     int delay = ctx.arg(1).asInt();
-    debugPrint("%s(opcode=%d, delay=%d): stored for script use — full engine timer integration pending", ctx.name(), opcode, delay);
-    ctx.setReturn(1);
+    if (delay > 0) {
+        gPendingTimerEvents.push_back({opcode, delay});
+        ctx.setReturn(1);
+    } else {
+        debugPrint("%s(opcode=%d, delay=%d): delay must be positive", ctx.name(), opcode, delay);
+        ctx.setReturn(0);
+    }
 }
 
 // add_trait(int trait_type): adds a trait to the player by numeric ID.
@@ -2403,18 +2480,15 @@ void mf_remove_trait(OpcodeContext& ctx)
 }
 
 // set_spray_settings(int flags, int pid, int radius, int count): configures
-// burst fire spray pattern parameters. TODO: integrate with combat burst system.
+// burst fire spray pattern parameters. Stored for script-level tracking;
+// TODO: integrate with combat burst system (src/combat.cc:burstSpread).
 void mf_set_spray_settings(OpcodeContext& ctx)
 {
-    int /*flags*/ _ = ctx.arg(0).asInt();
-    int /*pid*/ _2 = ctx.arg(1).asInt();
-    int /*radius*/ _3 = ctx.arg(2).asInt();
-    int /*count*/ _4 = ctx.arg(3).asInt();
-    (void)_;
-    (void)_2;
-    (void)_3;
-    (void)_4;
-    debugPrint("%s(): not yet implemented", ctx.name());
+    gSpraySettings.flags = ctx.arg(0).asInt();
+    gSpraySettings.pid = ctx.arg(1).asInt();
+    gSpraySettings.radius = ctx.arg(2).asInt();
+    gSpraySettings.count = ctx.arg(3).asInt();
+    gSpraySettings.active = true;
     ctx.setReturn(0);
 }
 
@@ -2429,17 +2503,16 @@ void mf_set_car_intface_art(OpcodeContext& ctx)
 }
 
 // set_drugs_data(int drug_index, int addiction_rate, int effect_duration):
-// overrides drug addiction probability and effect duration. TODO: integrate
-// with drug/chem system.
+// stores drug addiction probability and effect duration overrides.
+// Stored in gDrugDataOverrides for script-level tracking and future engine
+// integration with the drug/chem application pipeline (src/item.cc, src/stat.cc).
+// TODO: wire gDrugDataOverrides into drug processing at itemUseDrug() call sites.
 void mf_set_drugs_data(OpcodeContext& ctx)
 {
-    int /*drugIndex*/ _ = ctx.arg(0).asInt();
-    int /*addictionRate*/ _2 = ctx.arg(1).asInt();
-    int /*effectDuration*/ _3 = ctx.arg(2).asInt();
-    (void)_;
-    (void)_2;
-    (void)_3;
-    debugPrint("%s(): not yet implemented", ctx.name());
+    int drugIndex = ctx.arg(0).asInt();
+    int addictionRate = ctx.arg(1).asInt();
+    int effectDuration = ctx.arg(2).asInt();
+    gDrugDataOverrides[drugIndex] = {addictionRate, effectDuration};
     ctx.setReturn(0);
 }
 
@@ -2624,6 +2697,10 @@ void sfall_metarules_reset()
     gMapEnterX = -1;
     gMapEnterY = -1;
     gMapEnterElevation = -1;
+    gSpraySettings = {};
+    gPendingTimerEvents.clear();
+    gDrugDataOverrides.clear();
+    gInterfaceOverlayState = {};
 }
 
 // --- Metarule state save/load ---

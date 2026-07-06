@@ -1820,7 +1820,11 @@ static bool sfallVfsFileOpen[kVfsMaxFiles] = {};
 static int sfallVfsFileMode[kVfsMaxFiles] = {};
 // Store the original filename for handles so fs_resize can reopen read-only
 // handles in read-write mode when needed (F-028).
-static const char* sfallVfsFilePath[kVfsMaxFiles] = {};
+// NOTE (F-270): Filesystem paths are OWNED COPIES (via internal_strdup),
+// not raw pointers into program->dynamicStrings. programStackPopString
+// returns a pointer into the program's owned string storage which is freed
+// on program exit — storing raw pointers would be use-after-free.
+static char* sfallVfsFilePath[kVfsMaxFiles] = {};
 
 static int sfallVfsAllocHandle()
 {
@@ -1844,7 +1848,11 @@ static void sfallVfsFreeHandle(int id)
         }
         sfallVfsFileOpen[id] = false;
         sfallVfsFileMode[id] = 0;
-        sfallVfsFilePath[id] = nullptr;
+        // F-270: free the owned path copy to prevent use-after-free
+        if (sfallVfsFilePath[id] != nullptr) {
+            internal_free(sfallVfsFilePath[id]);
+            sfallVfsFilePath[id] = nullptr;
+        }
     }
 }
 
@@ -1927,7 +1935,9 @@ static void op_fs_create(Program* program)
 
     sfallVfsFiles[handle] = file;
     sfallVfsFileMode[handle] = 2; // read-write ("w+b")
-    sfallVfsFilePath[handle] = path; // stored for fs_resize reopen (F-028)
+    // F-270: store an owned copy to prevent use-after-free when the
+    // program exits and frees its dynamicStrings backing store.
+    sfallVfsFilePath[handle] = internal_strdup(path);
     programStackPushInteger(program, handle);
 }
 
@@ -1984,7 +1994,9 @@ static void op_fs_copy(Program* program)
     rewind(destFile); // position at start for reading
     sfallVfsFiles[handle] = destFile;
     sfallVfsFileMode[handle] = 2; // read-write ("w+b")
-    sfallVfsFilePath[handle] = destPath; // stored for fs_resize reopen (F-028)
+    // F-270: store an owned copy to prevent use-after-free when the
+    // program exits and frees its dynamicStrings backing store.
+    sfallVfsFilePath[handle] = internal_strdup(destPath);
     programStackPushInteger(program, handle);
 }
 
@@ -2015,7 +2027,9 @@ static void op_fs_find(Program* program)
 
     sfallVfsFiles[handle] = file;
     sfallVfsFileMode[handle] = 1; // read-only ("rb")
-    sfallVfsFilePath[handle] = path; // stored for fs_resize reopen (F-028)
+    // F-270: store an owned copy to prevent use-after-free when the
+    // program exits and frees its dynamicStrings backing store.
+    sfallVfsFilePath[handle] = internal_strdup(path);
     programStackPushInteger(program, handle);
 }
 
@@ -2503,6 +2517,13 @@ static void op_register_hook(Program* program)
         programPrintError("%s: invalid hook ID: %d", opcodeName, hookId);
         return;
     }
+    // NOTE (F-106): register_hook (0x8207) only registers the "start"
+    // procedure. In original sfall this opcode accepts an optional procedure
+    // parameter; CE requires the explicit register_hook_proc variant
+    // (0x8262) for non-start procedures. If a script has no "start" procedure,
+    // this opcode will fail with an error on purpose — scripts without a
+    // start procedure cannot serve as hook handlers because the interpreter
+    // dispatches hooks through the start procedure's entry point.
     int startProcIndex = programFindProcedure(program, gScriptProcNames[SCRIPT_PROC_START]);
     if (startProcIndex == -1) {
         programPrintError("%s: 'start' procedure not found", opcodeName);
@@ -2990,6 +3011,11 @@ static void op_set_stat_min(Program* program)
 
 // set_pc_stat_max(int stat, int value) — 0x81B7
 // ETu needs this for rad resist cap at 100.
+// NOTE (F-055): CE uses a single shared gStatDescriptions[] table for all stat
+// limits, so set_pc_stat_max is functionally identical to set_stat_max.
+// PC-specific vs NPC-specific stat caps are not differentiated — the last
+// call to any set_*_stat_max/min overrides the stat cap globally.
+// Registered for compatibility so scripts do not crash.
 static void op_set_pc_stat_max(Program* program)
 {
     int value = programStackPopInteger(program);
@@ -3004,6 +3030,7 @@ static void op_set_pc_stat_max(Program* program)
 }
 
 // set_pc_stat_min(int stat, int value) — 0x81B8
+// NOTE (F-055): See set_pc_stat_max above — CE uses a single global stat table.
 static void op_set_pc_stat_min(Program* program)
 {
     int value = programStackPopInteger(program);
@@ -3018,6 +3045,7 @@ static void op_set_pc_stat_min(Program* program)
 }
 
 // set_npc_stat_max(int stat, int value) — 0x81B9
+// NOTE (F-055): See set_pc_stat_max above — CE uses a single global stat table.
 static void op_set_npc_stat_max(Program* program)
 {
     int value = programStackPopInteger(program);
@@ -3032,6 +3060,7 @@ static void op_set_npc_stat_max(Program* program)
 }
 
 // set_npc_stat_min(int stat, int value) — 0x81BA
+// NOTE (F-055): See set_pc_stat_max above — CE uses a single global stat table.
 static void op_set_npc_stat_min(Program* program)
 {
     int value = programStackPopInteger(program);
@@ -3130,6 +3159,13 @@ static void op_get_perk_available(Program* program)
 // Knockback opcodes (0x8195-0x819A).
 // Store knockback settings; exposed via sfall_opcodes.h for combat
 // integration in combat.cc (attackComputeDamage).
+//
+// NOTE (F-091): Knockback values are stored in global singletons, NOT per-entity.
+// If two scripts set knockback for different weapons/critters, only the last
+// call takes effect. The weapon/critter object parameters are accepted for
+// API compatibility but do not distinguish per-entity knockback. Converting
+// to per-entity storage would require a map from (Object*, knockbackType)
+// to values, which is not implemented. Reset via sfallOpcodesReset().
 // ============================================================
 int sfallWeaponKnockbackType = 0;
 float sfallWeaponKnockbackValue = 0.0f;
@@ -3524,6 +3560,14 @@ static void op_set_hp_per_level_mod(Program* program)
 // set_critter_hit_chance_mod (0x81C5) — modifies hit chance.
 // Stores max and mod values; exposed via sfall_opcodes.h for combat
 // integration in combat.cc (attackDetermineToHit).
+//
+// NOTE (F-033, F-103): Like all critter-modifier opcodes in CE, these values
+// are stored globally, not per-critter. The critter object parameter is
+// accepted for API compatibility but the max/mod values apply universally.
+// Both set_critter_hit_chance_mod (0x81C5) and set_base_hit_chance_mod
+// (0x81C6) write to the same sfallHitChanceMax / sfallHitChanceMod globals
+// — whichever is called last takes effect. Clamping matches set_hit_chance_max
+// and set_base_hit_chance_mod for consistency.
 // ============================================================
 int sfallHitChanceMod = 0;
 int sfallHitChanceMax = 95;
@@ -3536,6 +3580,13 @@ static void op_set_critter_hit_chance_mod(Program* program)
 
     if (critter == nullptr) {
         return;
+    }
+
+    if (max < 1) {
+        max = 1;
+    }
+    if (max > 100) {
+        max = 100;
     }
 
     sfallHitChanceMax = max;
@@ -3566,6 +3617,11 @@ static void op_set_hit_chance_max(Program* program)
 // set_base_hit_chance_mod (0x81C6) — sets flat hit chance bonus/malus.
 // Previously commented out; now registered (F-006). ET Tu uses this
 // for Fallout 1 hit mechanics where base chance is adjusted globally.
+//
+// NOTE (F-103): Shares sfallHitChanceMax/sfallHitChanceMod globals with
+// set_critter_hit_chance_mod (0x81C5). See set_critter_hit_chance_mod
+// above for full explanation. In sfall these opcodes are documented as
+// distinct ("base" vs "critter") but CE does not differentiate.
 // ============================================================
 static void op_set_base_hit_chance_mod(Program* program)
 {
@@ -3693,8 +3749,6 @@ static void op_sneak_success(Program* program)
 // ============================================================
 // create_spatial (0x8273) — creates a spatial script object at a tile.
 // Spatial scripts execute when a critter enters their radius.
-// Full implementation requires script system integration (scriptAdd,
-// scriptSetScript, object creation, and tile placement).
 // ============================================================
 static void op_create_spatial(Program* program)
 {
@@ -3703,17 +3757,81 @@ static void op_create_spatial(Program* program)
     int tile = programStackPopInteger(program);
     int scriptID = programStackPopInteger(program);
 
-    // Create a spatial script object — invisible object that
-    // runs its spatial procedure when critters enter its radius.
-    // TODO: Full implementation requires:
-    //   1. scriptAdd(&sid, SCRIPT_TYPE_SPATIAL)
-    //   2. scriptSetObjects(sid, nullptr, nullptr)
-    //   3. objectCreateWithFidPid + objectSetLocation
-    //   4. scr->sp.radius = radius
-    //   5. scr->sp.built_tile = builtTileCreate(tile, elevation)
-    debugPrint("create_spatial(script=%d, tile=%d, elev=%d, radius=%d) — spatial system integration pending\n",
-        scriptID, tile, elevation, radius);
-    programStackPushInteger(program, 0);
+    // Convert 1-based sfall script index to 0-based CE index.
+    // Matches the convention used by set_script (0x81F4).
+    int scriptIndex = scriptID;
+    if (scriptIndex <= 0) {
+        programPrintError("create_spatial: invalid script index %d (must be >= 1)", scriptID);
+        programStackPushInteger(program, 0);
+        return;
+    }
+    scriptIndex--;
+
+    if (!scriptsIsValidScriptIndex(scriptIndex)) {
+        programPrintError("create_spatial: script index %d out of range", scriptID);
+        programStackPushInteger(program, 0);
+        return;
+    }
+
+    // Validate tile and elevation.
+    if (!hexGridTileIsValid(tile) || !elevationIsValid(elevation)) {
+        programPrintError("create_spatial: invalid tile/elevation (%d, %d)", tile, elevation);
+        programStackPushInteger(program, 0);
+        return;
+    }
+
+    if (radius < 1) {
+        programPrintError("create_spatial: invalid radius %d (must be >= 1)", radius);
+        programStackPushInteger(program, 0);
+        return;
+    }
+
+    // Create the spatial script entry.
+    int sid;
+    if (scriptAdd(&sid, SCRIPT_TYPE_SPATIAL) == -1) {
+        programPrintError("create_spatial: failed to create spatial script");
+        programStackPushInteger(program, 0);
+        return;
+    }
+
+    Script* scr;
+    if (scriptGetScript(sid, &scr) == -1) {
+        programPrintError("create_spatial: failed to get spatial Script for SID %d", sid);
+        programStackPushInteger(program, 0);
+        return;
+    }
+
+    // Set spatial properties — matches mapper's spatial creation pattern
+    // (mp_scrpt.cc:map_create_spatial).
+    scr->sp.built_tile = builtTileCreate(tile, elevation);
+    scr->sp.radius = radius;
+    scr->flags |= SCRIPT_FLAG_NO_SAVE; // spatials are not persisted in save files
+
+    // Load and attach the script program.
+    // _scr_find_str_run_info loads the .int file from the script index
+    // and binds the start procedure to the spatial script.
+    if (_scr_find_str_run_info(scriptIndex, nullptr, sid) == -1) {
+        programPrintError("create_spatial: failed to load script program for index %d", scriptID);
+        programStackPushInteger(program, 0);
+        return;
+    }
+
+    // Create a marker object at the spatial location (matches mapper pattern).
+    // The object is invisible — it serves as the spatial position anchor
+    // and is returned as the spatial handle that scripts can query.
+    int markerFid = buildFid(OBJ_TYPE_INTERFACE, 3, 0, 0, 0);
+    Object* obj;
+    if (objectCreateWithFidPid(&obj, markerFid, -1) != -1) {
+        obj->flags |= OBJECT_NO_SAVE;
+        objectHide(obj, nullptr);
+        _obj_toggle_flat(obj, nullptr);
+        objectSetLocation(obj, tile, elevation, nullptr);
+    }
+
+    // Return the spatial SID. In sfall, create_spatial returns the spatial
+    // object handle; CE returns the SID which scripts can use to interact
+    // with the spatial (e.g., spatial_radius metarule).
+    programStackPushInteger(program, sid);
 }
 
 // ============================================================
@@ -3938,34 +4056,40 @@ void sfallAnimCallbackInvoke(Object* object)
         return;
     }
 
-    // Set up a minimal script execution context.
-    // Push the animated object as the argument, then execute the procedure.
+    // Snapshot the callback state and clear globals IMMEDIATELY to prevent
+    // use-after-free (F-105). The sfallAnimCallbackProgram pointer references
+    // a Program* whose lifetime is managed by the interpreter. If we clear
+    // the globals before calling programExecuteProcedure, the following
+    // scenarios are all safe:
+    //
+    // 1. The callback procedure itself calls reg_anim_callback to set a new
+    //    callback — it won't interfere with this invocation.
+    // 2. The callback procedure triggers script cleanup that frees this
+    //    program — we no longer hold a dangling reference to it.
+    // 3. programExecuteProcedure longjmps out (e.g., programFatalError) —
+    //    the globals are already cleared, so re-entry is safe.
+    //
+    // The permanent fix requires clearing sfallAnimCallbackProgram in
+    // programFree() (interpreter.cc:line ~1340), which is outside this
+    // translation unit. This one-shot clearing is the best-effort guard
+    // available within sfall_opcodes.cc.
     Program* program = sfallAnimCallbackProgram;
     int procIndex = sfallAnimCallbackProcedureIndex;
+    sfallAnimCallbackProgram = nullptr;
+    sfallAnimCallbackProcedureIndex = -1;
 
-    // Guard against use-after-free (I2-F-001): if the registered program has
-    // exited (set via _updatePrograms() before programListNodeFree frees it),
-    // or if its internal data has been invalidated, clear the dangling pointer
-    // and return. This is a best-effort guard — the true fix requires clearing
-    // sfallAnimCallbackProgram in programFree() (interpreter.cc), which is
-    // outside this translation unit.
+    // Validate the program is still alive before proceeding.
     if (program->exited || program->data == nullptr) {
-        sfallAnimCallbackProgram = nullptr;
-        sfallAnimCallbackProcedureIndex = -1;
         return;
     }
 
     if (procIndex < 0 || procIndex >= program->procedureCount()) {
-        sfallAnimCallbackProgram = nullptr;
-        sfallAnimCallbackProcedureIndex = -1;
         return;
     }
 
     programStackPushValue(program, ProgramValue(object));
     programExecuteProcedure(program, procIndex);
-    // Reset after one-shot invocation (matches sfall behavior).
-    sfallAnimCallbackProgram = nullptr;
-    sfallAnimCallbackProcedureIndex = -1;
+    // Already cleared above; no need to reset again.
 }
 
 void sfallOpcodesReset()
@@ -4094,6 +4218,61 @@ void sfallOpcodeStateLoad()
     }
 }
 
+// ============================================================
+// Stub opcodes (F-034): opcodes expected by sfall mods that CE does not
+// fully implement. Registered as safe no-ops/stubs so scripts do not
+// crash with "Undefined opcode" fatal errors. Each stub pops its
+// expected arguments and returns a safe default value.
+// ============================================================
+
+// set_movie_path(string name, int movieid) — 0x8177
+// Replaces a movie file path for the given movie ID.
+// CE handles movie paths through the VFS and movie_lib configuration;
+// this stub pops the arguments without applying them.
+static void op_set_movie_path(Program* program)
+{
+    int movieid = programStackPopInteger(program);
+    const char* name = programStackPopString(program);
+    (void)movieid;
+    (void)name;
+}
+
+// get_shader_version() -> int — 0x81AD
+// Returns the shader version supported by the graphics driver.
+// CE uses SDL2 rendering without custom shaders; returns 0 to signal
+// "no shader support" so scripts can fall back to non-shader paths.
+static void op_get_shader_version(Program* program)
+{
+    programStackPushInteger(program, 0);
+}
+
+// set_shader_mode(int mode) — 0x81AE
+// Sets the shader pipeline mode (0=none, 1=DX9, 2=GLSL).
+// CE uses SDL2 rendering; shader modes are not applicable.
+static void op_set_shader_mode(Program* program)
+{
+    int mode = programStackPopInteger(program);
+    (void)mode;
+}
+
+// stop_game() — 0x8222
+// Pauses the game clock and input processing.
+// CE equivalent is not directly exposed to scripts; stub is a safe no-op.
+static void op_stop_game(Program* program)
+{
+    (void)program;
+}
+
+// resume_game() — 0x8223
+// Resumes the game clock and input processing.
+// CE equivalent is not directly exposed to scripts; stub is a safe no-op.
+static void op_resume_game(Program* program)
+{
+    (void)program;
+}
+
+// ============================================================
+
 // Note: opcodes should pop arguments off the stack in reverse order
 void sfallOpcodesInit()
 {
@@ -4216,7 +4395,9 @@ void sfallOpcodesInit()
     // 0x816e - void set_shader_float(int ID, string param, float value)
     // 0x816f - void set_shader_vector(int ID, string param, float f1, float f2, float f3, float f4)
     // 0x81ad - int get_shader_version()
+    interpreterRegisterOpcode(0x81AD, op_get_shader_version);
     // 0x81ae - void set_shader_mode(int mode)
+    interpreterRegisterOpcode(0x81AE, op_set_shader_mode);
     // 0x81b0 - void force_graphics_refresh(bool enabled)
     // 0x81b1 - int get_shader_texture(int ID, int texture)
     // 0x81b2 - void set_shader_texture(int ID, string param, int texID)
@@ -4250,6 +4431,7 @@ void sfallOpcodesInit()
     // 0x8176 - void set_df_model(string name)
     interpreterRegisterOpcode(0x8176, op_set_df_model);
     // 0x8177 - void set_movie_path(string filename, int movieid)
+    interpreterRegisterOpcode(0x8177, op_set_movie_path);
 
     // 0x8178 - void set_perk_image(int perkID, int value)
     // 0x8179 - void set_perk_ranks(int perkID, int value)
@@ -4597,7 +4779,9 @@ void sfallOpcodesInit()
     interpreterRegisterOpcode(0x8221, op_get_screen_height);
 
     // 0x8222 - void stop_game()
+    interpreterRegisterOpcode(0x8222, op_stop_game);
     // 0x8223 - void resume_game()
+    interpreterRegisterOpcode(0x8223, op_resume_game);
     // 0x8224 - void create_message_window(string message)
     interpreterRegisterOpcode(0x8224, op_create_message_window);
 

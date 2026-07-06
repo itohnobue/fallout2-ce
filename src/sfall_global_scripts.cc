@@ -11,6 +11,7 @@
 #include "platform_compat.h"
 #include "scripts.h"
 #include "sfall_config.h"
+#include "sfall_script_hooks.h"
 
 namespace fallout {
 
@@ -41,7 +42,10 @@ bool sfall_gl_scr_init()
         return false;
     }
 
-    // CE: always use "scripts\gl*.int" as global script path
+    // Load global scripts from both the vanilla "scripts\gl*.int" and
+    // the RPU/Et Tu "scripts\sfall\gl*.int" paths. RPU places extended
+    // global scripts under the sfall subdirectory — without this second
+    // pass those scripts are silently never loaded.
     const char* scriptPath = "scripts\\gl*.int";
     const char* dir = "scripts";
     char** files;
@@ -50,6 +54,20 @@ bool sfall_gl_scr_init()
         for (int index = 0; index < filesLength; index++) {
             char path[COMPAT_MAX_PATH];
             snprintf(path, sizeof(path), "%s\\%s", dir, files[index]);
+            state->paths.push_back(std::string { path });
+        }
+
+        fileNameListFree(&files, 0);
+    }
+
+    // Load RPU global scripts from "scripts\sfall\gl*.int".
+    const char* sfallScriptPath = "scripts\\sfall\\gl*.int";
+    const char* sfallDir = "scripts\\sfall";
+    int sfallFilesLength = fileNameListInit(sfallScriptPath, &files);
+    if (sfallFilesLength != 0) {
+        for (int index = 0; index < sfallFilesLength; index++) {
+            char path[COMPAT_MAX_PATH];
+            snprintf(path, sizeof(path), "%s\\%s", sfallDir, files[index]);
             state->paths.push_back(std::string { path });
         }
 
@@ -115,6 +133,11 @@ void sfall_gl_scr_remove_all()
     tickersRemove(sfall_gl_scr_process_input);
 
     for (auto& scr : state->globalScripts) {
+        // Unregister hook references before freeing the program to prevent
+        // hook vectors from retaining dangling Program* references.
+        // Without this, hook dispatch iterating the hook vector after
+        // programFree() would dereference freed memory.
+        scriptHooksUnregisterProgram(scr.program);
         programFree(scr.program);
     }
 

@@ -3764,7 +3764,7 @@ static void characterEditorAdjustPrimaryStat(int eventCode)
             } else {
                 int previousValue = critterGetBaseStatWithTraitModifier(gDude, incrementingStat);
                 previousValue += critterGetBonusStat(gDude, incrementingStat);
-                if (gCharacterEditorRemainingCharacterPoints > 0 && previousValue < 10 && critterIncBaseStat(gDude, incrementingStat) == 0) {
+                if (gCharacterEditorRemainingCharacterPoints > 0 && previousValue < statGetMaxValue(incrementingStat) && critterIncBaseStat(gDude, incrementingStat) == 0) {
                     gCharacterEditorRemainingCharacterPoints--;
                 } else {
                     cont = false;
@@ -4887,10 +4887,11 @@ static void characterEditorRestorePlayer()
 
     i = 2;
     v3 = 0;
-    for (v3 = 0; v3 < 2; v3++) {
-        if (gCharacterEditorTempTraits[v3] != -1) {
+    for (int idx = 1; idx >= 0; idx--) {
+        if (gCharacterEditorTempTraits[idx] != -1) {
             break;
         }
+        v3++;
     }
 
     gCharacterEditorTempTraitCount = v3;
@@ -6812,7 +6813,7 @@ static int _is_supper_bonus()
     for (int stat = 0; stat < 7; stat++) {
         int v1 = critterGetBaseStatWithTraitModifier(gDude, stat);
         int v2 = critterGetBonusStat(gDude, stat);
-        if (v1 + v2 > 10) {
+        if (v1 + v2 > statGetMaxValue(stat)) {
             return 1;
         }
     }

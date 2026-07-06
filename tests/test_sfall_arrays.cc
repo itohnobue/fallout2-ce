@@ -95,11 +95,19 @@ void sfallListsExit() {}
 } // namespace fallout
 
 // =============================================================
-// NOTE: ensureArraysInit/cleanupArrays removed because sfallArraysExit() 
-// does not set _state=nullptr after delete, causing double-free on a 
-// second call. Production bug at src/sfall_arrays.cc:634-639. 
-// Tests use sfallArraysInit() directly — it replaces any existing _state
-// (leaks memory, but tests are short-lived and process exit cleans up).
+// NOTE: sfallArraysExit() at src/sfall_arrays.cc:634-639 does NOT
+// set _state=nullptr after delete, causing double-free on a second
+// Exit call. Production fix needed (not in writable scope for this agent):
+//   void sfallArraysExit() {
+//       if (_state != nullptr) {
+//           delete _state;
+//           _state = nullptr;  // <-- add this line
+//       }
+//   }
+// Until the production fix is applied, calling Exit twice causes
+// double-free → SIGABRT. Init() unconditionally allocates a new _state
+// (does NOT check for existing non-null _state first), so the safe
+// pattern is: Exit() → Init() (overwrites dangling pointer).
 
 // =============================================================
 // Lifecycle Tests
@@ -107,8 +115,9 @@ void sfallListsExit() {}
 
 // NOTE: sfallArraysExit() does NOT set _state=nullptr after delete
 // (production bug at src/sfall_arrays.cc:634-639). Calling Exit twice
-// causes double-free → SIGABRT. Tests avoid calling Exit altogether —
-// sfallArraysInit() replaces _state (leaks old, acceptable for tests).
+// causes double-free → SIGABRT. Tests call Exit once followed by Init
+// to safely restore state (Init unconditionally allocates new _state,
+// overwriting the dangling pointer left by Exit).
 TEST_CASE("sfallArrays lifecycle") {
     // Initialize fresh state
     REQUIRE(sfallArraysInit());
@@ -141,11 +150,35 @@ TEST_CASE("sfallArrays lifecycle") {
         CHECK(id3 == id1); // ID counter reset, same starting ID
     }
 
-    // NOTE: "exit after init" and "double exit is safe" subcases removed.
-    // production sfallArraysExit() does not nullify _state after delete,
-    // causing double-free on second call. Known production bug.
+    SUBCASE("exit then re-init lifecycle") {
+        // Demonstrate the correct lifecycle: Exit frees state, Init restores it.
+        // Create some arrays to verify they work
+        ArrayId id = CreateArray(3, 0);
+        SetArray(id, ProgramValue(0), ProgramValue(42), false, nullptr);
+        CHECK(LenArray(id) == 3);
+        CHECK(GetArray(id, ProgramValue(0), nullptr).asInt() == 42);
+
+        // Exit frees all state (leaves dangling _state pointer — production bug)
+        sfallArraysExit();
+
+        // Re-init allocates fresh state (overwrites dangling pointer)
+        CHECK(sfallArraysInit());
+
+        // Previously created arrays are gone after exit/reinit
+        CHECK_FALSE(ArrayExists(id));
+
+        // New arrays work correctly
+        ArrayId newId = CreateArray(2, 0);
+        CHECK(ArrayExists(newId));
+        CHECK(LenArray(newId) == 2);
+    }
+
+    // NOTE: "double exit is safe" cannot be tested until production bug is fixed.
+    // sfallArraysExit() must set _state=nullptr after delete at sfall_arrays.cc:634-639.
     //
-    // No final sfallArraysExit() — prevents dangling _state for other tests.
+    // Call Exit at the end to clean up. Init in next TEST_CASE will restore state.
+    sfallArraysExit();
+    sfallArraysInit();
 }
 
 // =============================================================

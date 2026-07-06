@@ -92,31 +92,21 @@ jobs:
       - name: Cache cmake build
         uses: actions/cache@v4
         with:
-          path: build
-          key: ios-cmake-v1
+          path: out
+          key: ios-cmake-v2
 
       - name: Configure
         run: |
-          cmake \
-            -B build \
-            -D CMAKE_TOOLCHAIN_FILE=cmake/toolchain/ios.toolchain.cmake \
-            -D ENABLE_BITCODE=0 \
-            -D PLATFORM=OS64 \
-            -G Xcode \
-            -D CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY='' \
-            # EOL
+          cmake --preset ios
 
       - name: Build
         run: |
-          cmake \
-            --build build \
-            --config RelWithDebInfo \
-            -j $(sysctl -n hw.physicalcpu) \
-            # EOL
+          cmake --build --preset ios-release \
+            -j $(sysctl -n hw.physicalcpu)
 
       - name: Pack
         run: |
-          cd build
+          cd out/build/ios
           cpack -C RelWithDebInfo
 
       - name: Download ce.dat
@@ -128,7 +118,7 @@ jobs:
       - name: Upload
         run: |
           mkdir -p out/dist/fallout2-ce-ios
-          cp build/fallout2-ce.ipa out/dist/fallout2-ce-ios/fallout2-ce-ios.ipa
+          cp out/build/ios/fallout2-ce.ipa out/dist/fallout2-ce-ios/fallout2-ce-ios.ipa
           cp out/dist/ce.dat out/dist/fallout2-ce-ios/ce.dat
           cd out/dist
           zip -r fallout2-ce-ios.zip fallout2-ce-ios
@@ -140,7 +130,7 @@ jobs:
   linux:
     name: Linux (${{ matrix.arch }})
 
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-24.04
     needs: [ce-dat]
     permissions:
       contents: write
@@ -161,7 +151,6 @@ jobs:
         run: |
           sudo dpkg --add-architecture i386
           sudo apt update
-          sudo apt install --allow-downgrades libpcre2-8-0=10.34-7
           sudo apt install g++-multilib libsdl2-dev:i386 zlib1g-dev:i386
 
       - name: Dependencies (x64)
@@ -173,32 +162,23 @@ jobs:
       - name: Cache cmake build
         uses: actions/cache@v4
         with:
-          path: build
-          key: linux-${{ matrix.arch }}-cmake-v1
+          path: out
+          key: linux-${{ matrix.arch }}-cmake-v2
 
       - name: Configure (x86)
         if: matrix.arch == 'x86'
         run: |
-          cmake \
-            -B build \
-            -D CMAKE_BUILD_TYPE=RelWithDebInfo \
-            -D CMAKE_TOOLCHAIN_FILE=cmake/toolchain/Linux32.cmake \
-            # EOL
+          cmake --preset linux-x86-release
 
       - name: Configure (x64)
         if: matrix.arch == 'x64'
         run: |
-          cmake \
-            -B build \
-            -D CMAKE_BUILD_TYPE=RelWithDebInfo \
-            # EOL
+          cmake --preset linux-x64-release
 
       - name: Build
         run: |
-          cmake \
-            --build build \
-            -j $(nproc) \
-            # EOL
+          cmake --build --preset linux-${{ matrix.arch }}-release \
+            -j $(nproc)
 
       - name: Download ce.dat
         uses: actions/download-artifact@v4
@@ -209,7 +189,7 @@ jobs:
       - name: Upload
         run: |
           mkdir -p out/dist/fallout2-ce-linux-${{ matrix.arch }}
-          cp build/fallout2-ce out/dist/fallout2-ce-linux-${{ matrix.arch }}/fallout2-ce
+          cp out/build/linux-${{ matrix.arch }}-release/fallout2-ce out/dist/fallout2-ce-linux-${{ matrix.arch }}/fallout2-ce
           cp out/dist/ce.dat out/dist/fallout2-ce-linux-${{ matrix.arch }}/ce.dat
           tar -czvf fallout2-ce-linux-${{ matrix.arch }}.tar.gz -C out/dist fallout2-ce-linux-${{ matrix.arch }}
           gh release upload ${{ github.event.release.tag_name }} fallout2-ce-linux-${{ matrix.arch }}.tar.gz
@@ -220,7 +200,7 @@ jobs:
   macos:
     name: macOS
 
-    runs-on: macos-11
+    runs-on: macos-14
     permissions:
       contents: write
 

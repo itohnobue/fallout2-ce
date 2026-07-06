@@ -64,7 +64,7 @@ static void nfRelease();
 static int _MVE_sndDecompM16(unsigned short* a1, unsigned char* a2, int a3, int a4);
 static int _MVE_sndDecompS16(unsigned short* a1, unsigned char* a2, int a3, int a4);
 static void _nfPkConfig();
-static void _nfPkDecomp(unsigned char* buf, unsigned char* a2, int a3, int a4, int a5, int a6);
+static void _nfPkDecomp(unsigned char* buf, unsigned char* a2, int a3, int a4, int a5, int a6, size_t a2_size);
 
 // 0x51EBE0 snd_8to16
 static unsigned short word_51EBE0[256] = {
@@ -801,7 +801,7 @@ LABEL_5:
                 movieSwapSurfaces();
             }
 
-            _nfPkDecomp((unsigned char*)v3, (unsigned char*)&v1[7], v1[2], v1[3], v1[4], v1[5]);
+            _nfPkDecomp((unsigned char*)v3, (unsigned char*)&v1[7], v1[2], v1[3], v1[4], v1[5], (size_t)(v0 > 14 ? v0 - 14 : 0));
 
             continue;
         default:
@@ -1138,7 +1138,7 @@ static int _MVE_sndAdd(unsigned char* dest, unsigned char** src_ptr, int a3, int
     }
 
     if (!_snd_buf) {
-        memcpy(dest, src_ptr, a3);
+        memcpy(dest, src, a3);
         *src_ptr += a3;
         return a4;
     }
@@ -1189,9 +1189,17 @@ static void _MVE_sndResume()
 // 0x4F5CB0 nfConfig
 static int nfConfig(int width, int height, int a3, int is_16_bpp)
 {
+    if (width <= 0 || height <= 0) {
+        return 0;
+    }
+
     byte_6B4016 = a3;
     nf_width = 8 * width;
     nf_height = 8 * height * a3;
+
+    if (nf_width <= 0 || nf_height <= 0 || nf_width > 16384 || nf_height > 16384) {
+        return 0;
+    }
 
     nf_buf_cur = (unsigned char*)MVE_MemAlloc(&nf_mem_cur, nf_width * nf_height);
     if (nf_buf_cur == nullptr) {
@@ -1257,6 +1265,10 @@ static void palMakeSynthPalette(int a1, int a2, int a3, int a4, int a5, int a6)
         return;
     }
 
+    if (a1 < 0 || a4 < 0 || a1 + a3 > 256 || a4 + a6 > 256) {
+        return;
+    }
+
     int i;
     int j;
 
@@ -1272,7 +1284,7 @@ static void palMakeSynthPalette(int a1, int a2, int a3, int a4, int a5, int a6)
         for (j = 0; j < a6; j++) {
             pal_tbl[3 * a4 + 3 * j] = 0;
             pal_tbl[3 * a4 + 3 * j + 1] = (63 * i) / (a5 - 1);
-            pal_tbl[3 * a1 + 3 * j + 2] = 5 * ((63 * j) / (a6 - 1)) / 8;
+            pal_tbl[3 * a4 + 3 * j + 2] = 5 * ((63 * j) / (a6 - 1)) / 8;
         }
     }
 }
@@ -1280,6 +1292,10 @@ static void palMakeSynthPalette(int a1, int a2, int a3, int a4, int a5, int a6)
 // 0x4F6210 palLoadPalette
 static void palLoadPalette(unsigned char* palette, int start, int count)
 {
+    if (start < 0 || count < 0 || start + count > 256) {
+        return;
+    }
+
     memcpy(&(pal_tbl[start * 3]), palette, count * 3);
 }
 
@@ -1405,8 +1421,14 @@ static void _nfPkConfig()
 }
 
 // 0x4F7359 nfPkDecomp
-static void _nfPkDecomp(unsigned char* a1, unsigned char* a2, int a3, int a4, int a5, int a6)
+static void _nfPkDecomp(unsigned char* a1, unsigned char* a2, int a3, int a4, int a5, int a6, size_t a2_size)
 {
+    if (a2_size == 0) {
+        return;
+    }
+
+    unsigned char* const a2_end = a2 + a2_size;
+
     int v49;
     unsigned char* dest;
     int v8;
@@ -1465,6 +1487,7 @@ static void _nfPkDecomp(unsigned char* a1, unsigned char* a2, int a3, int a4, in
                         break;
                     case 2:
                     case 3:
+                        if (a2 >= a2_end) { return; }
                         byte = *a2++;
                         v11 = word_51F618[byte];
                         if (v7 == 3) {
@@ -1477,9 +1500,11 @@ static void _nfPkDecomp(unsigned char* a1, unsigned char* a2, int a3, int a4, in
                     case 4:
                     case 5:
                         if (v7 == 4) {
+                            if (a2 >= a2_end) { return; }
                             byte = *a2++;
                             v13 = word_51F418[byte];
                         } else {
+                            if (a2 + 2 > a2_end) { return; }
                             v13 = *(unsigned short*)a2;
                             a2 += 2;
                         }
@@ -1523,6 +1548,7 @@ static void _nfPkDecomp(unsigned char* a1, unsigned char* a2, int a3, int a4, in
                 case 7:
                     if (a2[0] > a2[1]) {
                         // 7/1
+                        if (a2 + 4 > a2_end) { return; }
                         for (i = 0; i < 2; i++) {
                             value1 = _$$R0053[a2[2 + i] & 0xF];
                             map1[i * 8] = value1 & 0xFF;
@@ -1565,6 +1591,7 @@ static void _nfPkDecomp(unsigned char* a1, unsigned char* a2, int a3, int a4, in
                     } else {
                         // 7/2
                         // VERIFIED
+                        if (a2 + 10 > a2_end) { return; }
                         for (i = 0; i < 8; i++) {
                             value1 = _$$R0004[a2[2 + i]];
                             map1[i * 4] = value1 & 0xFF;
@@ -1599,6 +1626,7 @@ static void _nfPkDecomp(unsigned char* a1, unsigned char* a2, int a3, int a4, in
                     if (a2[0] > a2[1]) {
                         if (a2[6] > a2[7]) {
                             // 8/1
+                            if (a2 + 12 > a2_end) { return; }
                             for (i = 0; i < 4; i++) {
                                 value1 = _$$R0004[a2[2 + i]];
                                 map1[i * 4] = value1 & 0xFF;
@@ -1649,6 +1677,7 @@ static void _nfPkDecomp(unsigned char* a1, unsigned char* a2, int a3, int a4, in
                             dest -= var_10;
                         } else {
                             // 8/2
+                            if (a2 + 12 > a2_end) { return; }
                             for (i = 0; i < 4; i++) {
                                 value1 = _$$R0004[a2[2 + i]];
                                 map1[i * 4] = value1 & 0xFF;
@@ -1708,6 +1737,7 @@ static void _nfPkDecomp(unsigned char* a1, unsigned char* a2, int a3, int a4, in
                     } else {
                         // 8/3
                         // VERIFIED
+                        if (a2 + 16 > a2_end) { return; }
                         for (i = 0; i < 2; i++) {
                             value1 = _$$R0004[a2[2 + i]];
                             map1[i * 4] = value1 & 0xFF;
@@ -1817,6 +1847,7 @@ static void _nfPkDecomp(unsigned char* a1, unsigned char* a2, int a3, int a4, in
                         if (a2[2] > a2[3]) {
                             // 9/1
                             // VERIFIED
+                            if (a2 + 12 > a2_end) { return; }
                             for (i = 0; i < 8; i++) {
                                 value1 = _$$R0063[a2[4 + i]];
                                 map1[i * 4] = value1 & 0xFF;
@@ -1855,6 +1886,7 @@ static void _nfPkDecomp(unsigned char* a1, unsigned char* a2, int a3, int a4, in
                         } else {
                             // 9/2
                             // VERIFIED
+                            if (a2 + 12 > a2_end) { return; }
                             for (i = 0; i < 8; i++) {
                                 value1 = _$$R0063[a2[4 + i]];
                                 map1[i * 4 + 3] = value1 & 0xFF;
@@ -1891,6 +1923,7 @@ static void _nfPkDecomp(unsigned char* a1, unsigned char* a2, int a3, int a4, in
                         if (a2[2] > a2[3]) {
                             // 9/3
                             // VERIFIED
+                            if (a2 + 8 > a2_end) { return; }
                             for (i = 0; i < 4; i++) {
                                 value1 = _$$R0063[a2[4 + i]];
                                 map1[i * 4 + 3] = value1 & 0xFF;
@@ -1931,6 +1964,7 @@ static void _nfPkDecomp(unsigned char* a1, unsigned char* a2, int a3, int a4, in
                         } else {
                             // 9/4
                             // VERIFIED
+                            if (a2 + 20 > a2_end) { return; }
                             for (i = 0; i < 16; i++) {
                                 value1 = _$$R0063[a2[4 + i]];
                                 map1[i * 4] = value1 & 0xFF;
@@ -1969,6 +2003,7 @@ static void _nfPkDecomp(unsigned char* a1, unsigned char* a2, int a3, int a4, in
                         if (a2[12] > a2[13]) {
                             // 10/1
                             // VERIFIED
+                            if (a2 + 24 > a2_end) { return; }
                             for (i = 0; i < 8; i++) {
                                 value1 = _$$R0063[a2[4 + i]];
                                 map1[i * 4] = value1 & 0xFF;
@@ -2026,6 +2061,7 @@ static void _nfPkDecomp(unsigned char* a1, unsigned char* a2, int a3, int a4, in
                         } else {
                             // 10/2
                             // VERIFIED
+                            if (a2 + 24 > a2_end) { return; }
                             for (i = 0; i < 8; i++) {
                                 value1 = _$$R0063[a2[4 + i]];
                                 map1[i * 4] = value1 & 0xFF;
@@ -2093,6 +2129,7 @@ static void _nfPkDecomp(unsigned char* a1, unsigned char* a2, int a3, int a4, in
                     } else {
                         // 10/3
                         // VERIFIED
+                        if (a2 + 32 > a2_end) { return; }
                         for (i = 0; i < 4; i++) {
                             value1 = _$$R0063[a2[4 + i]];
                             map1[i * 4] = value1 & 0xFF;
@@ -2213,6 +2250,7 @@ static void _nfPkDecomp(unsigned char* a1, unsigned char* a2, int a3, int a4, in
                     }
                     break;
                 case 11:
+                    if (a2 + 64 > a2_end) { return; }
                     value2 = nf_width;
 
                     src_ptr = (unsigned int*)a2;
@@ -2229,6 +2267,7 @@ static void _nfPkDecomp(unsigned char* a1, unsigned char* a2, int a3, int a4, in
                     dest -= var_10;
                     break;
                 case 12:
+                    if (a2 + 16 > a2_end) { return; }
                     value2 = nf_width;
 
                     for (i = 0; i < 4; i++) {
@@ -2261,6 +2300,7 @@ static void _nfPkDecomp(unsigned char* a1, unsigned char* a2, int a3, int a4, in
                     dest -= var_10;
                     break;
                 case 13:
+                    if (a2 + 4 > a2_end) { return; }
                     byte = a2[0];
                     value1 = byte | (byte << 8) | (byte << 16) | (byte << 24);
 
@@ -2305,10 +2345,12 @@ static void _nfPkDecomp(unsigned char* a1, unsigned char* a2, int a3, int a4, in
                 case 14:
                 case 15:
                     if (v7 == 14) {
+                        if (a2 >= a2_end) { return; }
                         byte = *a2++;
                         value1 = byte | (byte << 8) | (byte << 16) | (byte << 24);
                         value2 = value1;
                     } else {
+                        if (a2 + 2 > a2_end) { return; }
                         byte = *(unsigned short*)a2;
                         a2 += 2;
                         value1 = byte | (byte << 16);

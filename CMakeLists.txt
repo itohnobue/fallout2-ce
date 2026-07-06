@@ -456,6 +456,8 @@ if(APPLE)
     set(MACOSX_BUNDLE_GUI_IDENTIFIER "com.alexbatalov.fallout2-ce")
     set(MACOSX_BUNDLE_SHORT_VERSION_STRING "1.3.0")
     set(MACOSX_BUNDLE_BUNDLE_VERSION "1.3.0")
+    set(MACOSX_BUNDLE_INFO_STRING "Fallout II Community Edition 1.3.0, Copyright 2024 The Fallout II Community Edition Contributors")
+    set(MACOSX_BUNDLE_COPYRIGHT "Copyright 2024 The Fallout II Community Edition Contributors")
 endif()
 
 if((NOT ${CMAKE_SYSTEM_NAME} MATCHES "Emscripten"))

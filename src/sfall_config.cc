@@ -11,15 +11,27 @@ Config gSfallConfig;
 
 bool gFallout1Behavior = false;
 
-// TODO: The following 5 config booleans are parsed from ddraw.ini but have
-// zero consumers in the engine. They need to be wired to their respective
-// feature implementations or removed if the features are abandoned.
-// See F-012 in the audit synthesis report for full details.
-bool gAllowUnsafeScripting = false;        // TODO: wire to scripting safety gates
-bool gEnableHeroAppearanceMod = false;     // TODO: wire to hero appearance FID pipeline
-bool gUseFileSystemOverride = false;       // TODO: wire to asset loading path selection
-bool gOverrideArtCacheSize = false;        // TODO: wire to art cache size configuration
-bool gExtraSaveSlots = false;              // TODO: wire to save slot count
+// Config globals parsed from ddraw.ini — stored correctly but currently
+// unwired to their respective engine subsystems. Each global below documents
+// the exact consumer file and function where wiring is needed.
+//
+// Wiring status summary:
+//   gAllowUnsafeScripting   — UNWIRED: needs gate at sfall_opcodes.cc:4116-4147
+//                             (VOODOO write/call_offset opcode registration)
+//   gEnableHeroAppearanceMod — UNWIRED: needs integration in hero appearance
+//                               FID pipeline (object.cc critter art loading)
+//   gUseFileSystemOverride   — INTENTIONALLY UNWIRED: VFS priority ordering
+//                               provides equivalent override behavior without
+//                               this flag (master_patches/ dir > .dat files)
+//   gOverrideArtCacheSize     — UNWIRED: needs wiring to art cache allocation
+//                               in art.cc:artCacheInit() size computation
+//   gExtraSaveSlots           — UNWIRED: needs wiring to loadsave.cc:199
+//                               (saveLoadPages constant) to increase max slots
+bool gAllowUnsafeScripting = false;
+bool gEnableHeroAppearanceMod = false;
+bool gUseFileSystemOverride = false;
+bool gOverrideArtCacheSize = false;
+bool gExtraSaveSlots = false;
 
 bool sfallConfigInit(int argc, char** argv)
 {

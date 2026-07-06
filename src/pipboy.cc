@@ -1665,6 +1665,9 @@ static void pipboyWindowHandleAutomaps(int userInput)
             //_PrintAMList(userInput);
             // windowRefreshRect(gPipboyWindow, & gPipboyWindowContentRect);
             int realIndex = (_view_page_automap_main * PIPBOY_AUTOMAP_LINES) + (userInput - 1); // Adjust for pagination
+            if (realIndex < 0 || realIndex >= 24) {
+                return;
+            }
             _amcty_indx = _sortlist[realIndex].field_4;
             _map_count = _PrintAMelevList(1);
             pipboyWindowCreateButtons(0, _map_count + 2, true); // create buttons for sub-locations (elevation), and back/more
@@ -1694,6 +1697,9 @@ static void pipboyWindowHandleAutomaps(int userInput)
         }
 
         if (userInput >= 1 && userInput <= _map_count + 3) {
+            if (userInput - 1 >= 24) {
+                return;
+            }
             soundPlayFile("ib1p1xx1");
             _PrintAMelevList(userInput);
             automapRenderInPipboyWindow(gPipboyWindow, _sortlist[userInput - 1].field_6, _sortlist[userInput - 1].field_4);

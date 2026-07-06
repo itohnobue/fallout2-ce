@@ -719,14 +719,23 @@ int partyMembersLoad(File* stream)
 
     // FIXME: partyMemberObjectIds is never free'd in this function, obviously memory leak.
 
-    if (fileReadInt32(stream, &gPartyMembersLength) == -1) return -1;
-    if (fileReadInt32(stream, &_partyMemberItemCount) == -1) return -1;
+    if (fileReadInt32(stream, &gPartyMembersLength) == -1) {
+        internal_free(partyMemberObjectIds);
+        return -1;
+    }
+    if (fileReadInt32(stream, &_partyMemberItemCount) == -1) {
+        internal_free(partyMemberObjectIds);
+        return -1;
+    }
 
     gPartyMembers->object = gDude;
 
     if (gPartyMembersLength != 0) {
         for (int index = 1; index < gPartyMembersLength; index++) {
-            if (fileReadInt32(stream, &(partyMemberObjectIds[index])) == -1) return -1;
+            if (fileReadInt32(stream, &(partyMemberObjectIds[index])) == -1) {
+                internal_free(partyMemberObjectIds);
+                return -1;
+            }
         }
 
         for (int index = 1; index < gPartyMembersLength; index++) {
@@ -756,6 +765,7 @@ int partyMembersLoad(File* stream)
         }
 
         if (_partyMemberUnPrepSave() == -1) {
+            internal_free(partyMemberObjectIds);
             return -1;
         }
     }
@@ -765,11 +775,21 @@ int partyMembersLoad(File* stream)
     for (int index = 1; index < gPartyMemberDescriptionsLength; index++) {
         PartyMemberLevelUpInfo* levelUpInfo = &(_partyMemberLevelUpInfoList[index]);
 
-        if (fileReadInt32(stream, &(levelUpInfo->level)) == -1) return -1;
-        if (fileReadInt32(stream, &(levelUpInfo->numLevelUps)) == -1) return -1;
-        if (fileReadInt32(stream, &(levelUpInfo->isEarly)) == -1) return -1;
+        if (fileReadInt32(stream, &(levelUpInfo->level)) == -1) {
+            internal_free(partyMemberObjectIds);
+            return -1;
+        }
+        if (fileReadInt32(stream, &(levelUpInfo->numLevelUps)) == -1) {
+            internal_free(partyMemberObjectIds);
+            return -1;
+        }
+        if (fileReadInt32(stream, &(levelUpInfo->isEarly)) == -1) {
+            internal_free(partyMemberObjectIds);
+            return -1;
+        }
     }
 
+    internal_free(partyMemberObjectIds);
     return 0;
 }
 
@@ -1613,6 +1633,8 @@ static int _partyMemberCopyLevelInfo(Object* critter, int stagePid)
     }
 
     critter->data.critter.hp = critterGetStat(critter, STAT_MAXIMUM_HIT_POINTS);
+
+    critterUpdateDerivedStats(critter);
 
     if (armor != nullptr) {
         itemAdd(critter, armor, 1);

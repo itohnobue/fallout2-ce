@@ -70,7 +70,9 @@ static void audioEngineMixin(void* userData, Uint8* stream, int length)
                 }
 
                 // TODO: Make something better than frame-by-frame convertion.
-                SDL_AudioStreamPut(soundBuffer->stream, (unsigned char*)soundBuffer->data + soundBuffer->pos, srcFrameSize);
+                if (SDL_AudioStreamPut(soundBuffer->stream, (unsigned char*)soundBuffer->data + soundBuffer->pos, srcFrameSize) == -1) {
+                    break;
+                }
                 soundBuffer->pos += srcFrameSize;
 
                 int bytesRead = SDL_AudioStreamGet(soundBuffer->stream, buffer, remaining);

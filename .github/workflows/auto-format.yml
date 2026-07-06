@@ -38,7 +38,7 @@ jobs:
 
           if ! git diff --quiet; then
             git diff
-            git commit -am "chore: auto-format with clang-format"
+            git commit -am "chore: auto-format with clang-format [skip ci]"
             git push
           else
             echo "No formatting changes"

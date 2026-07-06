@@ -633,6 +633,9 @@ static void automapRenderInMapWindow(int window, int elevation, unsigned char* b
 int automapRenderInPipboyWindow(int window, int map, int elevation)
 {
     unsigned char* windowBuffer = windowGetBuffer(window) + 640 * AUTOMAP_PIPBOY_VIEW_Y + AUTOMAP_PIPBOY_VIEW_X;
+    int windowWidth = windowGetWidth(window);
+    int windowHeight = windowGetHeight(window);
+    unsigned char* windowBufferEnd = windowGetBuffer(window) + windowWidth * windowHeight;
 
     unsigned char wallColor = _colorTable[992];
     unsigned char sceneryColor = _colorTable[480];
@@ -667,12 +670,20 @@ int automapRenderInPipboyWindow(int window, int map, int elevation)
 
             switch ((byte & 0xC0) >> 6) {
             case 1:
-                *windowBuffer++ = wallColor;
-                *windowBuffer++ = wallColor;
+                if (windowBuffer + 1 < windowBufferEnd) {
+                    *windowBuffer++ = wallColor;
+                    *windowBuffer++ = wallColor;
+                } else {
+                    windowBuffer += 2;
+                }
                 break;
             case 2:
-                *windowBuffer++ = sceneryColor;
-                *windowBuffer++ = sceneryColor;
+                if (windowBuffer + 1 < windowBufferEnd) {
+                    *windowBuffer++ = sceneryColor;
+                    *windowBuffer++ = sceneryColor;
+                } else {
+                    windowBuffer += 2;
+                }
                 break;
             default:
                 windowBuffer += 2;
@@ -714,8 +725,9 @@ int automapSaveCurrent()
     }
 
     if (!dataBuffersAllocated) {
-        // FIXME: Leaking gAutomapEntry.data.
         debugPrint("\nAUTOMAP: Error allocating data buffers!\n");
+        internal_free(gAutomapEntry.data);
+        gAutomapEntry.data = nullptr;
         return -1;
     }
 

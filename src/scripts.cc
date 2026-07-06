@@ -51,14 +51,6 @@ namespace fallout {
 // SFALL: Number of message lists for scripted dialogs.
 #define SCRIPT_DIALOG_MESSAGE_LIST_MAX_CAPACITY 10000
 
-// CE: WorldMapSlots from ddraw.ini [Misc]. RPU requires 21.
-static int gWorldMapSlots = 0;
-
-// CE: sfall-mods.ini config storage for engine-level awareness.
-// Loaded at init from the game directory, mirrors sfall's mods INI loading.
-static Config gSfallModsIni;
-static bool gSfallModsIniLoaded = false;
-
 typedef struct ScriptsListEntry {
     char name[16];
     int local_vars_num;
@@ -1541,11 +1533,6 @@ bool scriptsIsValidScriptIndex(int scriptIndex)
     return scriptIndex >= 0 && scriptIndex < gScriptsListEntriesLength;
 }
 
-int scriptsGetWorldMapSlots()
-{
-    return gWorldMapSlots;
-}
-
 // scr_set_dude_script
 // 0x4A4F90
 int scriptsSetDudeScript()
@@ -1580,43 +1567,6 @@ int scriptsSetDudeScript()
     return 0;
 }
 
-// CE: Load sfall-mods.ini for engine-level awareness.
-// sfall-mods.ini uses the same INI format as ddraw.ini and provides
-// mod-specific overrides. RPU and ET Tu rely on this file being parsed.
-bool sfallModsIniInit()
-{
-    if (gSfallModsIniLoaded) {
-        return true;
-    }
-
-    if (!configInit(&gSfallModsIni)) {
-        return false;
-    }
-
-    const char* path = "sfall-mods.ini";
-    // Try loading; if file doesn't exist, configRead returns false gracefully.
-    configRead(&gSfallModsIni, path, false);
-
-    gSfallModsIniLoaded = true;
-    return true;
-}
-
-void sfallModsIniExit()
-{
-    if (gSfallModsIniLoaded) {
-        configFree(&gSfallModsIni);
-        gSfallModsIniLoaded = false;
-    }
-}
-
-bool sfallModsIniGetInt(const char* section, const char* key, int* value, int defaultValue)
-{
-    if (!gSfallModsIniLoaded) {
-        *value = defaultValue;
-        return false;
-    }
-    return configGetInt(&gSfallModsIni, section, key, value, defaultValue);
-}
 // scr_clear_dude_script
 // 0x4A5044
 int scriptsClearDudeScript()
@@ -1674,18 +1624,17 @@ int scriptsInit()
     configGetInt(&gContentConfig, CONTENT_CONFIG_START_SECTION, "month", &gStartMonth, 6);
     configGetInt(&gContentConfig, CONTENT_CONFIG_START_SECTION, "day", &gStartDay, 24);
 
+    int fallout1Behavior;
+    if (configGetInt(&gContentConfig, CONTENT_CONFIG_START_SECTION, "fallout1_behavior", &fallout1Behavior)) {
+        gFallout1Behavior = fallout1Behavior != 0;
+    }
+
     configGetInt(&gContentConfig, CONTENT_CONFIG_MOVIES_SECTION, "artimer1", &gMovieTimerArtimer1, 90);
     configGetInt(&gContentConfig, CONTENT_CONFIG_MOVIES_SECTION, "artimer2", &gMovieTimerArtimer2, 180);
     configGetInt(&gContentConfig, CONTENT_CONFIG_MOVIES_SECTION, "artimer3", &gMovieTimerArtimer3, 270);
     configGetInt(&gContentConfig, CONTENT_CONFIG_MOVIES_SECTION, "artimer4", &gMovieTimerArtimer4, 360);
 
-    // SFALL: Read WorldMapSlots from ddraw.ini.
-    configGetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, "WorldMapSlots", &gWorldMapSlots, 21);
-
     checkScriptsOpcodes();
-
-    // SFALL: Load sfall-mods.ini for engine-level mod config awareness.
-    sfallModsIniInit();
 
     return 0;
 }
@@ -1781,8 +1730,6 @@ int scriptsExit()
 
     // NOTE: Uninline.
     scriptsFreeScriptsList();
-
-    sfallModsIniExit();
 
     return 0;
 }
@@ -1890,7 +1837,7 @@ int scriptsSkipGameGlobalVars(File* stream)
     }
 
     if (fileReadInt32List(stream, vars, gGameGlobalVarsLength) == -1) {
-        // FIXME: Leaks vars.
+        internal_free(vars);
         return -1;
     }
 
@@ -2392,6 +2339,7 @@ static int scriptsRemoveLocalVars(Script* script)
                 gMapLocalVars = (int*)internal_realloc(gMapLocalVars, sizeof(*gMapLocalVars) * gMapLocalVarsLength);
                 if (gMapLocalVars == nullptr) {
                     debugPrint("\nError in mem_realloc in scr_remove_local_vars!\n");
+                    return -1;
                 }
 
                 for (int index = 0; index < SCRIPT_TYPE_COUNT; index++) {
@@ -2601,6 +2549,7 @@ int _scr_remove_all_force()
     gScriptsEnumerationElevation = 0;
     gMapSid = -1;
     programListFree();
+    scriptHooksReset();
     _exportClearAllVariables();
 
     return 0;

@@ -180,7 +180,7 @@ static struct SfallOpcodeInfo opcodeInfoArray[] = {
     { 0x1fa, "fs_write_byte" },
     { 0x1fb, "fs_write_short" },
     { 0x1fc, "fs_write_int" },
-    { 0x1fd, "fs_write_int" },
+    { 0x1fd, "fs_write_float" },
     { 0x1fe, "fs_write_string" },
     { 0x1ff, "fs_delete" },
     { 0x200, "fs_size" },

@@ -610,11 +610,14 @@ static int endgameEndingSlideshowWindowInit()
         _colorTable[0],
         WINDOW_MOVE_ON_TOP);
     if (gEndgameEndingSlideshowWindow == -1) {
+        windowDestroy(gEndgameEndingOverlay);
         return -1;
     }
 
     gEndgameEndingSlideshowWindowBuffer = windowGetBuffer(gEndgameEndingSlideshowWindow);
     if (gEndgameEndingSlideshowWindowBuffer == nullptr) {
+        windowDestroy(gEndgameEndingSlideshowWindow);
+        windowDestroy(gEndgameEndingOverlay);
         return -1;
     }
 
@@ -1192,7 +1195,7 @@ void endgameSetupDeathEnding(int reason)
         }
     }
 
-    EndgameDeathEnding* deathEnding = &(gEndgameDeathEndings[selectedEnding]);
+    EndgameDeathEnding* deathEnding = &(gEndgameDeathEndings[selectedEnding < gEndgameDeathEndingsLength ? selectedEnding : 0]);
 
     strcat(gEndgameDeathEndingFileName, deathEnding->voiceOverBaseName);
 

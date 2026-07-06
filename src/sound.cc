@@ -1508,6 +1508,10 @@ void _fadeSounds()
 
     fadeSound = _fadeHead;
     while (fadeSound != nullptr) {
+        // Save next pointer BEFORE any modifications — _removeFadeSound
+        // chains the node to the free list, overwriting fadeSound->next.
+        FadeSound* nextFadeSound = fadeSound->next;
+
         if ((fadeSound->currentVolume > fadeSound->targetVolume || fadeSound->currentVolume + fadeSound->deltaVolume < fadeSound->targetVolume) && (fadeSound->currentVolume < fadeSound->targetVolume || fadeSound->currentVolume + fadeSound->deltaVolume > fadeSound->targetVolume)) {
             fadeSound->currentVolume += fadeSound->deltaVolume;
             soundSetVolume(fadeSound->sound, fadeSound->currentVolume);
@@ -1533,6 +1537,10 @@ void _fadeSounds()
 
             _removeFadeSound(fadeSound);
         }
+
+        // Advance to the next active node (saved before _removeFadeSound
+        // overwrote fadeSound->next with the free-list link).
+        fadeSound = nextFadeSound;
     }
 
     if (_fadeHead == nullptr) {

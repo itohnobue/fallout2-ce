@@ -232,6 +232,11 @@ jobs:
         run: |
           cmake --build --preset linux-${{ matrix.arch }}-debug
 
+      - name: Test (x64 only)
+        if: matrix.arch == 'x64'
+        run: |
+          ctest --test-dir out/build/linux-x64-debug
+
       - name: Download ce.dat
         uses: actions/download-artifact@v4
         with:

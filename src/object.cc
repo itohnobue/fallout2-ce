@@ -22,6 +22,7 @@
 #include "party_member.h"
 #include "proto.h"
 #include "proto_instance.h"
+#include "queue.h"
 #include "scripts.h"
 #include "settings.h"
 #include "sfall_script_hooks.h"
@@ -1046,9 +1047,7 @@ int _obj_copy(Object** a1, Object* a2)
     }
 
     if (objectSetRotation(objectListNode->obj, a2->rotation, nullptr) == -1) {
-        // TODO: Probably leaking object allocated with objectAllocate.
-        // NOTE: Uninline.
-        objectListNodeDestroy(&objectListNode);
+        objectDestroy(objectListNode->obj, nullptr);
         return -1;
     }
 
@@ -1057,6 +1056,7 @@ int _obj_copy(Object** a1, Object* a2)
     Inventory* newInventory = &(objectListNode->obj->data.inventory);
     newInventory->length = 0;
     newInventory->capacity = 0;
+    newInventory->items = nullptr;
 
     Inventory* oldInventory = &(a2->data.inventory);
     for (int index = 0; index < oldInventory->length; index++) {
@@ -1064,16 +1064,12 @@ int _obj_copy(Object** a1, Object* a2)
 
         Object* newItem;
         if (_obj_copy(&newItem, oldInventoryItem->item) == -1) {
-            // TODO: Probably leaking object allocated with objectAllocate.
-            // NOTE: Uninline.
-            objectListNodeDestroy(&objectListNode);
+            objectDestroy(objectListNode->obj, nullptr);
             return -1;
         }
 
         if (itemAdd(objectListNode->obj, newItem, oldInventoryItem->quantity) == 1) {
-            // TODO: Probably leaking object allocated with objectAllocate.
-            // NOTE: Uninline.
-            objectListNodeDestroy(&objectListNode);
+            objectDestroy(objectListNode->obj, nullptr);
             return -1;
         }
     }
@@ -2038,7 +2034,13 @@ int _obj_inven_free(Inventory* inventory)
 
         ObjectListNode* node;
         // NOTE: Uninline.
-        objectListNodeCreate(&node);
+        if (objectListNodeCreate(&node) == -1) {
+            // Manually free the object if node allocation fails
+            _obj_inven_free(&(inventoryItem->item->data.inventory));
+            objectDeallocate(&(inventoryItem->item));
+            inventoryItem->item = nullptr;
+            continue;
+        }
 
         node->obj = inventoryItem->item;
         node->obj->flags &= ~OBJECT_NO_REMOVE;
@@ -3941,6 +3943,12 @@ static int _obj_remove(ObjectListNode* a1, ObjectListNode* a2)
 
     if ((a1->obj->flags & OBJECT_NO_REMOVE) != 0) {
         return -1;
+    }
+
+    // Remove queued events for inventory items before freeing them
+    Inventory* inventory = &(a1->obj->data.inventory);
+    for (int index = 0; index < inventory->length; index++) {
+        queueRemoveEvents(inventory->items[index].item);
     }
 
     _obj_inven_free(&(a1->obj->data.inventory));

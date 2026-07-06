@@ -1678,7 +1678,9 @@ static int lsgWindowInit(int windowType)
         256,
         WINDOW_MODAL | WINDOW_MOVE_ON_TOP);
     if (gLoadSaveWindow == -1) {
-        // FIXME: Leaking frms.
+        for (int index = 0; index < LOAD_SAVE_FRM_COUNT; index++) {
+            _loadsaveFrmImages[index].unlock();
+        }
         internal_free(_snapshot);
         messageListFree(&gLoadSaveMessageList);
         fontSetCurrent(gLoadSaveWindowOldFont);
@@ -3247,7 +3249,7 @@ static int _RestoreSave()
     }
 
     if (fileListLength != _map_backup_count) {
-        // FIXME: Probably leaks fileList.
+        fileNameListFree(&fileList, 0);
         _EraseSave();
         return -1;
     }
@@ -3260,7 +3262,7 @@ static int _RestoreSave()
         _strmfe(_str1, _str0, "SAV");
         compat_remove(_str1);
         if (compat_rename(_str0, _str1) != 0) {
-            // FIXME: Probably leaks fileList.
+            fileNameListFree(&fileList, 0);
             _EraseSave();
             return -1;
         }

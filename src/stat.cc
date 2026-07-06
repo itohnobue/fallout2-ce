@@ -1,5 +1,6 @@
 #include "stat.h"
 
+#include <cstdint>
 #include <stdio.h>
 
 #include <algorithm>
@@ -811,11 +812,12 @@ int pcAddExperienceWithOptions(int xp, bool doParty, int* xpGained)
     // Apply sfall set_xp_mod (0x81AA) percentage modifier to base XP.
     // gXpModPercentage defaults to 100 (no modification). Values above 100
     // increase XP gain; values below 100 decrease it; 0 means no XP.
-    int adjustedXp = xp * gXpModPercentage / 100;
+    // Use int64_t to prevent overflow with extreme xp * modifier values.
+    int64_t adjustedXp = static_cast<int64_t>(xp) * gXpModPercentage / 100;
 
-    int newXp = gPcStatValues[PC_STAT_EXPERIENCE];
+    int64_t newXp = gPcStatValues[PC_STAT_EXPERIENCE];
     newXp += adjustedXp;
-    newXp += perkGetRank(gDude, PERK_SWIFT_LEARNER) * 5 * adjustedXp / 100;
+    newXp += static_cast<int64_t>(perkGetRank(gDude, PERK_SWIFT_LEARNER)) * 5 * adjustedXp / 100;
 
     if (newXp < gPcStatDescriptions[PC_STAT_EXPERIENCE].minimumValue) {
         newXp = gPcStatDescriptions[PC_STAT_EXPERIENCE].minimumValue;
@@ -825,7 +827,7 @@ int pcAddExperienceWithOptions(int xp, bool doParty, int* xpGained)
         newXp = gPcStatDescriptions[PC_STAT_EXPERIENCE].maximumValue;
     }
 
-    gPcStatValues[PC_STAT_EXPERIENCE] = newXp;
+    gPcStatValues[PC_STAT_EXPERIENCE] = static_cast<int>(newXp);
 
     while (gPcStatValues[PC_STAT_LEVEL] < PC_LEVEL_MAX) {
         if (newXp < pcGetExperienceForNextLevel()) {

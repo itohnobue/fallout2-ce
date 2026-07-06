@@ -180,6 +180,7 @@ namespace {
         { kSfallMisc, "FemaleStartModel", CONTENT_CONFIG_START_SECTION, "model_female", "hfprim" },
         { kSfallMisc, "FemaleDefaultModel", CONTENT_CONFIG_START_SECTION, "model_female_default", "hfjmps" },
         { kSfallMisc, "PipBoyAvailableAtGameStart", CONTENT_CONFIG_START_SECTION, "pipboy", "0" },
+        { kSfallMisc, "Fallout1Behavior", CONTENT_CONFIG_START_SECTION, "fallout1_behavior", "0" },
         // [karma]
         { kSfallMisc, "KarmaFRMs", CONTENT_CONFIG_KARMA_SECTION, "frms" },
         { kSfallMisc, "KarmaPoints", CONTENT_CONFIG_KARMA_SECTION, "points" },
@@ -232,6 +233,11 @@ namespace {
         // WorldMapSlots migration intentionally removed — `encounter_slots` is never read
         // from game.cfg and `scriptsGetWorldMapSlots()` has zero callers, making the
         // entire WorldMapSlots → encounter_slots pipeline dead code.
+
+        // BoxBarCount migration intentionally removed — `add_iface_tag` metarule provides
+        // equivalent functionality and 5 pre-allocated tag slots match the sfall baseline.
+        // There is no engine-level consumer for BoxBarCount in CE.
+
         { kSfallMisc, "BoostScriptDialogLimit", CONTENT_CONFIG_DIALOG_SECTION, "boost_dialog_limit", "0" },
         // [characters]
         { kSfallMisc, "PremadePaths", CONTENT_CONFIG_CHARACTERS_SECTION, "premade_paths" },

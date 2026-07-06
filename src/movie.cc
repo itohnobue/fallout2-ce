@@ -349,6 +349,13 @@ static void movieBufferedImpl(unsigned char* pixels, int src_width, int src_heig
 int _movieScaleSubRect(int win, unsigned char* data, int width, int height, int pitch)
 {
     int windowWidth = windowGetWidth(win);
+    int windowHeight = windowGetHeight(win);
+    if (_movieX < 0 || _movieY < 0 || _movieW <= 0 || _movieH <= 0) {
+        return 0;
+    }
+    if (_movieX + _movieW > windowWidth || _movieY + _movieH > windowHeight) {
+        return 0;
+    }
     unsigned char* windowBuffer = windowGetBuffer(win) + windowWidth * _movieY + _movieX;
     if (width * 4 / 3 > _movieW) {
         gMovieFlags |= MOVIE_EXTENDED_FLAG_ERROR;
@@ -414,6 +421,13 @@ int _movieScaleWindow(int win, unsigned char* data, int width, int height, int p
 int _blitNormal(int win, unsigned char* data, int width, int height, int pitch)
 {
     int windowWidth = windowGetWidth(win);
+    int windowHeight = windowGetHeight(win);
+    if (_movieX < 0 || _movieY < 0 || _movieW <= 0 || _movieH <= 0) {
+        return 0;
+    }
+    if (_movieX + _movieW > windowWidth || _movieY + _movieH > windowHeight) {
+        return 0;
+    }
     unsigned char* windowBuffer = windowGetBuffer(win);
     _drawScaled(windowBuffer + windowWidth * _movieY + _movieX, _movieW, _movieH, windowWidth, data, width, height, pitch);
     return 1;
@@ -607,6 +621,7 @@ static void movieLoadSubtitles(char* filePath)
             prev = subtitle;
         } else {
             debugPrint("subtitle: couldn't parse %s\n", string);
+            internal_free_safe(subtitle, __FILE__, __LINE__); // "..\\int\\MOVIE.C", 1050
         }
     }
 

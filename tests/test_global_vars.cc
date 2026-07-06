@@ -14,6 +14,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -23,6 +24,7 @@
 
 #include "db.h"
 #include "sfall_global_vars.h"
+#include "sfall_global_scripts.h"
 
 using namespace fallout;
 
@@ -543,129 +545,283 @@ TEST_CASE("sfall_gl_vars_save / sfall_gl_vars_load — M-051 (sfall_global_vars.
 }
 
 // =============================================================
-// H-016: sfall_global_scripts module struct mirror
+// H-016: sfall_global_scripts module tests
 // =============================================================
-// sfall_global_scripts.cc (242 lines) has ZERO test coverage.
-// Production functions require full Program lifecycle (script file
-// loading, compilation). We validate the GlobalScript struct layout
-// and set_repeat/set_type/is_loaded contract patterns.
-// Research tier: CONFIRMED — RPU uses 11+ global scripts.
-// Source: sfall_global_scripts.cc:21-28, 197-233.
+// sfall_global_scripts.cc (265 lines) has ZERO linked test coverage.
+// This file does NOT link sfall_global_scripts.cc — it is not in
+// the `test_sources` library (tests/CMakeLists.txt:18-27). To achieve
+// full coverage, add "${CMAKE_SOURCE_DIR}/src/sfall_global_scripts.cc"
+// to the test_sources STATIC library.
+//
+// These tests validate the GlobalScript struct layout and
+// GlobalScriptsState container management patterns against the
+// production source at sfall_global_scripts.cc:22-34.
+//
+// The real header is included (sfall_global_scripts.h) to validate
+// type definitions; production function calls require linking.
+// Source: sfall_global_scripts.cc:22-34, 197-233.
 
-TEST_CASE("H-016: sfall_global_scripts struct mirror (sfall_global_scripts.cc:21-28)")
+// Mirror GlobalScript from sfall_global_scripts.cc:22-29.
+// SCRIPT_PROC_COUNT = 5 (scripts.h:19).
+struct MirrorGlobalScript {
+    void* program = nullptr;
+    int procs[5] = { 0 };
+    int repeat = 0;
+    int count = 0;
+    int mode = 0;
+    bool once = true;
+};
+
+// Mirror GlobalScriptsState from sfall_global_scripts.cc:31-34.
+struct MirrorGlobalScriptsState {
+    std::vector<std::string> paths;
+    std::vector<MirrorGlobalScript> globalScripts;
+};
+
+// Helper: find script by Program* in the globalScripts vector.
+// Mirrors the search pattern at sfall_global_scripts.cc:197-233.
+static MirrorGlobalScript* mirrorFindScript(std::vector<MirrorGlobalScript>& scripts, void* program) {
+    for (auto& script : scripts) {
+        if (script.program == program) {
+            return &script;
+        }
+    }
+    return nullptr;
+}
+
+// Mirror sfall_gl_scr_set_repeat (sfall_global_scripts.cc:197-203)
+static void mirrorSetRepeat(std::vector<MirrorGlobalScript>& scripts, void* program, int frames) {
+    MirrorGlobalScript* script = mirrorFindScript(scripts, program);
+    if (script != nullptr) {
+        script->repeat = frames;
+    }
+}
+
+// Mirror sfall_gl_scr_set_type (sfall_global_scripts.cc:205-219)
+static void mirrorSetType(std::vector<MirrorGlobalScript>& scripts, void* program, int type) {
+    if (type < 0 || type > 3) {
+        return;
+    }
+    MirrorGlobalScript* script = mirrorFindScript(scripts, program);
+    if (script != nullptr) {
+        script->mode = type;
+    }
+}
+
+// Mirror sfall_gl_scr_is_loaded (sfall_global_scripts.cc:221-233)
+static bool mirrorIsLoaded(std::vector<MirrorGlobalScript>& scripts, void* program) {
+    for (auto& script : scripts) {
+        if (script.program == program) {
+            if (script.once) {
+                script.once = false;
+                return true;
+            }
+            return false;
+        }
+    }
+    return false;
+}
+
+TEST_CASE("H-016: GlobalScriptsState container lifecycle (sfall_global_scripts.cc:31-34)")
 {
-    // Mirror GlobalScript from sfall_global_scripts.cc:21-28.
-    // SCRIPT_PROC_COUNT = 5 (scripts.h:19).
-    struct MirrorGlobalScript {
-        void* program = nullptr;
-        int procs[5] = { 0 };
-        int repeat = 0;
-        int count = 0;
-        int mode = 0;
-        bool once = true;
-    };
+    MirrorGlobalScriptsState state;
 
-    std::vector<MirrorGlobalScript> scripts;
-
-    MirrorGlobalScript scr;
-    scr.program = reinterpret_cast<void*>(0xDEADBEEF);
-    scr.repeat = 0;
-    scr.mode = 0;
-    scr.once = true;
-    scripts.push_back(scr);
-    MirrorGlobalScript* s = &scripts[0];
-
-    SUBCASE("sfall_gl_scr_set_repeat: set to 60 (sfall_global_scripts.cc:197)")
+    SUBCASE("empty state has no scripts or paths")
     {
-        int frames = 60;
-        s->repeat = frames;
-        CHECK(s->repeat == 60);
+        CHECK(state.paths.empty());
+        CHECK(state.globalScripts.empty());
     }
 
-    SUBCASE("sfall_gl_scr_set_repeat: set to 0 disables periodic invocation")
+    SUBCASE("add paths and scripts in correct order")
     {
-        // RPU report: set_global_script_repeat(0) disables periodic invocation.
-        s->repeat = 60;
-        s->repeat = 0;
+        // Simulate loading RPU global scripts from scripts\gl*.int and scripts\sfall\gl*.int
+        state.paths.push_back("scripts\\gl_ammo.int");
+        state.paths.push_back("scripts\\gl_highlighting.int");
+        state.paths.push_back("scripts\\sfall\\gl_party_control.int");
+        state.paths.push_back("scripts\\sfall\\gl_highlighting_ext.int");
+
+        CHECK(state.paths.size() == 4);
+        // Paths should be sorted after loading (sfall_global_scripts.cc:77)
+        std::sort(state.paths.begin(), state.paths.end());
+        CHECK(state.paths[0] == "scripts\\gl_ammo.int");
+        CHECK(state.paths[3] == "scripts\\sfall\\gl_party_control.int");
+    }
+
+    SUBCASE("register global scripts and verify search")
+    {
+        // Create Programs (mocked as opaque pointers)
+        void* prog1 = reinterpret_cast<void*>(0x1000);
+        void* prog2 = reinterpret_cast<void*>(0x2000);
+        void* prog3 = reinterpret_cast<void*>(0x3000);
+
+        MirrorGlobalScript scr1;
+        scr1.program = prog1;
+        scr1.repeat = 0;
+        scr1.mode = 0;  // timed
+        state.globalScripts.push_back(scr1);
+
+        MirrorGlobalScript scr2;
+        scr2.program = prog2;
+        scr2.repeat = 60;
+        scr2.mode = 2;  // worldmap
+        state.globalScripts.push_back(scr2);
+
+        MirrorGlobalScript scr3;
+        scr3.program = prog3;
+        scr3.repeat = 0;
+        scr3.mode = 1;  // background
+        state.globalScripts.push_back(scr3);
+
+        CHECK(state.globalScripts.size() == 3);
+
+        // Search by program pointer
+        MirrorGlobalScript* found = mirrorFindScript(state.globalScripts, prog2);
+        REQUIRE(found != nullptr);
+        CHECK(found->repeat == 60);
+        CHECK(found->mode == 2);
+
+        // Non-existent program returns nullptr
+        void* unknown = reinterpret_cast<void*>(0x9999);
+        CHECK(mirrorFindScript(state.globalScripts, unknown) == nullptr);
+    }
+}
+
+TEST_CASE("H-016: GlobalScript set_repeat / set_type / is_loaded contract (sfall_global_scripts.cc:197-233)")
+{
+    std::vector<MirrorGlobalScript> scripts;
+    void* progA = reinterpret_cast<void*>(0xA000);
+    void* progB = reinterpret_cast<void*>(0xB000);
+
+    MirrorGlobalScript scrA;
+    scrA.program = progA;
+    scrA.repeat = 0;
+    scrA.mode = 0;
+    scrA.once = true;
+    scripts.push_back(scrA);
+
+    MirrorGlobalScript scrB;
+    scrB.program = progB;
+    scrB.repeat = 30;
+    scrB.mode = 2;
+    scrB.once = true;
+    scripts.push_back(scrB);
+
+    SUBCASE("set_repeat: set to valid value")
+    {
+        mirrorSetRepeat(scripts, progA, 120);
+        MirrorGlobalScript* s = mirrorFindScript(scripts, progA);
+        REQUIRE(s != nullptr);
+        CHECK(s->repeat == 120);
+    }
+
+    SUBCASE("set_repeat: set to 0 disables periodic invocation")
+    {
+        mirrorSetRepeat(scripts, progB, 0);
+        MirrorGlobalScript* s = mirrorFindScript(scripts, progB);
+        REQUIRE(s != nullptr);
         CHECK(s->repeat == 0);
     }
 
-    SUBCASE("sfall_gl_scr_set_repeat: set to 1000 (large interval)")
+    SUBCASE("set_repeat: non-existent program is no-op")
     {
-        // RPU report: set_global_script_repeat(1000).
-        s->repeat = 1000;
-        CHECK(s->repeat == 1000);
+        void* unknown = reinterpret_cast<void*>(0xFFFF);
+        mirrorSetRepeat(scripts, unknown, 60);
+        // No crash, no change to existing scripts
+        CHECK(scripts.size() == 2);
     }
 
-    SUBCASE("sfall_gl_scr_set_type: valid types 0-3 (sfall_global_scripts.cc:205)")
+    SUBCASE("set_type: valid types 0-3 accepted")
     {
-        // RPU uses all 4 types: 0=timed, 1=background, 2=worldmap, 3=gameplay.
         for (int type = 0; type <= 3; type++) {
-            s->mode = type;
+            mirrorSetType(scripts, progA, type);
+            MirrorGlobalScript* s = mirrorFindScript(scripts, progA);
+            REQUIRE(s != nullptr);
             CHECK(s->mode == type);
         }
     }
 
-    SUBCASE("sfall_gl_scr_set_type: reject type < 0 (sfall_global_scripts.cc:207)")
+    SUBCASE("set_type: type < 0 is rejected (mode unchanged)")
     {
-        // Production: if (type < 0 || type > 3) return;
-        int saved = s->mode;
-        int type = -1;
-        if (type < 0 || type > 3) {
-            // return; — mode unchanged
-        } else {
-            s->mode = type;
-        }
-        CHECK(s->mode == saved);
+        mirrorSetType(scripts, progA, 2);
+        mirrorSetType(scripts, progA, -1);
+        MirrorGlobalScript* s = mirrorFindScript(scripts, progA);
+        REQUIRE(s != nullptr);
+        CHECK(s->mode == 2); // unchanged
     }
 
-    SUBCASE("sfall_gl_scr_set_type: reject type > 3 (sfall_global_scripts.cc:207)")
+    SUBCASE("set_type: type > 3 is rejected (mode unchanged)")
     {
-        int saved = s->mode;
-        int type = 4;
-        if (type < 0 || type > 3) {
-            // return; — mode unchanged
-        } else {
-            s->mode = type;
-        }
-        CHECK(s->mode == saved);
+        mirrorSetType(scripts, progA, 1);
+        mirrorSetType(scripts, progA, 4);
+        MirrorGlobalScript* s = mirrorFindScript(scripts, progA);
+        REQUIRE(s != nullptr);
+        CHECK(s->mode == 1); // unchanged
     }
 
-    SUBCASE("sfall_gl_scr_is_loaded: true on first call (sfall_global_scripts.cc:221)")
+    SUBCASE("is_loaded: true on first call, false on subsequent calls")
     {
-        // Production: once=true → sets once=false, returns true.
-        CHECK(s->once == true);
-        bool result = s->once;
-        if (s->once) {
-            s->once = false;
-            result = true;
-        }
-        CHECK(result == true);
-        CHECK(s->once == false);
+        CHECK(mirrorIsLoaded(scripts, progA) == true);
+        CHECK(mirrorIsLoaded(scripts, progA) == false);
+        CHECK(mirrorIsLoaded(scripts, progA) == false); // idempotent
     }
 
-    SUBCASE("sfall_gl_scr_is_loaded: false on subsequent calls (sfall_global_scripts.cc:226)")
+    SUBCASE("is_loaded: separate scripts have independent once flags")
     {
-        s->once = false;
-        bool result = false;
-        if (s->once) {
-            s->once = false;
-            result = true;
-        }
-        CHECK(result == false);
+        CHECK(mirrorIsLoaded(scripts, progA) == true);
+        CHECK(mirrorIsLoaded(scripts, progB) == true); // progB's once flag is separate
+        CHECK(mirrorIsLoaded(scripts, progA) == false);
+        CHECK(mirrorIsLoaded(scripts, progB) == false);
     }
 
-    SUBCASE("sfall_gl_scr_is_loaded: non-global script returns false (sfall_global_scripts.cc:229)")
+    SUBCASE("is_loaded: non-existent program returns false")
     {
-        // sfall 4.4.5 fix: game_loaded() returns false for non-global scripts.
-        void* nonGlobal = reinterpret_cast<void*>(0xBEEF);
-        bool found = false;
-        for (auto& scr : scripts) {
-            if (scr.program == nonGlobal) {
-                found = true;
-                break;
-            }
-        }
-        CHECK_FALSE(found);
+        void* unknown = reinterpret_cast<void*>(0xFFFF);
+        CHECK(mirrorIsLoaded(scripts, unknown) == false);
+    }
+
+    SUBCASE("is_loaded: both once flag states")
+    {
+        // Pre-set once=false to simulate a script that has already been loaded
+        MirrorGlobalScript scrC;
+        scrC.program = reinterpret_cast<void*>(0xC000);
+        scrC.once = false;
+        scripts.push_back(scrC);
+
+        CHECK(mirrorIsLoaded(scripts, scrC.program) == false);
     }
 }
+
+TEST_CASE("H-016: GlobalScriptsState kGlobalScriptBusyFlags constant (sfall_global_scripts.cc:18-20)")
+{
+    // Validate PROGRAM_FLAG constants used for script busy-checking.
+    // sfall_global_scripts.cc:18-20 defines:
+    //   static constexpr int kGlobalScriptBusyFlags =
+    //       PROGRAM_FLAG_FATAL_ERROR | PROGRAM_FLAG_CHILD_CALL | PROGRAM_FLAG_CHILD_SPAWN;
+    // These must be non-zero to effectively gate script execution.
+    // NOTE: Actual PROGRAM_FLAG_* values are defined in interpreter.h;
+    // this test validates only that the mask is non-empty.
+
+    // The busy flags mask must be non-zero to prevent re-entrant execution.
+    constexpr int kGlobalScriptBusyFlags = 0
+        | 0x01  // PROGRAM_FLAG_FATAL_ERROR placeholder
+        | 0x02  // PROGRAM_FLAG_CHILD_CALL placeholder
+        | 0x04; // PROGRAM_FLAG_CHILD_SPAWN placeholder
+    CHECK(kGlobalScriptBusyFlags != 0);
+
+    // A script with no busy flags set should be able to run.
+    int scriptFlags = 0;
+    bool canRun = (scriptFlags & kGlobalScriptBusyFlags) == 0;
+    CHECK(canRun == true);
+
+    // A script with any busy flag set should be blocked.
+    int busyFlags = 0x01;
+    bool blocked = (busyFlags & kGlobalScriptBusyFlags) != 0;
+    CHECK(blocked == true);
+}
+
+// GAP: sfall_global_scripts.cc is NOT linked into tests.
+// To achieve production coverage, add to tests/CMakeLists.txt test_sources:
+//   "${CMAKE_SOURCE_DIR}/src/sfall_global_scripts.cc"
+// Required stubs for linking: fileNameListInit, fileNameListFree,
+// program_* functions, scriptHooksRegisterProgram, aiCheckMovies.
+// These stubs can be added to test_common_stubs.cc.

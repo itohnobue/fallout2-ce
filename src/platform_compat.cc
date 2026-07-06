@@ -37,6 +37,12 @@ static bool compatIsPathSeparator(char ch)
 
 static void compat_prepare_native_path(char* nativePath, const char* path)
 {
+    if (strlen(path) >= COMPAT_MAX_PATH) {
+        // Path is too long and will be truncated — the resulting path may
+        // reference a wrong file or fail to resolve correctly.
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "compat_prepare_native_path: path truncated (%zu chars), original: %s", strlen(path), path);
+    }
+
     strncpy(nativePath, path, COMPAT_MAX_PATH - 1);
     nativePath[COMPAT_MAX_PATH - 1] = '\0';
     compat_windows_path_to_native(nativePath);
@@ -144,14 +150,19 @@ void compat_makepath(char* path, const char* drive, const char* dir, const char*
 #ifdef _WIN32
     _makepath(path, drive, dir, fname, ext);
 #else
+    char* const pathStart = path;
     path[0] = '\0';
 
     if (drive != nullptr) {
         if (*drive != '\0') {
-            strcpy(path, drive);
+            size_t remaining = (size_t)(pathStart + COMPAT_MAX_PATH - path);
+            if (remaining > 0) {
+                strncpy(path, drive, remaining - 1);
+                path[remaining - 1] = '\0';
+            }
             path = strchr(path, '\0');
 
-            if (compatIsPathSeparator(path[-1])) {
+            if (path > pathStart && compatIsPathSeparator(path[-1])) {
                 path--;
             } else {
                 *path = '/';
@@ -165,10 +176,14 @@ void compat_makepath(char* path, const char* drive, const char* dir, const char*
                 path++;
             }
 
-            strcpy(path, dir);
+            size_t remaining = (size_t)(pathStart + COMPAT_MAX_PATH - path);
+            if (remaining > 0) {
+                strncpy(path, dir, remaining - 1);
+                path[remaining - 1] = '\0';
+            }
             path = strchr(path, '\0');
 
-            if (compatIsPathSeparator(path[-1])) {
+            if (path > pathStart && compatIsPathSeparator(path[-1])) {
                 path--;
             } else {
                 *path = '/';
@@ -181,7 +196,11 @@ void compat_makepath(char* path, const char* drive, const char* dir, const char*
             path++;
         }
 
-        strcpy(path, fname);
+        size_t remaining = (size_t)(pathStart + COMPAT_MAX_PATH - path);
+        if (remaining > 0) {
+            strncpy(path, fname, remaining - 1);
+            path[remaining - 1] = '\0';
+        }
         path = strchr(path, '\0');
     } else {
         if (compatIsPathSeparator(*path)) {
@@ -191,16 +210,29 @@ void compat_makepath(char* path, const char* drive, const char* dir, const char*
 
     if (ext != nullptr) {
         if (*ext != '\0') {
+            // Reserve space for the leading dot if needed.
+            size_t remaining = (size_t)(pathStart + COMPAT_MAX_PATH - path);
             if (*ext != '.') {
-                *path++ = '.';
+                if (remaining > 0) {
+                    *path++ = '.';
+                    remaining--;
+                }
             }
 
-            strcpy(path, ext);
+            if (remaining > 0) {
+                strncpy(path, ext, remaining - 1);
+                path[remaining - 1] = '\0';
+            }
             path = strchr(path, '\0');
         }
     }
 
-    *path = '\0';
+    // Ensure the final buffer is always null-terminated.
+    if (pathStart + COMPAT_MAX_PATH - path > 0) {
+        *path = '\0';
+    } else {
+        pathStart[COMPAT_MAX_PATH - 1] = '\0';
+    }
 #endif
 }
 

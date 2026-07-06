@@ -1115,7 +1115,8 @@ int globalVarsRead(const char* path, const char* section, int* variablesListLeng
         *variablesListPtr = (int*)internal_realloc(*variablesListPtr, sizeof(int) * *variablesListLengthPtr);
 
         if (*variablesListPtr == nullptr) {
-            exit(1);
+            fileClose(stream);
+            return -1;
         }
 
         char* equals = strchr(string, '=');

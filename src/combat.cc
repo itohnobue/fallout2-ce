@@ -4654,6 +4654,7 @@ static int attackDetermineToHit(Object* attacker, int tile, Object* defender, in
 
     if (toHit < -100) {
         debugPrint("Whoa! Bad skill value in determine_to_hit!\n");
+        toHit = -100;
     }
 
     toHit = scriptHooks_ToHit(attacker, defender, tile, hitMode, hitLocation, toHit, toHitUncapped, useDistance);

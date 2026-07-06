@@ -852,15 +852,23 @@ int scriptWindowCreate(const char* windowName, int x, int y, int width, int heig
 {
     int windowIndex = -1;
 
-    // NOTE: Original code is slightly different.
+    // Search for existing window with same name first.
     for (int index = 0; index < MANAGED_WINDOW_COUNT; index++) {
         ManagedWindow* managedWindow = &(gManagedWindows[index]);
-        if (managedWindow->window == -1) {
-            windowIndex = index;
-            break;
-        } else {
+        if (managedWindow->window != -1) {
             if (compat_stricmp(managedWindow->name, windowName) == 0) {
                 scriptWindowDelete(windowName);
+                windowIndex = index;
+                break;
+            }
+        }
+    }
+
+    // If no name match found, search for empty slot.
+    if (windowIndex == -1) {
+        for (int index = 0; index < MANAGED_WINDOW_COUNT; index++) {
+            ManagedWindow* managedWindow = &(gManagedWindows[index]);
+            if (managedWindow->window == -1) {
                 windowIndex = index;
                 break;
             }
@@ -1042,16 +1050,20 @@ int _popWindow()
     }
 
     int windowIndex = _winStack[_winTOS];
-    _winTOS--;
 
     if (windowIndex < 0 || windowIndex >= MANAGED_WINDOW_COUNT) {
+        _winTOS--;
         gCurrentManagedWindowIndex = -1;
         return -1;
     }
 
     ManagedWindow* managedWindow = &(gManagedWindows[windowIndex]);
 
-    return scriptWindowSelect(managedWindow->name);
+    int result = scriptWindowSelect(managedWindow->name);
+    if (result != -1) {
+        _winTOS--;
+    }
+    return result;
 }
 
 // 0x4B8414

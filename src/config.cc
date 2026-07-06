@@ -193,6 +193,12 @@ bool configSetString(Config* config, const char* sectionKey, const char* key, co
     ConfigSection* section = (ConfigSection*)sectionEntry->value;
 
     int index = dictionaryGetIndexByKey(section, key);
+
+    char* valueCopy = internal_strdup(value);
+    if (valueCopy == nullptr) {
+        return false;
+    }
+
     if (index != -1) {
         DictionaryEntry* keyValueEntry = &(section->entries[index]);
 
@@ -201,11 +207,6 @@ bool configSetString(Config* config, const char* sectionKey, const char* key, co
         *existingValue = nullptr;
 
         dictionaryRemoveValue(section, key);
-    }
-
-    char* valueCopy = internal_strdup(value);
-    if (valueCopy == nullptr) {
-        return false;
     }
 
     if (dictionaryAddValue(section, key, &valueCopy) == -1) {
@@ -273,8 +274,9 @@ bool configGetIntList(Config* config, const char* sectionKey, const char* key, i
     char temp[CONFIG_FILE_MAX_LINE_LENGTH];
     string = strncpy(temp, string, CONFIG_FILE_MAX_LINE_LENGTH - 1);
 
+    char* pch;
     while (1) {
-        char* pch = strchr(string, ',');
+        pch = strchr(string, ',');
         if (pch == nullptr) {
             break;
         }
@@ -287,6 +289,12 @@ bool configGetIntList(Config* config, const char* sectionKey, const char* key, i
         if (count == 0) {
             break;
         }
+    }
+
+    // If the loop exited because count hit 0 but more comma-separated values
+    // were still available in the string, the list was silently truncated.
+    if (count == 0 && pch != nullptr) {
+        return false;
     }
 
     // SFALL: Fix getting last item in a list if the list has less than the
@@ -735,10 +743,7 @@ static bool configWriteSideBySide(Config* config, const char* filePath, int flag
 
     std::string backupPath = std::string(filePath) + ".bak";
 
-    if (compat_remove(backupPath.c_str()) != 0 && errno != ENOENT) {
-        compat_remove(tempPath);
-        return false;
-    }
+    compat_remove(backupPath.c_str()); // ignore errors — may not exist
 
     if (compat_rename(filePath, backupPath.c_str()) != 0) {
         compat_remove(tempPath);
@@ -750,9 +755,7 @@ static bool configWriteSideBySide(Config* config, const char* filePath, int flag
         return false;
     }
 
-    if (compat_remove(backupPath.c_str()) != 0 && errno != ENOENT) {
-        return false;
-    }
+    compat_remove(backupPath.c_str()); // ignore errors — cleanup only
     return true;
 }
 

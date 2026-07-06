@@ -3668,6 +3668,12 @@ static void opPlayGameMovie(Program* program)
 
     int movie = programStackPopInteger(program);
 
+    if (movie < 0 || movie >= MOVIE_COUNT) {
+        debugPrint("\nScript Error: %s: op_play_gmovie: movie index %d out of bounds\n", program->name, movie);
+        program->flags &= ~PROGRAM_FLAG_CHILD_CALL;
+        return;
+    }
+
     // CE: Disable map updates. Needed to stop animation of objects (dude in
     // particular) when playing movies (the problem can be seen as visual
     // artifacts when playing endgame oilrig explosion).

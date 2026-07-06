@@ -486,6 +486,7 @@ int mapAllocLocalVars(const int numNewVars)
     int* vars = (int*)internal_realloc(gMapLocalVars, sizeof(*vars) * gMapLocalVarsLength);
     if (vars == nullptr) {
         debugPrint("\nError: Ran out of memory!");
+        return -1;
     }
 
     gMapLocalVars = vars;

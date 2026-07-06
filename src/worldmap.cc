@@ -4380,7 +4380,7 @@ static bool wmEvalConditional(EncounterCondition* condition, int* critterCountPt
 
         if (!matches) {
             // FIXME: Can overflow with all 3 conditions specified.
-            if (condition->logicalOperators[index] == ENCOUNTER_LOGICAL_OPERATOR_AND) {
+            if (index < 2 && condition->logicalOperators[index] == ENCOUNTER_LOGICAL_OPERATOR_AND) {
                 break;
             }
         }
@@ -4493,6 +4493,17 @@ static int wmGrabTileWalkMask(int tileIdx)
 // 0x4C1D9C wmWorldPosInvalid
 static bool wmWorldPosInvalid(int x, int y)
 {
+    // Validate coordinates to prevent OOB access via negative/invalid values.
+    if (wmNumHorizontalTiles <= 0 || wmMaxTileNum <= 0) {
+        return false;
+    }
+    if (x < 0 || x >= WM_TILE_WIDTH * wmNumHorizontalTiles) {
+        return false;
+    }
+    if (y < 0 || y >= WM_TILE_HEIGHT * (wmMaxTileNum / wmNumHorizontalTiles)) {
+        return false;
+    }
+
     int tileIdx = y / WM_TILE_HEIGHT * wmNumHorizontalTiles + x / WM_TILE_WIDTH % wmNumHorizontalTiles;
     if (wmGrabTileWalkMask(tileIdx) == -1) {
         return false;
