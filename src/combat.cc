@@ -59,6 +59,20 @@ int gXPTableMode = 0;
 int gWorldMapFPSPatch = 0;
 int gDisableSpecialMapIDs = 0;
 
+// SFALL: Extern declarations for sfall knockback globals (defined in sfall_opcodes.cc).
+// Wired into combat knockback calculation (F-004).
+extern int sfallWeaponKnockbackType;
+extern float sfallWeaponKnockbackValue;
+extern int sfallTargetKnockbackType;
+extern float sfallTargetKnockbackValue;
+extern int sfallAttackerKnockbackType;
+extern float sfallAttackerKnockbackValue;
+
+// SFALL: Extern declarations for sfall hit chance globals (defined in sfall_opcodes.cc).
+// Wired into attackDetermineToHit() (F-005).
+extern int sfallHitChanceMod;
+extern int sfallHitChanceMax;
+
 #define CALLED_SHOT_WINDOW_Y (20)
 #define CALLED_SHOT_WINDOW_WIDTH (504)
 #define CALLED_SHOT_WINDOW_HEIGHT (309)
@@ -136,7 +150,7 @@ static void _check_for_death(Object* a1, int a2, int* a3);
 static void _set_new_results(Object* a1, int a2);
 static void _damage_object(Object* a1, int damage, bool animated, int a4, Object* a5);
 static void combatCopyDamageAmountDescription(char* dest, size_t size, Object* critter_obj, int damage);
-static void combatAddDamageFlagsDescription(char* a1, int flags, Object* a3);
+static void combatAddDamageFlagsDescription(char* dest, size_t destSize, int flags, Object* critter);
 static void _combat_standup(Object* a1);
 static void _print_tohit(unsigned char* dest, int dest_pitch, int a3);
 static char* hitLocationGetName(Object* critter, int hitLocation);
@@ -4154,8 +4168,14 @@ void _compute_explosion_on_extras(Attack* attack, bool isFromAttacker, bool isGr
     int tile = -1;
     int ringFirstTile = explosionTile;
 
-    // SFALL
+    // SFALL: Fix I2-F-016 — clamp script-controlled maxTargets to array bounds.
+    // explosionSetMaxTargets (sfall opcode 0x8261) accepts any int; without
+    // clamping, maxTargets > EXPLOSION_TARGET_COUNT (6) would cause OOB writes
+    // into extras[6], extrasDamage[6], extrasFlags[6], extrasKnockback[6].
     int maxTargets = explosionGetMaxTargets();
+    if (maxTargets > EXPLOSION_TARGET_COUNT) {
+        maxTargets = EXPLOSION_TARGET_COUNT;
+    }
     // Check adjacent tiles for possible targets, going ring-by-ring
     while (attack->extrasLength < maxTargets) {
         if (radius != 0 && (tile == -1 || (tile = tileGetTileInDirection(tile, rotation, 1)) != ringFirstTile)) {
@@ -4621,8 +4641,15 @@ static int attackDetermineToHit(Object* attacker, int tile, Object* defender, in
     }
 
     int toHitUncapped = toHit;
-    if (toHit > 95) {
-        toHit = 95;
+
+    // SFALL: Fix F-005 — apply critter hit chance modifier set by
+    // set_critter_hit_chance_mod (0x81C5). Default is 0 (no modification).
+    toHit += sfallHitChanceMod;
+
+    // SFALL: Fix F-005 — use script-controlled hit chance cap instead of
+    // hardcoded 95. Default is 95 (vanilla match).
+    if (toHit > sfallHitChanceMax) {
+        toHit = sfallHitChanceMax;
     }
 
     if (toHit < -100) {
@@ -4708,6 +4735,10 @@ static void attackComputeDamage(Attack* attack, int numRounds, int baseDamageMul
     context.damageBonus = damageBonus;
     context.baseDamageMult = baseDamageMult;
     context.difficultyDamagePercent = difficultyDamagePercent;
+    // SFALL: Fix I2-F-002 — ammoQuantity was never initialized.
+    // Vanilla path uses numRounds directly (line 4727); Glovz/Yaam
+    // paths read context->ammoQuantity as loop bound at lines 6843/6933.
+    context.ammoQuantity = numRounds;
 
     if (gDamageCalculationType == DAMAGE_CALCULATION_TYPE_GLOVZ || gDamageCalculationType == DAMAGE_CALCULATION_TYPE_GLOVZ_WITH_DAMAGE_MULTIPLIER_TWEAK) {
         damageModCalculateGlovz(&context);
@@ -4792,6 +4823,33 @@ static void attackComputeDamage(Attack* attack, int numRounds, int baseDamageMul
 
             if (hasStonewall) {
                 *knockbackDistancePtr /= 2;
+            }
+
+            // SFALL: Fix F-004 — apply knockback modifiers set by
+            // set_weapon_knockback (0x8195), set_target_knockback (0x8196),
+            // set_attacker_knockback (0x8197). Type 0 = none, 1 = absolute,
+            // 2 = additive. Defaults are 0 (no modification).
+            if (sfallWeaponKnockbackType == 1) {
+                *knockbackDistancePtr = static_cast<int>(sfallWeaponKnockbackValue);
+            } else if (sfallWeaponKnockbackType == 2) {
+                *knockbackDistancePtr += static_cast<int>(sfallWeaponKnockbackValue);
+            }
+
+            if (sfallTargetKnockbackType == 1) {
+                *knockbackDistancePtr = static_cast<int>(sfallTargetKnockbackValue);
+            } else if (sfallTargetKnockbackType == 2) {
+                *knockbackDistancePtr += static_cast<int>(sfallTargetKnockbackValue);
+            }
+
+            if (sfallAttackerKnockbackType == 1) {
+                *knockbackDistancePtr = static_cast<int>(sfallAttackerKnockbackValue);
+            } else if (sfallAttackerKnockbackType == 2) {
+                *knockbackDistancePtr += static_cast<int>(sfallAttackerKnockbackValue);
+            }
+
+            // Knockback distance should never be negative.
+            if (*knockbackDistancePtr < 0) {
+                *knockbackDistancePtr = 0;
             }
         }
     }
@@ -5059,7 +5117,9 @@ void _combat_display(Attack* attack)
     }
 
     if (messageListGetItem(&gCombatMessageList, &messageListItem)) {
-        strcpy(you, messageListItem.text);
+        // SFALL: Fix I2-F-034 — strcpy overflow from mod-controlled message text.
+        strncpy(you, messageListItem.text, sizeof(you) - 1);
+        you[sizeof(you) - 1] = '\0';
     }
 
     int baseMessageId;
@@ -5216,7 +5276,7 @@ void _combat_display(Attack* attack)
                 if (settings.preferences.combat_messages && (attack->attackerFlags & DAM_CRITICAL) != 0 && attack->criticalMessageId != -1) {
                     messageListItem.num = attack->criticalMessageId;
                     if (messageListGetItem(&gCombatMessageList, &messageListItem)) {
-                        strcat(text, messageListItem.text);
+                        strncat(text, messageListItem.text, sizeof(text) - strlen(text) - 1);
                     }
 
                     if ((attack->defenderFlags & DAM_DEAD) != 0) {
@@ -5246,7 +5306,7 @@ void _combat_display(Attack* attack)
                         }
                     }
                 } else {
-                    combatAddDamageFlagsDescription(text, attack->defenderFlags, attack->defender);
+                    combatAddDamageFlagsDescription(text, sizeof(text), attack->defenderFlags, attack->defender);
                 }
 
                 strcat(text, ".");
@@ -5286,7 +5346,7 @@ void _combat_display(Attack* attack)
                 }
             }
 
-            combatAddDamageFlagsDescription(text, attack->attackerFlags, attack->attacker);
+            combatAddDamageFlagsDescription(text, sizeof(text), attack->attackerFlags, attack->attacker);
 
             strcat(text, ".");
 
@@ -5296,7 +5356,7 @@ void _combat_display(Attack* attack)
         if ((attack->attackerFlags & DAM_HIT) != 0 || (attack->attackerFlags & DAM_CRITICAL) == 0) {
             if (attack->attackerDamage > 0) {
                 combatCopyDamageAmountDescription(text, sizeof(text), attack->attacker, attack->attackerDamage);
-                combatAddDamageFlagsDescription(text, attack->attackerFlags, attack->attacker);
+                combatAddDamageFlagsDescription(text, sizeof(text), attack->attackerFlags, attack->attacker);
                 strcat(text, ".");
                 displayMonitorAddMessage(text);
             }
@@ -5307,7 +5367,7 @@ void _combat_display(Attack* attack)
         Object* critter = attack->extras[index];
         if ((critter->data.critter.combat.results & DAM_DEAD) == 0) {
             combatCopyDamageAmountDescription(text, sizeof(text), critter, attack->extrasDamage[index]);
-            combatAddDamageFlagsDescription(text, attack->extrasFlags[index], critter);
+            combatAddDamageFlagsDescription(text, sizeof(text), attack->extrasFlags[index], critter);
             strcat(text, ".");
 
             displayMonitorAddMessage(text);
@@ -5335,7 +5395,9 @@ static void combatCopyDamageAmountDescription(char* dest, size_t size, Object* c
         // 506 - You
         messageListItem.num = messageId + 6;
         if (messageListGetItem(&gCombatMessageList, &messageListItem)) {
-            strcpy(text, messageListItem.text);
+            // SFALL: Fix I2-F-035 — strcpy overflow from mod-controlled message text.
+            strncpy(text, messageListItem.text, sizeof(text) - 1);
+            text[sizeof(text) - 1] = '\0';
         }
 
         name = text;
@@ -5375,9 +5437,15 @@ static void combatCopyDamageAmountDescription(char* dest, size_t size, Object* c
 }
 
 // 0x425BA4
-static void combatAddDamageFlagsDescription(char* dest, int flags, Object* critter)
+// SFALL: Fix I2-F-033 — added destSize parameter for bounded concatenation.
+static void combatAddDamageFlagsDescription(char* dest, size_t destSize, int flags, Object* critter)
 {
     MessageListItem messageListItem;
+
+    size_t offset = strlen(dest);
+    if (offset >= destSize) {
+        return;
+    }
 
     int num;
     if (critter == gDude) {
@@ -5402,13 +5470,20 @@ static void combatAddDamageFlagsDescription(char* dest, int flags, Object* critt
         // " and "
         messageListItem.num = 108;
         if (messageListGetItem(&gCombatMessageList, &messageListItem)) {
-            strcat(dest, messageListItem.text);
+            int written = snprintf(dest + offset, destSize - offset, "%s", messageListItem.text);
+            if (written > 0) {
+                size_t remaining = destSize - offset;
+                if (static_cast<size_t>(written) > remaining) {
+                    written = static_cast<int>(remaining);
+                }
+                offset += static_cast<size_t>(written);
+            }
         }
 
         // were killed
         messageListItem.num = num + 7;
         if (messageListGetItem(&gCombatMessageList, &messageListItem)) {
-            strcat(dest, messageListItem.text);
+            snprintf(dest + offset, destSize - offset, "%s", messageListItem.text);
         }
 
         return;
@@ -5426,23 +5501,44 @@ static void combatAddDamageFlagsDescription(char* dest, int flags, Object* critt
 
     if (flagsListLength != 0) {
         for (int index = 0; index < flagsListLength - 1; index++) {
-            strcat(dest, ", ");
+            int written = snprintf(dest + offset, destSize - offset, ", ");
+            if (written > 0) {
+                size_t remaining = destSize - offset;
+                if (static_cast<size_t>(written) > remaining) {
+                    written = static_cast<int>(remaining);
+                }
+                offset += static_cast<size_t>(written);
+            }
 
             messageListItem.num = num + flagsList[index];
             if (messageListGetItem(&gCombatMessageList, &messageListItem)) {
-                strcat(dest, messageListItem.text);
+                written = snprintf(dest + offset, destSize - offset, "%s", messageListItem.text);
+                if (written > 0) {
+                    size_t remaining = destSize - offset;
+                    if (static_cast<size_t>(written) > remaining) {
+                        written = static_cast<int>(remaining);
+                    }
+                    offset += static_cast<size_t>(written);
+                }
             }
         }
 
         // " and "
         messageListItem.num = 108;
         if (messageListGetItem(&gCombatMessageList, &messageListItem)) {
-            strcat(dest, messageListItem.text);
+            int written = snprintf(dest + offset, destSize - offset, "%s", messageListItem.text);
+            if (written > 0) {
+                size_t remaining = destSize - offset;
+                if (static_cast<size_t>(written) > remaining) {
+                    written = static_cast<int>(remaining);
+                }
+                offset += static_cast<size_t>(written);
+            }
         }
 
         messageListItem.num = num + flagsList[flagsListLength - 1];
         if (messageListGetItem(&gCombatMessageList, &messageListItem)) {
-            strcat(dest, messageListItem.text);
+            snprintf(dest + offset, destSize - offset, "%s", messageListItem.text);
         }
     }
 }
@@ -6951,7 +7047,10 @@ static void damageModCalculateYaam(DamageCalculationContext* context)
         damage -= damage * damageResistance / 100;
 
         if (damage > 0) {
-            context->damagePtr += damage;
+            // SFALL: Fix I2-F-003 — was pointer arithmetic (context->damagePtr += damage)
+            // which advanced the pointer by damage*sizeof(int) instead of writing
+            // to the pointed-to value. Glovz path at line 6882 correctly uses dereference.
+            *context->damagePtr += damage;
         }
     }
 }

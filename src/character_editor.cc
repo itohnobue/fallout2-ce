@@ -849,11 +849,11 @@ int characterEditorShow(bool isCreationMode)
 
                     // You must use all character points
                     messageListItemText = getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 118);
-                    strcpy(line1, messageListItemText);
+                    snprintf(line1, sizeof(line1), "%s", messageListItemText);
 
                     // before starting the game!
                     messageListItemText = getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 119);
-                    strcpy(line2, messageListItemText);
+                    snprintf(line2, sizeof(line2), "%s", messageListItemText);
 
                     showDialogBox(line1, lines, 1, 192, 126, _colorTable[32328], nullptr, _colorTable[32328], 0);
                     windowRefresh(gCharacterEditorWindow);
@@ -867,11 +867,11 @@ int characterEditorShow(bool isCreationMode)
 
                     // You must select all tag skills
                     messageListItemText = getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 142);
-                    strcpy(line1, messageListItemText);
+                    snprintf(line1, sizeof(line1), "%s", messageListItemText);
 
                     // before starting the game!
                     messageListItemText = getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 143);
-                    strcpy(line2, messageListItemText);
+                    snprintf(line2, sizeof(line2), "%s", messageListItemText);
 
                     showDialogBox(line1, lines, 1, 192, 126, _colorTable[32328], nullptr, _colorTable[32328], 0);
                     windowRefresh(gCharacterEditorWindow);
@@ -885,11 +885,11 @@ int characterEditorShow(bool isCreationMode)
 
                     // All stats must be between 1 and 10
                     messageListItemText = getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 157);
-                    strcpy(line1, messageListItemText);
+                    snprintf(line1, sizeof(line1), "%s", messageListItemText);
 
                     // before starting the game!
                     messageListItemText = getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 158);
-                    strcpy(line2, messageListItemText);
+                    snprintf(line2, sizeof(line2), "%s", messageListItemText);
 
                     showDialogBox(line1, lines, 1, 192, 126, _colorTable[32328], nullptr, _colorTable[32328], 0);
                     windowRefresh(gCharacterEditorWindow);
@@ -903,11 +903,11 @@ int characterEditorShow(bool isCreationMode)
 
                     // Warning: You haven't changed your player
                     messageListItemText = getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 160);
-                    strcpy(line1, messageListItemText);
+                    snprintf(line1, sizeof(line1), "%s", messageListItemText);
 
                     // name. Use this character any way?
                     messageListItemText = getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 161);
-                    strcpy(line2, messageListItemText);
+                    snprintf(line2, sizeof(line2), "%s", messageListItemText);
 
                     if (showDialogBox(line1, lines, 1, 192, 126, _colorTable[32328], nullptr, _colorTable[32328], DIALOG_BOX_YES_NO) == 0) {
                         windowRefresh(gCharacterEditorWindow);
@@ -1429,13 +1429,13 @@ static int characterEditorWindowInit()
         fontSetCurrent(103);
 
         str = getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 109);
-        strcpy(perks, str);
+        snprintf(perks, sizeof(perks), "%s", str);
 
         str = getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 110);
-        strcpy(karma, str);
+        snprintf(karma, sizeof(karma), "%s", str);
 
         str = getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 111);
-        strcpy(kills, str);
+        snprintf(kills, sizeof(kills), "%s", str);
 
         int tabLabelY = 5;
         int inactiveTabLabelY = tabLabelY + 1;
@@ -2520,7 +2520,7 @@ static void characterEditorDrawGender()
     gender = critterGetStat(gDude, STAT_GENDER);
     str = getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 107 + gender);
 
-    strcpy(text, str);
+    snprintf(text, sizeof(text), "%s", str);
 
     width = _editorFrmImages[EDITOR_GRAPHIC_SEX_ON].getWidth();
     x = (width / 2) - (fontGetStringWidth(text) / 2);
@@ -3864,7 +3864,7 @@ static int characterEditorShowOptions()
                 memcpy(down[index], _editorFrmImages[43].getData(), size);
                 memcpy(up[index], _editorFrmImages[42].getData(), size);
 
-                strcpy(string4, getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 600 + index));
+                snprintf(string4, sizeof(string4), "%s", getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 600 + index));
 
                 int offset = width * 7 + width / 2 - fontGetStringWidth(string4) / 2;
                 fontDrawText(up[index] + offset, string4, width, width, _colorTable[18979]);
@@ -3912,8 +3912,8 @@ static int characterEditorShowOptions()
                 rc = 2;
             } else if (keyCode == 503 || keyCode == KEY_UPPERCASE_E || keyCode == KEY_LOWERCASE_E) {
                 // ERASE
-                strcpy(string5, getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 605));
-                strcpy(string2, getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 606));
+                snprintf(string5, sizeof(string5), "%s", getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 605));
+                snprintf(string2, sizeof(string2), "%s", getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 606));
 
                 if (showDialogBox(nullptr, dialogBody, 2, 169, 126, _colorTable[992], nullptr, _colorTable[992], DIALOG_BOX_YES_NO) != 0) {
                     _ResetPlayer();
@@ -3958,10 +3958,10 @@ static int characterEditorShowOptions()
                 int fileListLength = fileNameListInit(string4, &fileList);
                 if (fileListLength != -1) {
                     // PRINT
-                    strcpy(string1, getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 616));
+                    snprintf(string1, sizeof(string1), "%s", getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 616));
 
                     // PRINT TO FILE
-                    strcpy(string4, getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 602));
+                    snprintf(string4, sizeof(string4), "%s", getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 602));
 
                     if (showSaveFileDialog(string4, fileList, string1, fileListLength, 168, 80, 0) == 0) {
                         strcat(string1, ".");
@@ -3977,7 +3977,7 @@ static int characterEditorShowOptions()
                                 compat_strupr(string1),
                                 getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 609));
 
-                            strcpy(string5, getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 610));
+                            snprintf(string5, sizeof(string5), "%s", getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 610));
 
                             if (showDialogBox(string4, dialogBody, 1, 169, 126, _colorTable[32328], nullptr, _colorTable[32328], 0x10) != 0) {
                                 rc = 1;
@@ -4015,7 +4015,7 @@ static int characterEditorShowOptions()
                 } else {
                     soundPlayFile("iisxxxx1");
 
-                    strcpy(string4, getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 615));
+                    snprintf(string4, sizeof(string4), "%s", getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 615));
                     showDialogBox(string4, nullptr, 0, 169, 126, _colorTable[32328], nullptr, _colorTable[32328], 0);
 
                     rc = 0;
@@ -4093,7 +4093,7 @@ static int characterEditorShowOptions()
                             critterAdjustHitPoints(gDude, 1000);
                             soundPlayFile("iisxxxx1");
 
-                            strcpy(string4, getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 612));
+                            snprintf(string4, sizeof(string4), "%s", getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 612));
                             strcat(string4, string3);
                             strcat(string4, "!");
 
@@ -4108,7 +4108,7 @@ static int characterEditorShowOptions()
                     soundPlayFile("iisxxxx1");
 
                     // Error reading file list!
-                    strcpy(string4, getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 615));
+                    snprintf(string4, sizeof(string4), "%s", getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 615));
                     rc = 0;
 
                     showDialogBox(string4, nullptr, 0, 169, 126, _colorTable[32328], nullptr, _colorTable[32328], 0);
@@ -4122,8 +4122,8 @@ static int characterEditorShowOptions()
                 char** fileNameList;
                 int fileNameListLength = fileNameListInit(string4, &fileNameList);
                 if (fileNameListLength != -1) {
-                    strcpy(string1, getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 617));
-                    strcpy(string4, getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 600));
+                    snprintf(string1, sizeof(string1), "%s", getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 617));
+                    snprintf(string4, sizeof(string4), "%s", getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 600));
 
                     if (showSaveFileDialog(string4, fileNameList, string1, fileNameListLength, 168, 80, 0) == 0) {
                         strcat(string1, ".");
@@ -4137,7 +4137,7 @@ static int characterEditorShowOptions()
                             snprintf(string4, sizeof(string4), "%s %s",
                                 compat_strupr(string1),
                                 getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 609));
-                            strcpy(string5, getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 610));
+                            snprintf(string5, sizeof(string5), "%s", getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 610));
 
                             if (showDialogBox(string4, dialogBody, 1, 169, 126, _colorTable[32328], nullptr, _colorTable[32328], DIALOG_BOX_YES_NO) != 0) {
                                 shouldSave = true;
@@ -4212,17 +4212,17 @@ static int characterEditorShowOptions()
         soundPlayFile("iisxxxx1");
 
         // Error reading file list!
-        strcpy(pattern, getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 615));
+        snprintf(pattern, sizeof(pattern), "%s", getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 615));
         showDialogBox(pattern, nullptr, 0, 169, 126, _colorTable[32328], nullptr, _colorTable[32328], 0);
         return 0;
     }
 
     // PRINT
     char fileName[512];
-    strcpy(fileName, getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 616));
+    snprintf(fileName, sizeof(fileName), "%s", getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 616));
 
     char title[512];
-    strcpy(title, getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 602));
+    snprintf(title, sizeof(title), "%s", getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 602));
 
     if (showSaveFileDialog(title, fileNames, fileName, filesCount, 168, 80, 0) == 0) {
         strcat(fileName, ".TXT");
@@ -4238,7 +4238,7 @@ static int characterEditorShowOptions()
                 getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 609));
 
             char line2[512];
-            strcpy(line2, getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 610));
+            snprintf(line2, sizeof(line2), "%s", getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 610));
 
             const char* lines[] = { line2 };
             v42 = showDialogBox(title, lines, 1, 169, 126, _colorTable[32328], nullptr, _colorTable[32328], 0x10);
@@ -4300,7 +4300,7 @@ static int characterPrintToFile(const char* fileName)
     char padding[256];
 
     // FALLOUT
-    strcpy(title1, getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 620));
+    snprintf(title1, sizeof(title1), "%s", getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 620));
 
     // NOTE: Uninline.
     padding[0] = '\0';
@@ -4311,7 +4311,7 @@ static int characterPrintToFile(const char* fileName)
     fileWriteString(padding, stream);
 
     // VAULT-13 PERSONNEL RECORD
-    strcpy(title1, getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 621));
+    snprintf(title1, sizeof(title1), "%s", getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 621));
 
     // NOTE: Uninline.
     padding[0] = '\0';
@@ -5011,7 +5011,7 @@ static int characterEditorDrawCardWithOptions(int graphicId, const char* name, c
         }
     }
 
-    strcpy(gCharacterEditorCardTitle, name);
+    snprintf(gCharacterEditorCardTitle, sizeof(gCharacterEditorCardTitle), "%s", name);
     gCharacterEditorCardFrmId = graphicId;
     gCharacterEditorCardDrawn = true;
 
@@ -5225,9 +5225,9 @@ static void characterEditorHandleAdjustSkillButtonPressed(int keyCode)
 
                         snprintf(title, sizeof(title), "%s:", skillGetName(gCharacterEditorCurrentSkill));
                         // At maximum level.
-                        strcpy(body1, getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 132));
+                        snprintf(body1, sizeof(body1), "%s", getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 132));
                         // Unable to increment it.
-                        strcpy(body2, getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 133));
+                        snprintf(body2, sizeof(body2), "%s", getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 133));
                         showDialogBox(title, body, 2, 192, 126, _colorTable[32328], nullptr, _colorTable[32328], DIALOG_BOX_LARGE);
                         rc = -1;
                     }
@@ -5235,7 +5235,7 @@ static void characterEditorHandleAdjustSkillButtonPressed(int keyCode)
                     soundPlayFile("iisxxxx1");
 
                     // Not enough skill points available.
-                    strcpy(title, getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 136));
+                    snprintf(title, sizeof(title), "%s", getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 136));
                     showDialogBox(title, nullptr, 0, 192, 126, _colorTable[32328], nullptr, _colorTable[32328], DIALOG_BOX_LARGE);
                     rc = -1;
                 }
@@ -5253,9 +5253,9 @@ static void characterEditorHandleAdjustSkillButtonPressed(int keyCode)
 
                     snprintf(title, sizeof(title), "%s:", skillGetName(gCharacterEditorCurrentSkill));
                     // At minimum level.
-                    strcpy(body1, getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 134));
+                    snprintf(body1, sizeof(body1), "%s", getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 134));
                     // Unable to decrement it.
-                    strcpy(body2, getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 135));
+                    snprintf(body2, sizeof(body2), "%s", getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 135));
                     showDialogBox(title, body, 2, 192, 126, _colorTable[32328], nullptr, _colorTable[32328], DIALOG_BOX_LARGE);
                     rc = -1;
                 }
@@ -5340,10 +5340,10 @@ static void characterEditorToggleTaggedSkill(int skill)
             soundPlayFile("iisxxxx1");
 
             char line1[128];
-            strcpy(line1, getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 140));
+            snprintf(line1, sizeof(line1), "%s", getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 140));
 
             char line2[128];
-            strcpy(line2, getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 141));
+            snprintf(line2, sizeof(line2), "%s", getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 141));
 
             const char* lines[] = { line2 };
             showDialogBox(line1, lines, 1, 192, 126, _colorTable[32328], nullptr, _colorTable[32328], 0);
@@ -5465,10 +5465,10 @@ static void characterEditorToggleOptionalTrait(int trait)
             soundPlayFile("iisxxxx1");
 
             char line1[128];
-            strcpy(line1, getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 148));
+            snprintf(line1, sizeof(line1), "%s", getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 148));
 
             char line2[128];
-            strcpy(line2, getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 149));
+            snprintf(line2, sizeof(line2), "%s", getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 149));
 
             const char* lines = { line2 };
             showDialogBox(line1, &lines, 1, 192, 126, _colorTable[32328], nullptr, _colorTable[32328], 0);
@@ -6769,7 +6769,7 @@ static int perkDialogDrawCard(int frmId, const char* name, const char* rank, cha
         }
     }
 
-    strcpy(gPerkDialogCardTitle, name);
+    snprintf(gPerkDialogCardTitle, sizeof(gPerkDialogCardTitle), "%s", name);
     gPerkDialogCardFrmId = frmId;
     gPerkDialogCardDrawn = true;
 

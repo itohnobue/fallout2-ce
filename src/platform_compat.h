@@ -48,6 +48,11 @@ int compat_access(const char* path, int mode);
 char* compat_strdup(const char* string);
 long getFileSize(FILE* stream);
 
+// Returns true if the path contains ".." as a path component (directory
+// traversal).  Used to validate user-controlled paths before passing them
+// to filesystem operations.
+bool compat_path_contains_traversal(const char* path);
+
 } // namespace fallout
 
 #endif /* PLATFORM_COMPAT_H */

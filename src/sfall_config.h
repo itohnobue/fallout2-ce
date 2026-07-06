@@ -36,11 +36,15 @@ extern bool gSfallConfigInitialized;
 extern Config gSfallConfig;
 
 extern bool gFallout1Behavior;
-extern bool gAllowUnsafeScripting;
-extern bool gEnableHeroAppearanceMod;
-extern bool gUseFileSystemOverride;
-extern bool gOverrideArtCacheSize;
-extern bool gExtraSaveSlots;
+
+// TODO: The following 5 config booleans are parsed from ddraw.ini but have
+// zero consumers in the engine. They need to be wired or removed.
+// See F-012 in the audit synthesis report.
+extern bool gAllowUnsafeScripting;         // TODO: wire to scripting safety gates
+extern bool gEnableHeroAppearanceMod;      // TODO: wire to hero appearance FID pipeline
+extern bool gUseFileSystemOverride;        // TODO: wire to asset loading path selection
+extern bool gOverrideArtCacheSize;         // TODO: wire to art cache size configuration
+extern bool gExtraSaveSlots;               // TODO: wire to save slot count
 
 bool sfallConfigInit(int argc, char** argv);
 void sfallConfigExit();

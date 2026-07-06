@@ -226,6 +226,17 @@ int perksInit()
         }
     }
 
+    // SFALL: Validate that all perk names were loaded (F-018).
+    // perkGetName() returns "" for missing names (to protect downstream callers
+    // from nullptr), defeating the null-check in proto.cc:1407. This explicit
+    // validation catches truncated perk.msg files during initialization.
+    for (int perk = 0; perk < PERK_COUNT; perk++) {
+        if (gPerkDescriptions[perk].name == nullptr) {
+            debugPrint("\nError: Initing perks: missing perk name!");
+            return -1;
+        }
+    }
+
     messageListRepositorySetStandardMessageList(STANDARD_MESSAGE_LIST_PERK, &gPerksMessageList);
 
     return 0;
@@ -539,21 +550,28 @@ int perkGetRank(Object* critter, int perk)
 }
 
 // 0x496B90 perk_name
+// Returns the name of the specified perk, or nullptr if the perk index is invalid.
+// Returns "" (empty string) if the perk is valid but its name was not loaded
+// (e.g., due to a truncated perk.msg file). This prevents null pointer
+// dereference at the many call sites that pass the result directly to
+// snprintf/strcmp/strcpy/fontDrawText without null checks.
 char* perkGetName(int perk)
 {
     if (!perkIsValid(perk)) {
         return nullptr;
     }
-    return gPerkDescriptions[perk].name;
+    return gPerkDescriptions[perk].name ? gPerkDescriptions[perk].name : (char*)"";
 }
 
 // 0x496BB4 perk_description
+// Returns the description of the specified perk, or nullptr if the perk index
+// is invalid. Returns "" if valid but description was not loaded.
 char* perkGetDescription(int perk)
 {
     if (!perkIsValid(perk)) {
         return nullptr;
     }
-    return gPerkDescriptions[perk].description;
+    return gPerkDescriptions[perk].description ? gPerkDescriptions[perk].description : (char*)"";
 }
 
 // 0x496BD8 perk_skilldex_fid

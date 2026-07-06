@@ -107,8 +107,16 @@ void ScriptHookCall::call()
 
     _callStack.push_back(this);
 
-    const auto& hooksOfType = scriptHooks[_hookType];
-    // Iterate in reverse order. In case current hook is unregistered inside the call, we can just continue iteration.
+    // Copy the hook list to protect against vector invalidation during
+    // iteration. A hook script may call register_hook_proc for the same type
+    // during callback, which modifies scriptHooks[_hookType] via push_back()
+    // or emplace(begin()). push_back() may reallocate the vector, invalidating
+    // any reference; emplace(begin()) shifts existing elements, causing index
+    // mismatch under reverse iteration. A value copy isolates our iteration
+    // from concurrent mutations to the live hook list.
+    auto hooksOfType = scriptHooks[_hookType];
+    // Iterate in reverse order. In case current hook is unregistered inside
+    // the call, we can just continue iteration.
     for (int i = hooksOfType.size() - 1; i >= 0; --i) {
         const auto& hook = hooksOfType[i];
         _scriptArgs = 0;

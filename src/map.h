@@ -119,6 +119,12 @@ int mapHandleTransition();
 int _map_save_in_game(bool isLeavingMap);
 int _map_save(bool isInGame = false);
 
+// CE/SFALL: Returns the script world map time multiplier for local map time advancement.
+// Should be used in _script_chk_timed_events() (scripts.cc) instead of hardcoded gGameTime += 1.
+// wmGetScriptWorldMapMulti() on the worldmap side multiplies travel time;
+// this function exposes the same value through the map module.
+float mapGetTimeMultiplier();
+
 } // namespace fallout
 
 #endif /* MAP_H */

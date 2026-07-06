@@ -139,22 +139,29 @@ void traitsGetSelected(int* trait1, int* trait2)
     *trait2 = gSelectedTraits[1];
 }
 
-// Returns a name of the specified trait, or `NULL` if the specified trait is
-// out of range.
+// Returns a name of the specified trait, or `nullptr` if the specified trait is
+// out of range. Returns "" if the trait is valid but its name was not loaded
+// from trait.msg (prevents null dereference at call sites).
 //
 // 0x4B3B68 trait_name
 char* traitGetName(int trait)
 {
-    return trait >= 0 && trait < TRAIT_COUNT ? gTraitDescriptions[trait].name : nullptr;
+    if (!(trait >= 0 && trait < TRAIT_COUNT)) {
+        return nullptr;
+    }
+    return gTraitDescriptions[trait].name ? gTraitDescriptions[trait].name : (char*)"";
 }
 
-// Returns a description of the specified trait, or `NULL` if the specified
-// trait is out of range.
+// Returns a description of the specified trait, or `nullptr` if the specified
+// trait is out of range. Returns "" if valid but description was not loaded.
 //
 // 0x4B3B88 trait_description
 char* traitGetDescription(int trait)
 {
-    return trait >= 0 && trait < TRAIT_COUNT ? gTraitDescriptions[trait].description : nullptr;
+    if (!(trait >= 0 && trait < TRAIT_COUNT)) {
+        return nullptr;
+    }
+    return gTraitDescriptions[trait].description ? gTraitDescriptions[trait].description : (char*)"";
 }
 
 // Return an art ID of the specified trait, or `0` if the specified trait is

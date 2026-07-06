@@ -1,6 +1,7 @@
 #ifndef FALLOUT_SFALL_METARULES_H_
 #define FALLOUT_SFALL_METARULES_H_
 
+#include "db.h"
 #include "opcode_context.h"
 
 namespace fallout {
@@ -33,6 +34,10 @@ class Program;
 
 void sfall_metarule(Program* program, int args);
 void sfall_metarules_reset();
+// Save/load metarule state to/from File* stream.
+// Called by sfallgv.sav persistence in sfall_ext.cc.
+void sfall_metarules_save(File* stream);
+void sfall_metarules_load(File* stream);
 void mf_string_format(OpcodeContext& ctx);
 
 } // namespace fallout

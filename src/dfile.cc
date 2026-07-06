@@ -152,6 +152,15 @@ DBase* dbaseOpen(const char* filePath, int* errorFlags)
             break;
         }
 
+        // Validate pathLength to prevent signed integer misuse as allocation
+        // size. A negative pathLength causes malloc(0) → non-null pointer →
+        // NULL guard bypass → fread overflow and OOB null write.
+        // Upper bound protects against corrupted DAT footers with unrealistic
+        // path sizes.
+        if (pathLength < 0 || pathLength > COMPAT_MAX_PATH) {
+            break;
+        }
+
         entry->path = (char*)malloc(pathLength + 1);
         if (entry->path == nullptr) {
             break;

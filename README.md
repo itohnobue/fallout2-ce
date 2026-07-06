@@ -17,4 +17,4 @@ The following total conversion mods are tested:
 
 ## License
 
-The source code is this repository is available under the [Sustainable Use License](LICENSE.md).
+The source code in this repository is available under the [Sustainable Use License](LICENSE.md).

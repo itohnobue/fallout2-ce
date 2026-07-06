@@ -36,6 +36,7 @@
 #include "random.h"
 #include "scripts.h"
 #include "settings.h"
+#include "sfall_opcodes.h"
 #include "sfall_script_hooks.h"
 #include "stat.h"
 #include "svga.h"
@@ -494,7 +495,16 @@ static void renderNavigationButtons(int _view_page, int totalPages, bool isSubPa
 // 0x497004
 int pipboyOpen(int intent)
 {
-    if (!wmMapPipboyActive() && !pipboy_available_at_game_start) {
+    // SFALL: Check pipboy availability override (F-019).
+    // gPipboyAvailableOverride: -1 = not set, 0 = unavailable, 1 = available.
+    bool pipboyAllowed;
+    if (gPipboyAvailableOverride >= 0) {
+        pipboyAllowed = (gPipboyAvailableOverride == 1);
+    } else {
+        pipboyAllowed = wmMapPipboyActive() || pipboy_available_at_game_start;
+    }
+
+    if (!pipboyAllowed) {
         // You aren't wearing the pipboy!
         const char* text = getmsg(&gMiscMessageList, &gPipboyMessageListItem, 7000);
         showDialogBox(text, nullptr, 0, 192, 135, _colorTable[32328], nullptr, _colorTable[32328], 1);

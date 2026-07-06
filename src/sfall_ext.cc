@@ -9,9 +9,82 @@
 #include "platform_compat.h"
 #include "scripts.h"
 #include "sfall_arrays.h"
+#include "sfall_config.h"
 #include "sfall_global_vars.h"
+#include "sfall_metarules.h"
+#include "sfall_opcodes.h"
 
 namespace fallout {
+
+// Config key for global script path globs (RPU places scripts under
+// scripts/sfall/ in addition to the default scripts/).  Comma-separated.
+static constexpr const char* kGlobalScriptPathsKey = "GlobalScriptPaths";
+
+// Section and key prefix for ExtraPatches support — individual named patch
+// files beyond the template-based PatchFile mechanism in game.cc.
+static constexpr const char* kExtraPatchesSection = "ExtraPatches";
+static constexpr const char* kExtraPatchesKeyPrefix = "PatchFile";
+
+// Parsed global script path globs, populated by sfallParseGlobalScriptPaths().
+static std::vector<std::string> g_globalScriptPaths;
+
+/**
+ * Parse GlobalScriptPaths from ddraw.ini [Misc] section.
+ *
+ * Sfall supports a comma-separated list of path globs (e.g.
+ * "scripts\\gl*.int,scripts\\sfall\\gl*.int").  CE previously
+ * hardcoded only "scripts\\gl*.int", silently ignoring RPU's
+ * scripts\\sfall\\gl*.int globals.
+ */
+bool sfallParseGlobalScriptPaths()
+{
+    g_globalScriptPaths.clear();
+
+    char* rawPaths = nullptr;
+    if (!configGetString(&gSfallConfig, SFALL_CONFIG_MISC_KEY, kGlobalScriptPathsKey, &rawPaths)
+        || rawPaths == nullptr
+        || rawPaths[0] == '\0') {
+        return true; // absent or empty is not an error — caller uses default
+    }
+
+    // Split on commas.
+    std::string pathsStr{rawPaths};
+    size_t pos = 0;
+    while (pos < pathsStr.size()) {
+        // Skip leading whitespace.
+        while (pos < pathsStr.size() && isspace(static_cast<unsigned char>(pathsStr[pos]))) {
+            pos++;
+        }
+        if (pos >= pathsStr.size()) {
+            break;
+        }
+
+        size_t end = pathsStr.find(',', pos);
+        if (end == std::string::npos) {
+            end = pathsStr.size();
+        }
+
+        // Trim trailing whitespace.
+        size_t trail = end;
+        while (trail > pos && isspace(static_cast<unsigned char>(pathsStr[trail - 1]))) {
+            trail--;
+        }
+
+        if (trail > pos) {
+            std::string glob = pathsStr.substr(pos, trail - pos);
+            g_globalScriptPaths.push_back(std::move(glob));
+        }
+
+        pos = end + 1;
+    }
+
+    return true;
+}
+
+const std::vector<std::string>& sfallGetGlobalScriptPaths()
+{
+    return g_globalScriptPaths;
+}
 
 /**
  * Load mods from the mod directory
@@ -71,6 +144,13 @@ void sfallLoadMods()
             if (modPath.empty())
                 continue; // skip empty lines
 
+            // Reject entries containing ".." path components to prevent
+            // directory traversal out of the mods/ sandbox.
+            if (modPath.find("..") != std::string::npos) {
+                debugPrint("Rejecting unsafe mod entry (contains '..'): %s\n", modPath.c_str());
+                continue;
+            }
+
             char normalizedModPath[COMPAT_MAX_PATH];
             compat_makepath(normalizedModPath, nullptr, modsPath, modPath.c_str(), nullptr);
 
@@ -90,6 +170,43 @@ void sfallLoadMods()
     } else {
         debugPrint("Error opening %s for read\n", loadOrderFilepath);
     }
+
+    // Load individually-named patch files from [ExtraPatches] section in
+    // ddraw.ini.  Sfall uses PatchFile0, PatchFile1, ... keys to specify
+    // additional .dat files.  Stop when a key is not found.
+    int extraPatchesLoaded = 0;
+    for (int patchIdx = 0; patchIdx < 100; patchIdx++) {
+        char key[32];
+        snprintf(key, sizeof(key), "%s%d", kExtraPatchesKeyPrefix, patchIdx);
+
+        char* patchPath = nullptr;
+        if (!configGetString(&gSfallConfig, kExtraPatchesSection, key, &patchPath)
+            || patchPath == nullptr
+            || patchPath[0] == '\0') {
+            break; // no more entries
+        }
+
+        // Reject paths containing ".." to prevent directory traversal.
+        if (compat_path_contains_traversal(patchPath)) {
+            debugPrint("Rejecting unsafe ExtraPatches entry (contains '..'): %s\n", patchPath);
+            continue;
+        }
+
+        if (compat_access(patchPath, 0) == 0) {
+            debugPrint("Loading extra patch %s\n", patchPath);
+            if (dbOpen(patchPath, nullptr) != -1) {
+                extraPatchesLoaded++;
+            } else {
+                debugPrint("Error opening extra patch %s\n", patchPath);
+            }
+        } else {
+            debugPrint("Skipping missing extra patch %s\n", patchPath);
+        }
+    }
+
+    if (extraPatchesLoaded > 0) {
+        debugPrint("Loaded %d extra patches from [%s]\n", extraPatchesLoaded, kExtraPatchesSection);
+    }
 }
 
 // Binary layout of sfallgv.sav (must match sfall's SaveGame2 / LoadGame_Before order):
@@ -100,6 +217,10 @@ void sfallLoadMods()
 
 bool sfallSaveGameData(File* stream)
 {
+    // Store current runtime opcode state into the sfall global vars map
+    // before serializing, so it's included in sfallgv.sav.
+    sfallOpcodeStateSave();
+
     if (!sfall_gl_vars_save(stream)) {
         debugPrint("LOADSAVE (SFALL): ** Error saving global vars **\n");
         return false;
@@ -130,6 +251,9 @@ bool sfallSaveGameData(File* stream)
         return false;
     }
 
+    // Append metarule state after the legacy binary sections.
+    sfall_metarules_save(stream);
+
     return true;
 }
 
@@ -139,6 +263,9 @@ bool sfallLoadGameData(File* stream)
         debugPrint("LOADSAVE (SFALL): ** Error loading global vars **\n");
         return false;
     }
+
+    // Restore opcode globals from the loaded sfall global vars map.
+    sfallOpcodeStateLoad();
 
     int32_t nextObjectId;
     if (fileReadInt32(stream, &nextObjectId) == -1) {
@@ -162,7 +289,21 @@ bool sfallLoadGameData(File* stream)
         return false;
     }
 
+    // Consume drugPidsCount (4 bytes, written by sfallSaveGameData).
+    // This field is unused by CE but its bytes must be consumed so that
+    // sfall_metarules_load() reads its own version marker, not garbage.
+    int32_t ignoredDrugPidsCount;
+    if (fileReadInt32(stream, &ignoredDrugPidsCount) == -1) {
+        debugPrint("LOADSAVE (SFALL): ** Error reading drug pids **\n");
+        scriptsRestoreUniqueObjectIdCounter(nextObjectId);
+        return false;
+    }
+
     scriptsRestoreUniqueObjectIdCounter(nextObjectId);
+
+    // Read the trailing metarule state section (may not exist in older saves).
+    // sfall_metarules_load() gracefully checks its own version marker.
+    sfall_metarules_load(stream);
 
     return true;
 }

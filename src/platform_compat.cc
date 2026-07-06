@@ -443,6 +443,42 @@ int compat_access(const char* path, int mode)
     return access(nativePath, mode);
 }
 
+bool compat_path_contains_traversal(const char* path)
+{
+    if (path == nullptr) {
+        return false;
+    }
+
+    // Walk the path component by component.  If any component is exactly "..",
+    // the path traverses above its intended root.
+    const char* p = path;
+
+    // Skip leading separators (absolute paths: "/foo", "\\foo").
+    while (*p == '/' || *p == '\\') {
+        p++;
+    }
+
+    while (*p != '\0') {
+        // Find the end of the current component (next separator or NUL).
+        const char* start = p;
+        while (*p != '\0' && *p != '/' && *p != '\\') {
+            p++;
+        }
+
+        size_t len = static_cast<size_t>(p - start);
+        if (len == 2 && start[0] == '.' && start[1] == '.') {
+            return true; // ".." component found
+        }
+
+        // Skip separators between components.
+        while (*p == '/' || *p == '\\') {
+            p++;
+        }
+    }
+
+    return false;
+}
+
 char* compat_strdup(const char* string)
 {
     return SDL_strdup(string);

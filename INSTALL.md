@@ -195,8 +195,6 @@ The project includes two additional build targets:
   $ cmake --build out/build/<preset-name> --target ce-frm2png
   ```
 
-See the "CLI Tools" section above for build instructions.
-
 ---
 
 ## Testing

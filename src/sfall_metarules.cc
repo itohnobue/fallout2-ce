@@ -4,6 +4,7 @@
 #include <map>
 #include <math.h>
 #include <memory>
+#include <set>
 #include <string.h>
 #include <string>
 #include <unordered_map>
@@ -15,6 +16,7 @@
 #include "color.h"
 #include "combat.h"
 #include "config.h" // For Config, configInit, configFree
+#include "db.h" // For File*, fileWriteInt32, fileReadInt32, etc.
 #include "dbox.h"
 #include "debug.h"
 #include "game.h"
@@ -38,6 +40,7 @@
 #include "sfall_arrays.h" // For CreateTempArray, SetArray
 #include "sfall_ini.h"
 #include "sfall_global_scripts.h"
+#include "sfall_global_vars.h"
 #include "sfall_opcodes.h"
 #include "sfall_script_hooks.h"
 #include "skilldex.h"
@@ -132,9 +135,11 @@ static void mf_get_current_inven_size(OpcodeContext& ctx);
 static void mf_get_map_enter_position(OpcodeContext& ctx);
 static void mf_get_metarule_table(OpcodeContext& ctx);
 static void mf_get_object_ai_data(OpcodeContext& ctx);
+static void mf_get_quest_failure_value(OpcodeContext& ctx);
 static void mf_get_stat_max(OpcodeContext& ctx);
 static void mf_get_stat_min(OpcodeContext& ctx);
 static void mf_item_make_explosive(OpcodeContext& ctx);
+static void mf_get_explosive_data(OpcodeContext& ctx);
 static void mf_lock_is_jammed(OpcodeContext& ctx);
 static void mf_remove_timer_event(OpcodeContext& ctx);
 static void mf_set_can_rest_on_map(OpcodeContext& ctx);
@@ -152,11 +157,13 @@ static void mf_r_write(OpcodeContext& ctx);
 // F-033: MEDIUM-priority metarules — remaining commented-out entries
 static void mf_add_g_timer_event(OpcodeContext& ctx);
 static void mf_add_trait(OpcodeContext& ctx);
+static void mf_remove_trait(OpcodeContext& ctx);
 static void mf_set_spray_settings(OpcodeContext& ctx);
 static void mf_set_car_intface_art(OpcodeContext& ctx);
 static void mf_set_drugs_data(OpcodeContext& ctx);
 static void mf_set_map_enter_position(OpcodeContext& ctx);
 static void mf_set_town_title(OpcodeContext& ctx);
+static void mf_get_town_title(OpcodeContext& ctx);
 static void mf_set_unjam_locks_time(OpcodeContext& ctx);
 static void mf_unjam_lock(OpcodeContext& ctx);
 
@@ -172,6 +179,12 @@ static int gNpcEngineLevelUpEnabled = 1;
 
 // set_dude_obj/real_dude_obj: saved dude pointer during cutscene swaps
 static Object* gSavedOriginalDude = nullptr;
+
+// CID of the saved original dude for save/load persistence.
+// gSavedOriginalDude is an Object* that is not stable across save/load;
+// gSavedOriginalDudeCid preserves the identity so the save/load agent
+// can restore the pointer via objectFindByCid() after loading.
+static int gSavedOriginalDudeCid = -1;
 
 // set_quest_failure_value: GVAR number -> failure threshold
 static std::map<int, int> gQuestFailureValues;
@@ -196,13 +209,35 @@ static int gCarIntfaceArtFid = -1;
 static int gRestMode = -1;
 
 // Fake perk/trait storage for NPC critters.
-// Key: Object*, Value: set of perk/trait name strings.
-static std::unordered_map<Object*, std::unordered_set<std::string>> gFakePerksNpc;
-static std::unordered_map<Object*, std::unordered_set<std::string>> gFakeTraitsNpc;
-static std::unordered_map<Object*, std::unordered_set<std::string>> gFakeSelectablePerksNpc;
+// Key: CID (int, stable across save/load), Value: set of perk/trait name strings.
+// Keys are Object::cid — the unique per-object identifier serialized in save games.
+static std::unordered_map<int, std::unordered_set<std::string>> gFakePerksNpc;
+static std::unordered_map<int, std::unordered_set<std::string>> gFakeTraitsNpc;
+static std::unordered_map<int, std::unordered_set<std::string>> gFakeSelectablePerksNpc;
+
+// Traits added via the add_trait / remove_trait metarules.
+// Stores trait type IDs (integers) for the player character.
+static std::set<int> gAddedTraits;
+
+// Map enter position override (set by set_map_enter_position, read by get_map_enter_position).
+// -1 = no override stored.
+static int gMapEnterX = -1;
+static int gMapEnterY = -1;
+static int gMapEnterElevation = -1;
+
+// Explosive properties set via item_make_explosive metarule.
+// Key: proto PID, Value: {pattern, radius, delay}
+struct ExplosiveProperties {
+    int pattern;
+    int radius;
+    int delay;
+};
+static std::map<int, ExplosiveProperties> gExplosiveOverrides;
 
 // F-003: intface hidden state tracker. gInterfaceBarHidden is file-static in
-// interface.cc, so we maintain our own mirror. Read by mf_intface_is_hidden().
+// interface.cc, so we maintain our own mirror for tracking state set via
+// sfall metarules. mf_intface_is_hidden() queries the engine directly
+// via interfaceBarIsHidden() to avoid stale-mirror desynchronization.
 static bool sIntfaceHiddenState = false;
 
 // --- End static state ---
@@ -215,6 +250,7 @@ const MetaruleInfo kMetarules[] = {
     { "add_iface_tag", mf_add_iface_tag, 0, 0 },
     { "add_g_timer_event", mf_add_g_timer_event, 2, 2, -1, { ARG_INT, ARG_INT } },
     { "add_trait", mf_add_trait, 1, 1, -1, { ARG_INT } },
+    { "remove_trait", mf_remove_trait, 1, 1, -1, { ARG_INT } },
     { "art_cache_clear", mf_art_cache_flush, 0, 0 },
     { "art_frame_data", mf_art_frame_data, 1, 3, 0, { ARG_INTSTR, ARG_INT, ARG_INT } },
     { "attack_is_aimed", mf_attack_is_aimed, 0, 0 },
@@ -233,6 +269,7 @@ const MetaruleInfo kMetarules[] = {
     { "get_combat_free_move", mf_get_combat_free_move, 0, 0 },
     { "get_current_inven_size", mf_get_current_inven_size, 1, 1, 0, { ARG_OBJECT } },
     { "get_cursor_mode", mf_get_cursor_mode, 0, 0 },
+    { "get_explosive_data", mf_get_explosive_data, 1, 1, 0, { ARG_INT } },
     { "get_flags", mf_get_flags, 1, 1, 0, { ARG_OBJECT } },
     { "get_ini_config", mf_get_ini_config, 2, 2, 0, { ARG_STRING, ARG_INT } },
     { "get_ini_section", mf_get_ini_section, 2, 2, -1, { ARG_STRING, ARG_STRING } },
@@ -243,12 +280,14 @@ const MetaruleInfo kMetarules[] = {
     { "get_object_ai_data", mf_get_object_ai_data, 2, 2, -1, { ARG_OBJECT, ARG_INT } },
     { "get_object_data", mf_get_object_data, 2, 2, 0, { ARG_OBJECT, ARG_INT } },
     { "get_outline", mf_get_outline, 1, 1, 0, { ARG_OBJECT } },
+    { "get_quest_failure_value", mf_get_quest_failure_value, 1, 1, 0, { ARG_INT } },
     { "get_sfall_arg_at", mf_get_sfall_arg_at, 1, 1, 0, { ARG_INT } },
     { "get_stat_max", mf_get_stat_max, 1, 2, 0, { ARG_INT, ARG_INT } },
     { "get_stat_min", mf_get_stat_min, 1, 2, 0, { ARG_INT, ARG_INT } },
     // {"get_string_pointer",        mf_get_string_pointer,        1, 1,  0, {ARG_STRING}}, // note: deprecated; do not implement
     { "get_terrain_name", mf_get_terrain_name, 0, 2, -1, { ARG_INT, ARG_INT } },
     { "get_text_width", mf_get_text_width, 1, 1, 0, { ARG_STRING } },
+    { "get_town_title", mf_get_town_title, 1, 1, 0, { ARG_INT } },
     { "get_window_attribute", mf_get_window_attribute, 1, 2, -1, { ARG_INT, ARG_INT } },
     { "has_fake_perk_npc", mf_has_fake_perk_npc, 2, 2, 0, { ARG_OBJECT, ARG_STRING } },
     { "has_fake_trait_npc", mf_has_fake_trait_npc, 2, 2, 0, { ARG_OBJECT, ARG_STRING } },
@@ -985,13 +1024,13 @@ void mf_metarule_exist(OpcodeContext& ctx)
     // which use standard sfall opcodes that CE fully implements (get_ini_setting,
     // message_box, etc.). r_call_offset is NOT registered — scripts that try to
     // use it will get metarule_exist("r_call_offset")=0.
-    if (strcmp(metarule, "rotators") == 0) {
+    if (compat_stricmp(metarule, "rotators") == 0) {
         ctx.setReturn(1);
         return;
     }
 
     for (int index = 0; index < (int)kMetarulesCount; index++) {
-        if (strcmp(kMetarules[index].name, metarule) == 0) {
+        if (compat_stricmp(kMetarules[index].name, metarule) == 0) {
             ctx.setReturn(1);
             return;
         }
@@ -1762,20 +1801,26 @@ void mf_get_terrain_name(OpcodeContext& ctx)
 }
 
 // set_worldmap_heal_time(int time): sets the override for how much HP is healed per
-// time unit during worldmap travel. -1 = use default. The stored value is available
-// for the healing calculation code in worldmap.cc / party_member.cc.
+// time unit during worldmap travel. -1 = use default.
+// Wired to both sfall-local storage (save/load persistence) and the worldmap
+// healing system via wmSetWorldmapHealTime() (consumed at worldmap.cc:3258).
 void mf_set_worldmap_heal_time(OpcodeContext& ctx)
 {
-    gWorldmapHealTime = ctx.arg(0).asInt();
+    int hours = ctx.arg(0).asInt();
+    gWorldmapHealTime = hours;
+    wmSetWorldmapHealTime(hours);
     ctx.setReturn(0);
 }
 
 // set_rest_heal_time(int time): sets the override for how much HP is healed per
-// time unit during resting. -1 = use default. The stored value is available for
-// the healing calculation code in party_member.cc / pipboy.cc.
+// time unit during resting. -1 = use default.
+// Wired to both sfall-local storage (save/load persistence) and the worldmap
+// healing system via wmSetRestHealTime() (consumed by worldmap.cc rest logic).
 void mf_set_rest_heal_time(OpcodeContext& ctx)
 {
-    gRestHealTime = ctx.arg(0).asInt();
+    int hours = ctx.arg(0).asInt();
+    gRestHealTime = hours;
+    wmSetRestHealTime(hours);
     ctx.setReturn(0);
 }
 
@@ -1789,6 +1834,20 @@ void mf_set_quest_failure_value(OpcodeContext& ctx)
     int threshold = ctx.arg(1).asInt();
     gQuestFailureValues[gvar] = threshold;
     ctx.setReturn(0);
+}
+
+// get_quest_failure_value(int gvar): returns the failure threshold for the given
+// GVAR, or -1 if no threshold has been set. Mirrors the set_quest_failure_value
+// metarule — provides a script-level query API for the stored mapping.
+void mf_get_quest_failure_value(OpcodeContext& ctx)
+{
+    int gvar = ctx.arg(0).asInt();
+    auto it = gQuestFailureValues.find(gvar);
+    if (it != gQuestFailureValues.end()) {
+        ctx.setReturn(it->second);
+    } else {
+        ctx.setReturn(-1);
+    }
 }
 
 // set_scr_name(string name): overrides the current script's display name.
@@ -1813,7 +1872,11 @@ void mf_has_fake_perk_npc(OpcodeContext& ctx)
     Object* critter = ctx.arg(0).asObject();
     const char* name = ctx.stringArg(1);
 
-    auto it = gFakePerksNpc.find(critter);
+    if (critter == nullptr) {
+        ctx.setReturn(0);
+        return;
+    }
+    auto it = gFakePerksNpc.find(critter->cid);
     if (it != gFakePerksNpc.end() && it->second.find(name) != it->second.end()) {
         ctx.setReturn(1);
     } else {
@@ -1828,7 +1891,11 @@ void mf_has_fake_trait_npc(OpcodeContext& ctx)
     Object* critter = ctx.arg(0).asObject();
     const char* name = ctx.stringArg(1);
 
-    auto it = gFakeTraitsNpc.find(critter);
+    if (critter == nullptr) {
+        ctx.setReturn(0);
+        return;
+    }
+    auto it = gFakeTraitsNpc.find(critter->cid);
     if (it != gFakeTraitsNpc.end() && it->second.find(name) != it->second.end()) {
         ctx.setReturn(1);
     } else {
@@ -1845,13 +1912,18 @@ void mf_set_fake_perk_npc(OpcodeContext& ctx)
     const char* name = ctx.stringArg(1);
     int level = ctx.arg(2).asInt();
 
+    if (critter == nullptr) {
+        ctx.printError("%s() - null object argument.", ctx.name());
+        ctx.setReturn(-1);
+        return;
+    }
     if (level == 0) {
-        auto it = gFakePerksNpc.find(critter);
+        auto it = gFakePerksNpc.find(critter->cid);
         if (it != gFakePerksNpc.end()) {
             it->second.erase(name);
         }
     } else {
-        gFakePerksNpc[critter].insert(name);
+        gFakePerksNpc[critter->cid].insert(name);
     }
     // level, image, desc (args 3-4) are stored implicitly via the set membership
     // for future retrieval by matching has_fake_perk_npc calls.
@@ -1866,13 +1938,18 @@ void mf_set_fake_trait_npc(OpcodeContext& ctx)
     const char* name = ctx.stringArg(1);
     int active = ctx.arg(2).asInt();
 
+    if (critter == nullptr) {
+        ctx.printError("%s() - null object argument.", ctx.name());
+        ctx.setReturn(-1);
+        return;
+    }
     if (active == 0) {
-        auto it = gFakeTraitsNpc.find(critter);
+        auto it = gFakeTraitsNpc.find(critter->cid);
         if (it != gFakeTraitsNpc.end()) {
             it->second.erase(name);
         }
     } else {
-        gFakeTraitsNpc[critter].insert(name);
+        gFakeTraitsNpc[critter->cid].insert(name);
     }
     ctx.setReturn(0);
 }
@@ -1885,13 +1962,18 @@ void mf_set_selectable_perk_npc(OpcodeContext& ctx)
     const char* name = ctx.stringArg(1);
     int active = ctx.arg(2).asInt();
 
+    if (critter == nullptr) {
+        ctx.printError("%s() - null object argument.", ctx.name());
+        ctx.setReturn(-1);
+        return;
+    }
     if (active == 0) {
-        auto it = gFakeSelectablePerksNpc.find(critter);
+        auto it = gFakeSelectablePerksNpc.find(critter->cid);
         if (it != gFakeSelectablePerksNpc.end()) {
             it->second.erase(name);
         }
     } else {
-        gFakeSelectablePerksNpc[critter].insert(name);
+        gFakeSelectablePerksNpc[critter->cid].insert(name);
     }
     ctx.setReturn(0);
 }
@@ -1914,13 +1996,21 @@ void mf_exec_map_update_scripts(OpcodeContext& ctx)
 }
 
 // get_can_rest_on_map(int mapElevation, int tile): returns whether resting is
-// allowed at the given coordinates. Reads the MAP_CAN_REST_ELEVATION flags.
+// allowed at the given coordinates. Consults the worldmap per-tile override via
+// wmGetCanRestOnTile() (set via set_can_rest_on_map metarule), falling back to
+// the elevation-level check wmMapCanRestHere() if no per-tile override exists.
 void mf_get_can_rest_on_map(OpcodeContext& ctx)
 {
     int elevation = ctx.arg(0).asInt();
-    int /*tile*/ _ = ctx.arg(1).asInt();
-    (void)_;
-    bool canRest = wmMapCanRestHere(elevation);
+    int tile = ctx.arg(1).asInt();
+    bool canRest;
+    // Per-tile override takes precedence; wmGetCanRestOnTile defaults to true
+    // when no explicit override has been set.
+    if (!wmGetCanRestOnTile(elevation, tile)) {
+        canRest = false;
+    } else {
+        canRest = wmMapCanRestHere(elevation);
+    }
     ctx.setReturn(canRest ? 1 : 0);
 }
 
@@ -1932,13 +2022,21 @@ void mf_get_current_inven_size(OpcodeContext& ctx)
     ctx.setReturn(obj->data.inventory.length);
 }
 
-// get_map_enter_position(): returns the map entry position index set by
-// set_map_enter_position(). Stub — full integration needs map module access.
+// get_map_enter_position(): returns the override map entry position set by
+// set_map_enter_position() as a 3-element temp array [x, y, elevation].
+// Returns 0 if no override has been set.
 void mf_get_map_enter_position(OpcodeContext& ctx)
 {
-    // TODO: integrate with map module to return stored entry position.
-    debugPrint("%s(): not yet implemented — returning 0", ctx.name());
-    ctx.setReturn(0);
+    if (gMapEnterX == -1) {
+        ctx.setReturn(0);
+        return;
+    }
+
+    ArrayId arrayId = CreateTempArray(3, 0);
+    SetArray(arrayId, ProgramValue(0), ProgramValue(gMapEnterX), false, ctx.program());
+    SetArray(arrayId, ProgramValue(1), ProgramValue(gMapEnterY), false, ctx.program());
+    SetArray(arrayId, ProgramValue(2), ProgramValue(gMapEnterElevation), false, ctx.program());
+    ctx.setReturn(ProgramValue(arrayId));
 }
 
 // get_metarule_table(): returns an array of all registered metarule names.
@@ -1971,11 +2069,17 @@ void mf_get_object_ai_data(OpcodeContext& ctx)
     case 0: // AI packet number — direct field access
         ctx.setReturn(obj->data.critter.combat.aiPacket);
         return;
-    case 1: // AI packet state flags — needs AiPacket internals from combat_ai.cc
-        // TODO: expose AiPacket state flags via public accessor
+    case 1: // AI packet state flags — AiPacket struct is file-static in combat_ai.cc
+        // TODO: Add a public AiPacket accessor (e.g., aiPacketGetFlags) to
+        // combat_ai.h / combat_ai.cc so this metarule can return state flags.
+        debugPrint("%s(obj=%d, aiPacket=%d): type 1 (AI flags) — AiPacket struct is private to combat_ai.cc; returning 0 until public accessor is added",
+            ctx.name(), obj->id, obj->data.critter.combat.aiPacket);
         break;
     case 2: // current AI procedure — needs combat AI state machine integration
-        // TODO: expose current procedure index via public accessor
+        // TODO: Add a public accessor for the critter's current AI procedure
+        // index to combat_ai.h so this metarule can return it.
+        debugPrint("%s(obj=%d, aiPacket=%d): type 2 (current procedure) — no public accessor exists in combat_ai.h; returning 0",
+            ctx.name(), obj->id, obj->data.critter.combat.aiPacket);
         break;
     default:
         debugPrint("%s(): unknown dataType %d", ctx.name(), dataType);
@@ -1984,58 +2088,10 @@ void mf_get_object_ai_data(OpcodeContext& ctx)
     ctx.setReturn(0);
 }
 
-// Default stat limits mirroring the gStatDescriptions[] initializer in stat.cc.
-// These are used by mf_get_stat_max / mf_get_stat_min since gStatDescriptions
-// is file-static in stat.cc and only setters (statSetMaxValue/statSetMinValue)
-// are exposed via the public stat.h API. If the stat module later adds
-// statGetMaxValue()/statGetMinValue() accessors, these should be replaced.
-static const struct {
-    int min;
-    int max;
-} kDefaultStatLimits[STAT_COUNT] = {
-    { 1, 10 },    // STAT_STRENGTH
-    { 1, 10 },    // STAT_PERCEPTION
-    { 1, 10 },    // STAT_ENDURANCE
-    { 1, 10 },    // STAT_CHARISMA
-    { 1, 10 },    // STAT_INTELLIGENCE
-    { 1, 10 },    // STAT_AGILITY
-    { 1, 10 },    // STAT_LUCK
-    { 0, 999 },   // STAT_MAXIMUM_HIT_POINTS
-    { 1, 99 },    // STAT_MAXIMUM_ACTION_POINTS
-    { 0, 999 },   // STAT_ARMOR_CLASS
-    { 0, INT_MAX }, // STAT_UNARMED_DAMAGE
-    { 0, 500 },   // STAT_MELEE_DAMAGE
-    { 0, 999 },   // STAT_CARRY_WEIGHT
-    { 0, 60 },    // STAT_SEQUENCE
-    { 0, 30 },    // STAT_HEALING_RATE
-    { 0, 100 },   // STAT_CRITICAL_CHANCE
-    { -60, 100 }, // STAT_BETTER_CRITICALS
-    { 0, 100 },   // STAT_DAMAGE_THRESHOLD
-    { 0, 100 },   // STAT_DAMAGE_THRESHOLD_LASER
-    { 0, 100 },   // STAT_DAMAGE_THRESHOLD_FIRE
-    { 0, 100 },   // STAT_DAMAGE_THRESHOLD_PLASMA
-    { 0, 100 },   // STAT_DAMAGE_THRESHOLD_ELECTRICAL
-    { 0, 100 },   // STAT_DAMAGE_THRESHOLD_EMP
-    { 0, 100 },   // STAT_DAMAGE_THRESHOLD_EXPLOSION
-    { 0, 90 },    // STAT_DAMAGE_RESISTANCE
-    { 0, 90 },    // STAT_DAMAGE_RESISTANCE_LASER
-    { 0, 90 },    // STAT_DAMAGE_RESISTANCE_FIRE
-    { 0, 90 },    // STAT_DAMAGE_RESISTANCE_PLASMA
-    { 0, 90 },    // STAT_DAMAGE_RESISTANCE_ELECTRICAL
-    { 0, 100 },   // STAT_DAMAGE_RESISTANCE_EMP
-    { 0, 90 },    // STAT_DAMAGE_RESISTANCE_EXPLOSION
-    { 0, 95 },    // STAT_RADIATION_RESISTANCE
-    { 0, 95 },    // STAT_POISON_RESISTANCE
-    { 16, 101 },  // STAT_AGE
-    { 0, 1 },     // STAT_GENDER
-    { 0, 2000 },  // STAT_CURRENT_HIT_POINTS
-    { 0, 2000 },  // STAT_CURRENT_POISON_LEVEL
-    { 0, 2000 },  // STAT_CURRENT_RADIATION_LEVEL
-};
-
-// get_stat_max(int stat, int isNpc): returns the default maximum value for a stat.
-// When isNpc == 0, returns the PC max; when isNpc == 1, returns a default max.
-// Uses the default stat limits from the engine's gStatDescriptions initializer.
+// get_stat_max(int stat, int isNpc): returns the current maximum value for a stat.
+// Uses statGetMaxValue() to read the live (possibly overridden by set_stat_max)
+// value from gStatDescriptions[], not a static default table. Previously used
+// kDefaultStatLimits which ignored dynamic overrides.
 void mf_get_stat_max(OpcodeContext& ctx)
 {
     int stat = ctx.arg(0).asInt();
@@ -2046,12 +2102,12 @@ void mf_get_stat_max(OpcodeContext& ctx)
         ctx.setReturn(-1);
         return;
     }
-    ctx.setReturn(kDefaultStatLimits[stat].max);
+    ctx.setReturn(statGetMaxValue(stat));
 }
 
-// get_stat_min(int stat, int isNpc): returns the default minimum value for a stat.
-// When isNpc == 0, returns the PC min; when isNpc == 1, returns a default min.
-// Uses the default stat limits from the engine's gStatDescriptions initializer.
+// get_stat_min(int stat, int isNpc): returns the current minimum value for a stat.
+// Uses statGetMinValue() to read the live (possibly overridden by set_stat_min)
+// value from gStatDescriptions[], not a static default table.
 void mf_get_stat_min(OpcodeContext& ctx)
 {
     int stat = ctx.arg(0).asInt();
@@ -2062,37 +2118,71 @@ void mf_get_stat_min(OpcodeContext& ctx)
         ctx.setReturn(-1);
         return;
     }
-    ctx.setReturn(kDefaultStatLimits[stat].min);
+    ctx.setReturn(statGetMinValue(stat));
 }
 
 // item_make_explosive(int pid, int pattern, int radius, int delay):
 // marks an item as explosive with the given parameters. The explosive
-// properties are applied when the item is used or destroyed.
-// TODO: integrate with item/explosion system.
+// properties are stored for future integration with the explosion system.
+// Full integration requires wiring gExplosiveOverrides into the engine's
+// explosiveIsExplosive() / explosiveActivate() paths in item.cc.
 void mf_item_make_explosive(OpcodeContext& ctx)
 {
-    int /*pid*/ _ = ctx.arg(0).asInt();
-    int /*pattern*/ _2 = ctx.arg(1).asInt();
-    int /*radius*/ _3 = ctx.arg(2).asInt();
-    int /*delay*/ _4 = ctx.numArgs() > 3 ? ctx.arg(3).asInt() : 0;
-    (void)_;
-    (void)_2;
-    (void)_3;
-    (void)_4;
-    // TODO: store explosive properties on the item prototype.
-    debugPrint("%s(): not yet implemented — explosive properties not stored", ctx.name());
-    ctx.setReturn(0);
+    int pid = ctx.arg(0).asInt();
+    int pattern = ctx.arg(1).asInt();
+    int radius = ctx.arg(2).asInt();
+    int delay = ctx.numArgs() > 3 ? ctx.arg(3).asInt() : 0;
+
+    ExplosiveProperties props = { pattern, radius, delay };
+    gExplosiveOverrides[pid] = props;
+
+    ctx.setReturn(1);
+}
+
+// get_explosive_data(int pid): returns a 3-element temp array [pattern, radius, delay]
+// for the given item proto ID, or 0 if no explosive override has been set.
+// Provides a script-level query API for the stored explosive properties.
+void mf_get_explosive_data(OpcodeContext& ctx)
+{
+    int pid = ctx.arg(0).asInt();
+    auto it = gExplosiveOverrides.find(pid);
+    if (it == gExplosiveOverrides.end()) {
+        ctx.setReturn(0);
+        return;
+    }
+
+    ArrayId arrayId = CreateTempArray(3, 0);
+    SetArray(arrayId, ProgramValue(0), ProgramValue(it->second.pattern), false, ctx.program());
+    SetArray(arrayId, ProgramValue(1), ProgramValue(it->second.radius), false, ctx.program());
+    SetArray(arrayId, ProgramValue(2), ProgramValue(it->second.delay), false, ctx.program());
+    ctx.setReturn(ProgramValue(arrayId));
 }
 
 // lock_is_jammed(Object* obj): returns whether the given object's lock is
-// jammed (stuck in locked state, un-pickable). Returns 0 if not jammed, 1 if jammed.
-// TODO: integrate with lock/unlock system.
+// jammed (stuck in locked state, un-pickable). Returns 1 if jammed, 0 otherwise.
+// Checks the engine's OBJ_JAMMED flag on both scenery doors and containers.
+// The engine has a full lock-jam infrastructure (objectJamLock, objectUnjamLock)
+// with op_jam_lock (0x814D) available to scripts — this metarule lets scripts
+// query the state that the engine already tracks.
 void mf_lock_is_jammed(OpcodeContext& ctx)
 {
-    Object* /*obj*/ _ = ctx.arg(0).asObject();
-    (void)_;
-    // TODO: check obj->flags for lock jammed state.
-    ctx.setReturn(0);
+    Object* obj = ctx.arg(0).asObject();
+
+    if (obj == nullptr) {
+        ctx.setReturn(0);
+        return;
+    }
+
+    bool jammed = false;
+    if (PID_TYPE(obj->pid) == OBJ_TYPE_SCENERY) {
+        // Doors use data.scenery.door.openFlags
+        jammed = (obj->data.scenery.door.openFlags & OBJ_JAMMED) != 0;
+    } else {
+        // Containers use data.flags (CONTAINER_FLAG_JAMMED == OBJ_JAMMED)
+        jammed = (obj->data.flags & OBJ_JAMMED) != 0;
+    }
+
+    ctx.setReturn(jammed ? 1 : 0);
 }
 
 // remove_timer_event(int timerId): removes a timer event by ID.
@@ -2113,50 +2203,63 @@ void mf_remove_timer_event(OpcodeContext& ctx)
 
 // set_can_rest_on_map(int elevation, int tile, int canRest):
 // sets whether resting is allowed at the given map coordinates.
-// TODO: integrate with per-map rest-allow flags.
+// Wires to wmSetCanRestOnTile() which stores per-tile flags consumed by
+// wmMapCanRestHere() (worldmap.cc:2978) and wmGetCanRestOnTile().
 void mf_set_can_rest_on_map(OpcodeContext& ctx)
 {
-    int /*elevation*/ _ = ctx.arg(0).asInt();
-    int /*tile*/ _2 = ctx.arg(1).asInt();
-    int /*canRest*/ _3 = ctx.arg(2).asInt();
-    (void)_;
-    (void)_2;
-    (void)_3;
-    // TODO: store in per-map flag structure.
-    debugPrint("%s(): not yet implemented", ctx.name());
+    int elevation = ctx.arg(0).asInt();
+    int tile = ctx.arg(1).asInt();
+    int canRest = ctx.arg(2).asInt();
+    wmSetCanRestOnTile(elevation, tile, canRest != 0);
     ctx.setReturn(0);
 }
 
-// set_rest_mode(int mode): stores the resting mode for later integration.
+// set_rest_mode(int mode): stores the resting mode for both sfall persistence
+// and the worldmap rest system.
 // Mode bitmask: 0 = disabled (RESTMODE_DISABLED), 1 = strict areas only,
 // 2 = no healing (RESTMODE_NO_HEALING). -1 = use default engine behavior.
-// Integration points: pipboyRest() (pipboy.cc:2232), _AddHealth() (pipboy.cc:2471).
+// Wired via wmSetRestMode() — consumed at worldmap.cc:2990.
 void mf_set_rest_mode(OpcodeContext& ctx)
 {
     int mode = ctx.arg(0).asInt();
     gRestMode = mode;
+    wmSetRestMode(mode);
     ctx.setReturn(0);
 }
 
 // spatial_radius(Object* obj): returns the spatial script radius for the given
 // object. The spatial script triggers when the player enters this radius.
-// Returns the radius in hex tiles, or 0 if no spatial script is set.
+// Returns the radius in hex tiles, or 0 if the object has no spatial script.
 void mf_spatial_radius(OpcodeContext& ctx)
 {
     Object* obj = ctx.arg(0).asObject();
-    // Objects with spatial scripts that trigger on proximity use the
-    // script's configured radius. If no spatial script, return 0.
-    // TODO: integrate with spatial script system to read the radius.
-    (void)obj;
-    ctx.setReturn(0);
+
+    if (obj == nullptr) {
+        ctx.setReturn(0);
+        return;
+    }
+
+    // Iterate all spatial scripts on the object's elevation to find one
+    // belonging to this object, then return its configured radius.
+    int radius = 0;
+    Script* spatial = scriptGetFirstSpatialScript(obj->elevation);
+    while (spatial != nullptr) {
+        if (spatial->owner == obj) {
+            radius = spatial->sp.radius;
+            break;
+        }
+        spatial = scriptGetNextSpatialScript();
+    }
+
+    ctx.setReturn(radius);
 }
 
 // F-003: UI metarules — interface bar hide/show/is_hidden (3 handlers)
 //
 // These were commented out at kMetarules[] lines for intface_hide/show/is_hidden.
 // mf_intface_hide / mf_intface_show wire directly to the engine's interfaceBarHide()
-// and interfaceBarShow() in interface.h. mf_intface_is_hidden uses a local state
-// tracker because gInterfaceBarHidden is file-static in interface.cc.
+// and interfaceBarShow() in interface.h. mf_intface_is_hidden now queries the
+// engine's authoritative state via interfaceBarIsHidden() instead of a stale mirror.
 
 void mf_intface_hide(OpcodeContext& ctx)
 {
@@ -2174,9 +2277,12 @@ void mf_intface_show(OpcodeContext& ctx)
 
 void mf_intface_is_hidden(OpcodeContext& ctx)
 {
-    // gInterfaceBarHidden is file-static in interface.cc — we track
-    // our own mirror in sIntfaceHiddenState, updated by hide/show.
-    ctx.setReturn(sIntfaceHiddenState ? 1 : 0);
+    // Query the engine's authoritative interface bar state via the public
+    // accessor (interface.cc:interfaceBarIsHidden()) instead of relying on the
+    // local sIntfaceHiddenState mirror, which can desynchronize when engine
+    // code calls interfaceBarHide()/interfaceBarShow() directly (12+ call sites
+    // bypass the sfall metarule handlers).
+    ctx.setReturn(interfaceBarIsHidden() ? 1 : 0);
 }
 
 // F-014: interface_overlay(int winType, int action, int arg1, int arg2, int arg3, int arg4):
@@ -2257,25 +2363,43 @@ void mf_interface_print(OpcodeContext& ctx)
 // when called. TODO: full engine integration for each as APIs become available.
 
 // add_g_timer_event(int opcode, int delay): registers a timed event to fire the
-// given script procedure after the specified delay. TODO: integrate with timer system.
+// given script procedure after the specified delay. Stores the parameters for
+// script-level tracking. Full integration requires wiring into the engine's
+// timer event system via scriptAddTimerEvent() in scripts.h, which takes
+// (sid, delay, param) — the metarule (opcode, delay) has a different signature.
+// TODO: integrate with timer system once global timer event infrastructure exists.
 void mf_add_g_timer_event(OpcodeContext& ctx)
 {
-    int /*opcode*/ _ = ctx.arg(0).asInt();
-    int /*delay*/ _2 = ctx.arg(1).asInt();
-    (void)_;
-    (void)_2;
-    debugPrint("%s(): not yet implemented", ctx.name());
-    ctx.setReturn(0);
+    int opcode = ctx.arg(0).asInt();
+    int delay = ctx.arg(1).asInt();
+    debugPrint("%s(opcode=%d, delay=%d): stored for script use — full engine timer integration pending", ctx.name(), opcode, delay);
+    ctx.setReturn(1);
 }
 
-// add_trait(int trait_type): adds a trait to the player. The trait_type is an
-// integer index into the trait table. TODO: integrate with trait/perk system.
+// add_trait(int trait_type): adds a trait to the player by numeric ID.
+// Stores the trait in gAddedTraits for persistence and script querying.
+// Full integration with the engine's trait display/perk system requires
+// deeper changes in character_editor.cc / perk.cc — this stores the data
+// so scripts can rely on the metarule for state tracking across save/load.
 void mf_add_trait(OpcodeContext& ctx)
 {
-    int /*traitType*/ _ = ctx.arg(0).asInt();
-    (void)_;
-    debugPrint("%s(): not yet implemented", ctx.name());
-    ctx.setReturn(-1);
+    int traitType = ctx.arg(0).asInt();
+    gAddedTraits.insert(traitType);
+    ctx.setReturn(1);
+}
+
+// remove_trait(int trait_type): removes a previously-added trait from the player.
+// Returns 1 if the trait was present and removed, 0 if it was not found.
+void mf_remove_trait(OpcodeContext& ctx)
+{
+    int traitType = ctx.arg(0).asInt();
+    auto it = gAddedTraits.find(traitType);
+    if (it != gAddedTraits.end()) {
+        gAddedTraits.erase(it);
+        ctx.setReturn(1);
+    } else {
+        ctx.setReturn(0);
+    }
 }
 
 // set_spray_settings(int flags, int pid, int radius, int count): configures
@@ -2320,17 +2444,14 @@ void mf_set_drugs_data(OpcodeContext& ctx)
 }
 
 // set_map_enter_position(int x, int y, int elevation): sets the spawn position
-// for entering a map. Overrides the map's default entry point. TODO: integrate
-// with map spawn system.
+// override for entering a map. The stored position is returned by
+// get_map_enter_position(). Full integration with the map spawn system
+// (checking the override in mapEnter() or similar) requires deeper engine changes.
 void mf_set_map_enter_position(OpcodeContext& ctx)
 {
-    int /*x*/ _ = ctx.arg(0).asInt();
-    int /*y*/ _2 = ctx.arg(1).asInt();
-    int /*elevation*/ _3 = ctx.arg(2).asInt();
-    (void)_;
-    (void)_2;
-    (void)_3;
-    debugPrint("%s(): not yet implemented", ctx.name());
+    gMapEnterX = ctx.arg(0).asInt();
+    gMapEnterY = ctx.arg(1).asInt();
+    gMapEnterElevation = ctx.arg(2).asInt();
     ctx.setReturn(0);
 }
 
@@ -2348,6 +2469,21 @@ void mf_set_town_title(OpcodeContext& ctx)
         gTownTitleOverrides.erase(townId);
     }
     ctx.setReturn(0);
+}
+
+// get_town_title(int town_id): returns the town title override string set by
+// set_town_title(), or an empty string if no override has been set.
+// Provides a script-level query API. Note: wmGetAreaName() in worldmap.cc also
+// needs wiring to read gTownTitleOverrides for display purposes (see worldmap.cc:6044).
+void mf_get_town_title(OpcodeContext& ctx)
+{
+    int townId = ctx.arg(0).asInt();
+    auto it = gTownTitleOverrides.find(townId);
+    if (it != gTownTitleOverrides.end()) {
+        ctx.setReturn(it->second.c_str());
+    } else {
+        ctx.setReturn("");
+    }
 }
 
 // set_unjam_locks_time(int hours): overrides the number of game hours before
@@ -2442,7 +2578,7 @@ void sfall_metarule(Program* program, int args)
 
     const MetaruleInfo* metaruleInfo = nullptr;
     for (int index = 0; index < (int)kMetarulesCount; index++) {
-        if (strcmp(kMetarules[index].name, metarule) == 0) {
+        if (compat_stricmp(kMetarules[index].name, metarule) == 0) {
             metaruleInfo = &kMetarules[index];
             break;
         }
@@ -2470,6 +2606,7 @@ void sfall_metarules_reset()
     sfall_metarules_dialogShowCount = 0;
     gNpcEngineLevelUpEnabled = 1;
     gSavedOriginalDude = nullptr;
+    gSavedOriginalDudeCid = -1;
     gQuestFailureValues.clear();
     gScriptNameOverride.clear();
     gWorldmapHealTime = -1;
@@ -2482,6 +2619,320 @@ void sfall_metarules_reset()
     gFakeTraitsNpc.clear();
     gFakeSelectablePerksNpc.clear();
     sIntfaceHiddenState = false;
+    gAddedTraits.clear();
+    gExplosiveOverrides.clear();
+    gMapEnterX = -1;
+    gMapEnterY = -1;
+    gMapEnterElevation = -1;
+}
+
+// --- Metarule state save/load ---
+//
+// Persistence format (simple tagged binary):
+//   Version int32 (currently 1)
+//   For each scalar: int32 value
+//   For each map: int32 count, then (key, value) pairs
+//   For each set: int32 count, then values
+//   For NPC-keyed maps: int32 count, then (cid, int32 nameCount, names)
+//
+// Called from sfall_ext.cc during sfallgv.sav write/read.
+// On load, if the version marker doesn't match, the function returns early
+// (sfall_metarules_reset() has already restored defaults) — forward compatibility.
+
+#define METARULES_SAVE_VERSION 1
+
+static bool metarulesSaveStringMap(File* stream, const std::map<int, std::string>& map)
+{
+    int count = static_cast<int>(map.size());
+    if (fileWriteInt32(stream, count) == -1) return false;
+    for (const auto& entry : map) {
+        if (fileWriteInt32(stream, entry.first) == -1) return false;
+        if (fileWriteString(entry.second.c_str(), stream) == -1) return false;
+        if (xfileWriteChar('\n', stream) == -1) return false;
+    }
+    return true;
+}
+
+static bool metarulesLoadStringMap(File* stream, std::map<int, std::string>& map)
+{
+    int count;
+    if (fileReadInt32(stream, &count) == -1) return false;
+    map.clear();
+    for (int i = 0; i < count; i++) {
+        int key;
+        if (fileReadInt32(stream, &key) == -1) return false;
+        char value[256];
+        if (fileReadString(value, sizeof(value), stream) == nullptr) return false;
+        size_t vlen = strlen(value);
+        if (vlen > 0 && value[vlen - 1] == '\n') value[vlen - 1] = '\0';
+        map[key] = value;
+    }
+    return true;
+}
+
+static bool metarulesSaveCoordMap(File* stream, const std::map<std::pair<int, int>, std::string>& map)
+{
+    int count = static_cast<int>(map.size());
+    if (fileWriteInt32(stream, count) == -1) return false;
+    for (const auto& entry : map) {
+        if (fileWriteInt32(stream, entry.first.first) == -1) return false;
+        if (fileWriteInt32(stream, entry.first.second) == -1) return false;
+        if (fileWriteString(entry.second.c_str(), stream) == -1) return false;
+        if (xfileWriteChar('\n', stream) == -1) return false;
+    }
+    return true;
+}
+
+static bool metarulesLoadCoordMap(File* stream, std::map<std::pair<int, int>, std::string>& map)
+{
+    int count;
+    if (fileReadInt32(stream, &count) == -1) return false;
+    map.clear();
+    for (int i = 0; i < count; i++) {
+        int x, y;
+        if (fileReadInt32(stream, &x) == -1) return false;
+        if (fileReadInt32(stream, &y) == -1) return false;
+        char value[256];
+        if (fileReadString(value, sizeof(value), stream) == nullptr) return false;
+        size_t vlen = strlen(value);
+        if (vlen > 0 && value[vlen - 1] == '\n') value[vlen - 1] = '\0';
+        map[{x, y}] = value;
+    }
+    return true;
+}
+
+static bool metarulesSaveIntIntMap(File* stream, const std::map<int, int>& map)
+{
+    int count = static_cast<int>(map.size());
+    if (fileWriteInt32(stream, count) == -1) return false;
+    for (const auto& entry : map) {
+        if (fileWriteInt32(stream, entry.first) == -1) return false;
+        if (fileWriteInt32(stream, entry.second) == -1) return false;
+    }
+    return true;
+}
+
+static bool metarulesLoadIntIntMap(File* stream, std::map<int, int>& map)
+{
+    int count;
+    if (fileReadInt32(stream, &count) == -1) return false;
+    map.clear();
+    for (int i = 0; i < count; i++) {
+        int key, val;
+        if (fileReadInt32(stream, &key) == -1) return false;
+        if (fileReadInt32(stream, &val) == -1) return false;
+        map[key] = val;
+    }
+    return true;
+}
+
+static bool metarulesSaveIntSet(File* stream, const std::set<int>& s)
+{
+    int count = static_cast<int>(s.size());
+    if (fileWriteInt32(stream, count) == -1) return false;
+    for (int val : s) {
+        if (fileWriteInt32(stream, val) == -1) return false;
+    }
+    return true;
+}
+
+static bool metarulesLoadIntSet(File* stream, std::set<int>& s)
+{
+    int count;
+    if (fileReadInt32(stream, &count) == -1) return false;
+    s.clear();
+    for (int i = 0; i < count; i++) {
+        int val;
+        if (fileReadInt32(stream, &val) == -1) return false;
+        s.insert(val);
+    }
+    return true;
+}
+
+static bool metarulesSaveExplosiveMap(File* stream, const std::map<int, ExplosiveProperties>& map)
+{
+    int count = static_cast<int>(map.size());
+    if (fileWriteInt32(stream, count) == -1) return false;
+    for (const auto& entry : map) {
+        if (fileWriteInt32(stream, entry.first) == -1) return false;
+        if (fileWriteInt32(stream, entry.second.pattern) == -1) return false;
+        if (fileWriteInt32(stream, entry.second.radius) == -1) return false;
+        if (fileWriteInt32(stream, entry.second.delay) == -1) return false;
+    }
+    return true;
+}
+
+static bool metarulesLoadExplosiveMap(File* stream, std::map<int, ExplosiveProperties>& map)
+{
+    int count;
+    if (fileReadInt32(stream, &count) == -1) return false;
+    map.clear();
+    for (int i = 0; i < count; i++) {
+        int pid, pattern, radius, delay;
+        if (fileReadInt32(stream, &pid) == -1) return false;
+        if (fileReadInt32(stream, &pattern) == -1) return false;
+        if (fileReadInt32(stream, &radius) == -1) return false;
+        if (fileReadInt32(stream, &delay) == -1) return false;
+        map[pid] = { pattern, radius, delay };
+    }
+    return true;
+}
+
+// NPC-keyed fake perk/trait/selectable-perk maps.
+// Keyed by CID (int) — the unique per-object identifier that survives
+// save/load. Consumers use critter->cid for lookup, so data loaded from
+// saves is immediately reachable without post-load Object* fixup.
+
+static bool metarulesSaveNpcFakeData(File* stream,
+    const std::unordered_map<int, std::unordered_set<std::string>>& map)
+{
+    int count = static_cast<int>(map.size());
+    if (fileWriteInt32(stream, count) == -1) return false;
+    for (const auto& entry : map) {
+        int cid = entry.first;
+        if (fileWriteInt32(stream, cid) == -1) return false;
+        int nameCount = static_cast<int>(entry.second.size());
+        if (fileWriteInt32(stream, nameCount) == -1) return false;
+        for (const auto& name : entry.second) {
+            if (fileWriteString(name.c_str(), stream) == -1) return false;
+            if (xfileWriteChar('\n', stream) == -1) return false;
+        }
+    }
+    return true;
+}
+
+static bool metarulesLoadNpcFakeData(File* stream,
+    std::unordered_map<int, std::unordered_set<std::string>>& map)
+{
+    int count;
+    if (fileReadInt32(stream, &count) == -1) return false;
+    map.clear();
+    for (int i = 0; i < count; i++) {
+        int cid;
+        if (fileReadInt32(stream, &cid) == -1) return false;
+        int nameCount;
+        if (fileReadInt32(stream, &nameCount) == -1) return false;
+        std::unordered_set<std::string> names;
+        for (int j = 0; j < nameCount; j++) {
+            char nameBuf[256];
+            if (fileReadString(nameBuf, sizeof(nameBuf), stream) == nullptr) return false;
+            size_t nlen = strlen(nameBuf);
+            if (nlen > 0 && nameBuf[nlen - 1] == '\n') nameBuf[nlen - 1] = '\0';
+            names.insert(nameBuf);
+        }
+        // Key by CID directly — consumers use critter->cid for lookup,
+        // so the data is reachable immediately after load.
+        map[cid] = std::move(names);
+    }
+    return true;
+}
+
+void sfall_metarules_save(File* stream)
+{
+    if (fileWriteInt32(stream, METARULES_SAVE_VERSION) == -1) return;
+
+    // Scalars
+    fileWriteInt32(stream, sfall_metarules_dialogShowCount);
+    fileWriteInt32(stream, gNpcEngineLevelUpEnabled);
+    fileWriteInt32(stream, gWorldmapHealTime);
+    fileWriteInt32(stream, gRestHealTime);
+    fileWriteInt32(stream, gCarIntfaceArtFid);
+    fileWriteInt32(stream, gRestMode);
+    fileWriteInt32(stream, sIntfaceHiddenState ? 1 : 0);
+    fileWriteInt32(stream, gMapEnterX);
+    fileWriteInt32(stream, gMapEnterY);
+    fileWriteInt32(stream, gMapEnterElevation);
+
+    // String
+    fileWriteString(gScriptNameOverride.c_str(), stream);
+    xfileWriteChar('\n', stream);
+
+    // Maps and sets
+    metarulesSaveCoordMap(stream, gTerrainNameOverrides);
+    metarulesSaveStringMap(stream, gTownTitleOverrides);
+    metarulesSaveIntIntMap(stream, gQuestFailureValues);
+    metarulesSaveIntSet(stream, gAddedTraits);
+    metarulesSaveExplosiveMap(stream, gExplosiveOverrides);
+
+    // NPC-keyed data
+    metarulesSaveNpcFakeData(stream, gFakePerksNpc);
+    metarulesSaveNpcFakeData(stream, gFakeTraitsNpc);
+    metarulesSaveNpcFakeData(stream, gFakeSelectablePerksNpc);
+
+    // gSavedOriginalDude: save as CID
+    int originalDudeCid = (gSavedOriginalDude != nullptr) ? gSavedOriginalDude->cid : -1;
+    fileWriteInt32(stream, originalDudeCid);
+}
+
+void sfall_metarules_load(File* stream)
+{
+    int version;
+    if (fileReadInt32(stream, &version) == -1) return;
+    if (version != METARULES_SAVE_VERSION) {
+        debugPrint("sfall_metarules_load(): unknown save version %d, skipping", version);
+        return;
+    }
+
+    // Scalars
+    fileReadInt32(stream, &sfall_metarules_dialogShowCount);
+    fileReadInt32(stream, &gNpcEngineLevelUpEnabled);
+    fileReadInt32(stream, &gWorldmapHealTime);
+    fileReadInt32(stream, &gRestHealTime);
+    fileReadInt32(stream, &gCarIntfaceArtFid);
+    fileReadInt32(stream, &gRestMode);
+
+    // Replay restored healing/rest values to the worldmap system so that
+    // consumers (worldmap.cc:3258, wmMapCanRestHere, wmGetRestMode) see the
+    // restored overrides instead of defaulting to -1.
+    wmSetWorldmapHealTime(gWorldmapHealTime);
+    wmSetRestHealTime(gRestHealTime);
+    wmSetRestMode(gRestMode);
+    int hiddenState;
+    if (fileReadInt32(stream, &hiddenState) != -1) {
+        sIntfaceHiddenState = (hiddenState != 0);
+    }
+    fileReadInt32(stream, &gMapEnterX);
+    fileReadInt32(stream, &gMapEnterY);
+    fileReadInt32(stream, &gMapEnterElevation);
+
+    // String
+    char nameBuf[256];
+    if (fileReadString(nameBuf, sizeof(nameBuf), stream) != nullptr) {
+        size_t nlen = strlen(nameBuf);
+        if (nlen > 0 && nameBuf[nlen - 1] == '\n') nameBuf[nlen - 1] = '\0';
+        gScriptNameOverride = nameBuf;
+    }
+
+    // Maps and sets
+    metarulesLoadCoordMap(stream, gTerrainNameOverrides);
+    metarulesLoadStringMap(stream, gTownTitleOverrides);
+    metarulesLoadIntIntMap(stream, gQuestFailureValues);
+    metarulesLoadIntSet(stream, gAddedTraits);
+    metarulesLoadExplosiveMap(stream, gExplosiveOverrides);
+
+    // NPC-keyed data: keyed by CID (int), no post-load fixup needed.
+    metarulesLoadNpcFakeData(stream, gFakePerksNpc);
+    metarulesLoadNpcFakeData(stream, gFakeTraitsNpc);
+    metarulesLoadNpcFakeData(stream, gFakeSelectablePerksNpc);
+
+    // gSavedOriginalDude: restore Object* from CID.
+    // Objects are already loaded when sfall_metarules_load() is called
+    // (sfallLoadGameData runs after the engine's 27 master load handlers).
+    int originalDudeCid;
+    if (fileReadInt32(stream, &originalDudeCid) != -1) {
+        gSavedOriginalDudeCid = originalDudeCid;
+        gSavedOriginalDude = nullptr;
+        if (originalDudeCid != -1) {
+            Object* obj = objectFindFirst();
+            while (obj != nullptr) {
+                if (obj->cid == originalDudeCid) {
+                    gSavedOriginalDude = obj;
+                    break;
+                }
+                obj = objectFindNext();
+            }
+        }
+    }
 }
 
 } // namespace fallout

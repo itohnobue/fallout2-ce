@@ -159,7 +159,16 @@ typedef enum {
     // Allows to prevent PC or NPC from using a weapon.
     HOOK_CANUSEWEAPON = 48,
 
-    // RESERVED 49..60
+    // Dialog start/end. Fires when a dialog session begins or ends.
+    // Arguments: speaker (Object), headFid (int), reaction (int, -1 if not applicable).
+    HOOK_DIALOG = 49,
+
+    // Dialog reaction calculation. Fires when a reaction value is computed
+    // for a dialog speaker.
+    // Arguments: speaker (Object), reaction (int).
+    HOOK_DIALOGREACTION = 50,
+
+    // RESERVED 51..60
 
     // NOTE: Deliberately absent — sfxBuildWeaponName() returns char* to a
     // static buffer (_sfx_file_name). String return value override from scripts

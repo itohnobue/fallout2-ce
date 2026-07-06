@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "db.h"
+#include "debug.h"
 #include "memory.h"
 #include "platform_compat.h"
 
@@ -338,7 +339,38 @@ bool configRead(Config* config, const char* filePath, bool isDb)
             return false;
         }
 
+        // Check for UTF-8 BOM (byte order mark) at the start of the file.
+        // UTF-8 BOM = 0xEF 0xBB 0xBF. If present, skip past it so the
+        // first '[' section header is recognized correctly. Without this
+        // check, all config entries in BOM-prefixed files fall under the
+        // "unknown" section and are effectively ignored.
+        // Windows Notepad adds BOM by default when saving as "UTF-8".
+        int firstBytes[3];
+        firstBytes[0] = fgetc(stream);
+        firstBytes[1] = fgetc(stream);
+        firstBytes[2] = fgetc(stream);
+        bool hasBom = (firstBytes[0] == 0xEF && firstBytes[1] == 0xBB && firstBytes[2] == 0xBF);
+        if (!hasBom) {
+            // Not a BOM — seek back to the beginning of the file.
+            fseek(stream, 0, SEEK_SET);
+        }
+
         while (compat_fgets(string, sizeof(string), stream) != nullptr) {
+            // Detect truncated lines: if the buffer is full and the last
+            // character is not a newline, fgets() stopped before reaching
+            // end-of-line.  The rest of the line sits in the stream and
+            // will be read as the next fgets() call — producing a
+            // continuation fragment without '=' that configParseKeyValue()
+            // silently drops.  Flush the remainder and warn.
+            size_t len = strlen(string);
+            if (len == sizeof(string) - 1 && string[sizeof(string) - 2] != '\n') {
+                // Line was truncated — flush remainder.
+                int c;
+                while ((c = fgetc(stream)) != EOF && c != '\n') {
+                }
+                debugPrint("Warning: Config line longer than %zu chars was truncated in %s\n",
+                    sizeof(string) - 1, filePath);
+            }
             configParseLine(config, string);
         }
         fclose(stream);
@@ -513,6 +545,18 @@ static bool configWriteSideBySide(Config* config, const char* filePath, int flag
 
     char line[CONFIG_FILE_MAX_LINE_LENGTH];
     while (ok && compat_fgets(line, sizeof(line), original) != nullptr) {
+        // Detect truncated lines: if the buffer is full and the last character
+        // is not a newline, the line was longer than our buffer. Flush the
+        // remainder to prevent continuation data from corrupting subsequent lines.
+        {
+            size_t len = strlen(line);
+            if (len == sizeof(line) - 1 && line[sizeof(line) - 2] != '\n') {
+                int c;
+                while ((c = fgetc(original)) != EOF && c != '\n') {
+                }
+            }
+        }
+
         char lineCopy[CONFIG_FILE_MAX_LINE_LENGTH];
         strcpy(lineCopy, line);
 

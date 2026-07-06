@@ -7,6 +7,8 @@
 #include <string.h>
 
 #include <algorithm>
+#include <map>
+#include <utility>
 
 #include "animation.h"
 #include "art.h"
@@ -470,6 +472,64 @@ float gScriptWorldMapMulti = 1.0f;
 void wmSetScriptWorldMapMulti(float value)
 {
     gScriptWorldMapMulti = value;
+}
+float wmGetScriptWorldMapMulti()
+{
+    return gScriptWorldMapMulti;
+}
+
+// CE/SFALL: control healing rate during worldmap travel (hours per tick, -1 = use default).
+static int gWorldmapHealTime = -1;
+void wmSetWorldmapHealTime(int hours)
+{
+    gWorldmapHealTime = hours;
+}
+int wmGetWorldmapHealTime()
+{
+    return gWorldmapHealTime;
+}
+
+// CE/SFALL: control healing rate during resting (hours per tick, -1 = use default).
+static int gRestHealTime = -1;
+void wmSetRestHealTime(int hours)
+{
+    gRestHealTime = hours;
+}
+int wmGetRestHealTime()
+{
+    return gRestHealTime;
+}
+
+// CE/SFALL: per-tile rest permission storage.
+// Maps (elevation, tile) → canRest (true = allowed, false = explicitly forbidden).
+static std::map<std::pair<int, int>, bool> gCanRestOnTiles;
+void wmSetCanRestOnTile(int elevation, int tile, bool canRest)
+{
+    gCanRestOnTiles[{elevation, tile}] = canRest;
+}
+void wmClearCanRestOnTile(int elevation, int tile)
+{
+    gCanRestOnTiles.erase({elevation, tile});
+}
+bool wmGetCanRestOnTile(int elevation, int tile)
+{
+    auto it = gCanRestOnTiles.find({elevation, tile});
+    if (it != gCanRestOnTiles.end()) {
+        return it->second;
+    }
+    // No override — use default engine behavior.
+    return true;
+}
+
+// CE/SFALL: rest mode (-1 = default, 0 = disabled, 1 = strict areas only, 2 = no healing).
+static int gRestMode = -1;
+void wmSetRestMode(int mode)
+{
+    gRestMode = mode;
+}
+int wmGetRestMode()
+{
+    return gRestMode;
 }
 
 static void wmSetFlags(int* flagsPtr, int flag, int value);
@@ -2890,24 +2950,63 @@ int wmMapMatchNameToIdx(char* name)
 // 0x4BFA44 wmMapIdxIsSaveable
 bool wmMapIdxIsSaveable(int mapIdx)
 {
+    if (mapIdx < 0 || mapIdx >= wmMaxMapNum) {
+        return false;
+    }
     return (wmMapInfoList[mapIdx].flags & MAP_SAVED) != 0;
 }
 
 // 0x4BFA64 wmMapIsSaveable
 bool wmMapIsSaveable()
 {
+    // Validate gMapHeader.index to prevent OOB when wmMapMatchNameToIdx returns -1 (I2-F-013).
+    if (gMapHeader.index < 0 || gMapHeader.index >= wmMaxMapNum) {
+        return false;
+    }
     return (wmMapInfoList[gMapHeader.index].flags & MAP_SAVED) != 0;
 }
 
 // 0x4BFA90 wmMapDeadBodiesAge
 bool wmMapDeadBodiesAge()
 {
+    if (gMapHeader.index < 0 || gMapHeader.index >= wmMaxMapNum) {
+        return false;
+    }
     return (wmMapInfoList[gMapHeader.index].flags & MAP_DEAD_BODIES_AGE) != 0;
 }
 
 // 0x4BFABC wmMapCanRestHere
 bool wmMapCanRestHere(int elevation)
 {
+    // Validate elevation and map index (I2-F-013, F-085).
+    if (gMapHeader.index < 0 || gMapHeader.index >= wmMaxMapNum) {
+        return false;
+    }
+    if (!elevationIsValid(elevation)) {
+        return false;
+    }
+
+    // CE/SFALL: Determine current worldmap tile from player position (F-015).
+    // Per-tile rest overrides key on tile index; previously hardcoded to 0.
+    int tile = wmGenData.worldPosY / WM_TILE_HEIGHT * wmNumHorizontalTiles
+        + wmGenData.worldPosX / WM_TILE_WIDTH % wmNumHorizontalTiles;
+
+    // CE/SFALL: Rest mode override (F-017).
+    int restMode = wmGetRestMode();
+    if (restMode == 0) {
+        // RESTMODE_DISABLED: rest is never allowed.
+        return false;
+    } else if (restMode == 1) {
+        // RESTMODE_STRICT: only allow rest on explicitly set tiles.
+        return wmGetCanRestOnTile(elevation, tile);
+    }
+
+    // CE/SFALL: Per-tile rest permission override — explicitly forbidden tiles
+    // take priority over map flags even in default rest mode (F-017).
+    if (!wmGetCanRestOnTile(elevation, tile)) {
+        return false;
+    }
+
     int flags[3];
 
     // NOTE: I'm not sure why they're copied.
@@ -3160,7 +3259,9 @@ static int wmWorldMapFunc(int a1)
             wmInterfaceRefresh();
 
             if (getTicksBetween(now, partyHealTime) > 1000) {
-                if (_partyMemberRestingHeal(3)) {
+                // CE/SFALL: Use scriptable healing time override if set (F-016).
+                int healHours = (gWorldmapHealTime >= 0) ? gWorldmapHealTime : 3;
+                if (_partyMemberRestingHeal(healHours)) {
                     interfaceRenderHitPoints(false);
                     partyHealTime = now;
                 }
@@ -5288,6 +5389,20 @@ int wmSubTileMarkRadiusVisited(int x, int y, int radius)
 // 0x4C3740 wmSubTileGetVisitedState
 int wmSubTileGetVisitedState(int x, int y, int* statePtr)
 {
+    // Validate coordinates to prevent OOB access via negative/invalid values (I2-F-012).
+    if (wmNumHorizontalTiles <= 0 || wmMaxTileNum <= 0) {
+        return -1;
+    }
+    if (x < 0 || x >= WM_TILE_WIDTH * wmNumHorizontalTiles) {
+        return -1;
+    }
+    if (y < 0 || y >= WM_TILE_HEIGHT * (wmMaxTileNum / wmNumHorizontalTiles)) {
+        return -1;
+    }
+    if (statePtr == nullptr) {
+        return -1;
+    }
+
     TileInfo* tile;
     SubtileInfo* subtile;
 
@@ -7026,6 +7141,18 @@ void wmBlinkRndEncounterIcon(bool special)
 
 void wmSetPartyWorldPos(int x, int y)
 {
+    // Validate coordinates to prevent OOB crash via wmFindCurSubTileFromPos
+    // (I2-F-011 / F-086). Follows pattern from wmAreaSetWorldPos.
+    int worldMaxX = WM_TILE_WIDTH * wmNumHorizontalTiles;
+    int worldMaxY = WM_TILE_HEIGHT * (wmMaxTileNum / wmNumHorizontalTiles);
+
+    if (x < 0 || x >= worldMaxX) {
+        return;
+    }
+    if (y < 0 || y >= worldMaxY) {
+        return;
+    }
+
     wmGenData.worldPosX = x;
     wmGenData.worldPosY = y;
 }

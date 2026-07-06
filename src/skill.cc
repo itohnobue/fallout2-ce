@@ -488,15 +488,26 @@ int skillRoll(Object* critter, int skill, int modifier, int* howMuch)
 }
 
 // 0x4AAB9C
+// Returns the name of the specified skill, or nullptr if the skill index is invalid.
+// Returns "" if the skill is valid but its name was not loaded from skill.msg
+// (prevents null dereference at call sites passing the result to snprintf etc.).
 char* skillGetName(int skill)
 {
-    return skillIsValid(skill) ? gSkillDescriptions[skill].name : nullptr;
+    if (!skillIsValid(skill)) {
+        return nullptr;
+    }
+    return gSkillDescriptions[skill].name ? gSkillDescriptions[skill].name : (char*)"";
 }
 
 // 0x4AABC0
+// Returns the description of the specified skill, or nullptr if invalid.
+// Returns "" if valid but description was not loaded.
 char* skillGetDescription(int skill)
 {
-    return skillIsValid(skill) ? gSkillDescriptions[skill].description : nullptr;
+    if (!skillIsValid(skill)) {
+        return nullptr;
+    }
+    return gSkillDescriptions[skill].description ? gSkillDescriptions[skill].description : (char*)"";
 }
 
 // 0x4AABE4

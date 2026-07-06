@@ -755,6 +755,18 @@ void statSetMinValue(int stat, int value)
     }
 }
 
+// Returns the current maximum value for a stat, or -1 if stat is invalid.
+int statGetMaxValue(int stat)
+{
+    return statIsValid(stat) ? gStatDescriptions[stat].maximumValue : -1;
+}
+
+// Returns the current minimum value for a stat, or -1 if stat is invalid.
+int statGetMinValue(int stat)
+{
+    return statIsValid(stat) ? gStatDescriptions[stat].minimumValue : -1;
+}
+
 // Roll D10 against specified stat.
 //
 // This function is intended to be used with one of SPECIAL stats (which are

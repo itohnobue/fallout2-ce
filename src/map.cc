@@ -606,6 +606,15 @@ int mapGetCurrentMap()
     return gMapHeader.index;
 }
 
+// CE/SFALL: Returns the script world map time multiplier for local map time advancement (F-018).
+// The multiplier is applied to gGameTime increments in _script_chk_timed_events() (scripts.cc:871).
+// Currently consumed only during worldmap travel via wmGameTimeIncrement() — this function
+// exposes it for the local map time loop.
+float mapGetTimeMultiplier()
+{
+    return wmGetScriptWorldMapMulti();
+}
+
 // 0x4826C0
 int mapScroll(int dx, int dy)
 {

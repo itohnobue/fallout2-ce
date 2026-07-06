@@ -64,6 +64,15 @@ void statSetMaxValue(int stat, int value);
 // Validates stat index; silently ignored on invalid stat.
 void statSetMinValue(int stat, int value);
 
+// Returns the current maximum value for a stat, or -1 if stat is invalid.
+// Reads the live (possibly overridden) value from gStatDescriptions[],
+// unlike sfall_metarules.cc which uses a static const kDefaultStatLimits table.
+int statGetMaxValue(int stat);
+
+// Returns the current minimum value for a stat, or -1 if stat is invalid.
+// Reads the live (possibly overridden) value from gStatDescriptions[].
+int statGetMinValue(int stat);
+
 } // namespace fallout
 
 #endif /* STAT_H */

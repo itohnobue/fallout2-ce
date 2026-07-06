@@ -2804,3 +2804,168 @@ TEST_CASE("H-028 integration: carSteps computed, then hook applies override")
     CHECK(carSteps == 2);  // overridden from 4 → 2
     CHECK(carFuel == 50);  // overridden from 100 → 50
 }
+
+// ============================================================
+// TESTS — wmSetPartyWorldPos bounds validation (worldmap.cc:7142-7158)
+// Fork change: reject out-of-range coordinates (I2-F-011 / F-086)
+// ============================================================
+
+// Mirror of wmSetPartyWorldPos bounds validation from worldmap.cc:7142-7158.
+static void testWmSetPartyWorldPosValidated(int x, int y, int worldMaxX, int worldMaxY)
+{
+    if (x < 0 || x >= worldMaxX) {
+        return; // reject out-of-range X
+    }
+    if (y < 0 || y >= worldMaxY) {
+        return; // reject out-of-range Y
+    }
+    testWmGenData.worldPosX = x;
+    testWmGenData.worldPosY = y;
+}
+
+TEST_CASE("wmSetPartyWorldPos bounds validation — valid coordinates accepted")
+{
+    testWmGenDataInit();
+
+    // Typical world size: 1 horizontal tile, 350x300
+    int worldMaxX = TEST_WM_TILE_WIDTH;  // 350
+    int worldMaxY = TEST_WM_TILE_HEIGHT; // 300
+
+    // Valid coordinates
+    testWmSetPartyWorldPosValidated(173, 122, worldMaxX, worldMaxY);
+    CHECK(testWmGenData.worldPosX == 173);
+    CHECK(testWmGenData.worldPosY == 122);
+
+    // Edge: (0,0)
+    testWmSetPartyWorldPosValidated(0, 0, worldMaxX, worldMaxY);
+    CHECK(testWmGenData.worldPosX == 0);
+    CHECK(testWmGenData.worldPosY == 0);
+
+    // Edge: (worldMaxX-1, worldMaxY-1)
+    testWmSetPartyWorldPosValidated(349, 299, worldMaxX, worldMaxY);
+    CHECK(testWmGenData.worldPosX == 349);
+    CHECK(testWmGenData.worldPosY == 299);
+}
+
+TEST_CASE("wmSetPartyWorldPos bounds validation — negative X rejected")
+{
+    testWmGenDataInit();
+    int worldMaxX = TEST_WM_TILE_WIDTH;
+    int worldMaxY = TEST_WM_TILE_HEIGHT;
+
+    // Set valid position first
+    testWmGenData.worldPosX = 100;
+    testWmGenData.worldPosY = 100;
+
+    // Negative X — should NOT change position
+    testWmSetPartyWorldPosValidated(-1, 100, worldMaxX, worldMaxY);
+    CHECK(testWmGenData.worldPosX == 100); // unchanged
+    CHECK(testWmGenData.worldPosY == 100); // unchanged
+
+    testWmSetPartyWorldPosValidated(-100, 50, worldMaxX, worldMaxY);
+    CHECK(testWmGenData.worldPosX == 100); // unchanged
+    CHECK(testWmGenData.worldPosY == 100); // unchanged
+}
+
+TEST_CASE("wmSetPartyWorldPos bounds validation — negative Y rejected")
+{
+    testWmGenDataInit();
+    int worldMaxX = TEST_WM_TILE_WIDTH;
+    int worldMaxY = TEST_WM_TILE_HEIGHT;
+
+    testWmGenData.worldPosX = 100;
+    testWmGenData.worldPosY = 100;
+
+    testWmSetPartyWorldPosValidated(100, -1, worldMaxX, worldMaxY);
+    CHECK(testWmGenData.worldPosX == 100);
+    CHECK(testWmGenData.worldPosY == 100); // unchanged
+
+    testWmSetPartyWorldPosValidated(50, -100, worldMaxX, worldMaxY);
+    CHECK(testWmGenData.worldPosX == 100);
+    CHECK(testWmGenData.worldPosY == 100); // unchanged
+}
+
+TEST_CASE("wmSetPartyWorldPos bounds validation — both negative rejected")
+{
+    testWmGenDataInit();
+    int worldMaxX = TEST_WM_TILE_WIDTH;
+    int worldMaxY = TEST_WM_TILE_HEIGHT;
+
+    testWmGenData.worldPosX = 100;
+    testWmGenData.worldPosY = 100;
+
+    testWmSetPartyWorldPosValidated(-1, -1, worldMaxX, worldMaxY);
+    CHECK(testWmGenData.worldPosX == 100);
+    CHECK(testWmGenData.worldPosY == 100);
+
+    testWmSetPartyWorldPosValidated(-999, -999, worldMaxX, worldMaxY);
+    CHECK(testWmGenData.worldPosX == 100);
+    CHECK(testWmGenData.worldPosY == 100);
+}
+
+TEST_CASE("wmSetPartyWorldPos bounds validation — out-of-range X rejected")
+{
+    testWmGenDataInit();
+    int worldMaxX = TEST_WM_TILE_WIDTH;
+    int worldMaxY = TEST_WM_TILE_HEIGHT;
+
+    testWmGenData.worldPosX = 100;
+    testWmGenData.worldPosY = 100;
+
+    // X == worldMaxX (350) is >= worldMaxX, rejected
+    testWmSetPartyWorldPosValidated(350, 100, worldMaxX, worldMaxY);
+    CHECK(testWmGenData.worldPosX == 100); // unchanged
+    CHECK(testWmGenData.worldPosY == 100);
+
+    // X > worldMaxX
+    testWmSetPartyWorldPosValidated(9999, 100, worldMaxX, worldMaxY);
+    CHECK(testWmGenData.worldPosX == 100);
+}
+
+TEST_CASE("wmSetPartyWorldPos bounds validation — out-of-range Y rejected")
+{
+    testWmGenDataInit();
+    int worldMaxX = TEST_WM_TILE_WIDTH;
+    int worldMaxY = TEST_WM_TILE_HEIGHT;
+
+    testWmGenData.worldPosX = 100;
+    testWmGenData.worldPosY = 100;
+
+    // Y == worldMaxY (300) is >= worldMaxY, rejected
+    testWmSetPartyWorldPosValidated(100, 300, worldMaxX, worldMaxY);
+    CHECK(testWmGenData.worldPosX == 100);
+    CHECK(testWmGenData.worldPosY == 100); // unchanged
+
+    // Y > worldMaxY
+    testWmSetPartyWorldPosValidated(100, 9999, worldMaxX, worldMaxY);
+    CHECK(testWmGenData.worldPosX == 100);
+    CHECK(testWmGenData.worldPosY == 100);
+}
+
+TEST_CASE("wmSetPartyWorldPos bounds validation — large world with multiple tiles")
+{
+    testWmGenDataInit();
+
+    // Calculate world size with 5 horizontal tiles
+    // worldMaxX = 350 * 5 = 1750, worldMaxY = 300 * (numTiles/horzTiles)
+    // For 10 tiles across 5 horizontal: worldMaxY = 300 * 2 = 600
+    int worldMaxX = TEST_WM_TILE_WIDTH * 5;  // 1750
+    int worldMaxY = TEST_WM_TILE_HEIGHT * 2; // 600
+
+    // Valid position in the middle
+    testWmSetPartyWorldPosValidated(800, 300, worldMaxX, worldMaxY);
+    CHECK(testWmGenData.worldPosX == 800);
+    CHECK(testWmGenData.worldPosY == 300);
+
+    // Negative X rejected
+    testWmSetPartyWorldPosValidated(-1, 300, worldMaxX, worldMaxY);
+    CHECK(testWmGenData.worldPosX == 800); // unchanged
+
+    // X beyond large world
+    testWmSetPartyWorldPosValidated(1750, 300, worldMaxX, worldMaxY);
+    CHECK(testWmGenData.worldPosX == 800); // unchanged
+
+    // Y beyond large world
+    testWmSetPartyWorldPosValidated(800, 600, worldMaxX, worldMaxY);
+    CHECK(testWmGenData.worldPosY == 300); // unchanged
+}

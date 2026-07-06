@@ -397,3 +397,12 @@ add_executable(test_animation
 )
 target_link_libraries(test_animation PRIVATE doctest)
 add_test(NAME test_animation COMMAND test_animation)
+
+# ---- Test: platform_compat.cc (path traversal security) ----
+# Self-contained test — does not link platform_compat.cc.
+# Tests compat_path_contains_traversal from platform_compat.cc:446-480.
+add_executable(test_platform_compat
+    test_platform_compat.cc
+)
+target_link_libraries(test_platform_compat PRIVATE doctest)
+add_test(NAME test_platform_compat COMMAND test_platform_compat)

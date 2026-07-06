@@ -23,7 +23,7 @@ compile.exe -q -p -l -O2 -d -s -n -I<sfall_headers_id> <script_name.ssl>
 
 - Open any script here and compile it
 
-- This shoud create compiled script <file.int>
+- This should create compiled script `<file.int>`
 
 
 ### Build script using VSCode extension

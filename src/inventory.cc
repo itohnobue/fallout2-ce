@@ -2665,7 +2665,7 @@ static void _adjust_fid()
         interfaceGetCurrentHand(),
         0,
         0);
-    gInventoryWindowDudeFid = scriptHooks_AdjustFid(gInventoryWindowDudeFid, fid);
+    gInventoryWindowDudeFid = scriptHooks_AdjustFid(fid, fid);
 }
 
 // 0x4717E4 use_inventory_on

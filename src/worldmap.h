@@ -289,6 +289,23 @@ void wmSetPartyWorldPos(int x, int y);
 void wmCarSetCurrentArea(int area);
 void wmForceEncounter(int map, unsigned int flags);
 void wmSetScriptWorldMapMulti(float value);
+float wmGetScriptWorldMapMulti();
+
+// CE/SFALL: scriptable healing time overrides (-1 = use default engine behavior).
+void wmSetWorldmapHealTime(int hours);
+int wmGetWorldmapHealTime();
+void wmSetRestHealTime(int hours);
+int wmGetRestHealTime();
+
+// CE/SFALL: per-tile rest permission overrides.
+void wmSetCanRestOnTile(int elevation, int tile, bool canRest);
+bool wmGetCanRestOnTile(int elevation, int tile);
+void wmClearCanRestOnTile(int elevation, int tile);
+
+// CE/SFALL: rest mode override (-1 = use default, 0 = disabled, 1 = strict, 2 = no healing).
+void wmSetRestMode(int mode);
+int wmGetRestMode();
+
 int worldmapGetWindow();
 
 } // namespace fallout

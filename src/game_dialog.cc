@@ -38,6 +38,7 @@
 #include "random.h"
 #include "scripts.h"
 #include "settings.h"
+#include "sfall_script_hooks.h"
 #include "skill.h"
 #include "stat.h"
 #include "svga.h"
@@ -797,7 +798,7 @@ void gameDialogEnter(Object* speaker, int mode)
                     displayMonitorAddMessage(messageListItem.text);
                     debugPrint("Cannot see there ");
                 } else {
-                    debugPrint(messageListItem.text);
+                    debugPrint("%s", messageListItem.text);
                 }
             } else {
                 debugPrint("\nError: gdialog: Can't find message!");
@@ -813,7 +814,7 @@ void gameDialogEnter(Object* speaker, int mode)
                     displayMonitorAddMessage(messageListItem.text);
                     debugPrint("Too far ");
                 } else {
-                    debugPrint(messageListItem.text);
+                    debugPrint("%s", messageListItem.text);
                 }
             } else {
                 debugPrint("\nError: gdialog: Can't find message!");
@@ -821,6 +822,14 @@ void gameDialogEnter(Object* speaker, int mode)
             return;
         }
     }
+
+    // SFALL: Save old speaker before overwriting (F-020).
+    // When gameDialogEnter is called while another dialog is active,
+    // gGameDialogSpeaker is overwritten at line 832 before
+    // _gdialogExitFromScript() fires the HOOK_DIALOG exit hook at line 1049.
+    // The hook should pass the OLD speaker (the one whose dialog is ending),
+    // not the new one. Save it here and temporarily restore before the exit call.
+    Object* oldSpeaker = gGameDialogSpeaker;
 
     gGameDialogOldCenterTile = gCenterTile;
     gGameDialogBarterModifier = 0;
@@ -879,7 +888,16 @@ void gameDialogEnter(Object* speaker, int mode)
                 gameDialogDestroyBarterWindow();
             }
         }
-        _gdialogExitFromScript();
+        // SFALL: Restore old speaker before exit hook (F-020).
+        // _gdialogExitFromScript() fires HOOK_DIALOG with gGameDialogSpeaker.
+        // Temporarily swap to the old speaker so the hook sees the speaker
+        // whose dialog is actually ending, not the new one.
+        {
+            Object* tmpSpeaker = gGameDialogSpeaker;
+            gGameDialogSpeaker = oldSpeaker;
+            _gdialogExitFromScript();
+            gGameDialogSpeaker = tmpSpeaker;
+        }
     }
 
     _gdialog_state = GAME_DIALOG_INACTIVE;
@@ -1024,6 +1042,9 @@ int _gdialogInitFromScript(int headFid, int reaction)
     // mode. Same pattern as inventory, skilldex, elevator, automap, etc.
     touch_set_touchscreen_mode(true);
 
+    // SFALL: Fire HOOK_DIALOG on dialog start.
+    ScriptHookCall(HOOK_DIALOG, 0, { gGameDialogSpeaker, headFid, reaction }).call();
+
     return 0;
 }
 
@@ -1039,6 +1060,10 @@ int _gdialogExitFromScript()
     if (_gdialog_state == GAME_DIALOG_INACTIVE) {
         return 0;
     }
+
+    // SFALL: Fire HOOK_DIALOG on dialog exit.
+    // headFid = -1 (not applicable), reaction = -1 (not applicable).
+    ScriptHookCall(HOOK_DIALOG, 0, { gGameDialogSpeaker, -1, -1 }).call();
 
     gameDialogEndLips();
     dialogReviewEntriesClear();
@@ -3067,6 +3092,9 @@ void _talk_to_critter_reacts(int reaction)
     if (reactionIndex < 3) {
         debugPrint("%s\n", _react_strs[reactionIndex]);
     }
+
+    // SFALL: Fire HOOK_DIALOGREACTION when a dialog reaction is triggered.
+    ScriptHookCall(HOOK_DIALOGREACTION, 0, { gGameDialogSpeaker, reaction }).call();
 
     int reactionCode = reaction + 50;
     _dialogue_seconds_since_last_input = 0;

@@ -2349,6 +2349,15 @@ static void opDtoA(Program* program)
 static void opExitProgram(Program* program)
 {
     program->flags |= PROGRAM_FLAG_EXITED;
+
+    // F-034: Mirror cleanup from opExit — mark program as exited and remove
+    // interpreter library references so _updatePrograms can free it. Without
+    // this, exited programs accumulate as zombie ProgramListNodes until the
+    // next gameReset().
+    if (!program->exited) {
+        intLibRemoveProgramReferences(program);
+        program->exited = true;
+    }
 }
 
 // 0x46BAC8

@@ -1937,9 +1937,17 @@ static int lsgPerformSaveGame()
         fileClose(_flptr);
         _flptr = nullptr;
         if (!saved) {
+            // SAVE.DAT was written successfully but sfallgv.sav write failed.
+            // The BAK files from _SaveBackup() are orphaned — _RestoreSave()
+            // recovers them so the previous save's data isn't lost.
             snprintf(_gmpath, sizeof(_gmpath), "%s\\%s%.2d\\", "SAVEGAME", "SLOT", _slot_cursor + 1);
             strcat(_gmpath, "sfallgv.sav");
             compat_remove(_gmpath);
+            _RestoreSave();
+            snprintf(_gmpath, sizeof(_gmpath), "%s\\%s%.2d\\", "SAVEGAME", "SLOT", _slot_cursor + 1);
+            MapDirErase(_gmpath, "BAK");
+            _partyMemberUnPrepSave();
+            backgroundSoundResume();
             return -1;
         }
     }
@@ -2040,6 +2048,11 @@ static int lsgLoadGameInSlot(int slot)
         bool loaded = sfallLoadGameData(_flptr);
         fileClose(_flptr);
         if (!loaded) {
+            // SAVE.DAT was loaded successfully but sfallgv.sav is corrupt.
+            // The engine state is partially restored (27 handlers applied).
+            // gameReset() cleans up the partially-loaded state to prevent
+            // data loss from sfall globals silently reverting to defaults.
+            gameReset();
             _loadingGame = false;
             return -1;
         }
@@ -2973,31 +2986,55 @@ static int _SlotMap2Game(File* stream)
     return 0;
 }
 
-// 0x47FE14
+// Reads a null-terminated string from a save game stream into dest.
+// Maximum readable length is 15 non-null characters + null terminator (16 bytes
+// total), matching the save format's fileName field size.
+//
+// Returns 0 on success, -1 on error (buffer overflow without null termination,
+// or EOF before a complete string is read).
+//
+// FIX: The original implementation had two bugs:
+//   (a) 14-byte null-terminated strings (13 chars + null) were erroneously
+//       rejected because the post-loop check `index == 0` failed to
+//       distinguish "buffer full, null found" from "buffer full, no null."
+//   (b) 15+ non-null bytes returned SUCCESS without null termination,
+//       because index reached -1 before a null byte was encountered.
+// The corrected version uses an explicit count-based loop that properly
+// tracks whether a null terminator was found.
 static int _mygets(char* dest, File* stream)
 {
-    int index = 14;
-    while (true) {
+    static const int kMaxChars = 15;
+    int count;
+    for (count = 0; count < kMaxChars; count++) {
         int c = fileReadChar(stream);
         if (c == -1) {
+            // EOF before null terminator — error.
+            dest[count] = '\0';
             return -1;
         }
-
-        index -= 1;
-
-        *dest = c & 0xFF;
-        dest += 1;
-
-        if (index == -1 || c == '\0') {
-            break;
+        dest[count] = c & 0xFF;
+        if (c == '\0') {
+            // Null terminator found within the buffer — success.
+            return 0;
         }
     }
-
-    if (index == 0) {
-        return -1;
+    // Read exactly kMaxChars non-null bytes. Read one more byte —
+    // this must be the null terminator.
+    int c = fileReadChar(stream);
+    if (c == -1) {
+        // EOF at the null position — treat as valid (last byte implied null).
+        dest[kMaxChars] = '\0';
+        return 0;
     }
-
-    return 0;
+    dest[kMaxChars] = c & 0xFF;
+    if (c == '\0') {
+        // 15 chars + null = 16 bytes total — valid.
+        return 0;
+    }
+    // Buffer full without a null terminator — error.
+    // Null-terminate what we have to prevent unbounded string reads.
+    dest[kMaxChars] = '\0';
+    return -1;
 }
 
 // 0x47FE58

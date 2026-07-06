@@ -10,11 +10,16 @@ bool gSfallConfigInitialized = false;
 Config gSfallConfig;
 
 bool gFallout1Behavior = false;
-bool gAllowUnsafeScripting = false;
-bool gEnableHeroAppearanceMod = false;
-bool gUseFileSystemOverride = false;
-bool gOverrideArtCacheSize = false;
-bool gExtraSaveSlots = false;
+
+// TODO: The following 5 config booleans are parsed from ddraw.ini but have
+// zero consumers in the engine. They need to be wired to their respective
+// feature implementations or removed if the features are abandoned.
+// See F-012 in the audit synthesis report for full details.
+bool gAllowUnsafeScripting = false;        // TODO: wire to scripting safety gates
+bool gEnableHeroAppearanceMod = false;     // TODO: wire to hero appearance FID pipeline
+bool gUseFileSystemOverride = false;       // TODO: wire to asset loading path selection
+bool gOverrideArtCacheSize = false;        // TODO: wire to art cache size configuration
+bool gExtraSaveSlots = false;              // TODO: wire to save slot count
 
 bool sfallConfigInit(int argc, char** argv)
 {

@@ -927,6 +927,14 @@ bool interfaceBarEnabled()
     return gInterfaceBarEnabled;
 }
 
+// SFALL: Public accessor for gInterfaceBarHidden (file-static).
+// Used by sfall metarules (mf_intface_is_hidden) to query the engine's
+// authoritative interface bar state instead of relying on a stale mirror.
+bool interfaceBarIsHidden()
+{
+    return gInterfaceBarHidden;
+}
+
 // 0x45EB98 intface_redraw
 void interfaceBarRefresh()
 {

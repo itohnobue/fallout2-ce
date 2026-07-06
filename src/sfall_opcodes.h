@@ -16,6 +16,17 @@ void sfallOpcodesExit();
 // game reset between save/load cycles. Called from gameReset().
 void sfallOpcodesReset();
 
+// Persist all opcode-related global state into the sfall global vars map
+// (which is serialized to sfallgv.sav). Must be called BEFORE sfall_gl_vars_save()
+// during save so the current runtime values are included in the save file.
+void sfallOpcodeStateSave();
+
+// Restore all opcode-related global state from the sfall global vars map.
+// Must be called AFTER sfall_gl_vars_load() during load to rebuild the
+// runtime state from the save file. If no saved state exists (first run,
+// old save), the sfallOpcodesReset() defaults remain in effect.
+void sfallOpcodeStateLoad();
+
 // Expose animation callback reset for hooks subsystem cleanup.
 // Resets sfallAnimCallbackProgram to nullptr and
 // sfallAnimCallbackProcedureIndex to -1, preventing stale pointer
@@ -55,6 +66,41 @@ extern int gSkillMaxCap;
 // Default 100 (no modification). Applied in pcAddExperience() as a
 // multiplier: adjusted_xp = xp * gXpModPercentage / 100.
 extern int gXpModPercentage;
+
+// ============================================================
+// Knockback globals (F-004) — exposed for combat integration.
+// Set via opcodes 0x8195-0x819A. Integration point: the knockback
+// calculation in combat.cc (attackComputeDamage) should consult these
+// values to override vanilla knockback behavior.
+// ============================================================
+extern int sfallWeaponKnockbackType;
+extern float sfallWeaponKnockbackValue;
+extern int sfallTargetKnockbackType;
+extern float sfallTargetKnockbackValue;
+extern int sfallAttackerKnockbackType;
+extern float sfallAttackerKnockbackValue;
+
+// ============================================================
+// Hit chance globals (F-005, F-006) — exposed for combat integration.
+// Set via opcodes 0x81C5 (set_critter_hit_chance_mod) and 0x81C6
+// (set_base_hit_chance_mod), 0x81A1 (set_hit_chance_max).
+// Integration point: attackDetermineToHit() in combat.cc should clamp
+// to-hit using sfallHitChanceMax instead of hardcoded 95, and apply
+// sfallHitChanceMod as a bonus/malus.
+// ============================================================
+extern int sfallHitChanceMod;
+extern int sfallHitChanceMax;
+
+// ============================================================
+// Pipboy availability override (F-019).
+// Set via opcode 0x818B (set_pipboy_available).
+// -1 = not set (use engine default/static config).
+//  0 = pipboy forcefully unavailable.
+//  1 = pipboy forcefully available.
+// Integration point: pipboyOpen() in pipboy.cc should check this value
+// alongside the engine's pipboy_available_at_game_start.
+// ============================================================
+extern int gPipboyAvailableOverride;
 
 } // namespace fallout
 

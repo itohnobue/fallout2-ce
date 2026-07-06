@@ -947,7 +947,10 @@ int aiSetDisposition(Object* obj, int disposition)
         return -1;
     }
 
-    if (disposition == -1 || disposition >= 5) {
+    // SFALL: Fix F-057 — was `disposition >= 5` which incorrectly blocked
+    // DISPOSITION_BERKSERK (value 5). Changed to DISPOSITION_COUNT (6) to
+    // allow all valid Disposition enum values.
+    if (disposition == -1 || disposition >= DISPOSITION_COUNT) {
         return -1;
     }
 

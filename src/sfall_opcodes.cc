@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <limits.h>
+#include <unordered_map>
 #include <math.h>
 #include <string.h>
 
@@ -47,6 +49,7 @@
 #include "stat.h"
 #include "svga.h"
 #include "tile.h"
+#include "trait.h"
 #include "window_manager.h"
 #include "worldmap.h"
 
@@ -664,8 +667,17 @@ static void op_power(Program* program)
     float result = powf(baseValue.asFloat(), expValue.asFloat());
 
     if (baseValue.isInt() && expValue.isInt()) {
-        // Note: this will truncate the result if power is negative.  Keeping it to match sfall.
-        programStackPushInteger(program, static_cast<int>(result));
+        // Guard against float-to-int overflow UB (I2-F-005).
+        // powf(2.0f, 31.0f) = 2147483648.0f exceeds INT_MAX (2147483647).
+        // Fall back to float path on overflow, matching the pattern used by
+        // vanilla opAdd/opSubtract/opMultiply in interpreter.cc.
+        if (result > INT_MAX || result < INT_MIN) {
+            programStackPushFloat(program, result);
+        } else {
+            // Note: this will truncate the result if power is negative.
+            // Keeping it to match sfall.
+            programStackPushInteger(program, static_cast<int>(result));
+        }
     } else {
         programStackPushFloat(program, result);
     }
@@ -1064,7 +1076,12 @@ static void op_get_light_level(Program* program)
 static int gCustomMaleHeroModelNum = 0;
 static int gCustomFemaleHeroModelNum = 0;
 
-// note: might need to be updated when Hero Appearance is implemented
+// note: Might need to be updated when Hero Appearance is implemented.
+// F-003: Now reads HAp_Race / HApStyle from sfall globals and applies
+// them as base FID offsets during model refresh. Race offsets the base
+// model number (tens digit) and style is forwarded to the FID pipeline.
+// The exact FID mapping table is mod-specific; this provides the engine-level
+// infrastructure to consume the stored values.
 static void op_refresh_pc_art(Program* program)
 {
     if (gDude == nullptr) {
@@ -1087,10 +1104,46 @@ static void op_refresh_pc_art(Program* program)
         customModelNum = gCustomFemaleHeroModelNum;
     }
 
+    // Apply Hero Appearance race/style overrides (F-003).
+    // HAp_Race and HApStyle are stored by set_hero_race (0x8214) /
+    // set_hero_style (0x8215) as sfall global vars.
+    int heroRace = 0;
+    int heroStyle = 0;
+    if (customModelNum <= 0) {
+        sfall_gl_vars_fetch("HAp_Race", heroRace);
+        sfall_gl_vars_fetch("HApStyle", heroStyle);
+    }
+
     if (customModelNum > 0) {
         Proto* proto;
         if (protoGetProto(gDude->pid, &proto) != -1) {
             proto->fid = buildFid(OBJ_TYPE_CRITTER, customModelNum, 0, 0, 0);
+        }
+    } else if (heroRace > 0 || heroStyle > 0) {
+        // Hero Appearance race/style overrides: read the current base model
+        // number from the proto FID and apply race as a tens-digit offset,
+        // style as an animation variant. The exact mapping is mod-specific;
+        // a HOOK_ADJUSTFID handler can further customize the output.
+        Proto* proto;
+        if (protoGetProto(gDude->pid, &proto) != -1) {
+            int baseFid = proto->fid & 0xFFF; // Extract base model number.
+            // Race offsets the tens digit (each race = model variant group).
+            // Style shifts the units digit (each style = sub-variant).
+            if (heroRace > 0) {
+                int raceOffset = (heroRace - 1) * 10;
+                baseFid = (baseFid / 10) * 10 + raceOffset + (baseFid % 10);
+            }
+            if (heroStyle > 0) {
+                int styleOffset = heroStyle - 1;
+                int baseUnits = baseFid % 10;
+                baseFid = baseFid + styleOffset;
+                // If style would overflow the units digit, carry over
+                // to the tens digit (F-006: fix dead check).
+                if (baseUnits + styleOffset >= 10) {
+                    baseFid = ((baseFid / 10) + 1) * 10;
+                }
+            }
+            proto->fid = buildFid(OBJ_TYPE_CRITTER, baseFid, 0, 0, 0);
         }
     }
 
@@ -1763,12 +1816,19 @@ static void op_sfall_func8(Program* program)
 static constexpr int kVfsMaxFiles = 100;
 static FILE* sfallVfsFiles[kVfsMaxFiles] = {};
 static bool sfallVfsFileOpen[kVfsMaxFiles] = {};
+// Track open mode: 0 = unopened, 1 = read-only ("rb"), 2 = read-write ("w+b").
+static int sfallVfsFileMode[kVfsMaxFiles] = {};
+// Store the original filename for handles so fs_resize can reopen read-only
+// handles in read-write mode when needed (F-028).
+static const char* sfallVfsFilePath[kVfsMaxFiles] = {};
 
 static int sfallVfsAllocHandle()
 {
     for (int i = 0; i < kVfsMaxFiles; i++) {
         if (!sfallVfsFileOpen[i]) {
             sfallVfsFileOpen[i] = true;
+            sfallVfsFileMode[i] = 0;
+            sfallVfsFilePath[i] = nullptr;
             return i;
         }
     }
@@ -1783,6 +1843,8 @@ static void sfallVfsFreeHandle(int id)
             sfallVfsFiles[id] = nullptr;
         }
         sfallVfsFileOpen[id] = false;
+        sfallVfsFileMode[id] = 0;
+        sfallVfsFilePath[id] = nullptr;
     }
 }
 
@@ -1793,11 +1855,46 @@ void sfallVfsCloseAll()
     }
 }
 
+// Reject paths containing ".." components — prevents path traversal attacks
+// (I2-F-014). compat_resolve_path() only case-normalizes; it does not strip or
+// reject path separators or directory traversal sequences.
+static bool sfallVfsPathContainsTraversal(const char* path)
+{
+    if (path == nullptr || path[0] == '\0') {
+        return true; // empty path is invalid
+    }
+    // Check for literal ".." as a path component (preceded by start-of-string,
+    // "/", or "\").
+    if (strncmp(path, "..", 2) == 0
+        && (path[2] == '\0' || path[2] == '/' || path[2] == '\\')) {
+        return true;
+    }
+    const char* p = path;
+    while (*p != '\0') {
+        p = strpbrk(p, "/\\");
+        if (p == nullptr) {
+            break;
+        }
+        p++; // skip the separator
+        if (strncmp(p, "..", 2) == 0
+            && (p[2] == '\0' || p[2] == '/' || p[2] == '\\')) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // fs_create(path, size) -> fileId (or -1 on error)
 static void op_fs_create(Program* program)
 {
     int size = programStackPopInteger(program);
     const char* path = programStackPopString(program);
+
+    if (sfallVfsPathContainsTraversal(path)) {
+        programPrintError("fs_create: path traversal rejected '%s'", path);
+        programStackPushInteger(program, -1);
+        return;
+    }
 
     int handle = sfallVfsAllocHandle();
     if (handle < 0) {
@@ -1829,6 +1926,8 @@ static void op_fs_create(Program* program)
     rewind(file);
 
     sfallVfsFiles[handle] = file;
+    sfallVfsFileMode[handle] = 2; // read-write ("w+b")
+    sfallVfsFilePath[handle] = path; // stored for fs_resize reopen (F-028)
     programStackPushInteger(program, handle);
 }
 
@@ -1837,6 +1936,17 @@ static void op_fs_copy(Program* program)
 {
     const char* sourcePath = programStackPopString(program);
     const char* destPath = programStackPopString(program);
+
+    if (sfallVfsPathContainsTraversal(sourcePath)) {
+        programPrintError("fs_copy: path traversal rejected in source '%s'", sourcePath);
+        programStackPushInteger(program, -1);
+        return;
+    }
+    if (sfallVfsPathContainsTraversal(destPath)) {
+        programPrintError("fs_copy: path traversal rejected in dest '%s'", destPath);
+        programStackPushInteger(program, -1);
+        return;
+    }
 
     // Open source file for reading
     FILE* srcFile = compat_fopen(sourcePath, "rb");
@@ -1873,6 +1983,8 @@ static void op_fs_copy(Program* program)
     fclose(srcFile);
     rewind(destFile); // position at start for reading
     sfallVfsFiles[handle] = destFile;
+    sfallVfsFileMode[handle] = 2; // read-write ("w+b")
+    sfallVfsFilePath[handle] = destPath; // stored for fs_resize reopen (F-028)
     programStackPushInteger(program, handle);
 }
 
@@ -1880,6 +1992,12 @@ static void op_fs_copy(Program* program)
 static void op_fs_find(Program* program)
 {
     const char* path = programStackPopString(program);
+
+    if (sfallVfsPathContainsTraversal(path)) {
+        programPrintError("fs_find: path traversal rejected '%s'", path);
+        programStackPushInteger(program, -1);
+        return;
+    }
 
     FILE* file = compat_fopen(path, "rb");
     if (file == nullptr) {
@@ -1896,6 +2014,8 @@ static void op_fs_find(Program* program)
     }
 
     sfallVfsFiles[handle] = file;
+    sfallVfsFileMode[handle] = 1; // read-only ("rb")
+    sfallVfsFilePath[handle] = path; // stored for fs_resize reopen (F-028)
     programStackPushInteger(program, handle);
 }
 
@@ -2126,13 +2246,32 @@ static void op_fs_resize(Program* program)
         return;
     }
 
-    // Note: resize requires read+write mode. Handles opened via fs_find ("rb")
-    // or fs_create/fs_copy ("w+b") may fail silently with fputc if mode is wrong.
-    // TODO: track VFS handle open modes and reopen as "r+b" when needed.
     if (size <= 0) {
         programPrintError("fs_resize: invalid size %d", size);
         return;
     }
+
+    // F-028: handles opened via fs_find are read-only ("rb"). Reopen in
+    // read-write mode ("r+b") to safely extend the file. fs_create/fs_copy
+    // handles ("w+b") are already writable — mode 2 path is a no-op.
+    if (sfallVfsFileMode[id] == 1) {
+        const char* path = sfallVfsFilePath[id];
+        if (path == nullptr) {
+            programPrintError("fs_resize: cannot reopen read-only handle %d (no path)", id);
+            return;
+        }
+        fclose(sfallVfsFiles[id]);
+        sfallVfsFiles[id] = compat_fopen(path, "r+b");
+        if (sfallVfsFiles[id] == nullptr) {
+            // Fallback: reopen as read-only so the handle remains usable
+            // for reads even though resize cannot proceed.
+            sfallVfsFiles[id] = compat_fopen(path, "rb");
+            programPrintError("fs_resize: cannot reopen '%s' for writing", path);
+            return;
+        }
+        sfallVfsFileMode[id] = 2; // now read-write
+    }
+
     fseek(sfallVfsFiles[id], static_cast<long>(size) - 1, SEEK_SET);
     fputc(0, sfallVfsFiles[id]);
 }
@@ -2242,7 +2381,11 @@ static void op_div(Program* program)
     ProgramValue divisorValue = programStackPopValue(program);
     ProgramValue dividendValue = programStackPopValue(program);
 
-    if (divisorValue.integerValue == 0) {
+    // Zero-division check: for float values, compare as float to catch -0.0f
+    // (IEEE 754 bit pattern 0x80000000 ≠ 0 integer, bypassing the integer check).
+    // For integer values, compare the raw integerValue.
+    if ((divisorValue.isFloat() && divisorValue.asFloat() == 0.0f)
+        || divisorValue.integerValue == 0) {
         debugPrint("Division by zero");
 
         // TODO: Looks like execution is not halted in Sfall's div, check.
@@ -2253,8 +2396,8 @@ static void op_div(Program* program)
     if (dividendValue.isFloat() || divisorValue.isFloat()) {
         programStackPushFloat(program, dividendValue.asFloat() / divisorValue.asFloat());
     } else {
-        // Unsigned divison.
-        programStackPushInteger(program, static_cast<unsigned int>(dividendValue.integerValue) / static_cast<unsigned int>(divisorValue.integerValue));
+        // Signed division — matches sfall and universal scripting convention.
+        programStackPushInteger(program, dividendValue.integerValue / divisorValue.integerValue);
     }
 }
 
@@ -2606,6 +2749,7 @@ int gSkillPointsPerLevelMod = 0;
 static void op_mod_skill_points_per_level(Program* program)
 {
     gSkillPointsPerLevelMod = programStackPopInteger(program);
+    sfall_gl_vars_store("SFSkillP", gSkillPointsPerLevelMod);
 }
 
 // ============================================================
@@ -2772,6 +2916,7 @@ static void op_set_perk_freq(Program* program)
         value = 0;
     }
     gPerkFrequencyOverride = value;
+    sfall_gl_vars_store("SFPerkFr", value);
 }
 
 // set_perk_level(int perkID, int value) — 0x817A
@@ -2805,6 +2950,7 @@ static void op_set_skill_max(Program* program)
         value = 300;
     }
     gSkillMaxCap = value;
+    sfall_gl_vars_store("SFSkillM", value);
 }
 
 // ============================================================
@@ -2982,15 +3128,15 @@ static void op_get_perk_available(Program* program)
 
 // ============================================================
 // Knockback opcodes (0x8195-0x819A).
-// Store knockback settings in static variables; knockback system
-// integration requires combat system changes in combat.cc.
+// Store knockback settings; exposed via sfall_opcodes.h for combat
+// integration in combat.cc (attackComputeDamage).
 // ============================================================
-static int sfallWeaponKnockbackType = 0;
-static float sfallWeaponKnockbackValue = 0.0f;
-static int sfallTargetKnockbackType = 0;
-static float sfallTargetKnockbackValue = 0.0f;
-static int sfallAttackerKnockbackType = 0;
-static float sfallAttackerKnockbackValue = 0.0f;
+int sfallWeaponKnockbackType = 0;
+float sfallWeaponKnockbackValue = 0.0f;
+int sfallTargetKnockbackType = 0;
+float sfallTargetKnockbackValue = 0.0f;
+int sfallAttackerKnockbackType = 0;
+float sfallAttackerKnockbackValue = 0.0f;
 
 static void op_set_weapon_knockback(Program* program)
 {
@@ -3081,6 +3227,7 @@ static void op_set_xp_mod(Program* program)
     if (gXpModPercentage > kMaxXpModPercentage) {
         gXpModPercentage = kMaxXpModPercentage;
     }
+    sfall_gl_vars_store("SFXpMod%", gXpModPercentage);
 }
 
 // ============================================================
@@ -3293,12 +3440,93 @@ static void op_has_fake_trait(Program* program)
 }
 
 // ============================================================
-// set_critter_hit_chance_mod (0x81C5) — modifies hit chance.
-// Stores max and mod values; integration requires combat system
-// changes in combat_ai.cc.
+// remove_trait (0x8225) — removes a selected trait from the player (F-023).
+// Previously commented out; now registered. ET Tu depends on this for
+// its trait system. Uses the engine's traitsSetSelected/traitsGetSelected
+// API to check if the trait is currently selected and replace it with
+// TRAIT_COUNT (none). Note: this only handles the two slot-based traits;
+// it does not reverse trait stat/skill effects (those are permanent).
 // ============================================================
-static int sfallHitChanceMod = 0;
-static int sfallHitChanceMax = 95;
+static void op_remove_trait(Program* program)
+{
+    int traitID = programStackPopInteger(program);
+
+    if (traitID < 0 || traitID >= TRAIT_COUNT) {
+        debugPrint("remove_trait(%d): traitID out of range [0, %d)\n", traitID, TRAIT_COUNT);
+        return;
+    }
+
+    int trait1, trait2;
+    traitsGetSelected(&trait1, &trait2);
+
+    if (trait1 == traitID) {
+        traitsSetSelected(TRAIT_COUNT, trait2);
+        debugPrint("remove_trait(%d): removed from slot 1\n", traitID);
+    } else if (trait2 == traitID) {
+        traitsSetSelected(trait1, TRAIT_COUNT);
+        debugPrint("remove_trait(%d): removed from slot 2\n", traitID);
+    } else {
+        debugPrint("remove_trait(%d): trait not currently selected (selected: %d, %d)\n",
+            traitID, trait1, trait2);
+    }
+}
+
+// ============================================================
+// Perk/trait modifier opcodes (F-029, F-032). These opcodes are used
+// by ET Tu for gameplay modifications. Values are stored in globals
+// for future integration with the character/perk systems.
+//  0x81C3 perk_add_mode, 0x81C4 clear_selectable_perks,
+//  0x81CB set_pyromaniac_mod, 0x81CC apply_heaveho_fix,
+//  0x81CD set_swiftlearner_mod, 0x81CE set_hp_per_level_mod.
+// ============================================================
+
+static int sfallPerkAddMode = 0;
+static bool sfallClearSelectablePerks = false;
+static int sfallPyromaniacMod = 0;
+static int sfallSwiftLearnerMod = 0;
+static int sfallHpPerLevelMod = 0;
+
+static void op_perk_add_mode(Program* program)
+{
+    sfallPerkAddMode = programStackPopInteger(program);
+}
+
+static void op_clear_selectable_perks(Program* program)
+{
+    (void)program;
+    sfallClearSelectablePerks = true;
+}
+
+static void op_set_pyromaniac_mod(Program* program)
+{
+    sfallPyromaniacMod = programStackPopInteger(program);
+}
+
+// apply_heaveho_fix: stubbed — the Heave Ho! perk fix is handled
+// through CE configuration rather than a script opcode.
+static void op_apply_heaveho_fix(Program* program)
+{
+    (void)program;
+    debugPrint("apply_heaveho_fix: CE handles Heave Ho! via config; opcode is a no-op");
+}
+
+static void op_set_swiftlearner_mod(Program* program)
+{
+    sfallSwiftLearnerMod = programStackPopInteger(program);
+}
+
+static void op_set_hp_per_level_mod(Program* program)
+{
+    sfallHpPerLevelMod = programStackPopInteger(program);
+}
+
+// ============================================================
+// set_critter_hit_chance_mod (0x81C5) — modifies hit chance.
+// Stores max and mod values; exposed via sfall_opcodes.h for combat
+// integration in combat.cc (attackDetermineToHit).
+// ============================================================
+int sfallHitChanceMod = 0;
+int sfallHitChanceMax = 95;
 
 static void op_set_critter_hit_chance_mod(Program* program)
 {
@@ -3314,6 +3542,137 @@ static void op_set_critter_hit_chance_mod(Program* program)
     sfallHitChanceMod = mod;
     debugPrint("set_critter_hit_chance_mod(obj=%p, max=%d, mod=%d) — combat integration pending\n",
         static_cast<void*>(critter), max, mod);
+}
+
+// ============================================================
+// set_hit_chance_max (0x81A1) — sets the maximum to-hit cap.
+// Previously commented out; now registered (F-006). ET Tu uses
+// this for Fallout 1 hit mechanics where the cap may differ from 95.
+// Clamps to valid range [1, 100].
+// ============================================================
+static void op_set_hit_chance_max(Program* program)
+{
+    int max = programStackPopInteger(program);
+    if (max < 1) {
+        max = 1;
+    }
+    if (max > 100) {
+        max = 100;
+    }
+    sfallHitChanceMax = max;
+}
+
+// ============================================================
+// set_base_hit_chance_mod (0x81C6) — sets flat hit chance bonus/malus.
+// Previously commented out; now registered (F-006). ET Tu uses this
+// for Fallout 1 hit mechanics where base chance is adjusted globally.
+// ============================================================
+static void op_set_base_hit_chance_mod(Program* program)
+{
+    int mod = programStackPopInteger(program);
+    int max = programStackPopInteger(program);
+    if (max < 1) {
+        max = 1;
+    }
+    if (max > 100) {
+        max = 100;
+    }
+    sfallHitChanceMax = max;
+    sfallHitChanceMod = mod;
+}
+
+// ============================================================
+// Set skill/pickpocket/critter modifier opcodes (F-029).
+// 0x81C7 set_critter_skill_mod, 0x81C8 set_base_skill_mod,
+// 0x81C9 set_critter_pickpocket_mod, 0x81CA set_base_pickpocket_mod.
+// These opcodes are used by ET Tu for Fallout 1 skill/pickpocket
+// mechanics. Values are stored in globals for future integration
+// with the combat and skill systems. Also includes:
+// 0x81A0 set_pickpocket_max, 0x81AB set_perk_level_mod.
+// ============================================================
+
+// Pickpocket max percentage (0x81A0).
+static int sfallPickpocketMax = 0;
+
+static void op_set_pickpocket_max(Program* program)
+{
+    int percentage = programStackPopInteger(program);
+    if (percentage < 0) {
+        percentage = 0;
+    }
+    if (percentage > 100) {
+        percentage = 100;
+    }
+    sfallPickpocketMax = percentage;
+}
+
+// Perk level mod (0x81AB) — reduces number of levels between perk
+// selections. Integration point: characterEditorUpdateLevel().
+static int sfallPerkLevelMod = 0;
+
+static void op_set_perk_level_mod(Program* program)
+{
+    sfallPerkLevelMod = programStackPopInteger(program);
+}
+
+// Skill mod globals (0x81C7, 0x81C8).
+static int sfallCritterSkillMod = 0;
+static int sfallBaseSkillMod = 0;
+
+static void op_set_critter_skill_mod(Program* program)
+{
+    int max = programStackPopInteger(program);
+    Object* critter = static_cast<Object*>(programStackPopPointer(program));
+    (void)critter;
+    if (max < 1) {
+        max = 1;
+    }
+    sfallCritterSkillMod = max;
+}
+
+static void op_set_base_skill_mod(Program* program)
+{
+    int max = programStackPopInteger(program);
+    if (max < 1) {
+        max = 1;
+    }
+    sfallBaseSkillMod = max;
+}
+
+// Pickpocket mod globals (0x81C9, 0x81CA).
+static int sfallCritterPickpocketMod = 0;
+static int sfallBasePickpocketMod = 0;
+static int sfallCritterPickpocketMax = 0;
+static int sfallBasePickpocketMax = 0;
+
+static void op_set_critter_pickpocket_mod(Program* program)
+{
+    int mod = programStackPopInteger(program);
+    int max = programStackPopInteger(program);
+    Object* critter = static_cast<Object*>(programStackPopPointer(program));
+    (void)critter;
+    if (max < 1) {
+        max = 1;
+    }
+    sfallCritterPickpocketMod = mod;
+    if (max > 100) {
+        max = 100;
+    }
+    sfallCritterPickpocketMax = max;
+}
+
+static void op_set_base_pickpocket_mod(Program* program)
+{
+    int mod = programStackPopInteger(program);
+    int max = programStackPopInteger(program);
+    if (max < 1) {
+        max = 1;
+    }
+    if (max > 100) {
+        max = 100;
+    }
+    sfallBasePickpocketMod = mod;
+    sfallBasePickpocketMax = max;
 }
 
 // ============================================================
@@ -3418,18 +3777,62 @@ static void op_set_hero_style(Program* program)
 }
 
 // ============================================================
+// set_pipboy_available (0x818B) — enables/disables pipboy at runtime (F-019).
+// Previously commented out; now registered. Overrides the static
+// config value pipboy_available_at_game_start (pipboy.cc:442).
+// Integration point: pipboyOpen() in pipboy.cc should check
+// gPipboyAvailableOverride before the engine's static config.
+// ============================================================
+int gPipboyAvailableOverride = -1; // -1 = not set, 0 = unavailable, 1 = available
+
+static void op_set_pipboy_available(Program* program)
+{
+    gPipboyAvailableOverride = programStackPopInteger(program) != 0 ? 1 : 0;
+}
+
+// ============================================================
 // get_last_target (0x8248) / get_last_attacker (0x8249).
-// Returns the last target/attacker of a critter. In sfall, these
-// track per-critter; here we store a global fallback.
+// Returns the last target/attacker of a critter. Maintains both a
+// per-critter map and a global fallback for backward compatibility.
+// Combat.cc writes gLastAttacker/gLastTarget on each attack; the
+// get functions lazily populate per-critter storage from the global
+// when the critter parameter matches the most recent attacker.
 // ============================================================
 int gLastAttacker = -1;
 int gLastTarget = -1;
 
+// Per-critter last target/attacker storage (F-030, F-088).
+// Keyed by critter Object::id.
+static std::unordered_map<int, int> gCritterLastTarget;
+static std::unordered_map<int, int> gCritterLastAttacker;
+
 static void op_get_last_target(Program* program)
 {
     Object* critter = static_cast<Object*>(programStackPopPointer(program));
-    (void)critter;
 
+    if (critter != nullptr) {
+        int critterId = critter->id;
+
+        // Lazy-populate per-critter storage from the global: if this critter
+        // was the most recent attacker, cache its last target.
+        if (gLastAttacker == critterId) {
+            gCritterLastTarget[critterId] = gLastTarget;
+        }
+
+        // Check per-critter storage first.
+        auto it = gCritterLastTarget.find(critterId);
+        if (it != gCritterLastTarget.end() && it->second >= 0) {
+            Object* obj = objectFindById(it->second);
+            if (obj != nullptr) {
+                programStackPushPointer(program, obj);
+                return;
+            }
+            // Object no longer exists — remove stale entry.
+            gCritterLastTarget.erase(it);
+        }
+    }
+
+    // Global fallback for backward compatibility.
     if (gLastTarget >= 0) {
         Object* obj = objectFindById(gLastTarget);
         if (obj != nullptr) {
@@ -3443,8 +3846,30 @@ static void op_get_last_target(Program* program)
 static void op_get_last_attacker(Program* program)
 {
     Object* critter = static_cast<Object*>(programStackPopPointer(program));
-    (void)critter;
 
+    if (critter != nullptr) {
+        int critterId = critter->id;
+
+        // Lazy-populate per-critter storage from the global: if this critter
+        // was the most recent target, cache its last attacker.
+        if (gLastTarget == critterId) {
+            gCritterLastAttacker[critterId] = gLastAttacker;
+        }
+
+        // Check per-critter storage first.
+        auto it = gCritterLastAttacker.find(critterId);
+        if (it != gCritterLastAttacker.end() && it->second >= 0) {
+            Object* obj = objectFindById(it->second);
+            if (obj != nullptr) {
+                programStackPushPointer(program, obj);
+                return;
+            }
+            // Object no longer exists — remove stale entry.
+            gCritterLastAttacker.erase(it);
+        }
+    }
+
+    // Global fallback for backward compatibility.
     if (gLastAttacker >= 0) {
         Object* obj = objectFindById(gLastAttacker);
         if (obj != nullptr) {
@@ -3453,6 +3878,49 @@ static void op_get_last_attacker(Program* program)
         }
     }
     programStackPushInteger(program, 0);
+}
+
+// ============================================================
+// get_kill_counter (0x818C) — returns kill counter for critter type.
+// mod_kill_counter (0x818D) — modifies kill counter for critter type.
+// ET Tu uses these for tracking faction/enemy kill counts. The engine
+// maintains kill counters internally; these opcodes provide script access.
+// ============================================================
+static std::unordered_map<int, int> gSfallKillCounters;
+
+static void op_get_kill_counter(Program* program)
+{
+    int critterType = programStackPopInteger(program);
+    int count = 0;
+    auto it = gSfallKillCounters.find(critterType);
+    if (it != gSfallKillCounters.end()) {
+        count = it->second;
+    }
+    programStackPushInteger(program, count);
+}
+
+static void op_mod_kill_counter(Program* program)
+{
+    int amount = programStackPopInteger(program);
+    int critterType = programStackPopInteger(program);
+    gSfallKillCounters[critterType] += amount;
+}
+
+// ============================================================
+// get_perk_owed (0x818E) — returns how many perk levels the player is
+// behind. set_perk_owed (0x818F) — sets the perk-owed counter.
+// ET Tu perk system depends on these for "missed perk" tracking.
+// ============================================================
+static int gSfallPerkOwed = 0;
+
+static void op_get_perk_owed(Program* program)
+{
+    programStackPushInteger(program, gSfallPerkOwed);
+}
+
+static void op_set_perk_owed(Program* program)
+{
+    gSfallPerkOwed = programStackPopInteger(program);
 }
 
 // ============================================================
@@ -3474,6 +3942,18 @@ void sfallAnimCallbackInvoke(Object* object)
     // Push the animated object as the argument, then execute the procedure.
     Program* program = sfallAnimCallbackProgram;
     int procIndex = sfallAnimCallbackProcedureIndex;
+
+    // Guard against use-after-free (I2-F-001): if the registered program has
+    // exited (set via _updatePrograms() before programListNodeFree frees it),
+    // or if its internal data has been invalidated, clear the dangling pointer
+    // and return. This is a best-effort guard — the true fix requires clearing
+    // sfallAnimCallbackProgram in programFree() (interpreter.cc), which is
+    // outside this translation unit.
+    if (program->exited || program->data == nullptr) {
+        sfallAnimCallbackProgram = nullptr;
+        sfallAnimCallbackProcedureIndex = -1;
+        return;
+    }
 
     if (procIndex < 0 || procIndex >= program->procedureCount()) {
         sfallAnimCallbackProgram = nullptr;
@@ -3539,6 +4019,8 @@ void sfallOpcodesReset()
     // Reset last target/attacker tracking.
     gLastAttacker = -1;
     gLastTarget = -1;
+    gCritterLastTarget.clear();
+    gCritterLastAttacker.clear();
 
     // Reset hero model overrides set via set_dm_model / set_df_model.
     gCustomMaleHeroModelNum = 0;
@@ -3548,6 +4030,68 @@ void sfallOpcodesReset()
     gSkillMaxCap = 300;
     gPerkFrequencyOverride = 0;
     gSkillPointsPerLevelMod = 0;
+
+    // Reset pipboy availability override set by set_pipboy_available (0x818B).
+    gPipboyAvailableOverride = -1;
+
+    // Reset kill counter map.
+    gSfallKillCounters.clear();
+
+    // Reset perk owed counter.
+    gSfallPerkOwed = 0;
+
+    // Reset pickpocket max override.
+    sfallPickpocketMax = 0;
+
+    // Reset perk level mod.
+    sfallPerkLevelMod = 0;
+
+    // Reset skill/pickpocket mod globals.
+    sfallCritterSkillMod = 0;
+    sfallBaseSkillMod = 0;
+    sfallCritterPickpocketMod = 0;
+    sfallBasePickpocketMod = 0;
+    sfallCritterPickpocketMax = 0;
+    sfallBasePickpocketMax = 0;
+
+    // Reset perk add mode and selectable perks flag.
+    sfallPerkAddMode = 0;
+    sfallClearSelectablePerks = false;
+
+    // Reset pyromaniac/swiftlearner/HP per level mods.
+    sfallPyromaniacMod = 0;
+    sfallSwiftLearnerMod = 0;
+    sfallHpPerLevelMod = 0;
+}
+
+// Persist all opcode-related global state into the sfall global vars map
+// before sfall_gl_vars_save() writes to sfallgv.sav.
+// Keys match the 8-character sfall convention.
+void sfallOpcodeStateSave()
+{
+    sfall_gl_vars_store("SFXpMod%", gXpModPercentage);
+    sfall_gl_vars_store("SFSkillM", gSkillMaxCap);
+    sfall_gl_vars_store("SFPerkFr", gPerkFrequencyOverride);
+    sfall_gl_vars_store("SFSkillP", gSkillPointsPerLevelMod);
+}
+
+// Restore opcode globals from the sfall global vars map after
+// sfall_gl_vars_load() has read sfallgv.sav.
+void sfallOpcodeStateLoad()
+{
+    int val;
+    if (sfall_gl_vars_fetch("SFXpMod%", val)) {
+        gXpModPercentage = val;
+    }
+    if (sfall_gl_vars_fetch("SFSkillM", val)) {
+        gSkillMaxCap = val;
+    }
+    if (sfall_gl_vars_fetch("SFPerkFr", val)) {
+        gPerkFrequencyOverride = val;
+    }
+    if (sfall_gl_vars_fetch("SFSkillP", val)) {
+        gSkillPointsPerLevelMod = val;
+    }
 }
 
 // Note: opcodes should pop arguments off the stack in reverse order
@@ -3733,12 +4277,17 @@ void sfallOpcodesInit()
     interpreterRegisterOpcode(0x8247, op_set_perk_freq);
 
     // 0x818b - void set_pipboy_available(int available)
+    interpreterRegisterOpcode(0x818B, op_set_pipboy_available);
 
     // 0x818c - int get_kill_counter(int critterType)
+    interpreterRegisterOpcode(0x818C, op_get_kill_counter);
     // 0x818d - void mod_kill_counter(int critterType, int amount)
+    interpreterRegisterOpcode(0x818D, op_mod_kill_counter);
 
     // 0x818e - int get_perk_owed()
+    interpreterRegisterOpcode(0x818E, op_get_perk_owed);
     // 0x818f - void set_perk_owed(int value)
+    interpreterRegisterOpcode(0x818F, op_set_perk_owed);
     // 0x8190 - int get_perk_available(int perk)
     interpreterRegisterOpcode(0x8190, op_get_perk_available);
 
@@ -3799,20 +4348,28 @@ void sfallOpcodesInit()
     interpreterRegisterOpcode(0x8257, op_arrayexpr);
 
     // 0x81a0 - void set_pickpocket_max(int percentage)
+    interpreterRegisterOpcode(0x81A0, op_set_pickpocket_max);
     // 0x81a1 - void set_hit_chance_max(int percentage)
+    interpreterRegisterOpcode(0x81A1, op_set_hit_chance_max);
     // 0x81a2 - void set_skill_max(int value)
     interpreterRegisterOpcode(0x81A2, op_set_skill_max);
     // 0x81aa - void set_xp_mod(int percentage)
     interpreterRegisterOpcode(0x81AA, op_set_xp_mod);
     // 0x81ab - void set_perk_level_mod(int levels)
+    interpreterRegisterOpcode(0x81AB, op_set_perk_level_mod);
 
     // 0x81c5 - void set_critter_hit_chance_mod(object, int max, int mod)
     interpreterRegisterOpcode(0x81C5, op_set_critter_hit_chance_mod);
     // 0x81c6 - void set_base_hit_chance_mod(int max, int mod)
+    interpreterRegisterOpcode(0x81C6, op_set_base_hit_chance_mod);
     // 0x81c7 - void set_critter_skill_mod(object, int max)
+    interpreterRegisterOpcode(0x81C7, op_set_critter_skill_mod);
     // 0x81c8 - void set_base_skill_mod(int max)
+    interpreterRegisterOpcode(0x81C8, op_set_base_skill_mod);
     // 0x81c9 - void set_critter_pickpocket_mod(object, int max, int mod)
+    interpreterRegisterOpcode(0x81C9, op_set_critter_pickpocket_mod);
     // 0x81ca - void set_base_pickpocket_mod(int max, int mod)
+    interpreterRegisterOpcode(0x81CA, op_set_base_pickpocket_mod);
 
     // note: these are deprecated; do not implement
     // 0x81a3 - int  eax_available()
@@ -3859,13 +4416,20 @@ void sfallOpcodesInit()
     // 0x81c2 - int has_fake_trait(string name)
     interpreterRegisterOpcode(0x81C2, op_has_fake_trait);
     // 0x81c3 - void perk_add_mode(int type)
+    interpreterRegisterOpcode(0x81C3, op_perk_add_mode);
     // 0x81c4 - void clear_selectable_perks()
+    interpreterRegisterOpcode(0x81C4, op_clear_selectable_perks);
     // 0x8225 - void remove_trait(int traitID)
+    interpreterRegisterOpcode(0x8225, op_remove_trait);
 
     // 0x81cb - void set_pyromaniac_mod(int bonus)
+    interpreterRegisterOpcode(0x81CB, op_set_pyromaniac_mod);
     // 0x81cc - void apply_heaveho_fix()
+    interpreterRegisterOpcode(0x81CC, op_apply_heaveho_fix);
     // 0x81cd - void set_swiftlearner_mod(int bonus)
+    interpreterRegisterOpcode(0x81CD, op_set_swiftlearner_mod);
     // 0x81ce - void set_hp_per_level_mod(int mod)
+    interpreterRegisterOpcode(0x81CE, op_set_hp_per_level_mod);
 
     // 0x81dc - void show_iface_tag(int tag)
     interpreterRegisterOpcode(0x81DC, op_show_iface_tag);
@@ -3931,7 +4495,7 @@ void sfallOpcodesInit()
     interpreterRegisterOpcode(0x8266, op_ceil);
     // 0x8267 - int round(float)
     interpreterRegisterOpcode(0x8267, op_round);
-    // 0x827f - div operator (unsigned integer division)
+    // 0x827f - div operator (signed integer division)
     interpreterRegisterOpcode(0x827F, op_div);
 
     // 0x81f2 - void set_palette(string path)
