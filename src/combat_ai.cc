@@ -1833,10 +1833,21 @@ static Object* _ai_danger_source(Object* a1)
                 }
 
                 if (candidate != nullptr) {
-                    ScriptHookCall hook(static_cast<HookType>(7), 1, { a1, candidate });
+                    ScriptHookCall hook(HOOK_FINDTARGET, 1, { a1, candidate });
                     hook.call();
                     if (hook.numReturnValues() > 0) {
-                        candidate = hook.getReturnValueAt(0).asObject();
+                        Object* hookCandidate = hook.getReturnValueAt(0).asObject();
+                        // Validate that the script-returned override is a critter.
+                        // Non-critter objects (items, scenery, etc.) would cause
+                        // undefined behavior in downstream combat code that expects
+                        // critter-specific fields (combat.results, team, data.critter).
+                        if (hookCandidate != nullptr && PID_TYPE(hookCandidate->pid) == OBJ_TYPE_CRITTER) {
+                            candidate = hookCandidate;
+                        } else if (hookCandidate != nullptr) {
+                            debugPrint("HOOK_FINDTARGET: script returned non-critter object (pid=%d), ignoring override",
+                                hookCandidate->pid);
+                        }
+                        // nullptr from script = no override (keep engine candidate).
                     }
                     return candidate;
                 }
@@ -1860,10 +1871,16 @@ static Object* _ai_danger_source(Object* a1)
     } else {
         if ((whoHitMe->data.critter.combat.results & DAM_DEAD) == 0) {
             if (attackWho == ATTACK_WHO_WHOMEVER || attackWho == -1) {
-                ScriptHookCall hook(static_cast<HookType>(7), 1, { a1, whoHitMe });
+                ScriptHookCall hook(HOOK_FINDTARGET, 1, { a1, whoHitMe });
                 hook.call();
                 if (hook.numReturnValues() > 0) {
-                    whoHitMe = hook.getReturnValueAt(0).asObject();
+                    Object* hookCandidate = hook.getReturnValueAt(0).asObject();
+                    if (hookCandidate != nullptr && PID_TYPE(hookCandidate->pid) == OBJ_TYPE_CRITTER) {
+                        whoHitMe = hookCandidate;
+                    } else if (hookCandidate != nullptr) {
+                        debugPrint("HOOK_FINDTARGET: script returned non-critter object (pid=%d), ignoring override",
+                            hookCandidate->pid);
+                    }
                 }
                 return whoHitMe;
             }
@@ -1914,10 +1931,17 @@ static Object* _ai_danger_source(Object* a1)
         }
     }
 
-    ScriptHookCall hook(static_cast<HookType>(7), 1, { a1, result });
+    ScriptHookCall hook(HOOK_FINDTARGET, 1, { a1, result });
     hook.call();
     if (hook.numReturnValues() > 0) {
-        result = hook.getReturnValueAt(0).asObject();
+        Object* hookCandidate = hook.getReturnValueAt(0).asObject();
+        if (hookCandidate != nullptr && PID_TYPE(hookCandidate->pid) == OBJ_TYPE_CRITTER) {
+            result = hookCandidate;
+        } else if (hookCandidate != nullptr) {
+            debugPrint("HOOK_FINDTARGET: script returned non-critter object (pid=%d), ignoring override",
+                hookCandidate->pid);
+        }
+        // nullptr from script = no override (keep engine result, even if nullptr).
     }
 
     return result;
@@ -2021,10 +2045,18 @@ static bool aiHaveAmmo(Object* critter, Object* weapon, Object** ammoPtr)
 // 0x42938C
 static bool _caiHasWeapPrefType(AiPacket* ai, int attackType)
 {
-    int bestWeapon = ai->best_weapon + 1;
+    // Validate best_weapon against BEST_WEAPON_COUNT to prevent OOB access
+    // into _weapPrefOrderings (dim[0] = BEST_WEAPON_COUNT + 1).
+    // ai->best_weapon comes from an ai.txt file parsed at runtime; a
+    // malformed/corrupted ai.txt can produce values outside [0, BEST_WEAPON_COUNT).
+    int bestWeapon = ai->best_weapon;
+    if (bestWeapon < 0 || bestWeapon >= BEST_WEAPON_COUNT) {
+        return false;
+    }
+    int prefIndex = bestWeapon + 1;
 
     for (int index = 0; index < ATTACK_TYPE_COUNT; index++) {
-        if (attackType == _weapPrefOrderings[bestWeapon][index]) {
+        if (attackType == _weapPrefOrderings[prefIndex][index]) {
             return true;
         }
     }
@@ -3965,6 +3997,38 @@ void _combatai_delete_critter(Object* obj)
             break;
         }
     }
+}
+
+// Public accessor: returns AI packet state flags for the given critter.
+// Returns 0 if the critter has no AI packet assigned.
+// The flags encode the packet number and key combat mode fields.
+int aiPacketGetFlags(Object* obj)
+{
+    if (obj == nullptr) {
+        return 0;
+    }
+    AiPacket* ai = aiGetPacket(obj);
+    if (ai == nullptr) {
+        return 0;
+    }
+    // Pack packet_num in the upper 16 bits and disposition in lower bits
+    // as a simple composite flags word. The packet_num uniquely identifies
+    // the AI configuration; disposition captures the core behavior stance.
+    return (ai->packet_num << 16) | (ai->disposition & 0xFFFF);
+}
+
+// Public accessor: returns the current AI procedure index for the given critter.
+// Returns -1: full AI procedure tracking requires state machine integration
+// that is not yet implemented in the CE AI pipeline. The procedure index would
+// identify which phase of the AI decision cycle the critter is currently in
+// (e.g., targeting, moving, attacking, fleeing).
+int aiPacketGetProcedure(Object* obj)
+{
+    (void)obj;
+    // TODO: Integrate with AI state machine — when the critter's current
+    // combat AI action (move, attack, flee, etc.) is tracked, return the
+    // corresponding procedure index here.
+    return -1;
 }
 
 } // namespace fallout

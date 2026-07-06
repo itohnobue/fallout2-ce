@@ -516,7 +516,7 @@ public:
             }
             pairs.resize(newLen);
         } else if (newLen < 0) {
-            if (newLen < (ARRAY_ACTION_SHUFFLE - 2)) return;
+            if (newLen < (ARRAY_ACTION_SHUFFLE - 4)) return;
             MapSort(newLen);
         }
     }

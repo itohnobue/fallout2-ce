@@ -4733,6 +4733,16 @@ static int attackDetermineToHit(Object* attacker, int tile, Object* defender, in
         }
     }
 
+    // Apply defender-side per-critter hit chance modifier (set_critter_hit_chance_mod on defender).
+    // Positive mod on the defender makes them harder to hit (subtract from toHit).
+    {
+        int defenderMod = 0;
+        int ignoredMax = 0;
+        if (sfallGetCritterHitChanceMod(defender, defenderMod, ignoredMax)) {
+            toHit -= defenderMod;
+        }
+    }
+
     // SFALL: Use script-controlled hit chance cap instead of hardcoded 95.
     // Default is 95 (vanilla match).
     if (toHit > hitChanceMax) {

@@ -1614,10 +1614,19 @@ static int _anim_set_end(int animationSequenceIndex)
     for (i = 0; i < animationSequence->length; i++) {
         animationDescription = &(animationSequence->animations[i]);
         if (animationDescription->kind == ANIM_KIND_HIDE && ((i < animationSequence->animationIndex) || (animationDescription->extendedFlags & ANIMATION_SEQUENCE_FORCED))) {
+            Object* destroyedOwner = animationDescription->owner;
             Rect rect;
-            int elevation = animationDescription->owner->elevation;
-            objectDestroy(animationDescription->owner, &rect);
+            int elevation = destroyedOwner->elevation;
+            objectDestroy(destroyedOwner, &rect);
             tileWindowRefreshRect(&rect, elevation);
+            // Clear all references to the destroyed owner so the second loop
+            // doesn't access freed memory through other descriptions sharing
+            // the same owner (e.g. ANIM_KIND_HIDE + ANIM_KIND_ANIMATE_AND_HIDE).
+            for (int j = 0; j < animationSequence->length; j++) {
+                if (animationSequence->animations[j].owner == destroyedOwner) {
+                    animationSequence->animations[j].owner = nullptr;
+                }
+            }
         }
     }
 
@@ -1631,6 +1640,9 @@ static int _anim_set_end(int animationSequenceIndex)
             // TODO: Check.
             if (animationDescription->kind != ANIM_KIND_PING) {
                 Object* owner = animationDescription->owner;
+                if (owner == nullptr) {
+                    continue;
+                }
                 if (FID_TYPE(owner->fid) == OBJ_TYPE_CRITTER) {
                     int j = 0;
                     for (; j < i; j++) {

@@ -16,6 +16,7 @@
 #include "character_editor.h"
 #include "color.h"
 #include "combat.h"
+#include "combat_ai.h"
 #include "config.h" // For Config, configInit, configFree
 #include "db.h" // For File*, fileWriteInt32, fileReadInt32, etc.
 #include "dbox.h"
@@ -242,11 +243,13 @@ static int gMapEnterElevation = -1;
 static int gUnjamLocksTimeHours = -1;
 
 // Explosive properties set via item_make_explosive metarule.
-// Key: proto PID, Value: {pattern, radius, delay}
+// Key: proto PID, Value: {pattern, radius, delay, minDamage, maxDamage}
 struct ExplosiveProperties {
     int pattern;
     int radius;
     int delay;
+    int minDamage;
+    int maxDamage;
 };
 static std::map<int, ExplosiveProperties> gExplosiveOverrides;
 
@@ -366,7 +369,7 @@ const MetaruleInfo kMetarules[] = {
     { "intface_redraw", mf_intface_redraw, 0, 1, -1, { ARG_INT } },
     { "intface_show", mf_intface_show, 0, 0 },
     { "inventory_redraw", mf_inventory_redraw, 0, 1, -1, { ARG_INT } },
-    { "item_make_explosive", mf_item_make_explosive, 3, 4, -1, { ARG_INT, ARG_INT, ARG_INT, ARG_INT } },
+    { "item_make_explosive", mf_item_make_explosive, 3, 6, -1, { ARG_INT, ARG_INT, ARG_INT, ARG_INT, ARG_INT, ARG_INT } },
     { "item_weight", mf_item_weight, 1, 1, 0, { ARG_OBJECT } },
     { "lock_is_jammed", mf_lock_is_jammed, 1, 1, 0, { ARG_OBJECT } },
     { "loot_obj", mf_loot_obj, 0, 0 },
@@ -2270,18 +2273,19 @@ void mf_get_object_ai_data(OpcodeContext& ctx)
     case 0: // AI packet number — direct field access
         ctx.setReturn(obj->data.critter.combat.aiPacket);
         return;
-    case 1: // AI packet state flags — AiPacket struct is file-static in combat_ai.cc
-        // TODO: Add a public AiPacket accessor (e.g., aiPacketGetFlags) to
-        // combat_ai.h / combat_ai.cc so this metarule can return state flags.
-        debugPrint("%s(obj=%d, aiPacket=%d): type 1 (AI flags) — AiPacket struct is private to combat_ai.cc; returning 0 until public accessor is added",
-            ctx.name(), obj->id, obj->data.critter.combat.aiPacket);
-        break;
-    case 2: // current AI procedure — needs combat AI state machine integration
-        // TODO: Add a public accessor for the critter's current AI procedure
-        // index to combat_ai.h so this metarule can return it.
-        debugPrint("%s(obj=%d, aiPacket=%d): type 2 (current procedure) — no public accessor exists in combat_ai.h; returning 0",
-            ctx.name(), obj->id, obj->data.critter.combat.aiPacket);
-        break;
+    case 1: // AI packet state flags — wired to aiPacketGetFlags() in combat_ai.cc
+        ctx.setReturn(aiPacketGetFlags(obj));
+        return;
+    case 2: // current AI procedure — wired to aiPacketGetProcedure() in combat_ai.cc
+        {
+            int procedure = aiPacketGetProcedure(obj);
+            if (procedure < 0) {
+                ctx.setReturn(0);
+            } else {
+                ctx.setReturn(procedure);
+            }
+        }
+        return;
     default:
         debugPrint("%s(): unknown dataType %d", ctx.name(), dataType);
         break;
@@ -2333,15 +2337,18 @@ void mf_item_make_explosive(OpcodeContext& ctx)
     int pattern = ctx.arg(1).asInt();
     int radius = ctx.arg(2).asInt();
     int delay = ctx.numArgs() > 3 ? ctx.arg(3).asInt() : 0;
+    int minDamage = ctx.numArgs() > 4 ? ctx.arg(4).asInt() : 0;
+    int maxDamage = ctx.numArgs() > 5 ? ctx.arg(5).asInt() : 0;
 
-    ExplosiveProperties props = { pattern, radius, delay };
+    ExplosiveProperties props = { pattern, radius, delay, minDamage, maxDamage };
     gExplosiveOverrides[pid] = props;
 
     ctx.setReturn(1);
 }
 
-// get_explosive_data(int pid): returns a 3-element temp array [pattern, radius, delay]
-// for the given item proto ID, or 0 if no explosive override has been set.
+// get_explosive_data(int pid): returns a 5-element temp array
+// [pattern, radius, delay, minDamage, maxDamage] for the given item
+// proto ID, or 0 if no explosive override has been set.
 // Provides a script-level query API for the stored explosive properties.
 void mf_get_explosive_data(OpcodeContext& ctx)
 {
@@ -2352,10 +2359,12 @@ void mf_get_explosive_data(OpcodeContext& ctx)
         return;
     }
 
-    ArrayId arrayId = CreateTempArray(3, 0);
+    ArrayId arrayId = CreateTempArray(5, 0);
     SetArray(arrayId, ProgramValue(0), ProgramValue(it->second.pattern), false, ctx.program());
     SetArray(arrayId, ProgramValue(1), ProgramValue(it->second.radius), false, ctx.program());
     SetArray(arrayId, ProgramValue(2), ProgramValue(it->second.delay), false, ctx.program());
+    SetArray(arrayId, ProgramValue(3), ProgramValue(it->second.minDamage), false, ctx.program());
+    SetArray(arrayId, ProgramValue(4), ProgramValue(it->second.maxDamage), false, ctx.program());
     ctx.setReturn(ProgramValue(arrayId));
 }
 
@@ -2941,7 +2950,7 @@ void sfall_metarules_reset()
 // On load, if the version marker doesn't match, the function returns early
 // (sfall_metarules_reset() has already restored defaults) — forward compatibility.
 
-#define METARULES_SAVE_VERSION 3
+#define METARULES_SAVE_VERSION 4
 
 static bool metarulesSaveStringMap(File* stream, const std::map<int, std::string>& map)
 {
@@ -3060,22 +3069,29 @@ static bool metarulesSaveExplosiveMap(File* stream, const std::map<int, Explosiv
         if (fileWriteInt32(stream, entry.second.pattern) == -1) return false;
         if (fileWriteInt32(stream, entry.second.radius) == -1) return false;
         if (fileWriteInt32(stream, entry.second.delay) == -1) return false;
+        if (fileWriteInt32(stream, entry.second.minDamage) == -1) return false;
+        if (fileWriteInt32(stream, entry.second.maxDamage) == -1) return false;
     }
     return true;
 }
 
-static bool metarulesLoadExplosiveMap(File* stream, std::map<int, ExplosiveProperties>& map)
+static bool metarulesLoadExplosiveMap(File* stream, std::map<int, ExplosiveProperties>& map, int version)
 {
     int count;
     if (fileReadInt32(stream, &count) == -1) return false;
     map.clear();
     for (int i = 0; i < count; i++) {
-        int pid, pattern, radius, delay;
+        int pid, pattern, radius, delay, minDamage = 0, maxDamage = 0;
         if (fileReadInt32(stream, &pid) == -1) return false;
         if (fileReadInt32(stream, &pattern) == -1) return false;
         if (fileReadInt32(stream, &radius) == -1) return false;
         if (fileReadInt32(stream, &delay) == -1) return false;
-        map[pid] = { pattern, radius, delay };
+        // Version 4+ includes damage fields in the explosive map entries.
+        if (version >= 4) {
+            if (fileReadInt32(stream, &minDamage) == -1) return false;
+            if (fileReadInt32(stream, &maxDamage) == -1) return false;
+        }
+        map[pid] = { pattern, radius, delay, minDamage, maxDamage };
     }
     return true;
 }
@@ -3301,7 +3317,7 @@ void sfall_metarules_load(File* stream)
     metarulesLoadStringMap(stream, gTownTitleOverrides);
     metarulesLoadIntIntMap(stream, gQuestFailureValues);
     metarulesLoadIntSet(stream, gAddedTraits);
-    metarulesLoadExplosiveMap(stream, gExplosiveOverrides);
+    metarulesLoadExplosiveMap(stream, gExplosiveOverrides, version);
 
     // NPC-keyed data: keyed by CID (int), no post-load fixup needed.
     // v3+ format includes per-entry metadata (level, image, desc);
@@ -3424,32 +3440,64 @@ bool sfallIsExplosiveOverride(int pid)
     return gExplosiveOverrides.count(pid) > 0;
 }
 
+// Public accessor: returns true and populates damage fields if the given PID
+// has an explosive override with damage values set via item_make_explosive.
+// Returns false if no override exists for this PID.
+bool sfallGetExplosiveOverrideDamage(int pid, int* outMinDamage, int* outMaxDamage)
+{
+    auto it = gExplosiveOverrides.find(pid);
+    if (it == gExplosiveOverrides.end()) {
+        return false;
+    }
+    if (outMinDamage) *outMinDamage = it->second.minDamage;
+    if (outMaxDamage) *outMaxDamage = it->second.maxDamage;
+    return true;
+}
+
 // Public accessor: returns the stored unjam locks time in game hours.
-// -1 = disabled/engine default. Consumer: map.cc lock unjam logic.
+// -1 = disabled/engine default.
+// INTEGRATION POINT: map.cc — wire into the lock unjam logic during map entry.
+// Currently, objectUnjamAll() (map.cc:1149) unjams all locks unconditionally.
+// This accessor should gate or replace that behavior: when the override is set,
+// track jammed-lock timers and unjam only after the specified game hours have
+// elapsed. The stored value persists across save/load (version 3+ of metarules
+// save format).
 int sfallGetUnjamLocksTime()
 {
     return gUnjamLocksTimeHours;
 }
 
 // Public accessor: returns the stored map enter X position override.
-// -1 = no override. Consumer: map entry code in map.cc.
+// -1 = no override.
+// INTEGRATION POINT: map.cc — wire into the map entry / position-setting code.
+// When the player enters a new map, this override should be applied to the
+// player's starting position instead of the default map entry point.
 int sfallGetMapEnterX()
 {
     return gMapEnterX;
 }
 
 // Public accessor: returns the stored map enter Y position override.
-// -1 = no override. Consumer: map entry code in map.cc.
+// -1 = no override.
+// INTEGRATION POINT: map.cc — same as sfallGetMapEnterX.
 int sfallGetMapEnterY()
 {
     return gMapEnterY;
 }
 
 // Public accessor: returns the stored map enter elevation override.
-// -1 = no override. Consumer: map entry code in map.cc.
+// -1 = no override.
+// INTEGRATION POINT: map.cc — same as sfallGetMapEnterX.
 int sfallGetMapEnterElevation()
 {
     return gMapEnterElevation;
+}
+
+// Public accessor: returns the script name override set via set_scr_name.
+// Empty string = no override. Consumer: scriptsGetFileName() in scripts.cc.
+const char* sfallGetScriptNameOverride()
+{
+    return gScriptNameOverride.empty() ? nullptr : gScriptNameOverride.c_str();
 }
 
 } // namespace fallout

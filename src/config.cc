@@ -559,6 +559,8 @@ static bool configWriteSideBySide(Config* config, const char* filePath, int flag
         {
             size_t len = strlen(line);
             if (len == sizeof(line) - 1 && line[sizeof(line) - 2] != '\n') {
+                debugPrint("Warning: Config line longer than %zu chars was truncated in configWriteSideBySide\n",
+                    sizeof(line) - 1);
                 int c;
                 while ((c = fgetc(original)) != EOF && c != '\n') {
                 }

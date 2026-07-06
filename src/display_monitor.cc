@@ -16,6 +16,7 @@
 #include "interface.h"
 #include "memory.h"
 #include "settings.h"
+#include "sfall_script_hooks.h"
 #include "svga.h"
 #include "text_font.h"
 #include "window_manager.h"
@@ -238,6 +239,7 @@ void displayMonitorAddMessage(const char* str)
 
     // SFALL
     consoleFileAddMessage(str);
+    scriptHooks_Message(str);
 
     int oldFont = fontGetCurrent();
     fontSetCurrent(DISPLAY_MONITOR_FONT);

@@ -319,12 +319,16 @@ static bool perkCanAdd(Object* critter, int perk)
 
     PerkDescription* perkDescription = &(gPerkDescriptions[perk]);
 
-    if (perkDescription->maxRank == -1) {
+    // Check sfall script-level ranks override (set_perk_ranks opcode 0x8179).
+    int maxRankOverride = sfallGetPerkRanksOverride(perk);
+    int effectiveMaxRank = (maxRankOverride != -1) ? maxRankOverride : perkDescription->maxRank;
+
+    if (effectiveMaxRank == -1) {
         return false;
     }
 
     PerkRankData* ranksData = perkGetRankData(critter);
-    if (ranksData != nullptr && ranksData->ranks[perk] >= perkDescription->maxRank) {
+    if (ranksData != nullptr && ranksData->ranks[perk] >= effectiveMaxRank) {
         return false;
     }
 
@@ -337,6 +341,11 @@ static bool perkCanAdd(Object* critter, int perk)
     bool req1Fulfilled = true;
 
     int param1 = perkDescription->param1;
+    // Check sfall script-level skill1 override (set_perk_skill1 opcode 0x8181).
+    int skill1Override = sfallGetPerkSkill1Override(perk);
+    if (skill1Override != -1) {
+        param1 = skill1Override;
+    }
     if (param1 != -1) {
         bool isVariable = false;
         if ((param1 & 0x4000000) != 0) {
@@ -345,6 +354,11 @@ static bool perkCanAdd(Object* critter, int perk)
         }
 
         int value1 = perkDescription->value1;
+        // Check sfall script-level skill1 magnitude override (set_perk_skill1_mag opcode 0x8182).
+        int skill1MagOverride = sfallGetPerkSkill1MagOverride(perk);
+        if (skill1MagOverride != -1000) {
+            value1 = skill1MagOverride;
+        }
         if (value1 < 0) {
             if (isVariable) {
                 if (gameGetGlobalVar(param1) >= value1) {
@@ -378,6 +392,11 @@ static bool perkCanAdd(Object* critter, int perk)
         }
 
         int param2 = perkDescription->param2;
+        // Check sfall script-level skill2 override (set_perk_skill2 opcode 0x8183).
+        int skill2Override = sfallGetPerkSkill2Override(perk);
+        if (skill2Override != -1) {
+            param2 = skill2Override;
+        }
         bool isVariable = false;
         if (param2 != -1) {
             if ((param2 & 0x4000000) != 0) {
@@ -391,6 +410,11 @@ static bool perkCanAdd(Object* critter, int perk)
         }
 
         int value2 = perkDescription->value2;
+        // Check sfall script-level skill2 magnitude override (set_perk_skill2_mag opcode 0x8184).
+        int skill2MagOverride = sfallGetPerkSkill2MagOverride(perk);
+        if (skill2MagOverride != -1000) {
+            value2 = skill2MagOverride;
+        }
         if (value2 < 0) {
             if (isVariable) {
                 if (gameGetGlobalVar(param2) >= value2) {
@@ -415,12 +439,18 @@ static bool perkCanAdd(Object* critter, int perk)
     }
 
     for (int stat = 0; stat < PRIMARY_STAT_COUNT; stat++) {
-        if (perkDescription->stats[stat] < 0) {
-            if (critterGetStat(critter, stat) >= -perkDescription->stats[stat]) {
+        int statReq = perkDescription->stats[stat];
+        // Check sfall script-level special override (set_perk_special opcode 0x8188).
+        int specialOverride = sfallGetPerkSpecialOverride(perk, stat);
+        if (specialOverride != -1) {
+            statReq = specialOverride;
+        }
+        if (statReq < 0) {
+            if (critterGetStat(critter, stat) >= -statReq) {
                 return false;
             }
         } else {
-            if (critterGetStat(critter, stat) < perkDescription->stats[stat]) {
+            if (critterGetStat(critter, stat) < statReq) {
                 return false;
             }
         }
@@ -480,7 +510,9 @@ int perkAddForce(Object* critter, int perk)
 
     int value = ranksData->ranks[perk];
 
-    int maxRank = gPerkDescriptions[perk].maxRank;
+    // Check sfall script-level ranks override (set_perk_ranks opcode 0x8179).
+    int ranksOverride = sfallGetPerkRanksOverride(perk);
+    int maxRank = (ranksOverride != -1) ? ranksOverride : gPerkDescriptions[perk].maxRank;
 
     if (maxRank != -1 && value >= maxRank) {
         return -1;
@@ -624,6 +656,11 @@ int perkGetMaxRank(int perk)
     if (!perkIsValid(perk)) {
         return -1;
     }
+    // Check sfall script-level ranks override (set_perk_ranks opcode 0x8179).
+    int ranksOverride = sfallGetPerkRanksOverride(perk);
+    if (ranksOverride != -1) {
+        return ranksOverride;
+    }
     return gPerkDescriptions[perk].maxRank;
 }
 
@@ -642,9 +679,17 @@ void perkAddEffect(Object* critter, int perk)
 
     PerkDescription* perkDescription = &(gPerkDescriptions[perk]);
 
-    if (perkDescription->stat != -1) {
-        int value = critterGetBonusStat(critter, perkDescription->stat);
-        critterSetBonusStat(critter, perkDescription->stat, value + perkDescription->statModifier);
+    // Check sfall script-level stat override (set_perk_stat opcode 0x8185).
+    int statOverride = sfallGetPerkStatOverride(perk);
+    int effectiveStat = (statOverride != -1000) ? statOverride : perkDescription->stat;
+
+    if (effectiveStat != -1) {
+        // Check sfall script-level stat magnitude override (set_perk_stat_mag opcode 0x8186).
+        int statMagOverride = sfallGetPerkStatMagOverride(perk);
+        int effectiveModifier = (statMagOverride != -1000) ? statMagOverride : perkDescription->statModifier;
+
+        int value = critterGetBonusStat(critter, effectiveStat);
+        critterSetBonusStat(critter, effectiveStat, value + effectiveModifier);
     }
 
     if (perk == PERK_HERE_AND_NOW) {
@@ -686,9 +731,17 @@ void perkRemoveEffect(Object* critter, int perk)
 
     PerkDescription* perkDescription = &(gPerkDescriptions[perk]);
 
-    if (perkDescription->stat != -1) {
-        int value = critterGetBonusStat(critter, perkDescription->stat);
-        critterSetBonusStat(critter, perkDescription->stat, value - perkDescription->statModifier);
+    // Check sfall script-level stat override (set_perk_stat opcode 0x8185).
+    int statOverride = sfallGetPerkStatOverride(perk);
+    int effectiveStat = (statOverride != -1000) ? statOverride : perkDescription->stat;
+
+    if (effectiveStat != -1) {
+        // Check sfall script-level stat magnitude override (set_perk_stat_mag opcode 0x8186).
+        int statMagOverride = sfallGetPerkStatMagOverride(perk);
+        int effectiveModifier = (statMagOverride != -1000) ? statMagOverride : perkDescription->statModifier;
+
+        int value = critterGetBonusStat(critter, effectiveStat);
+        critterSetBonusStat(critter, effectiveStat, value - effectiveModifier);
     }
 
     if (perk == PERK_HERE_AND_NOW) {

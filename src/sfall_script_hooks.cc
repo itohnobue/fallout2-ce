@@ -1516,4 +1516,52 @@ void scriptHooks_SlideshowEnd()
     ScriptHookCall(HOOK_GAMEMODECHANGE, 0, { 0, GameMode::getCurrentGameMode() }).call();
 }
 
+/*
+Runs when the player character levels up after gaining enough experience.
+Fires from pcAddExperienceWithOptions() in stat.cc and from
+characterEditorUpdateLevel() in character_editor.cc.
+
+Critter arg0 - the critter that leveled up (usually dude_obj)
+*/
+void scriptHooks_StatLevelUp(Object* critter)
+{
+    if (scriptHooks[HOOK_STATLEVELUP].empty()) {
+        return;
+    }
+
+    ScriptHookCall(HOOK_STATLEVELUP, 0, { critter }).call();
+}
+
+/*
+Runs when barter/trade is initiated between the player and an NPC.
+Fires from gameDialogBarter() in game_dialog.cc.
+
+Critter arg0 - the player character (dude)
+Critter arg1 - the NPC being traded with
+int     arg2 - the barter mode (dialog type)
+*/
+void scriptHooks_Barter(Object* dude, Object* npc, int mode)
+{
+    if (scriptHooks[HOOK_BARTER].empty()) {
+        return;
+    }
+
+    ScriptHookCall(HOOK_BARTER, 0, { dude, npc, mode }).call();
+}
+
+/*
+Runs when a message is displayed to the player in the message monitor.
+Fires from displayMonitorAddMessage() in display_monitor.cc.
+
+string  arg0 - the message text being displayed
+*/
+void scriptHooks_Message(const char* msg)
+{
+    if (scriptHooks[HOOK_MESSAGE].empty()) {
+        return;
+    }
+
+    ScriptHookCall(HOOK_MESSAGE, 0, { msg }).call();
+}
+
 } // namespace fallout

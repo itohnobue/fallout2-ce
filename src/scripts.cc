@@ -35,6 +35,7 @@
 #include "sfall_arrays.h"
 #include "sfall_config.h"
 #include "sfall_global_scripts.h"
+#include "sfall_metarules.h"
 #include "sfall_script_hooks.h"
 #include "stat.h"
 #include "svga.h"
@@ -1140,7 +1141,14 @@ int _scripts_check_state_in_combat()
     }
 
     // NOTE: Uninline.
+    // Save ENDGAME request before clearing — combat state transitions
+    // (elevator/looting) must not drop pending endgame slideshow triggers.
+    // scriptsClearPendingRequests() zeros ALL request bits including
+    // SCRIPT_REQUEST_ENDGAME (0x80). Restore ENDGAME after the clear so
+    // the slideshow still fires when the combat loop exits.
+    int savedEndgameRequest = gScriptsRequests & SCRIPT_REQUEST_ENDGAME;
     scriptsClearPendingRequests();
+    gScriptsRequests |= savedEndgameRequest;
 
     return 0;
 }
@@ -1370,10 +1378,10 @@ int scriptExecProc(int sid, int proc)
 
     // CE: Fix for the start procedure not being called correctly if the required standard script procedure is missing.
     int procedureIndex = script->procs[proc];
-    if (procedureIndex == 0) {
+    if (procedureIndex == SCRIPT_PROC_NO_PROC) {
         // Fixme: hook receives `proc` which is wrong in this context
         procedureIndex = script->procs[SCRIPT_PROC_START];
-        if (procedureIndex == 0) {
+        if (procedureIndex == SCRIPT_PROC_NO_PROC) {
             procedureIndex = -1;
         }
     }
@@ -1523,6 +1531,16 @@ int scriptsGetFileName(int scriptIndex, char* name, size_t size)
 {
     if (!scriptsIsValidScriptIndex(scriptIndex)) {
         return -1;
+    }
+
+    // SFALL: set_scr_name metarule override — if a script name override has
+    // been set, use it in place of the original script file name. This allows
+    // scripts to customize their displayed name (e.g., for debug output or
+    // script identification in the game console).
+    const char* override = sfallGetScriptNameOverride();
+    if (override != nullptr && override[0] != '\0') {
+        snprintf(name, size, "%s", override);
+        return 0;
     }
 
     snprintf(name, size, "%s.int", gScriptsListEntries[scriptIndex].name);
@@ -2095,7 +2113,7 @@ static int scriptRead(Script* scr, File* stream)
     scr->target = nullptr;
 
     for (int index = 0; index < SCRIPT_PROC_COUNT; index++) {
-        scr->procs[index] = 0;
+        scr->procs[index] = SCRIPT_PROC_NO_PROC;
     }
 
     if (!(gMapHeader.flags & 1)) {
@@ -2775,7 +2793,7 @@ void scriptsExecMapUpdateScripts(int proc)
         while (scriptListExtent != nullptr) {
             for (int scriptIndex = 0; scriptIndex < scriptListExtent->length; scriptIndex++) {
                 Script* script = &(scriptListExtent->scripts[scriptIndex]);
-                if (script->sid != gMapSid && script->procs[proc] > 0) {
+                if (script->sid != gMapSid && script->procs[proc] != SCRIPT_PROC_NO_PROC) {
                     sidList[sidListLength++] = script->sid;
                 }
             }
@@ -3033,11 +3051,11 @@ int _scr_explode_scenery(Object* explosionSource, int tile, int radius, int elev
     while (extent != nullptr) {
         for (int index = 0; index < extent->length; index++) {
             Script* script = &(extent->scripts[index]);
-            if (script->procs[SCRIPT_PROC_DAMAGE] <= 0 && script->program == nullptr) {
+            if (script->procs[SCRIPT_PROC_DAMAGE] == SCRIPT_PROC_NO_PROC && script->program == nullptr) {
                 scriptExecProc(script->sid, SCRIPT_PROC_START);
             }
 
-            if (script->procs[SCRIPT_PROC_DAMAGE] > 0) {
+            if (script->procs[SCRIPT_PROC_DAMAGE] != SCRIPT_PROC_NO_PROC) {
                 Object* self = script->owner;
                 if (self != nullptr) {
                     if (self->elevation == elevation && tileDistanceBetween(self->tile, tile) <= radius) {
@@ -3054,11 +3072,11 @@ int _scr_explode_scenery(Object* explosionSource, int tile, int radius, int elev
     while (extent != nullptr) {
         for (int index = 0; index < extent->length; index++) {
             Script* script = &(extent->scripts[index]);
-            if (script->procs[SCRIPT_PROC_DAMAGE] <= 0 && script->program == nullptr) {
+            if (script->procs[SCRIPT_PROC_DAMAGE] == SCRIPT_PROC_NO_PROC && script->program == nullptr) {
                 scriptExecProc(script->sid, SCRIPT_PROC_START);
             }
 
-            if (script->procs[SCRIPT_PROC_DAMAGE] > 0
+            if (script->procs[SCRIPT_PROC_DAMAGE] != SCRIPT_PROC_NO_PROC
                 && builtTileGetElevation(script->sp.built_tile) == elevation
                 && tileDistanceBetween(builtTileGetTile(script->sp.built_tile), tile) <= radius) {
                 scriptIds[scriptsCount] = script->sid;

@@ -1998,6 +1998,11 @@ static int _proto_load_pid(int pid, Proto** protoPtr)
     }
 
     if (protoRead(*protoPtr, stream) != 0) {
+        // Mark the partially-loaded proto as invalid so subsequent
+        // protoGetProto() lookups don't return corrupt data. The proto
+        // remains in the list and will be freed during eviction.
+        (*protoPtr)->pid = -1;
+        *protoPtr = nullptr;
         fileClose(stream);
         return -1;
     }

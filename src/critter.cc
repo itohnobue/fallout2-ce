@@ -1434,6 +1434,7 @@ void critterFlagSet(int pid, int flag)
     protoGetProto(pid, &proto);
 
     proto->critter.data.flags |= flag;
+    protoMarkDirty(pid);
 }
 
 // 0x42E71C critter_flag_unset
@@ -1452,6 +1453,7 @@ void critterFlagUnset(int pid, int flag)
     protoGetProto(pid, &proto);
 
     proto->critter.data.flags &= ~flag;
+    protoMarkDirty(pid);
 }
 
 } // namespace fallout

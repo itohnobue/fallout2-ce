@@ -2876,7 +2876,7 @@ void programInterpret(Program* program, int numInstructions)
             interpreterBusy = true;
 
             if (program->checkWaitFunc != nullptr) {
-                if (!program->checkWaitFunc(program)) {
+                if (program->checkWaitFunc(program)) {
                     interpreterBusy = false;
                     continue;
                 }

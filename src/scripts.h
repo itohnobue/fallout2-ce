@@ -50,7 +50,7 @@ typedef enum ScriptType {
 } ScriptType;
 
 typedef enum ScriptProc {
-    SCRIPT_PROC_NO_PROC = 0,
+    SCRIPT_PROC_NO_PROC = -1,
     SCRIPT_PROC_START = 1,
     SCRIPT_PROC_SPATIAL = 2,
     SCRIPT_PROC_DESCRIPTION = 3,

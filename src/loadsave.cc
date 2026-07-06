@@ -2125,6 +2125,8 @@ static int lsgSaveHeaderInSlot(int slot)
 
     char* characterName = critterGetName(gDude);
     strncpy(ptr->characterName, characterName, 32);
+    // I2-084: strncpy does not guarantee null termination when source >= 32 chars.
+    ptr->characterName[sizeof(ptr->characterName) - 1] = '\0';
 
     if (fileWrite(ptr->characterName, 32, 1, _flptr) != 1) {
         return -1;
@@ -2188,6 +2190,7 @@ static int lsgSaveHeaderInSlot(int slot)
     // NOTE: Uppercased from "sav".
     char* v1 = _strmfe(_str, mapName, "SAV");
     strncpy(ptr->fileName, v1, 16);
+    ptr->fileName[sizeof(ptr->fileName) - 1] = '\0'; // F-M6: guarantee null termination
     if (fileWrite(ptr->fileName, 16, 1, _flptr) != 1) {
         return -1;
     }
@@ -2635,6 +2638,8 @@ static int _GetComment(int slot)
     char description[LOAD_SAVE_DESCRIPTION_LENGTH];
     if (_LSstatus[_slot_cursor] == SLOT_STATE_OCCUPIED) {
         strncpy(description, _LSData[slot].description, LOAD_SAVE_DESCRIPTION_LENGTH);
+        // I2-085: strncpy does not guarantee null termination when source >= LOAD_SAVE_DESCRIPTION_LENGTH.
+        description[LOAD_SAVE_DESCRIPTION_LENGTH - 1] = '\0';
     } else {
         memset(description, '\0', LOAD_SAVE_DESCRIPTION_LENGTH);
     }

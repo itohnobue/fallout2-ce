@@ -1284,6 +1284,18 @@ int wmWorldMap_save(File* stream)
         }
     }
 
+    // Save gCanRestOnTiles per-tile rest permission overrides (I2-068).
+    {
+        int canRestCount = static_cast<int>(gCanRestOnTiles.size());
+        if (fileWriteInt32(stream, canRestCount) == -1) return -1;
+
+        for (const auto& entry : gCanRestOnTiles) {
+            if (fileWriteInt32(stream, entry.first.first) == -1) return -1;   // elevation
+            if (fileWriteInt32(stream, entry.first.second) == -1) return -1;  // tile
+            if (fileWriteBool(stream, entry.second) == -1) return -1;          // canRest
+        }
+    }
+
     return 0;
 }
 
@@ -1389,6 +1401,28 @@ int wmWorldMap_load(File* stream)
         EncounterTableEntry* encounterTableEntry = &(encounterTable->entries[encounterTableEntryIdx]);
 
         if (fileReadInt32(stream, &(encounterTableEntry->counter)) == -1) return -1;
+    }
+
+    // Load gCanRestOnTiles per-tile rest permission overrides (I2-068).
+    // Older save files (pre-fix) may not contain this data. Detect by
+    // checking for EOF after counters. If EOF, skip reading rest tiles.
+    {
+        int canRestCount = 0;
+        if (fileReadInt32(stream, &canRestCount) != -1) {
+            gCanRestOnTiles.clear();
+            for (int i = 0; i < canRestCount; i++) {
+                int elevation;
+                int tile;
+                bool canRest;
+                if (fileReadInt32(stream, &elevation) == -1) return -1;
+                if (fileReadInt32(stream, &tile) == -1) return -1;
+                if (fileReadBool(stream, &canRest) == -1) return -1;
+                gCanRestOnTiles[{ elevation, tile }] = canRest;
+            }
+        }
+        // If fileReadInt32 returned -1 (EOF from older save), just skip.
+        // gCanRestOnTiles retains whatever runtime state it had (empty
+        // on fresh load), which is acceptable.
     }
 
     wmInterfaceCenterOnParty();
@@ -5448,9 +5482,25 @@ int wmSubTileMarkRadiusVisited(int x, int y, int radius)
     int offsetY;
     SubtileInfo* subtile;
 
+    // Validate coordinates before any array access (I2-064).
+    if (wmNumHorizontalTiles <= 0 || wmMaxTileNum <= 0
+        || x < 0 || x >= WM_TILE_WIDTH * wmNumHorizontalTiles
+        || y < 0 || y >= WM_TILE_HEIGHT * (wmMaxTileNum / wmNumHorizontalTiles)) {
+        return -1;
+    }
+
     tile = x / WM_TILE_WIDTH % wmNumHorizontalTiles + y / WM_TILE_HEIGHT * wmNumHorizontalTiles;
+
+    if (tile < 0 || tile >= wmMaxTileNum) {
+        return -1;
+    }
+
     subtileX = x % WM_TILE_WIDTH / WM_SUBTILE_SIZE;
     subtileY = y % WM_TILE_HEIGHT / WM_SUBTILE_SIZE;
+
+    if (subtileX < 0 || subtileX >= SUBTILE_GRID_WIDTH || subtileY < 0 || subtileY >= SUBTILE_GRID_HEIGHT) {
+        return -1;
+    }
 
     for (offsetY = -radius; offsetY <= radius; offsetY++) {
         for (offsetX = -radius; offsetX <= radius; offsetX++) {

@@ -38,6 +38,7 @@
 #include "scripts.h"
 #include "settings.h"
 #include "sfall_callbacks.h"
+#include "sfall_metarules.h"
 #include "svga.h"
 #include "text_object.h"
 #include "tile.h"
@@ -935,10 +936,18 @@ static int mapLoad(File* stream)
     }
 
     if (gEnteringElevation == -1) {
-        // F-011/F-071: Check if a script has set a map enter position override
-        // via set_map_enter_position metarule. If so, use the overridden position
-        // instead of the .MAP file header defaults.
-        if (wmHasMapEnterPosition()) {
+        // SFALL: Check if a script has set a map enter position override
+        // via set_map_enter_position metarule. The metarule stores values
+        // both in its own globals (sfallGetMapEnterX/Y/Elevation) and
+        // forwards them to the worldmap system (wmSetMapEnterPosition).
+        // Prefer the metarule locals (more direct) with the worldmap
+        // system as a secondary fallback.
+        int sx = sfallGetMapEnterX();
+        int sy = sfallGetMapEnterY();
+        int sel = sfallGetMapEnterElevation();
+        if (sx >= 0 && sy >= 0) {
+            mapSetEnteringLocation(sel >= 0 ? sel : 0, sx, sy);
+        } else if (wmHasMapEnterPosition()) {
             int overrideX, overrideY, overrideElevation;
             wmGetMapEnterPosition(&overrideX, &overrideY, &overrideElevation);
             mapSetEnteringLocation(overrideElevation, overrideX, overrideY);
@@ -1173,14 +1182,20 @@ int mapLoadSaved(char* fileName)
     int rc = mapLoadByName(mapName);
 
     if (gameTimeGetTime() >= gMapHeader.lastVisitTime) {
-        if (((gameTimeGetTime() - gMapHeader.lastVisitTime) / GAME_TIME_TICKS_PER_HOUR) >= 24) {
+        // SFALL: Use the unjam-locks-time override from set_unjam_locks_time
+        // metarule if configured; otherwise fall back to engine default (24h).
+        int unjamHours = sfallGetUnjamLocksTime();
+        if (unjamHours < 0) {
+            unjamHours = 24; // engine default — unjam after 24 game hours
+        }
+        if (((gameTimeGetTime() - gMapHeader.lastVisitTime) / GAME_TIME_TICKS_PER_HOUR) >= unjamHours) {
             objectUnjamAll();
         }
 
-        if (_map_age_dead_critters() == -1) {
-            debugPrint("\nError: Critter aging failed on map load!");
-            return -1;
-        }
+    if (_map_age_dead_critters() == -1) {
+        debugPrint("\nError: Critter aging failed on map load!");
+        return -1;
+    }
     }
 
     if (!wmMapIsSaveable()) {

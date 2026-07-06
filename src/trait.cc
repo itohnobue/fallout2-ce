@@ -128,21 +128,29 @@ int traitsSave(File* stream)
 }
 
 // Sets selected traits.
+// F-021: Added optional trait3 parameter (default -1) for FO1 3-trait mode.
+// In FO2 mode, only trait1/trait2 are meaningful; trait3 defaults to -1.
 //
 // 0x4B3B48 trait_set
-void traitsSetSelected(int trait1, int trait2)
+void traitsSetSelected(int trait1, int trait2, int trait3)
 {
     gSelectedTraits[0] = trait1;
     gSelectedTraits[1] = trait2;
+    gSelectedTraits[2] = trait3;
 }
 
 // Returns selected traits.
+// F-021: Added optional trait3 output parameter (default nullptr) for FO1 3-trait mode.
+// When trait3 is nullptr, only the first 2 slots are retrieved.
 //
 // 0x4B3B54 trait_get
-void traitsGetSelected(int* trait1, int* trait2)
+void traitsGetSelected(int* trait1, int* trait2, int* trait3)
 {
     *trait1 = gSelectedTraits[0];
     *trait2 = gSelectedTraits[1];
+    if (trait3 != nullptr) {
+        *trait3 = gSelectedTraits[2];
+    }
 }
 
 // Returns a name of the specified trait, or `nullptr` if the specified trait is

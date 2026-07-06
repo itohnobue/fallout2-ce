@@ -847,11 +847,11 @@ static bool characterSelectorWindowRenderStats()
     }
 
     // TRAITS
-    // F-076: Array sized for FO1 max (3), but only 2 slots are populated by
-    // traitsGetSelected. Zero-initialize the local array so the third slot
-    // is not left uninitialized on the stack.
-    int traits[TRAITS_MAX_SELECTED_COUNT] = {};
-    traitsGetSelected(&(traits[0]), &(traits[1]));
+    // F-021/I2-132: Initialize array with sentinel -1 (no trait) and read
+    // all 3 slots. In FO1 mode, the 3rd slot holds the character's 3rd trait;
+    // in FO2 mode, traits[2] will be -1 (sentinel, never displayed).
+    int traits[TRAITS_MAX_SELECTED_COUNT] = { -1, -1, -1 };
+    traitsGetSelected(&(traits[0]), &(traits[1]), &(traits[2]));
 
     for (int index = 0; index < traitGetMaxSelectedCount(); index++) {
         y += vh;

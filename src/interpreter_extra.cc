@@ -2089,7 +2089,7 @@ static void opMetarule3(Program* program)
         result.integerValue = wmCarIsOutOfGas() ? 1 : 0;
         break;
     case METARULE3_SET_WM_MUSIC:
-        if (1) {
+        if ((param2.opcode & VALUE_TYPE_MASK) == VALUE_TYPE_STRING) {
             const char* musicName = programGetString(program, param2.opcode, param2.integerValue);
             wmSetMapMusic(param1.integerValue, musicName);
             result.integerValue = 1;

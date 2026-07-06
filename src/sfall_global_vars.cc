@@ -132,8 +132,10 @@ bool sfall_gl_vars_load(File* stream)
         if (fileRead(&version, sizeof(version), 1, stream) != 1) {
             return false;
         }
-        // Only version 1 is supported currently.
-        if (version < 1 || version > 1) {
+        // Support version 1 and any future versions (forward-compatible).
+        // The count-delimited entry format means unknown future versions
+        // can be parsed as long as the core entry layout is unchanged.
+        if (version < 1) {
             return false;
         }
 
@@ -195,19 +197,48 @@ bool sfall_gl_vars_load(File* stream)
 }
 
 // Convert a C-string key to a uint64_t for use as a map key.
-// Keys must be exactly 8 characters (matching sfall convention).
-// Returns 0 and sets ok=false for keys that are not exactly 8 chars.
+//
+// Keys of exactly 8 characters are packed directly into the uint64_t
+// (matching the sfall convention for backward compatibility).
+//
+// Keys shorter than 8 characters are zero-padded in the high bytes.
+//
+// Keys longer than 8 characters are hashed with FNV-1a to produce a
+// 64-bit value. This namespace is disjoint from packed keys because
+// FNV-1a output differs from any short ASCII string's direct packing.
+//
+// An empty key always fails (ok=false).
 static uint64_t sfall_gl_vars_key_to_uint64(const char* key, bool& ok)
 {
     size_t len = strlen(key);
-    if (len != 8) {
+    if (len == 0) {
         ok = false;
         return 0;
     }
+
+    if (len <= 8) {
+        // Pad short keys with zeros in the high bytes.
+        // For exactly-8-char keys this is byte-identical to the old behavior.
+        ok = true;
+        uint64_t result = 0;
+        memcpy(&result, key, len);
+        return result;
+    }
+
+    // Keys longer than 8 chars: FNV-1a 64-bit hash.
+    // This produces a well-distributed 64-bit value that is effectively
+    // disjoint from the packed-key namespace (packed ASCII keys have
+    // the high bit of every byte clear).
     ok = true;
-    uint64_t result = 0;
-    memcpy(&result, key, len);
-    return result;
+    constexpr uint64_t FNV_OFFSET_BASIS = 14695981039346656037ULL;
+    constexpr uint64_t FNV_PRIME = 1099511628211ULL;
+
+    uint64_t hash = FNV_OFFSET_BASIS;
+    for (size_t i = 0; i < len; i++) {
+        hash ^= static_cast<uint64_t>(static_cast<unsigned char>(key[i]));
+        hash *= FNV_PRIME;
+    }
+    return hash;
 }
 
 bool sfall_gl_vars_store(const char* key, int value)

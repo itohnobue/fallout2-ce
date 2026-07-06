@@ -4747,7 +4747,9 @@ static InventoryMoveResult _move_inventory(Object* item, int slotIndex, Object* 
                 }
 
                 if (!skipMove && result != INVENTORY_MOVE_RESULT_CAUGHT_STEALING) {
-                    if (itemMove(_inven_dude, targetObj, item, quantityToMove) != -1) {
+                    if (!scriptHooks_InventoryMove(HOOK_INVENTORYMOVE_CONTAINER, item, targetObj)) {
+                        result = INVENTORY_MOVE_RESULT_FAILED;
+                    } else if (itemMove(_inven_dude, targetObj, item, quantityToMove) != -1) {
                         result = INVENTORY_MOVE_RESULT_SUCCESS;
                     } else {
                         inventoryDisplayMessage(26); // There is no space left for that item.
@@ -4774,7 +4776,9 @@ static InventoryMoveResult _move_inventory(Object* item, int slotIndex, Object* 
                 }
 
                 if (!skipMove && result != INVENTORY_MOVE_RESULT_CAUGHT_STEALING) {
-                    if (itemMove(targetObj, _inven_dude, item, quantityToMove) == 0) {
+                    if (!scriptHooks_InventoryMove(HOOK_INVENTORYMOVE_CONTAINER, item, targetObj)) {
+                        result = INVENTORY_MOVE_RESULT_FAILED;
+                    } else if (itemMove(targetObj, _inven_dude, item, quantityToMove) == 0) {
                         if ((item->flags & OBJECT_IN_RIGHT_HAND) != 0) {
                             targetObj->fid = buildFid(FID_TYPE(targetObj->fid), targetObj->fid & 0xFFF, FID_ANIM_TYPE(targetObj->fid), 0, targetObj->rotation + 1);
                         }

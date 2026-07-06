@@ -3664,6 +3664,13 @@ bool explosiveGetDamage(int pid, int* minDamagePtr, int* maxDamagePtr)
         }
     }
 
+    // SFALL: Check gExplosiveOverrides for custom explosives set via
+    // item_make_explosive metarule. If an override exists, return its
+    // configured damage values directly.
+    if (sfallGetExplosiveOverrideDamage(pid, minDamagePtr, maxDamagePtr)) {
+        return true;
+    }
+
     return false;
 }
 

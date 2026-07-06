@@ -40,6 +40,7 @@
 #include "scripts.h"
 #include "sfall_metarules.h"
 #include "sfall_opcodes.h"
+#include "sfall_script_hooks.h"
 #include "skill.h"
 #include "stat.h"
 #include "svga.h"
@@ -1257,10 +1258,16 @@ static int characterEditorWindowInit()
     gCharacterEditorTaggedSkillCount = v1;
 
     // traits
-    traitsGetSelected(&(gCharacterEditorTempTraits[0]), &(gCharacterEditorTempTraits[1]));
+    // I2-132: Read all 3 trait slots (FO1 mode uses 3, FO2 uses 2).
+    // gCharacterEditorTempTraits[2] was previously never initialized, causing
+    // it to read as trait 0 (Fast Metabolism) — a phantom selected trait.
+    traitsGetSelected(&(gCharacterEditorTempTraits[0]), &(gCharacterEditorTempTraits[1]), &(gCharacterEditorTempTraits[2]));
 
+    // I2-133: Use traitGetMaxSelectedCount() instead of hardcoded 2 for trait
+    // count computation. FO1 mode allows 3 traits, FO2 allows 2.
+    int maxTraits = traitGetMaxSelectedCount();
     v3 = 0;
-    for (i = 1; i >= 0; i--) {
+    for (i = maxTraits - 1; i >= 0; i--) {
         if (gCharacterEditorTempTraits[i] != -1) {
             break;
         }
@@ -1889,7 +1896,8 @@ static void characterEditorWindowFree()
 
     if (gCharacterEditorIsCreationMode) {
         skillsSetTagged(gCharacterEditorTempTaggedSkills, 3);
-        traitsSetSelected(gCharacterEditorTempTraits[0], gCharacterEditorTempTraits[1]);
+        // F-021: Pass all 3 trait slots (FO1 mode).
+        traitsSetSelected(gCharacterEditorTempTraits[0], gCharacterEditorTempTraits[1], gCharacterEditorTempTraits[2]);
         characterEditorSelectedItem = 0;
         critterAdjustHitPoints(gDude, 1000);
     }
@@ -1909,7 +1917,9 @@ void characterEditorInit()
     gCharacterEditorHasFreePerk = 0;
     characterEditorWindowSelectedFolder = EDITOR_FOLDER_PERKS;
 
-    for (i = 0; i < 2; i++) {
+    // F-M4: Use traitGetMaxSelectedCount() instead of hardcoded 2.
+    // FO1 mode allows 3 traits, FO2 allows 2.
+    for (i = 0; i < traitGetMaxSelectedCount(); i++) {
         gCharacterEditorTempTraits[i] = -1;
         gCharacterEditorOptionalTraitsBackup[i] = -1;
     }
@@ -2111,7 +2121,18 @@ static void characterEditorDrawPerksFolder()
 
     characterEditorFolderViewClear();
 
-    if (gCharacterEditorTempTraits[0] != -1) {
+    // F-M3: Check all trait slots (not just [0]) so the traits section
+    // shows even if only slot [2] (FO1 mode) has a trait.
+    int maxTraits = traitGetMaxSelectedCount();
+    bool anyTrait = false;
+    for (int i = 0; i < maxTraits; i++) {
+        if (gCharacterEditorTempTraits[i] != -1) {
+            anyTrait = true;
+            break;
+        }
+    }
+
+    if (anyTrait) {
         // TRAITS
         string = getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 156);
         if (characterEditorFolderViewDrawHeading(string)) {
@@ -2124,25 +2145,19 @@ static void characterEditorDrawPerksFolder()
             hasContent = true;
         }
 
-        if (gCharacterEditorTempTraits[0] != -1) {
-            string = traitGetName(gCharacterEditorTempTraits[0]);
-            if (characterEditorFolderViewDrawString(string)) {
-                gCharacterEditorFolderCardFrmId = traitGetFrmId(gCharacterEditorTempTraits[0]);
-                gCharacterEditorFolderCardTitle = traitGetName(gCharacterEditorTempTraits[0]);
-                gCharacterEditorFolderCardSubtitle = nullptr;
-                gCharacterEditorFolderCardDescription = traitGetDescription(gCharacterEditorTempTraits[0]);
-                hasContent = true;
-            }
-        }
-
-        if (gCharacterEditorTempTraits[1] != -1) {
-            string = traitGetName(gCharacterEditorTempTraits[1]);
-            if (characterEditorFolderViewDrawString(string)) {
-                gCharacterEditorFolderCardFrmId = traitGetFrmId(gCharacterEditorTempTraits[1]);
-                gCharacterEditorFolderCardTitle = traitGetName(gCharacterEditorTempTraits[1]);
-                gCharacterEditorFolderCardSubtitle = nullptr;
-                gCharacterEditorFolderCardDescription = traitGetDescription(gCharacterEditorTempTraits[1]);
-                hasContent = true;
+        // I2-134/F-M3: Use traitGetMaxSelectedCount() for folder cards so all
+        // slots (including [2] in FO1 mode) are rendered. In FO2 mode maxTraits=2
+        // and the loop behavior is identical to the original hardcoded [0]/[1].
+        for (int i = 0; i < maxTraits; i++) {
+            if (gCharacterEditorTempTraits[i] != -1) {
+                string = traitGetName(gCharacterEditorTempTraits[i]);
+                if (characterEditorFolderViewDrawString(string)) {
+                    gCharacterEditorFolderCardFrmId = traitGetFrmId(gCharacterEditorTempTraits[i]);
+                    gCharacterEditorFolderCardTitle = traitGetName(gCharacterEditorTempTraits[i]);
+                    gCharacterEditorFolderCardSubtitle = nullptr;
+                    gCharacterEditorFolderCardDescription = traitGetDescription(gCharacterEditorTempTraits[i]);
+                    hasContent = true;
+                }
             }
         }
 
@@ -3950,10 +3965,13 @@ static int characterEditorShowOptions()
 
                     gCharacterEditorTaggedSkillCount = taggedSkillCount;
 
-                    traitsGetSelected(&gCharacterEditorTempTraits[0], &gCharacterEditorTempTraits[1]);
+                    // I2-132: Read all 3 trait slots (FO1 mode).
+                    traitsGetSelected(&gCharacterEditorTempTraits[0], &gCharacterEditorTempTraits[1], &gCharacterEditorTempTraits[2]);
 
+                    // I2-133: Use traitGetMaxSelectedCount() instead of hardcoded 2.
                     int traitCount = 0;
-                    for (int index = 1; index >= 0; index--) {
+                    int maxTraits = traitGetMaxSelectedCount();
+                    for (int index = maxTraits - 1; index >= 0; index--) {
                         if (gCharacterEditorTempTraits[index] != -1) {
                             break;
                         }
@@ -4087,10 +4105,13 @@ static int characterEditorShowOptions()
 
                             gCharacterEditorTaggedSkillCount = taggedSkillCount;
 
-                            traitsGetSelected(&(gCharacterEditorTempTraits[0]), &(gCharacterEditorTempTraits[1]));
+                            // I2-132: Read all 3 trait slots (FO1 mode).
+                            traitsGetSelected(&(gCharacterEditorTempTraits[0]), &(gCharacterEditorTempTraits[1]), &(gCharacterEditorTempTraits[2]));
 
+                            // I2-133: Use traitGetMaxSelectedCount() instead of hardcoded 2.
                             int traitCount = 0;
-                            for (int index = 1; index >= 0; index--) {
+                            int maxTraits = traitGetMaxSelectedCount();
+                            for (int index = maxTraits - 1; index >= 0; index--) {
                                 if (gCharacterEditorTempTraits[index] != -1) {
                                     break;
                                 }
@@ -4167,7 +4188,8 @@ static int characterEditorShowOptions()
 
                         if (shouldSave) {
                             skillsSetTagged(gCharacterEditorTempTaggedSkills, 4);
-                            traitsSetSelected(gCharacterEditorTempTraits[0], gCharacterEditorTempTraits[1]);
+                            // F-021: Pass all 3 trait slots (FO1 mode).
+        traitsSetSelected(gCharacterEditorTempTraits[0], gCharacterEditorTempTraits[1], gCharacterEditorTempTraits[2]);
 
                             string4[0] = '\0';
                             strcat(string4, string1);
@@ -4852,7 +4874,7 @@ static void characterEditorSavePlayer()
 
     skillsGetTagged(gCharacterEditorTaggedSkillsBackup, NUM_TAGGED_SKILLS);
 
-    traitsGetSelected(&(gCharacterEditorOptionalTraitsBackup[0]), &(gCharacterEditorOptionalTraitsBackup[1]));
+    traitsGetSelected(&(gCharacterEditorOptionalTraitsBackup[0]), &(gCharacterEditorOptionalTraitsBackup[1]), &(gCharacterEditorOptionalTraitsBackup[2]));
 
     for (int skill = 0; skill < SKILL_COUNT; skill++) {
         gCharacterEditorSkillsBackup[skill] = skillGetValue(gDude, skill);
@@ -4883,7 +4905,9 @@ static void characterEditorRestorePlayer()
 
     skillsSetTagged(gCharacterEditorTaggedSkillsBackup, NUM_TAGGED_SKILLS);
 
-    traitsSetSelected(gCharacterEditorOptionalTraitsBackup[0], gCharacterEditorOptionalTraitsBackup[1]);
+    // F-021/I2-132: Restore all 3 trait slots. FO1 mode needs the 3rd slot;
+    // in FO2 mode trait3 = -1 (sentinel) via the default parameter.
+    traitsSetSelected(gCharacterEditorOptionalTraitsBackup[0], gCharacterEditorOptionalTraitsBackup[1], gCharacterEditorOptionalTraitsBackup[2]);
 
     skillsGetTagged(gCharacterEditorTempTaggedSkills, NUM_TAGGED_SKILLS);
 
@@ -4901,11 +4925,13 @@ static void characterEditorRestorePlayer()
 
     gCharacterEditorTaggedSkillCount = v3;
 
-    traitsGetSelected(&(gCharacterEditorTempTraits[0]), &(gCharacterEditorTempTraits[1]));
+    // I2-132: Read all 3 trait slots into temp traits array.
+    traitsGetSelected(&(gCharacterEditorTempTraits[0]), &(gCharacterEditorTempTraits[1]), &(gCharacterEditorTempTraits[2]));
 
-    i = 2;
+    // I2-133: Use traitGetMaxSelectedCount() instead of hardcoded 2.
+    int maxTraits = traitGetMaxSelectedCount();
     v3 = 0;
-    for (int idx = 1; idx >= 0; idx--) {
+    for (int idx = maxTraits - 1; idx >= 0; idx--) {
         if (gCharacterEditorTempTraits[idx] != -1) {
             break;
         }
@@ -5413,13 +5439,17 @@ static void characterEditorDrawOptionalTraits()
 
     fontSetCurrent(101);
 
-    traitsSetSelected(gCharacterEditorTempTraits[0], gCharacterEditorTempTraits[1]);
+    // F-021: Pass all 3 trait slots (FO1 mode uses 3, FO2 uses 2).
+    traitsSetSelected(gCharacterEditorTempTraits[0], gCharacterEditorTempTraits[1], gCharacterEditorTempTraits[2]);
 
+    // I2-134: Trait display/exclusion now checks all 3 slots instead of hardcoded 2.
+    // In FO2 mode, gCharacterEditorTempTraits[2] is -1 (sentinel), so the extra
+    // check is harmless — no valid trait index matches -1.
     step = fontGetLineHeight() + 3 + 0.56;
     y = 353;
     for (i = 0; i < 8; i++) {
         if (i == v0) {
-            if (i != gCharacterEditorTempTraits[0] && i != gCharacterEditorTempTraits[1]) {
+            if (i != gCharacterEditorTempTraits[0] && i != gCharacterEditorTempTraits[1] && i != gCharacterEditorTempTraits[2]) {
                 color = _colorTable[32747];
             } else {
                 color = _colorTable[32767];
@@ -5430,7 +5460,7 @@ static void characterEditorDrawOptionalTraits()
             gCharacterEditorFolderCardSubtitle = nullptr;
             gCharacterEditorFolderCardDescription = traitGetDescription(i);
         } else {
-            if (i != gCharacterEditorTempTraits[0] && i != gCharacterEditorTempTraits[1]) {
+            if (i != gCharacterEditorTempTraits[0] && i != gCharacterEditorTempTraits[1] && i != gCharacterEditorTempTraits[2]) {
                 color = _colorTable[992];
             } else {
                 color = _colorTable[21140];
@@ -5445,7 +5475,7 @@ static void characterEditorDrawOptionalTraits()
     y = 353;
     for (i = 8; i < 16; i++) {
         if (i == v0) {
-            if (i != gCharacterEditorTempTraits[0] && i != gCharacterEditorTempTraits[1]) {
+            if (i != gCharacterEditorTempTraits[0] && i != gCharacterEditorTempTraits[1] && i != gCharacterEditorTempTraits[2]) {
                 color = _colorTable[32747];
             } else {
                 color = _colorTable[32767];
@@ -5456,7 +5486,7 @@ static void characterEditorDrawOptionalTraits()
             gCharacterEditorFolderCardSubtitle = nullptr;
             gCharacterEditorFolderCardDescription = traitGetDescription(i);
         } else {
-            if (i != gCharacterEditorTempTraits[0] && i != gCharacterEditorTempTraits[1]) {
+            if (i != gCharacterEditorTempTraits[0] && i != gCharacterEditorTempTraits[1] && i != gCharacterEditorTempTraits[2]) {
                 color = _colorTable[992];
             } else {
                 color = _colorTable[21140];
@@ -5810,12 +5840,19 @@ static int characterEditorUpdateLevel()
             if (selectedPerksCount < 37) {
                 // Use gPerkFrequencyOverride if set by set_perk_freq metarule;
                 // otherwise fall back to engine default of 3 levels per perk.
+                // When a frequency override is active, it is authoritative
+                // (Skilled modifier is NOT added on top, to avoid N+1 double-count).
                 // F-35: Apply sfall perk level modifier (opcode 0x81AB).
-                int progression = (gPerkFrequencyOverride > 0) ? gPerkFrequencyOverride : 3;
-                progression -= sfallGetPerkLevelMod();
-                if (traitIsSelected(TRAIT_SKILLED)) {
-                    progression += 1;
+                int progression;
+                if (gPerkFrequencyOverride > 0) {
+                    progression = gPerkFrequencyOverride;
+                } else {
+                    progression = 3;
+                    if (traitIsSelected(TRAIT_SKILLED)) {
+                        progression += 1;
+                    }
                 }
+                progression -= sfallGetPerkLevelMod();
 
                 // Clamp to minimum of 1 level per perk to avoid divide-by-zero
                 // and nonsensical frequency.
@@ -5839,6 +5876,13 @@ static int characterEditorUpdateLevel()
                     }
                 }
             }
+
+            // SFALL: Notify scripts that the player character has leveled up.
+            // Fires once per new level gained (nextLevel != gCharacterEditorLastLevel
+            // is always true inside the loop). The primary fire site is in
+            // pcAddExperienceWithOptions() in stat.cc; this covers the character
+            // editor's own level-up path.
+            scriptHooks_StatLevelUp(gDude);
         }
     }
 
@@ -6620,25 +6664,29 @@ static bool perkDialogHandleMutatePerk()
 
         int rc = perkDialogHandleInput(gCharacterEditorTempTraitCount, perkDialogRefreshTraits);
         if (rc == 1) {
-            if (gPerkDialogCurrentLine == 0) {
-                if (gCharacterEditorTempTraitCount == 1) {
-                    gCharacterEditorTempTraits[0] = -1;
-                    gCharacterEditorTempTraits[1] = -1;
-                } else {
-                    if (gPerkDialogOptionList[0].value == gCharacterEditorTempTraits[0]) {
-                        gCharacterEditorTempTraits[0] = gCharacterEditorTempTraits[1];
-                        gCharacterEditorTempTraits[1] = -1;
-                    } else {
-                        gCharacterEditorTempTraits[1] = -1;
-                    }
+            // I2-128: Remove selected trait and shift remaining traits left.
+            // Works with any number of trait slots (2 for FO2, 3 for FO1).
+            int removedTrait = gPerkDialogOptionList[gPerkDialogCurrentLine + gPerkDialogTopLine].value;
+            bool found = false;
+            for (int t = 0; t < maxTraits; t++) {
+                if (!found && gCharacterEditorTempTraits[t] == removedTrait) {
+                    found = true;
                 }
-            } else {
-                if (gPerkDialogOptionList[0].value == gCharacterEditorTempTraits[0]) {
-                    gCharacterEditorTempTraits[1] = -1;
-                } else {
-                    gCharacterEditorTempTraits[0] = gCharacterEditorTempTraits[1];
-                    gCharacterEditorTempTraits[1] = -1;
+                if (found && t + 1 < maxTraits) {
+                    gCharacterEditorTempTraits[t] = gCharacterEditorTempTraits[t + 1];
                 }
+            }
+            if (found) {
+                gCharacterEditorTempTraits[maxTraits - 1] = -1;
+            }
+
+            // Recompute trait count after removal.
+            gCharacterEditorTempTraitCount = 0;
+            for (int t = maxTraits - 1; t >= 0; t--) {
+                if (gCharacterEditorTempTraits[t] != -1) {
+                    break;
+                }
+                gCharacterEditorTempTraitCount++;
             }
         } else {
             result = false;
@@ -6672,14 +6720,27 @@ static bool perkDialogHandleMutatePerk()
 
         int rc = perkDialogHandleInput(count, perkDialogRefreshTraits);
         if (rc == 1) {
-            if (gCharacterEditorTempTraitCount != 0) {
-                gCharacterEditorTempTraits[1] = gPerkDialogOptionList[gPerkDialogCurrentLine + gPerkDialogTopLine].value;
-            } else {
-                gCharacterEditorTempTraits[0] = gPerkDialogOptionList[gPerkDialogCurrentLine + gPerkDialogTopLine].value;
-                gCharacterEditorTempTraits[1] = -1;
+            // I2-128: Insert new trait into first empty slot.
+            // Works with any number of trait slots (2 for FO2, 3 for FO1).
+            int newTrait = gPerkDialogOptionList[gPerkDialogCurrentLine + gPerkDialogTopLine].value;
+            for (int t = 0; t < maxTraits; t++) {
+                if (gCharacterEditorTempTraits[t] == -1) {
+                    gCharacterEditorTempTraits[t] = newTrait;
+                    break;
+                }
             }
 
-            traitsSetSelected(gCharacterEditorTempTraits[0], gCharacterEditorTempTraits[1]);
+            // Recompute trait count after addition.
+            gCharacterEditorTempTraitCount = 0;
+            for (int t = maxTraits - 1; t >= 0; t--) {
+                if (gCharacterEditorTempTraits[t] != -1) {
+                    break;
+                }
+                gCharacterEditorTempTraitCount++;
+            }
+
+            // F-021: Pass all 3 trait slots (FO1 mode).
+            traitsSetSelected(gCharacterEditorTempTraits[0], gCharacterEditorTempTraits[1], gCharacterEditorTempTraits[2]);
         } else {
             result = false;
         }

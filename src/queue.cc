@@ -483,8 +483,8 @@ static int explosionProcess(Object* explosive, bool animate)
         elevation = explosive->elevation;
     }
 
-    int maxDamage;
-    int minDamage;
+    int maxDamage = 0;
+    int minDamage = 0;
 
     // SFALL
     explosiveGetDamage(explosive->pid, &minDamage, &maxDamage);

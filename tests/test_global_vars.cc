@@ -130,7 +130,7 @@ TEST_CASE("sfall_gl_vars_store / sfall_gl_vars_fetch — int keys")
     sfall_gl_vars_exit();
 }
 
-TEST_CASE("sfall_gl_vars_store / sfall_gl_vars_fetch — string keys (8-char)")
+TEST_CASE("sfall_gl_vars_store / sfall_gl_vars_fetch — string keys")
 {
     CHECK(sfall_gl_vars_init());
 
@@ -143,14 +143,22 @@ TEST_CASE("sfall_gl_vars_store / sfall_gl_vars_fetch — string keys (8-char)")
         CHECK(val == 42);
     }
 
-    SUBCASE("reject key != 8 chars")
+    SUBCASE("store and fetch with short key (zero-padded)")
     {
-        CHECK_FALSE(sfall_gl_vars_store("ABC", 42));
-        CHECK_FALSE(sfall_gl_vars_store("ABCDEFGHI", 42));  // 9 chars
-
+        // Short keys (< 8 chars) are zero-padded in high bytes.
+        CHECK(sfall_gl_vars_store("ABC", 42));
         int val = 0;
-        CHECK_FALSE(sfall_gl_vars_fetch("ABC", val));
-        CHECK_FALSE(sfall_gl_vars_fetch("ABCDEFGHI", val));
+        CHECK(sfall_gl_vars_fetch("ABC", val));
+        CHECK(val == 42);
+    }
+
+    SUBCASE("store and fetch with long key (FNV-1a hashed)")
+    {
+        // Long keys (> 8 chars) are FNV-1a hashed to uint64_t.
+        CHECK(sfall_gl_vars_store("ABCDEFGHI", 42));
+        int val = 0;
+        CHECK(sfall_gl_vars_fetch("ABCDEFGHI", val));
+        CHECK(val == 42);
     }
 
     SUBCASE("string with printable 8-char key")
@@ -249,12 +257,16 @@ TEST_CASE("sfall_gl_vars_store_float / sfall_gl_vars_fetch_float — M-050 (sfal
         CHECK(val == doctest::Approx(2.71f));
     }
 
-    SUBCASE("string key length rejection")
+    SUBCASE("short and long string keys")
     {
-        CHECK_FALSE(sfall_gl_vars_store_float("ABC", 1.0f));       // too short
-        CHECK_FALSE(sfall_gl_vars_store_float("ABCDEFGHI", 1.0f)); // too long
+        // Short keys (< 8 chars) are zero-padded; long keys (> 8 chars) are FNV-1a hashed.
+        CHECK(sfall_gl_vars_store_float("ABC", 1.0f));
+        CHECK(sfall_gl_vars_store_float("ABCDEFGHI", 2.0f));
         float val = 0.0f;
-        CHECK_FALSE(sfall_gl_vars_fetch_float("ABC", val));
+        CHECK(sfall_gl_vars_fetch_float("ABC", val));
+        CHECK(val == doctest::Approx(1.0f));
+        CHECK(sfall_gl_vars_fetch_float("ABCDEFGHI", val));
+        CHECK(val == doctest::Approx(2.0f));
     }
 
     SUBCASE("multiple float values with int keys")

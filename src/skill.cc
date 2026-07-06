@@ -263,11 +263,17 @@ int skillGetValue(Object* critter, int skill)
         value += traitGetSkillModifier(skill);
         value += perkGetSkillModifier(critter, skill);
         value += skillGetGameDifficultyModifier(skill);
-        // F-34: Apply sfall skill modifiers set via opcodes 0x81C7/0x81C8.
-        // sfallGetBaseSkillMod() is applied before baseValue multipliers
-        // (inline at line 252); sfallGetCritterSkillMod() is a flat addition
-        // after all other calculations (alongside trait/perk/difficulty mods).
-        value += sfallGetCritterSkillMod();
+        // F-004: Apply sfall per-critter skill modifier first, then fall back
+        // to the global modifier. Per-critter overrides set via opcode 0x81C7
+        // (set_critter_skill_mod) were previously stored but never consumed.
+        // F-34: sfallGetBaseSkillMod() is applied before baseValue multipliers
+        // (inline at line 252).
+        int perCritterSkillMod = sfallGetCritterSkillModForCritter(critter);
+        if (perCritterSkillMod != 0) {
+            value += perCritterSkillMod;
+        } else {
+            value += sfallGetCritterSkillMod();
+        }
     }
 
     // Use gSkillMaxCap if set by set_skill_max metarule;
@@ -1086,6 +1092,22 @@ SkillStealResult skillsPerformStealing(Object* thief, Object* target, Object* it
 
     int stealModifier = -_gStealCount + 1;
 
+    // F-003: Apply sfall pickpocket modifiers. These were stored via opcodes
+    // 0x81C9 (set_critter_pickpocket_mod), 0x81CA (set_base_pickpocket_mod)
+    // but were never consumed in steal calculations.
+    // sfallGetBasePickpocketMod() is always added; per-critter override
+    // replaces sfallGetCritterPickpocketMod() when available.
+    stealModifier += sfallGetBasePickpocketMod();
+
+    int ppMod = 0;
+    int ppMax = 0;
+    bool hasPerCritterOverride = sfallGetCritterPickpocketModForCritter(thief, ppMod, ppMax);
+    if (hasPerCritterOverride) {
+        stealModifier += ppMod;
+    } else {
+        stealModifier += sfallGetCritterPickpocketMod();
+    }
+
     if (thief != gDude || !perkHasRank(thief, PERK_PICKPOCKET)) {
         // -4% per item size
         stealModifier -= 4 * itemGetSize(item);
@@ -1103,8 +1125,21 @@ SkillStealResult skillsPerformStealing(Object* thief, Object* target, Object* it
     }
 
     int stealChance = stealModifier + skillGetValue(thief, SKILL_STEAL);
-    if (stealChance > 95) {
-        stealChance = 95;
+
+    // F-M2/F-003: Use sfall-configurable pickpocket max cap instead of hardcoded 95.
+    // Per-critter override (ppMax) takes precedence when available AND > 0;
+    // otherwise falls back to global sfallGetPickpocketMax(). Final fallback to 95.
+    int stealCap;
+    if (hasPerCritterOverride && ppMax > 0) {
+        stealCap = ppMax;
+    } else {
+        stealCap = sfallGetPickpocketMax();
+    }
+    if (stealCap <= 0) {
+        stealCap = 95;
+    }
+    if (stealChance > stealCap) {
+        stealChance = stealCap;
     }
 
     int stealRoll;

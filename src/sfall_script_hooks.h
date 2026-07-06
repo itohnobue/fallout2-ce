@@ -219,7 +219,22 @@ typedef enum {
     // Arguments: speaker (Object), reaction (int).
     HOOK_DIALOGREACTION = 50,
 
-    // RESERVED 51..60 — available for future hook types. Hook registers for
+    // Fires when the player character levels up (after XP gain triggers a level-up).
+    // Fire sites: stat.cc pcAddExperienceWithOptions(), character_editor.cc characterEditorUpdateLevel().
+    // Arguments: critter (Object).
+    HOOK_STATLEVELUP = 51,
+
+    // Fires when barter/trade is initiated between the player and an NPC.
+    // Fire site: game_dialog.cc gameDialogBarter().
+    // Arguments: dude (Object), npc (Object), mode (int).
+    HOOK_BARTER = 52,
+
+    // Fires when a message is displayed to the player in the message monitor.
+    // Fire site: display_monitor.cc displayMonitorAddMessage().
+    // Arguments: message (string).
+    HOOK_MESSAGE = 53,
+
+    // RESERVED 54..60 — available for future hook types. Hook registers for
     // these IDs will be accepted by scriptHooksRegister() but never fire
     // (no fire sites exist). Add fire sites before claiming a reserved slot.
 
@@ -450,6 +465,11 @@ bool scriptHooks_CanUseWeapon(bool result, Object* critter, Object* weapon, int 
 void scriptHooks_UseAnimObj(Object* object, int animId, int delay);
 void scriptHooks_DescriptionObj(Object* examiner, Object* target, std::string& description);
 void scriptHooks_SetLighting(Object* object, int* lightIntensityPtr, int* lightDistancePtr);
+
+// Hook fire functions — Phase 7 (hook restoration — HOOK_STATLEVELUP, HOOK_BARTER, HOOK_MESSAGE)
+void scriptHooks_StatLevelUp(Object* critter);
+void scriptHooks_Barter(Object* dude, Object* npc, int mode);
+void scriptHooks_Message(const char* msg);
 
 // Hook fire functions for Phase 5 (RPU hardening)
 void scriptHooks_CarTravel(int* speedPtr, int* fuelConsumptionPtr);

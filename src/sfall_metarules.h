@@ -102,10 +102,20 @@ int sfallGetMapEnterX();
 int sfallGetMapEnterY();
 int sfallGetMapEnterElevation();
 
+// Returns the script name override set via set_scr_name metarule.
+// Empty string = no override. Consumer: scriptsGetFileName() in scripts.cc.
+const char* sfallGetScriptNameOverride();
+
 // Returns true if the given PID has an explosive override set via
 // item_make_explosive metarule. Used by explosiveIsExplosive() and
 // explosiveActivate() in item.cc.
 bool sfallIsExplosiveOverride(int pid);
+
+// Returns true if the given PID has an explosive override, populating
+// outMinDamage and outMaxDamage with the override's damage values.
+// Returns false if no override exists (out params unchanged).
+// Used by explosiveGetDamage() in item.cc.
+bool sfallGetExplosiveOverrideDamage(int pid, int* outMinDamage, int* outMaxDamage);
 
 } // namespace fallout
 

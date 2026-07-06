@@ -414,6 +414,11 @@ int gameInitWithOptions(const char* windowTitle, bool isMapper, int font, int fl
         return -1;
     }
 
+    // Parse GlobalScriptPaths from ddraw.ini before global script init
+    // so that user-configured paths (e.g. RPU's scripts/sfall/gl*.int)
+    // are available when sfall_gl_scr_init() collects script paths.
+    sfallParseGlobalScriptPaths();
+
     if (!sfall_gl_scr_init()) {
         debugPrint("Failed on sfall_gl_scr_init");
         return -1;

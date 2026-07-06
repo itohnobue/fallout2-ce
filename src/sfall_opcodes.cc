@@ -1,6 +1,7 @@
 #include "sfall_opcodes.h"
 
 #include <algorithm>
+#include <cerrno>
 #include <cstdint>
 #include <cstdio>
 #include <limits.h>
@@ -1253,7 +1254,13 @@ static void op_list_as_array(Program* program)
 static void op_parse_int(Program* program)
 {
     const char* string = programStackPopString(program);
-    programStackPushInteger(program, static_cast<int>(strtol(string, nullptr, 0)));
+    errno = 0;
+    long result = strtol(string, nullptr, 0);
+    if (errno == ERANGE) {
+        programStackPushInteger(program, (result == LONG_MAX) ? INT_MAX : INT_MIN);
+    } else {
+        programStackPushInteger(program, static_cast<int>(result));
+    }
 }
 
 // atof
@@ -1405,8 +1412,8 @@ static void op_explosions_metarule(Program* program)
         break;
     case EXPL_GET_EXPLOSION_DAMAGE:
         if (1) {
-            int minDamage;
-            int maxDamage;
+            int minDamage = 0;
+            int maxDamage = 0;
             explosiveGetDamage(param1, &minDamage, &maxDamage);
 
             ArrayId arrayId = CreateTempArray(2, 0);
@@ -2584,6 +2591,12 @@ static void op_div(Program* program)
     if (dividendValue.isFloat() || divisorValue.isFloat()) {
         programStackPushFloat(program, dividendValue.asFloat() / divisorValue.asFloat());
     } else {
+        // Guard against INT_MIN / -1 which causes signed overflow UB (SIGFPE on x86).
+        if (divisorValue.integerValue == -1 && dividendValue.integerValue == INT_MIN) {
+            debugPrint("Division overflow: INT_MIN / -1");
+            programStackPushInteger(program, 0);
+            return;
+        }
         // Signed division — matches sfall and universal scripting convention.
         programStackPushInteger(program, dividendValue.integerValue / divisorValue.integerValue);
     }
@@ -5066,6 +5079,31 @@ void sfallOpcodeStateSave()
         sfall_gl_vars_store(key, entry.second.max);      // max value
         idx++;
     }
+
+    // F-062 (I2-088): Serialize fake perks and traits. Only int fields
+    // (level, image, active) are stored since the global vars system
+    // does not support string values. name/desc strings MUST be re-
+    // populated by mod scripts on game load via set_fake_perk /
+    // set_fake_trait / set_selectable_perk opcodes.
+    // Format: count per type, then indexed {level, image, active}.
+    sfall_gl_vars_store("SFFPkcnt", sfallFakePerkCount);
+    for (int i = 0; i < sfallFakePerkCount && i < kMaxFakePerks; i++) {
+        char key[16] = {};
+        sprintf(key, "SFFPL%03d", i);
+        sfall_gl_vars_store(key, sfallFakePerks[i].level);
+        sprintf(key, "SFFPI%03d", i);
+        sfall_gl_vars_store(key, sfallFakePerks[i].image);
+        sprintf(key, "SFFPA%03d", i);
+        sfall_gl_vars_store(key, sfallFakePerks[i].active ? 1 : 0);
+    }
+    sfall_gl_vars_store("SFFTkcnt", sfallFakeTraitCount);
+    for (int i = 0; i < sfallFakeTraitCount && i < kMaxFakeTraits; i++) {
+        char key[16] = {};
+        sprintf(key, "SFFTA%03d", i);
+        sfall_gl_vars_store(key, sfallFakeTraits[i].active);
+        sprintf(key, "SFFTI%03d", i);
+        sfall_gl_vars_store(key, sfallFakeTraits[i].image);
+    }
 }
 
 // Restore opcode globals from the sfall global vars map after
@@ -5381,6 +5419,51 @@ void sfallOpcodeStateLoad()
             }
         }
     }
+
+    // F-062 (I2-088): Restore fake perks and traits from serialized state.
+    // name/desc strings are NOT restored (global vars system only supports
+    // int/float) — mod scripts must re-call set_fake_perk / set_fake_trait /
+    // set_selectable_perk on game load to repopulate strings. The restored
+    // int fields (level, image, active) keep the array positions and counts
+    // intact so the entries are in a consistent state when scripts repopulate.
+    {
+        int fpCount = 0;
+        if (sfall_gl_vars_fetch("SFFPkcnt", fpCount) && fpCount > 0 && fpCount <= kMaxFakePerks) {
+            sfallFakePerkCount = fpCount;
+            for (int i = 0; i < fpCount; i++) {
+                char key[16] = {};
+                int ival = 0;
+                sprintf(key, "SFFPL%03d", i);
+                if (sfall_gl_vars_fetch(key, ival)) {
+                    sfallFakePerks[i].level = ival;
+                }
+                sprintf(key, "SFFPI%03d", i);
+                if (sfall_gl_vars_fetch(key, ival)) {
+                    sfallFakePerks[i].image = ival;
+                }
+                sprintf(key, "SFFPA%03d", i);
+                if (sfall_gl_vars_fetch(key, ival)) {
+                    sfallFakePerks[i].active = (ival != 0);
+                }
+            }
+        }
+        int ftCount = 0;
+        if (sfall_gl_vars_fetch("SFFTkcnt", ftCount) && ftCount > 0 && ftCount <= kMaxFakeTraits) {
+            sfallFakeTraitCount = ftCount;
+            for (int i = 0; i < ftCount; i++) {
+                char key[16] = {};
+                int ival = 0;
+                sprintf(key, "SFFTA%03d", i);
+                if (sfall_gl_vars_fetch(key, ival)) {
+                    sfallFakeTraits[i].active = ival;
+                }
+                sprintf(key, "SFFTI%03d", i);
+                if (sfall_gl_vars_fetch(key, ival)) {
+                    sfallFakeTraits[i].image = ival;
+                }
+            }
+        }
+    }
 }
 
 // ============================================================
@@ -5676,8 +5759,11 @@ void sfallOpcodesInit()
     //
     // NOTE: AllowUnsafeScripting gates registration because these opcodes
     // perform no useful work in CE — they exist only for script compatibility.
-    // Scripts should use CE-native opcodes and metarules instead.
-    if (gAllowUnsafeScripting) {
+    // Always registering them (unconditionally) prevents script-terminating
+    // programFatalError when scripts call them with AllowUnsafeScripting=0.
+    // The opcode implementations respect gAllowUnsafeScripting internally:
+    // when disabled, they pop arguments and push 0 as a safe fallback.
+    {
         // 0x81cf - void  write_byte(int address, int value)
         interpreterRegisterOpcode(0x81CF, op_write_byte);
         // 0x81d0 - void  write_short(int address, int value)
@@ -5711,7 +5797,7 @@ void sfallOpcodesInit()
         interpreterRegisterOpcode(0x81DA, op_call_offset_r3);
         // 0x81db - int   call_offset_r4(int address, int arg1, int arg2, int arg3, int arg4)
         interpreterRegisterOpcode(0x81DB, op_call_offset_r4);
-    } // gAllowUnsafeScripting
+    }
 
     // 0x815a - void set_pc_base_stat(int StatID, int value)
     interpreterRegisterOpcode(0x815A, op_set_pc_base_stat);
@@ -5817,11 +5903,15 @@ void sfallOpcodesInit()
     // 0x8175 - void set_dm_model(string name)
     // 0x8176 - void set_df_model(string name)
     // 0x8177 - void set_movie_path(string filename, int movieid)
-    if (sfallConfigGetHeroAppearanceMod()) {
-        interpreterRegisterOpcode(0x8175, op_set_dm_model);
-        interpreterRegisterOpcode(0x8176, op_set_df_model);
-        interpreterRegisterOpcode(0x8177, op_set_movie_path);
-    }
+    // Always register these opcodes unconditionally to prevent script-
+    // terminating programFatalError when HeroAppearanceMod is disabled.
+    // op_set_dm_model / op_set_df_model store global model numbers which
+    // are simply ignored by the engine when the config is off.
+    // op_set_movie_path stores movie path overrides — zero connection to
+    // hero model appearance (F-029).
+    interpreterRegisterOpcode(0x8175, op_set_dm_model);
+    interpreterRegisterOpcode(0x8176, op_set_df_model);
+    interpreterRegisterOpcode(0x8177, op_set_movie_path);
 
     // 0x8178 - void set_perk_image(int perkID, int value)
     interpreterRegisterOpcode(0x8178, op_set_perk_image);
@@ -6168,11 +6258,14 @@ void sfallOpcodesInit()
     // 0x8213 - void hero_select_win(int)
     // 0x8214 - void set_hero_race(int race)
     // 0x8215 - void set_hero_style(int style)
-    if (sfallConfigGetHeroAppearanceMod()) {
-        interpreterRegisterOpcode(0x8213, op_hero_select_win);
-        interpreterRegisterOpcode(0x8214, op_set_hero_race);
-        interpreterRegisterOpcode(0x8215, op_set_hero_style);
-    }
+    // Always register these opcodes unconditionally to prevent script-
+    // terminating programFatalError when HeroAppearanceMod is disabled.
+    // The opcode implementations safely no-op when the config is off:
+    //   op_hero_select_win: checks characterEditorGetWindow() >= 0 first.
+    //   op_set_hero_race / op_set_hero_style: just store in global vars.
+    interpreterRegisterOpcode(0x8213, op_hero_select_win);
+    interpreterRegisterOpcode(0x8214, op_set_hero_race);
+    interpreterRegisterOpcode(0x8215, op_set_hero_style);
 
     // 0x8216 - void set_critter_burst_disable(object critter, int disable)
     interpreterRegisterOpcode(0x8216, op_set_critter_burst_disable);

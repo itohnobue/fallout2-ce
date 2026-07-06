@@ -211,10 +211,22 @@ static int gEndgameEndingSlideshowWindow;
 
 static int gEndgameEndingOverlay;
 
+// I2-096: Re-entrancy guard for the endgame slideshow/movie.
+// Script hooks inside the endgame can re-set the ENDGAME request flag,
+// causing it to fire again after completion. This guard prevents that.
+static bool gEndgameInProgress = false;
+
 // 0x43F788 endgame_slideshow
 void endgamePlaySlideshow()
 {
+    // I2-096: Prevent re-entrant entry via script hooks that re-set ENDGAME.
+    if (gEndgameInProgress) {
+        return;
+    }
+    gEndgameInProgress = true;
+
     if (endgameEndingSlideshowWindowInit() == -1) {
+        gEndgameInProgress = false;
         return;
     }
 
@@ -238,11 +250,20 @@ void endgamePlaySlideshow()
     scriptHooks_SlideshowEnd();
 
     endgameEndingSlideshowWindowFree();
+
+    // I2-096: Reset re-entrancy guard when slideshow completes normally.
+    gEndgameInProgress = false;
 }
 
 // 0x43F810 endgame_movie
 void endgamePlayMovie()
 {
+    // I2-096: Prevent re-entrant entry via script hooks that re-set ENDGAME.
+    if (gEndgameInProgress) {
+        return;
+    }
+    gEndgameInProgress = true;
+
     // Notify scripts that the game is entering the endgame movie (slideshow) mode.
     scriptHooks_SlideshowStart();
 
@@ -285,6 +306,9 @@ void endgamePlayMovie()
 
     // Notify scripts that the game is leaving the endgame movie (slideshow) mode.
     scriptHooks_SlideshowEnd();
+
+    // I2-096: Reset re-entrancy guard when movie completes normally.
+    gEndgameInProgress = false;
 }
 
 // 0x43F8C4 gameOverConfim
@@ -1182,8 +1206,11 @@ void endgameSetupDeathEnding(int reason)
     switch (reason) {
     case ENDGAME_DEATH_ENDING_REASON_DEATH:
         if (gameGetGlobalVar(GVAR_MODOC_SHITTY_DEATH) != 0) {
-            selectedEnding = 12;
-            specialEndingSelected = true;
+            // I2-101: Validate that index 12 exists and is enabled before using it.
+            if (12 < gEndgameDeathEndingsLength && gEndgameDeathEndings[12].enabled) {
+                selectedEnding = 12;
+                specialEndingSelected = true;
+            }
         }
         break;
     case ENDGAME_DEATH_ENDING_REASON_TIMEOUT:
@@ -1195,6 +1222,7 @@ void endgameSetupDeathEnding(int reason)
         int chance = randomBetween(0, percentage);
 
         int accum = 0;
+        selectedEnding = -1;  // I2-100: Start with sentinel to detect no-match case.
         for (int index = 0; index < gEndgameDeathEndingsLength; index++) {
             EndgameDeathEnding* deathEnding = &(gEndgameDeathEndings[index]);
 
@@ -1208,7 +1236,30 @@ void endgameSetupDeathEnding(int reason)
         }
     }
 
-    EndgameDeathEnding* deathEnding = &(gEndgameDeathEndings[selectedEnding < gEndgameDeathEndingsLength ? selectedEnding : 0]);
+    // I2-100: Validate the selected ending is valid and enabled.
+    // If no ending was selected (percentage=0 or all disabled), find a safe fallback.
+    EndgameDeathEnding* deathEnding;
+    if (selectedEnding >= 0 && selectedEnding < gEndgameDeathEndingsLength
+        && gEndgameDeathEndings[selectedEnding].enabled) {
+        deathEnding = &(gEndgameDeathEndings[selectedEnding]);
+    } else {
+        // I2-100: The current ending is invalid or not enabled.
+        // Try to find any enabled ending as fallback.
+        int fallbackIdx = -1;
+        for (int index = 0; index < gEndgameDeathEndingsLength; index++) {
+            if (gEndgameDeathEndings[index].enabled) {
+                fallbackIdx = index;
+                break;
+            }
+        }
+        if (fallbackIdx >= 0) {
+            deathEnding = &(gEndgameDeathEndings[fallbackIdx]);
+        } else {
+            // I2-100: No enabled endings at all. Use index 0 as last resort
+            // (its data was parsed from file and is at least syntactically valid).
+            deathEnding = &(gEndgameDeathEndings[0]);
+        }
+    }
 
     strcat(gEndgameDeathEndingFileName, deathEnding->voiceOverBaseName);
 

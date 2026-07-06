@@ -77,6 +77,13 @@ void _combatai_notify_onlookers(Object* a1);
 void _combatai_notify_friends(Object* a1);
 void _combatai_delete_critter(Object* obj);
 
+// Public accessors for get_object_ai_data metarule (sfall_metarules.cc).
+// Returns the AI packet state flags for the given critter.
+int aiPacketGetFlags(Object* obj);
+// Returns the current AI procedure index for the given critter.
+// Returns -1 if the critter has no packet or the procedure is not active.
+int aiPacketGetProcedure(Object* obj);
+
 } // namespace fallout
 
 #endif /* COMBAT_AI_H */

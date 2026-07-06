@@ -24,6 +24,7 @@
 #include "scripts.h"
 #include "sfall_config.h"
 #include "sfall_opcodes.h"
+#include "sfall_script_hooks.h"
 #include "skill.h"
 #include "svga.h"
 #include "tile.h"
@@ -895,6 +896,11 @@ int pcAddExperienceWithOptions(int xp, bool doParty, int* xpGained)
             if (doParty) {
                 _partyMemberIncLevels();
             }
+
+            // SFALL: Fire HOOK_STATLEVELUP to notify scripts that the player
+            // leveled up. Scripts can use this to trigger custom level-up logic,
+            // skill point adjustments, or perk modifications.
+            scriptHooks_StatLevelUp(gDude);
         }
     }
 

@@ -2287,7 +2287,8 @@ int _gdProcessChoice(int optionIndex)
     default:
         // See 0x446907 in ecx but this branch should be unreachable. Due to the
         // bug described above, this code is reachable.
-        reaction = GAME_DIALOG_REACTION_NEUTRAL;
+        // I2-073: Use 0 (neutral) instead of raw enum value 50.
+        reaction = 0;
         debugPrint("\nError: dialog: Empathy Perk: invalid reaction!");
         break;
     }
@@ -3444,6 +3445,11 @@ int gameDialogBarter(int modifier)
 
     gGameDialogBarterModifier = modifier;
     gameDialogBarterButtonUpMouseUp(-1, -1);
+
+    // SFALL: Notify scripts that barter is about to start.
+    // Hook wrapper uses gGameDialogSpeaker to identify the barter NPC.
+    scriptHooks_Barter(gDude, gGameDialogSpeaker, modifier);
+
     dialogMode = GAME_DIALOG_MODE_BARTER;
     dialogSwitchMode = GAME_DIALOG_MODE_SWITCH_TO_BARTER;
 
