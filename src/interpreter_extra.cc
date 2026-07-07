@@ -2749,7 +2749,8 @@ static void opHasTrait(Program* program)
                 result = object->rotation;
                 break;
             case CRITTER_TRAIT_OBJECT_IS_INVISIBLE:
-                result = (object->flags & OBJECT_HIDDEN) == 0;
+                // F-004: Fix inverted check — object is invisible when OBJECT_HIDDEN is set.
+                result = (object->flags & OBJECT_HIDDEN) != 0;
                 break;
             case CRITTER_TRAIT_OBJECT_GET_INVENTORY_WEIGHT:
                 result = objectGetInventoryWeight(object);
@@ -3112,6 +3113,27 @@ static void opCritterRemoveTrait(Program* program)
                 if (perkRemove(object, param) != 0) {
                     scriptError("\nScript Error: op_critter_rm_trait: perk_sub failed");
                 }
+            }
+            break;
+        case CRITTER_TRAIT_OBJECT:
+            // F-052: Extend to support removing AI packets and team assignments.
+            // Follows the pattern from opCritterAddTrait which handles all three.
+            switch (param) {
+            case CRITTER_TRAIT_OBJECT_AI_PACKET:
+                critterSetAiPacket(object, 0);
+                break;
+            case CRITTER_TRAIT_OBJECT_TEAM:
+                if (objectIsPartyMember(object)) {
+                    break;
+                }
+                if (_isLoadingGame()) {
+                    break;
+                }
+                critterSetTeam(object, 0);
+                break;
+            default:
+                scriptError("\nScript Error: %s: op_critter_rm_trait: Trait out of range", program->name);
+                break;
             }
             break;
         default:

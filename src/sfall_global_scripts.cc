@@ -351,6 +351,10 @@ static bool sfall_gl_scr_execute_proc_if_ready(Program* program, int proc)
 
 void sfall_gl_scr_exec_map_update_scripts(int action)
 {
+    if (state == nullptr) {
+        return;
+    }
+
     for (auto& scr : state->globalScripts) {
         if (scr.mode == 0 || scr.mode == 3) {
             sfall_gl_scr_execute_proc_if_ready(scr.program, scr.procs[action]);

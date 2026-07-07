@@ -4,10 +4,10 @@
 #include <string>
 #include <vector>
 
+namespace fallout {
+
 struct XFile;
 typedef XFile File;
-
-namespace fallout {
 
 void sfallLoadMods();
 bool sfallSaveGameData(File* stream);

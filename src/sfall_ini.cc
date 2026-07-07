@@ -1,7 +1,10 @@
 #include "sfall_ini.h"
 
 #include <algorithm>
+#include <cerrno> // for errno, ERANGE
+#include <climits> // for INT_MAX, INT_MIN
 #include <cstdio> // for snprintf
+#include <cstdlib> // for strtol
 #include <cstring> // for strncpy, strlen
 #include <memory>
 #include <string>
@@ -68,6 +71,28 @@ static const char* parse_ini_triplet(const char* triplet, char* fileName, char* 
     // This matches the existing guard in VFS and mod loading paths.
     if (strstr(fileName, "..") != nullptr) {
         return nullptr;
+    }
+
+    // Reject Windows reserved device names (CON, NUL, PRN, AUX,
+    // COM1-COM9, LPT1-LPT9) to prevent potential file access issues
+    // on Windows. The check matches the base name (without extension)
+    // case-insensitively against the reserved list.
+    {
+        const char* dot = strrchr(fileName, '.');
+        size_t baseLen = dot ? static_cast<size_t>(dot - fileName) : fileNameLength;
+
+        static const char* kReservedNames[] = {
+            "CON", "NUL", "PRN", "AUX",
+            "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+            "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+        };
+
+        for (const auto& reserved : kReservedNames) {
+            size_t rlen = strlen(reserved);
+            if (baseLen == rlen && compat_strnicmp(fileName, reserved, rlen) == 0) {
+                return nullptr;
+            }
+        }
     }
 
     strncpy(section, fileNameSectionSep + 1, sectionLength);
@@ -242,7 +267,20 @@ static int sfall_ini_get_int_detailed(const char* triplet, int* value)
         return SFALL_INI_KEY_NOT_FOUND;
     }
 
-    *value = atol(stringValue);
+    // Use strtol with errno+ERANGE to avoid undefined behavior on overflow.
+    // Saturated to INT_MAX/INT_MIN on overflow — scripts receive the closest
+    // representable value rather than UB or rejection (matching the robustness
+    // goal of the existing configGetInt pattern at config.cc:232-244).
+    char* end;
+    errno = 0;
+    long l = strtol(stringValue, &end, 10);
+    if (end == stringValue) {
+        *value = 0;
+    } else if (errno == ERANGE || l < INT_MIN || l > INT_MAX) {
+        *value = (l == LONG_MAX || l > INT_MAX) ? INT_MAX : INT_MIN;
+    } else {
+        *value = static_cast<int>(l);
+    }
     return SFALL_INI_OK;
 }
 

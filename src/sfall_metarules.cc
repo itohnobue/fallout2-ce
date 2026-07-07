@@ -228,8 +228,9 @@ static std::unordered_map<int, std::unordered_map<std::string, FakePerkNpcEntry>
 static std::unordered_map<int, std::unordered_map<std::string, FakePerkNpcEntry>> gFakeSelectablePerksNpc;
 
 // Traits added via the add_trait / remove_trait metarules.
-// Stores trait type IDs (integers) for the player character.
-static std::set<int> gAddedTraits;
+// Stores trait type ID -> rank for the player character.
+// Rank defaults to 0 when not specified (1-arg form).
+static std::map<int, int> gAddedTraits;
 
 // Map enter position override (set by set_map_enter_position, read by get_map_enter_position).
 // -1 = no override stored.
@@ -681,6 +682,11 @@ void mf_critter_inven_obj2(OpcodeContext& ctx)
 {
     Object* obj = ctx.arg(0).asObject();
     int slot = ctx.arg(1).asInt();
+
+    if (obj == nullptr) {
+        ctx.setReturn(ProgramValue());
+        return;
+    }
 
     switch (slot) {
     case 0:
@@ -1740,10 +1746,15 @@ void mf_string_format(OpcodeContext& ctx)
         ctx.setReturn("Error");
         return;
     }
-    int newFmtLen = fmtLen;
 
+    // Pre-calculate the expanded format string size.  Each '%' conversion
+    // specifier may contain a '*' width/precision that expands to up to
+    // 11 decimal digits (the full range of int32 including sign).  We size
+    // the buffer for the worst case: fmtLen + (num_pct * 11).
+    constexpr int MAX_INT_DIGITS = 11; // -2147483648
+    int newFmtLen = fmtLen;
     for (int i = 0; i < fmtLen; i++) {
-        if (format[i] == '%') newFmtLen++;
+        if (format[i] == '%') newFmtLen += MAX_INT_DIGITS;
     }
 
     auto newFmt = std::make_unique<char[]>(newFmtLen + 1);
@@ -1891,9 +1902,11 @@ void mf_string_format_array(OpcodeContext& ctx)
         formatArgs[i] = GetArray(arrayId, key, ctx.program());
     }
 
+    // Pre-calculate the expanded format string size (same logic as mf_string_format).
+    constexpr int MAX_INT_DIGITS = 11;
     int newFmtLen = fmtLen;
     for (int i = 0; i < fmtLen; i++) {
-        if (format[i] == '%') newFmtLen++;
+        if (format[i] == '%') newFmtLen += MAX_INT_DIGITS;
     }
 
     auto newFmt = std::make_unique<char[]>(newFmtLen + 1);
@@ -2292,7 +2305,8 @@ void mf_has_fake_trait_npc(OpcodeContext& ctx)
     // Bridge: when queried for the player character, also check traits
     // added via the add_trait() metarule (gAddedTraits stores int trait IDs).
     if (critter == gDude) {
-        for (int traitId : gAddedTraits) {
+        for (const auto& entry : gAddedTraits) {
+            int traitId = entry.first;
             char* traitName = traitGetName(traitId);
             if (traitName != nullptr && strcmp(traitName, name) == 0) {
                 ctx.setReturn(1);
@@ -3022,13 +3036,12 @@ void mf_add_trait(OpcodeContext& ctx)
         if (ctx.numArgs() >= 3) {
             rank = ctx.arg(2).asInt();
         }
-        (void)rank; // Parsed but not yet consumed — reserved for per-critter trait rank storage.
     } else {
-        // 1-arg form: add_trait(traitType) — adds to player
+        // 1-arg form: add_trait(traitType) — adds to player with rank 0
         traitType = ctx.arg(0).asInt();
     }
 
-    gAddedTraits.insert(traitType);
+    gAddedTraits[traitType] = rank;
     ctx.setReturn(1);
 }
 
@@ -3324,7 +3337,7 @@ void sfall_metarules_reset()
 // On load, if the version marker doesn't match, the function returns early
 // (sfall_metarules_reset() has already restored defaults) — forward compatibility.
 
-#define METARULES_SAVE_VERSION 5
+#define METARULES_SAVE_VERSION 6
 
 static bool metarulesSaveStringMap(File* stream, const std::map<int, std::string>& map)
 {
@@ -3587,63 +3600,65 @@ static bool metarulesLoadNpcFakeDataV2(File* stream,
     return true;
 }
 
-void sfall_metarules_save(File* stream)
+bool sfall_metarules_save(File* stream)
 {
-    if (fileWriteInt32(stream, METARULES_SAVE_VERSION) == -1) return;
+    if (fileWriteInt32(stream, METARULES_SAVE_VERSION) == -1) return false;
 
     // Scalars
-    fileWriteInt32(stream, sfall_metarules_dialogShowCount);
-    fileWriteInt32(stream, gNpcEngineLevelUpEnabled);
-    fileWriteInt32(stream, gWorldmapHealTime);
-    fileWriteInt32(stream, gRestHealTime);
-    fileWriteInt32(stream, gCarIntfaceArtFid);
-    fileWriteInt32(stream, gRestMode);
-    fileWriteInt32(stream, sIntfaceHiddenState ? 1 : 0);
-    fileWriteInt32(stream, gMapEnterX);
-    fileWriteInt32(stream, gMapEnterY);
-    fileWriteInt32(stream, gMapEnterElevation);
+    if (fileWriteInt32(stream, sfall_metarules_dialogShowCount) == -1) return false;
+    if (fileWriteInt32(stream, gNpcEngineLevelUpEnabled) == -1) return false;
+    if (fileWriteInt32(stream, gWorldmapHealTime) == -1) return false;
+    if (fileWriteInt32(stream, gRestHealTime) == -1) return false;
+    if (fileWriteInt32(stream, gCarIntfaceArtFid) == -1) return false;
+    if (fileWriteInt32(stream, gRestMode) == -1) return false;
+    if (fileWriteInt32(stream, sIntfaceHiddenState ? 1 : 0) == -1) return false;
+    if (fileWriteInt32(stream, gMapEnterX) == -1) return false;
+    if (fileWriteInt32(stream, gMapEnterY) == -1) return false;
+    if (fileWriteInt32(stream, gMapEnterElevation) == -1) return false;
 
     // String
-    fileWriteString(gScriptNameOverride.c_str(), stream);
-    xfileWriteChar('\n', stream);
+    if (fileWriteString(gScriptNameOverride.c_str(), stream) == -1) return false;
+    if (xfileWriteChar('\n', stream) == -1) return false;
 
     // Maps and sets
-    metarulesSaveCoordMap(stream, gTerrainNameOverrides);
-    metarulesSaveStringMap(stream, gTownTitleOverrides);
-    metarulesSaveIntIntMap(stream, gQuestFailureValues);
-    metarulesSaveIntSet(stream, gAddedTraits);
-    metarulesSaveExplosiveMap(stream, gExplosiveOverrides);
+    if (!metarulesSaveCoordMap(stream, gTerrainNameOverrides)) return false;
+    if (!metarulesSaveStringMap(stream, gTownTitleOverrides)) return false;
+    if (!metarulesSaveIntIntMap(stream, gQuestFailureValues)) return false;
+    if (!metarulesSaveIntIntMap(stream, gAddedTraits)) return false;
+    if (!metarulesSaveExplosiveMap(stream, gExplosiveOverrides)) return false;
 
     // NPC-keyed data (v3 format includes metadata: level, image, desc)
-    metarulesSaveNpcFakeDataV3(stream, gFakePerksNpc);
-    metarulesSaveNpcFakeDataV3(stream, gFakeTraitsNpc);
-    metarulesSaveNpcFakeDataV3(stream, gFakeSelectablePerksNpc);
+    if (!metarulesSaveNpcFakeDataV3(stream, gFakePerksNpc)) return false;
+    if (!metarulesSaveNpcFakeDataV3(stream, gFakeTraitsNpc)) return false;
+    if (!metarulesSaveNpcFakeDataV3(stream, gFakeSelectablePerksNpc)) return false;
 
     // gSavedOriginalDude: save as CID
     int originalDudeCid = (gSavedOriginalDude != nullptr) ? gSavedOriginalDude->cid : -1;
-    fileWriteInt32(stream, originalDudeCid);
+    if (fileWriteInt32(stream, originalDudeCid) == -1) return false;
 
     // Version 2 additions: spray settings, drug data overrides, interface overlay state.
-    fileWriteInt32(stream, gSpraySettings.flags);
-    fileWriteInt32(stream, gSpraySettings.pid);
-    fileWriteInt32(stream, gSpraySettings.radius);
-    fileWriteInt32(stream, gSpraySettings.count);
-    fileWriteInt32(stream, gSpraySettings.active ? 1 : 0);
-    metarulesSaveDrugDataMap(stream, gDrugDataOverrides);
-    fileWriteInt32(stream, gInterfaceOverlayState.winType);
-    fileWriteInt32(stream, gInterfaceOverlayState.arg1);
-    fileWriteInt32(stream, gInterfaceOverlayState.arg2);
-    fileWriteInt32(stream, gInterfaceOverlayState.arg3);
-    fileWriteInt32(stream, gInterfaceOverlayState.arg4);
-    fileWriteInt32(stream, gInterfaceOverlayState.windowHandle);
-    fileWriteInt32(stream, gInterfaceOverlayState.active ? 1 : 0);
+    if (fileWriteInt32(stream, gSpraySettings.flags) == -1) return false;
+    if (fileWriteInt32(stream, gSpraySettings.pid) == -1) return false;
+    if (fileWriteInt32(stream, gSpraySettings.radius) == -1) return false;
+    if (fileWriteInt32(stream, gSpraySettings.count) == -1) return false;
+    if (fileWriteInt32(stream, gSpraySettings.active ? 1 : 0) == -1) return false;
+    if (!metarulesSaveDrugDataMap(stream, gDrugDataOverrides)) return false;
+    if (fileWriteInt32(stream, gInterfaceOverlayState.winType) == -1) return false;
+    if (fileWriteInt32(stream, gInterfaceOverlayState.arg1) == -1) return false;
+    if (fileWriteInt32(stream, gInterfaceOverlayState.arg2) == -1) return false;
+    if (fileWriteInt32(stream, gInterfaceOverlayState.arg3) == -1) return false;
+    if (fileWriteInt32(stream, gInterfaceOverlayState.arg4) == -1) return false;
+    if (fileWriteInt32(stream, gInterfaceOverlayState.windowHandle) == -1) return false;
+    if (fileWriteInt32(stream, gInterfaceOverlayState.active ? 1 : 0) == -1) return false;
 
     // Version 3 additions: unjam locks time, NPC fake data with metadata.
-    fileWriteInt32(stream, gUnjamLocksTimeHours);
+    if (fileWriteInt32(stream, gUnjamLocksTimeHours) == -1) return false;
 
     // Version 5 addition: block combat flag (sfall global, not part of
     // core combat stream).
-    fileWriteInt32(stream, gBlockCombat);
+    if (fileWriteInt32(stream, gBlockCombat) == -1) return false;
+
+    return true;
 }
 
 void sfall_metarules_load(File* stream)
@@ -3702,7 +3717,17 @@ void sfall_metarules_load(File* stream)
     metarulesLoadCoordMap(stream, gTerrainNameOverrides);
     metarulesLoadStringMap(stream, gTownTitleOverrides);
     metarulesLoadIntIntMap(stream, gQuestFailureValues);
-    metarulesLoadIntSet(stream, gAddedTraits);
+    // gAddedTraits: version 5 and earlier stored as a flat set of trait IDs
+    // (no rank).  Version 6+ stores trait ID -> rank pairs via IntIntMap.
+    if (version >= 6) {
+        metarulesLoadIntIntMap(stream, gAddedTraits);
+    } else {
+        std::set<int> legacyTraits;
+        metarulesLoadIntSet(stream, legacyTraits);
+        for (int t : legacyTraits) {
+            gAddedTraits[t] = 0; // default rank for legacy saves
+        }
+    }
     metarulesLoadExplosiveMap(stream, gExplosiveOverrides, version);
 
     // NPC-keyed data: keyed by CID (int), no post-load fixup needed.

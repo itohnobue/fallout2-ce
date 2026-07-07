@@ -774,14 +774,36 @@ if(ENABLE_ASAN)
             set(CMAKE_SHARED_LINKER_FLAGS_DEBUG "${CMAKE_SHARED_LINKER_FLAGS_DEBUG} -fsanitize=address")
         else()
             message(STATUS "Enabling AddressSanitizer for debug build (MSVC)")
+            # AddressSanitizer on MSVC requires dynamic CRT (/MD, /MDd).
+            # Static CRT (/MT, /MTd) causes link-time errors with /fsanitize=address.
+            # Detect this early and provide a clear error message.
+            set(_asan_static_crt FALSE)
+            if(DEFINED CMAKE_MSVC_RUNTIME_LIBRARY AND NOT CMAKE_MSVC_RUNTIME_LIBRARY MATCHES "DLL")
+                set(_asan_static_crt TRUE)
+            endif()
+            if(CMAKE_CXX_FLAGS_DEBUG MATCHES "(^| )[/-]MT")
+                set(_asan_static_crt TRUE)
+            endif()
+            if(_asan_static_crt)
+                message(FATAL_ERROR
+                    "AddressSanitizer on MSVC is incompatible with static CRT (/MT, /MTd). "
+                    "Either disable ASAN (-DENABLE_ASAN=OFF) or switch to dynamic CRT "
+                    "(set CMAKE_MSVC_RUNTIME_LIBRARY to \"MultiThreaded$<$<CONFIG:Debug>:Debug>DLL\").")
+            endif()
             set(ASAN_FLAGS "/fsanitize=address")
             # MSVC requires /Zi or /Z7 for debug info with ASan
             set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} ${ASAN_FLAGS} /Zi")
             set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} ${ASAN_FLAGS} /Zi")
             # No additional linker flags needed for MSVC ASan
-            # Disable incremental linking as it's incompatible with ASan
-            string(REPLACE "/INCREMENTAL" "/INCREMENTAL:NO" CMAKE_EXE_LINKER_FLAGS_DEBUG "${CMAKE_EXE_LINKER_FLAGS_DEBUG}")
-            string(REPLACE "/INCREMENTAL" "/INCREMENTAL:NO" CMAKE_SHARED_LINKER_FLAGS_DEBUG "${CMAKE_SHARED_LINKER_FLAGS_DEBUG}")
+            # Disable incremental linking (incompatible with ASAN).
+            # Strip any existing /INCREMENTAL* variant with regex, then add
+            # /INCREMENTAL:NO. This avoids the /INCREMENTAL:NONO artifact that
+            # a naive string(REPLACE "/INCREMENTAL" "/INCREMENTAL:NO") produces
+            # when the flag is already /INCREMENTAL:NO.
+            string(REGEX REPLACE "/INCREMENTAL[^ ]*" "" CMAKE_EXE_LINKER_FLAGS_DEBUG "${CMAKE_EXE_LINKER_FLAGS_DEBUG}")
+            set(CMAKE_EXE_LINKER_FLAGS_DEBUG "${CMAKE_EXE_LINKER_FLAGS_DEBUG} /INCREMENTAL:NO")
+            string(REGEX REPLACE "/INCREMENTAL[^ ]*" "" CMAKE_SHARED_LINKER_FLAGS_DEBUG "${CMAKE_SHARED_LINKER_FLAGS_DEBUG}")
+            set(CMAKE_SHARED_LINKER_FLAGS_DEBUG "${CMAKE_SHARED_LINKER_FLAGS_DEBUG} /INCREMENTAL:NO")
         endif()
     else()
         message(WARNING "AddressSanitizer is not supported with ${CMAKE_CXX_COMPILER_ID}. Disabling ASan.")

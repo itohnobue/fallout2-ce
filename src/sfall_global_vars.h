@@ -18,6 +18,8 @@ bool sfall_gl_vars_store_float(const char* key, float value);
 bool sfall_gl_vars_store_float(int key, float value);
 bool sfall_gl_vars_fetch_float(const char* key, float& value);
 bool sfall_gl_vars_fetch_float(int key, float& value);
+bool sfall_gl_vars_remove(const char* key);
+bool sfall_gl_vars_remove(int key);
 
 } // namespace fallout
 

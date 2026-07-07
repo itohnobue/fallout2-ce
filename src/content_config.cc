@@ -155,6 +155,13 @@ int contentConfigLookupSfallInt(const char* section, const char* key)
 
 const char* contentConfigLookupSfallString(const char* section, const char* key)
 {
+    // F-042: This function is part of the public API (declared in content_config.h)
+    // but is not yet wired to any callers. It mirrors contentConfigLookupSfallInt()
+    // and exists to provide string-type config lookups for mod scripts that need
+    // to read migrated ddraw.ini string values from game.cfg. No callers exist
+    // yet because all current migrated sfall keys are integer-valued. When a
+    // string-type key is added to the migration mapping, this function provides
+    // the ready lookup bridge without requiring an API change.
     if (!gContentConfig.isInitialized()) {
         return nullptr;
     }

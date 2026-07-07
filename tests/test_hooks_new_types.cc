@@ -146,17 +146,14 @@ TEST_CASE("F2-012: HOOK_DIALOG — arg layout: speaker, headFid, reaction")
     CHECK(hook.numArgs == 3); // verifies mirror constructor arg count (mirror property, not production)
 }
 
-TEST_CASE("F2-012: HOOK_DIALOG — maxReturnValues=0 (observation-only)")
+TEST_CASE("F2-012: HOOK_DIALOG — maxReturnValues=0 (observation-only)" * doctest::skip())
 {
     // Like HOOK_ONDEATH and HOOK_GAMEMODECHANGE, DIALOG is observation-only.
     // maxReturnValues=0 means addReturnValueFromScript always returns early.
     // The fire function scriptHooks_Dialog should pass 0.
-    // This test verifies the expected contract.
-    NewHooksTestScriptHookCall hook(HOOK_DIALOG, 0, {});
-
-    // maxReturnValues=0 is a mirror constructor property — not a production check.
+    // maxReturnValues is a mirror constructor property — not a production check.
     // Production uses sfall_script_hooks.h fire function signatures.
-    doctest::skip("maxReturnValues verified in mirror constructor (line 74) — mirror property, not production");
+    // SKIPPED: maxReturnValues verified in mirror constructor (line 74) — mirror property, not production.
 }
 
 // =================================================================
@@ -206,10 +203,9 @@ TEST_CASE("F2-012: HOOK_DIALOGREACTION — arg layout: speaker, reaction")
     CHECK(hook.numArgs == 2); // verifies mirror constructor arg count (mirror property, not production)
 }
 
-TEST_CASE("F2-012: HOOK_DIALOGREACTION — maxReturnValues=0")
+TEST_CASE("F2-012: HOOK_DIALOGREACTION — maxReturnValues=0" * doctest::skip())
 {
-    NewHooksTestScriptHookCall hook(HOOK_DIALOGREACTION, 0, {});
-    doctest::skip("maxReturnValues verified in mirror constructor (line 74) — mirror property, not production");
+    // SKIPPED: maxReturnValues verified in mirror constructor (line 74) — mirror property, not production.
 }
 
 // =================================================================
@@ -259,10 +255,9 @@ TEST_CASE("F2-012: HOOK_STATLEVELUP — arg layout: critter (single Object arg)"
     CHECK(hook.numArgs == 1); // verifies mirror constructor arg count (mirror property, not production)
 }
 
-TEST_CASE("F2-012: HOOK_STATLEVELUP — maxReturnValues=0 (observation-only)")
+TEST_CASE("F2-012: HOOK_STATLEVELUP — maxReturnValues=0 (observation-only)" * doctest::skip())
 {
-    NewHooksTestScriptHookCall hook(HOOK_STATLEVELUP, 0, {});
-    doctest::skip("maxReturnValues verified in mirror constructor (line 74) — mirror property, not production");
+    // SKIPPED: maxReturnValues verified in mirror constructor (line 74) — mirror property, not production.
 }
 
 TEST_CASE("F2-012: HOOK_STATLEVELUP — dispatch with registered handler fires")
@@ -340,10 +335,9 @@ TEST_CASE("F2-012: HOOK_BARTER — arg layout: dude, npc, mode")
     CHECK(hook.numArgs == 3); // verifies mirror constructor arg count (mirror property, not production)
 }
 
-TEST_CASE("F2-012: HOOK_BARTER — maxReturnValues=0 (observation-only)")
+TEST_CASE("F2-012: HOOK_BARTER — maxReturnValues=0 (observation-only)" * doctest::skip())
 {
-    NewHooksTestScriptHookCall hook(HOOK_BARTER, 0, {});
-    doctest::skip("maxReturnValues verified in mirror constructor (line 74) — mirror property, not production");
+    // SKIPPED: maxReturnValues verified in mirror constructor (line 74) — mirror property, not production.
 }
 
 TEST_CASE("F2-012: HOOK_BARTER — registered handler fires on dispatch")
@@ -416,10 +410,9 @@ TEST_CASE("F2-012: HOOK_MESSAGE — arg layout: msg (single string arg)")
     CHECK(hook.numArgs == 1); // verifies mirror constructor arg count (mirror property, not production)
 }
 
-TEST_CASE("F2-012: HOOK_MESSAGE — maxReturnValues=0 (observation-only)")
+TEST_CASE("F2-012: HOOK_MESSAGE — maxReturnValues=0 (observation-only)" * doctest::skip())
 {
-    NewHooksTestScriptHookCall hook(HOOK_MESSAGE, 0, {});
-    doctest::skip("maxReturnValues verified in mirror constructor (line 74) — mirror property, not production");
+    // SKIPPED: maxReturnValues verified in mirror constructor (line 74) — mirror property, not production.
 }
 
 TEST_CASE("F2-012: HOOK_MESSAGE — nullptr message arg")

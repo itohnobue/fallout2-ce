@@ -196,6 +196,15 @@ void statResetUnspentApBonuses()
 
 void statSetUnspentApBonus(int multiplier)
 {
+    // I2F-015: Clamp to safe range to prevent inflated armor class values
+    // (armor class = unspent AP * bonus / 4). Unbounded multipliers from
+    // op_set_unspent_ap_bonus could produce extreme armor class.
+    if (multiplier < 0) {
+        multiplier = 0;
+    }
+    if (multiplier > 100) {
+        multiplier = 100;
+    }
     unspentApBonus = multiplier;
 }
 
@@ -206,6 +215,14 @@ int statGetUnspentApBonus()
 
 void statSetUnspentApPerkBonus(int multiplier)
 {
+    // I2F-015: Same bounds as statSetUnspentApBonus — prevent extreme
+    // armor class from unbounded HtH Evade perk multiplier.
+    if (multiplier < 0) {
+        multiplier = 0;
+    }
+    if (multiplier > 100) {
+        multiplier = 100;
+    }
     unspentApPerkBonus = multiplier;
 }
 

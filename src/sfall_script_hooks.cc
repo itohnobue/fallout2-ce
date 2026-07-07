@@ -40,6 +40,15 @@ static std::vector<ScriptHook> scriptHooks[HOOK_COUNT];
 
 constexpr size_t MAX_HOOK_CALL_DEPTH = 8;
 
+// RAII scope guard for the _gameModeChangeInProgress reentrancy flag.
+// Sets the flag on construction, clears it on destruction.  This guarantees
+// cleanup even when programFatalError longjmps out of a hook call, preventing
+// the flag from staying stuck at true and permanently disabling HOOK_GAMEMODECHANGE.
+struct GameModeChangeGuard {
+    GameModeChangeGuard() { ScriptHookCall::_gameModeChangeInProgress = true; }
+    ~GameModeChangeGuard() { ScriptHookCall::_gameModeChangeInProgress = false; }
+};
+
 std::vector<ScriptHookCall*> ScriptHookCall::_callStack;
 bool ScriptHookCall::_gameModeChangeInProgress = false;
 
@@ -121,13 +130,16 @@ void ScriptHookCall::call()
                 ++drained;
             }
         }
-        // Fallback: if all entries are active (deep recursive nesting with
-        // no longjmp'd entries), the drain loop is a no-op and the call
-        // stack would grow past the MAX_HOOK_CALL_DEPTH cap.  Erase the
-        // oldest entry as a last resort to enforce the depth limit (R-06).
+        // If all entries are active (deep recursive nesting with no
+        // longjmp'd entries), the drain loop is a no-op.  Evicting an
+        // active frame would make _callStack.back() != this when the
+        // evicted frame's call() returns, causing an assertion failure
+        // (debug) or UB from pop_back on wrong entry (release).
+        // Reject the call instead — hook scripts with deeper recursion
+        // than MAX_HOOK_CALL_DEPTH are not supported.
         if (drained == 0 && _callStack.size() >= MAX_HOOK_CALL_DEPTH) {
-            debugPrint("HOOK_DRAIN: all %zu entries active, evicting oldest to enforce depth cap\n", _callStack.size());
-            _callStack.erase(_callStack.begin());
+            debugPrint("HOOK_DRAIN: all %zu entries active, rejecting call to enforce depth cap\n", _callStack.size());
+            return;
         }
     }
 
@@ -196,7 +208,10 @@ bool scriptHooksRegister(Program* program, const HookType hookType, const int pr
     assert(program != nullptr && hookType >= 0 && hookType < HOOK_COUNT && procedureIndex >= 0 && procedureIndex < program->procedureCount());
 
     auto& hooksByType = scriptHooks[hookType];
-    const bool isUnregisterRequest = procedureIndex == 0;
+    // Use -1 as unregister sentinel to avoid collision with valid procedure index 0.
+    // The assert above guarantees procedureIndex >= 0, so -1 is unreachable from
+    // public API and exists only as infrastructure for a future explicit unregister path.
+    const bool isUnregisterRequest = procedureIndex == -1;
     // Check for existing registration.
     for (auto it = hooksByType.begin(); it != hooksByType.end(); ++it) {
         if (it->program == program) {
@@ -279,6 +294,11 @@ bool scriptHooksInit()
 void scriptHooksReset()
 {
     scriptHooksClear();
+    // Reset reentrancy guard — a longjmp from programFatalError during
+    // a HOOK_GAMEMODECHANGE dispatch leaves _gameModeChangeInProgress
+    // stuck at true, permanently disabling the hook.  scriptHooksReset()
+    // runs on gameReset / new game, providing a guaranteed cleanup point.
+    ScriptHookCall::_gameModeChangeInProgress = false;
     // Reset animation callback pointer to prevent stale pointer
     // after game reset / new game cycle. Without this, sfallAnimCallbackProgram
     // could reference freed Program memory from a previous game session.
@@ -319,9 +339,8 @@ void scriptHooks_GameModeChange(int exit, int previousGameMode)
         return;
     }
 
-    ScriptHookCall::_gameModeChangeInProgress = true;
+    GameModeChangeGuard guard;
     ScriptHookCall(HOOK_GAMEMODECHANGE, 0, { exit, previousGameMode }).call();
-    ScriptHookCall::_gameModeChangeInProgress = false;
 }
 
 /*
@@ -1587,9 +1606,8 @@ void scriptHooks_SlideshowStart()
         return;
     }
 
-    ScriptHookCall::_gameModeChangeInProgress = true;
+    GameModeChangeGuard guard;
     ScriptHookCall(HOOK_GAMEMODECHANGE, 0, { 0, GameMode::getCurrentGameMode() }).call();
-    ScriptHookCall::_gameModeChangeInProgress = false;
 }
 
 void scriptHooks_SlideshowEnd()
@@ -1601,9 +1619,8 @@ void scriptHooks_SlideshowEnd()
         return;
     }
 
-    ScriptHookCall::_gameModeChangeInProgress = true;
+    GameModeChangeGuard guard;
     ScriptHookCall(HOOK_GAMEMODECHANGE, 0, { 0, GameMode::getCurrentGameMode() }).call();
-    ScriptHookCall::_gameModeChangeInProgress = false;
 }
 
 /*

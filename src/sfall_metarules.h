@@ -69,7 +69,7 @@ void sfall_metarule(Program* program, int args);
 void sfall_metarules_reset();
 // Save/load metarule state to/from File* stream.
 // Called by sfallgv.sav persistence in sfall_ext.cc.
-void sfall_metarules_save(File* stream);
+bool sfall_metarules_save(File* stream);
 void sfall_metarules_load(File* stream);
 void mf_string_format(OpcodeContext& ctx);
 

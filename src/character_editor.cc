@@ -5879,12 +5879,12 @@ static int characterEditorUpdateLevel()
                 }
             }
 
-            // SFALL: Notify scripts that the player character has leveled up.
-            // Fires once per new level gained (nextLevel != gCharacterEditorLastLevel
-            // is always true inside the loop). The primary fire site is in
-            // pcAddExperienceWithOptions() in stat.cc; this covers the character
-            // editor's own level-up path.
-            scriptHooks_StatLevelUp(gDude);
+            // F-054: Suppress HOOK_STATLEVELUP in the character editor level-up
+            // loop to prevent double-fire. The primary fire site in
+            // pcAddExperienceWithOptions() (stat.cc:926) already covers
+            // XP-gain-triggered level-ups. The character editor syncs levels
+            // already processed by that path and should not re-fire.
+            // scriptHooks_StatLevelUp(gDude);
         }
     }
 
@@ -5938,7 +5938,8 @@ static void perkDialogRefreshPerks()
         if (fakeIdx >= 0 && fakeIdx < sfallGetFakePerkCount()) {
             const FakePerkEntry& fp = fakePerks[fakeIdx];
             perkFrmId = fp.image;
-            perkName = fp.name;
+            // F-051: Guard against nullptr name in FakePerkEntry.
+            perkName = fp.name ? fp.name : const_cast<char*>("(unknown)");
             perkDescription = fp.desc;
         } else {
             perkFrmId = 0;
@@ -6908,7 +6909,10 @@ static int perkDialogDrawTraits(int a1)
                 color = _colorTable[992];
             }
 
-            fontDrawText(gPerkDialogWindowBuffer + PERK_WINDOW_WIDTH * y + 45, gPerkDialogOptionList[index].name, PERK_WINDOW_WIDTH, PERK_WINDOW_WIDTH, color);
+            // F-051: Guard against nullptr name in perk dialog entries.
+            const char* optionName = gPerkDialogOptionList[index].name;
+            fontDrawText(gPerkDialogWindowBuffer + PERK_WINDOW_WIDTH * y + 45,
+                optionName ? optionName : "(unknown)", PERK_WINDOW_WIDTH, PERK_WINDOW_WIDTH, color);
             y += yStep;
         }
     }
@@ -6920,6 +6924,10 @@ static int perkDialogOptionCompare(const void* a1, const void* a2)
 {
     PerkDialogOption* v1 = (PerkDialogOption*)a1;
     PerkDialogOption* v2 = (PerkDialogOption*)a2;
+    // F-051: Guard against nullptr name in FakePerkEntry.
+    if (v1->name == nullptr || v2->name == nullptr) {
+        return (v1->name == nullptr) - (v2->name == nullptr);
+    }
     return strcmp(v1->name, v2->name);
 }
 

@@ -3,10 +3,10 @@
 
 #include "interpreter.h"
 
+namespace fallout {
+
 struct XFile;
 typedef XFile File;
-
-namespace fallout {
 
 #define SFALL_ARRAYFLAG_ASSOC (1) // is map
 #define SFALL_ARRAYFLAG_CONSTVAL (2) // don't update value of key if the key exists in map

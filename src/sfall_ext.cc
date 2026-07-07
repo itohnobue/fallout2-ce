@@ -286,7 +286,10 @@ bool sfallSaveGameData(File* stream)
     }
 
     // Append metarule state after the legacy binary sections.
-    sfall_metarules_save(stream);
+    if (!sfall_metarules_save(stream)) {
+        debugPrint("LOADSAVE (SFALL): ** Error saving metarule state **\n");
+        return false;
+    }
 
     return true;
 }

@@ -25,6 +25,9 @@ add_library(test_sources STATIC
     "${CMAKE_SOURCE_DIR}/src/sfall_config.cc"
     "${CMAKE_SOURCE_DIR}/src/sfall_arrays.cc"
     "${CMAKE_SOURCE_DIR}/src/sfall_ini.cc"
+    "${CMAKE_SOURCE_DIR}/src/sfall_lists.cc"
+    "${CMAKE_SOURCE_DIR}/src/sfall_global_scripts.cc"
+    "${CMAKE_SOURCE_DIR}/src/sfall_kb_helpers.cc"
 )
 target_include_directories(test_sources PUBLIC "${CMAKE_SOURCE_DIR}/src")
 target_include_directories(test_sources PUBLIC ${ZLIB_INCLUDE_DIRS})
@@ -462,13 +465,14 @@ add_test(NAME test_config_migration COMMAND test_config_migration)
 
 # ---- Test: sfall kb helpers (F2-061: sfall_kb_helpers.cc zero tests) ----
 # Tests DIK mapping, key simulation, synthetic event queue.
-# Follows test_sfall_hooks pattern: engine headers cascade to SDL2/zlib.
+# Links test_sources (sfall_kb_helpers.cc production code).
+# SDL2/zlib headers needed for scancode types and transitive includes.
 add_executable(test_sfall_kb_helpers
     test_sfall_kb_helpers.cpp
 )
 target_include_directories(test_sfall_kb_helpers PRIVATE "${CMAKE_SOURCE_DIR}/src")
 target_include_directories(test_sfall_kb_helpers PRIVATE ${ZLIB_INCLUDE_DIRS})
-target_link_libraries(test_sfall_kb_helpers PRIVATE test_stubs doctest ${SDL2_LIBRARIES})
+target_link_libraries(test_sfall_kb_helpers PRIVATE test_sources test_stubs doctest ${SDL2_LIBRARIES})
 add_test(NAME test_sfall_kb_helpers COMMAND test_sfall_kb_helpers)
 
 # ---- Test: loadsave integration (F-055: end-to-end save/load round-trip) ----
@@ -660,3 +664,39 @@ target_include_directories(test_opcodes_ext_misc PRIVATE "${CMAKE_SOURCE_DIR}/sr
 target_include_directories(test_opcodes_ext_misc PRIVATE ${ZLIB_INCLUDE_DIRS})
 target_link_libraries(test_opcodes_ext_misc PRIVATE test_sources test_stubs doctest ${SDL2_LIBRARIES})
 add_test(NAME test_opcodes_ext_misc COMMAND test_opcodes_ext_misc)
+
+# ============================================================
+# Stage 7 Implementation — sfall Callbacks, Ext, Lists (F-060)
+# Added by s7-impl-tests agent
+# ============================================================
+
+# ---- Test: sfall callbacks (F-060: sfall_callbacks.cc zero tests) ----
+# Header-level test — validates function declarations and types.
+# Does not link sfall_callbacks.cc (heavy engine deps).
+add_executable(test_sfall_callbacks
+    test_sfall_callbacks.cc
+)
+target_include_directories(test_sfall_callbacks PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_link_libraries(test_sfall_callbacks PRIVATE doctest)
+add_test(NAME test_sfall_callbacks COMMAND test_sfall_callbacks)
+
+# ---- Test: sfall ext (F-060: sfall_ext.cc zero tests) ----
+# Header-level test — validates function declarations and return types.
+# Does not link sfall_ext.cc (heavy engine deps).
+add_executable(test_sfall_ext
+    test_sfall_ext.cc
+)
+target_include_directories(test_sfall_ext PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_link_libraries(test_sfall_ext PRIVATE doctest)
+add_test(NAME test_sfall_ext COMMAND test_sfall_ext)
+
+# ---- Test: sfall lists (F-060: sfall_lists.cc zero tests) ----
+# Links test_sources (sfall_lists.cc) for list lifecycle functions.
+# test_stubs provides object.h/scripts.h engine dependencies.
+add_executable(test_sfall_lists
+    test_sfall_lists.cc
+)
+target_include_directories(test_sfall_lists PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_include_directories(test_sfall_lists PRIVATE ${ZLIB_INCLUDE_DIRS})
+target_link_libraries(test_sfall_lists PRIVATE test_sources test_stubs doctest ${SDL2_LIBRARIES})
+add_test(NAME test_sfall_lists COMMAND test_sfall_lists)

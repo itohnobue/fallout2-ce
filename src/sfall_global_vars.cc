@@ -35,6 +35,7 @@ static const int32_t kSfallGlobalVarsVersion = 1;
 
 static bool sfall_gl_vars_store(uint64_t key, int value);
 static bool sfall_gl_vars_fetch(uint64_t key, int& value);
+static bool sfall_gl_vars_remove(uint64_t key);
 
 static SfallGlobalVarsState* sfall_gl_vars_state = nullptr;
 
@@ -271,14 +272,28 @@ bool sfall_gl_vars_fetch(int key, int& value)
     return sfall_gl_vars_fetch(static_cast<uint64_t>(key), value);
 }
 
+bool sfall_gl_vars_remove(const char* key)
+{
+    bool ok;
+    uint64_t numericKey = sfall_gl_vars_key_to_uint64(key, ok);
+    if (!ok) {
+        return false;
+    }
+    return sfall_gl_vars_remove(numericKey);
+}
+
+bool sfall_gl_vars_remove(int key)
+{
+    return sfall_gl_vars_remove(static_cast<uint64_t>(key));
+}
+
 static bool sfall_gl_vars_store(uint64_t key, int value)
 {
-    if (value == 0) {
-        sfall_gl_vars_state->vars.erase(key);
-    } else {
-        sfall_gl_vars_state->vars[key] = value;
-    }
-
+    // F-001: Always store the value, even when 0. Previously the erase-on-0
+    // convention caused explicitly-set zero values (e.g., gPipboyAvailableOverride=0
+    // meaning "pipboy unavailable") to be lost on save/load round-trip.
+    // Use sfall_gl_vars_remove() for explicit deletion.
+    sfall_gl_vars_state->vars[key] = value;
     return true;
 }
 
@@ -292,6 +307,13 @@ static bool sfall_gl_vars_fetch(uint64_t key, int& value)
     value = it->second;
 
     return true;
+}
+
+// Explicit removal of a global var (replaces the erased-on-0 convention).
+// Returns true if the entry existed and was removed, false if not found.
+static bool sfall_gl_vars_remove(uint64_t key)
+{
+    return sfall_gl_vars_state->vars.erase(key) > 0;
 }
 
 // --- Float global vars (parallel storage) ---

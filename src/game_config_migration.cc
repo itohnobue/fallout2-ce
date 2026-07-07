@@ -4,6 +4,7 @@
 #include <iterator>
 #include <stdio.h>
 #include <string.h>
+#include <string_view>
 
 #include "content_config.h"
 #include "debug.h"
@@ -268,35 +269,66 @@ static_assert(std::size(kSfallMigrationEntries) == kSfallMigrationEntryCount,
     "kSfallMigrationEntries entry count does not match kSfallMigrationEntryCount; "
     "update BOTH tables in game_config_migration.cc and content_config.cc");
 
+// Compile-time verification: kSfallMigrationEntries must contain no duplicate
+// (sfallSection, sfallKey) pairs. A duplicate entry means one of the tables
+// (migration or content mapping) has a stale copy-paste error that the
+// count-only static_assert above cannot detect.
+constexpr bool sfallMigrationEntriesNoDuplicates()
+{
+    for (size_t i = 0; i < std::size(kSfallMigrationEntries); ++i) {
+        std::string_view iSection(kSfallMigrationEntries[i].sfallSection);
+        std::string_view iKey(kSfallMigrationEntries[i].sfallKey);
+        for (size_t j = i + 1; j < std::size(kSfallMigrationEntries); ++j) {
+            std::string_view jSection(kSfallMigrationEntries[j].sfallSection);
+            std::string_view jKey(kSfallMigrationEntries[j].sfallKey);
+            if (iSection == jSection && iKey == jKey) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+static_assert(sfallMigrationEntriesNoDuplicates(),
+    "kSfallMigrationEntries contains duplicate (sfallSection, sfallKey) pairs. "
+    "Remove the duplicate entry and verify kSfallContentMappings in content_config.cc.");
+
 } // anonymous namespace
 
 // Migrate sfall settings from ddraw.ini to game.cfg.
 //
-// Runs once when no local game.cfg exists at contentConfigFilePath.
-// Writes only the settings found in sfallConfig to a new local file.
+// Re-migrates on each run: loads the existing patch file (if any) and updates
+// only the migration entries whose values have changed in ddraw.ini. This
+// prevents stale migrated values from overriding user ddraw.ini changes.
+// Non-migration keys in the patch file are preserved.
 static bool contentConfigMigrateFromSfall(Config* sfallConfig, const char* contentConfigFilePath)
 {
     assert(sfallConfig != nullptr && contentConfigFilePath != nullptr);
-
-    // Skip if a local game.cfg already exists (already migrated or user-managed).
-    if (compat_file_exists(contentConfigFilePath)) {
-        return false;
-    }
 
     Config migratedConfig;
     if (!configInit(&migratedConfig)) {
         return false;
     }
 
+    // Load the existing patch file to preserve non-migration keys and detect
+    // which migration entries need updating. Returns false if the file does
+    // not exist (first run) — that's fine; we proceed with an empty config.
+    configRead(&migratedConfig, contentConfigFilePath, false);
+
     bool migrated = false;
-    // Migrate start year/month/day only when explicitly set (not the sfall -1 sentinel).
+    // Migrate start year/month/day only when explicitly set (not the sfall -1 sentinel)
+    // AND when the value differs from what's already in the patch file.
     auto migrateStartInt = [&](const char* sfallKey, const char* targetKey, int defaultValue) {
         int value;
         if (configGetInt(sfallConfig, "Misc", sfallKey, &value) && value >= 0 && value != defaultValue) {
             char buf[32];
             snprintf(buf, sizeof(buf), "%d", value);
-            configSetString(&migratedConfig, CONTENT_CONFIG_START_SECTION, targetKey, buf);
-            migrated = true;
+            char* existingValue;
+            if (!configGetString(&migratedConfig, CONTENT_CONFIG_START_SECTION, targetKey, &existingValue)
+                || strcmp(existingValue, buf) != 0) {
+                configSetString(&migratedConfig, CONTENT_CONFIG_START_SECTION, targetKey, buf);
+                migrated = true;
+            }
         }
     };
     migrateStartInt("StartYear", "year", 2241);
@@ -309,8 +341,15 @@ static bool contentConfigMigrateFromSfall(Config* sfallConfig, const char* conte
             if (value[0] == '\0' || entry.defaultValue != nullptr && strcmp(value, entry.defaultValue) == 0) {
                 continue;
             }
-            configSetString(&migratedConfig, entry.targetSection, entry.targetKey, value);
-            migrated = true;
+            // Only update if the value in the patch file differs from the
+            // current ddraw.ini value. This avoids unnecessary writes and
+            // preserves the patch file when nothing has changed.
+            char* existingValue;
+            if (!configGetString(&migratedConfig, entry.targetSection, entry.targetKey, &existingValue)
+                || strcmp(existingValue, value) != 0) {
+                configSetString(&migratedConfig, entry.targetSection, entry.targetKey, value);
+                migrated = true;
+            }
         }
     }
 

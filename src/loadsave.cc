@@ -1975,32 +1975,40 @@ static int lsgPerformSaveGame()
 
     debugPrint("LOADSAVE: Total save data written: %ld bytes.\n", fileTell(_flptr));
 
-    fileClose(_flptr);
+    // I2F-021: Write sfallgv.sav atomically before closing SAVE.DAT.
+    // Writing to a temp file then renaming ensures that a crash between
+    // SAVE.DAT close and sfallgv.sav write doesn't leave SAVE.DAT on disk
+    // without a corresponding sfallgv.sav (inconsistent state).
+    // Only after both files are safely written is SAVE.DAT finalized.
+    {
+        char sfPath[COMPAT_MAX_PATH];
+        char tmpPath[COMPAT_MAX_PATH];
+        snprintf(sfPath, sizeof(sfPath), "%s\\%s%.2d\\", "SAVEGAME", "SLOT", _slot_cursor + 1);
+        snprintf(tmpPath, sizeof(tmpPath), "%ssfallgv.tmp", sfPath);
+        strcat(sfPath, "sfallgv.sav");
 
-    // SFALL: Save sfallgv.sav.
-    snprintf(_gmpath, sizeof(_gmpath), "%s\\%s%.2d\\", "SAVEGAME", "SLOT", _slot_cursor + 1);
-    strcat(_gmpath, "sfallgv.sav");
-
-    _flptr = fileOpen(_gmpath, "wb");
-    if (_flptr != nullptr) {
-        bool saved = sfallSaveGameData(_flptr);
-        fileClose(_flptr);
-        _flptr = nullptr;
-        if (!saved) {
-            // SAVE.DAT was written successfully but sfallgv.sav write failed.
-            // The BAK files from _SaveBackup() are orphaned — _RestoreSave()
-            // recovers them so the previous save's data isn't lost.
-            snprintf(_gmpath, sizeof(_gmpath), "%s\\%s%.2d\\", "SAVEGAME", "SLOT", _slot_cursor + 1);
-            strcat(_gmpath, "sfallgv.sav");
-            compat_remove(_gmpath);
-            _RestoreSave();
-            snprintf(_gmpath, sizeof(_gmpath), "%s\\%s%.2d\\", "SAVEGAME", "SLOT", _slot_cursor + 1);
-            MapDirErase(_gmpath, "BAK");
-            _partyMemberUnPrepSave();
-            backgroundSoundResume();
-            return -1;
+        File* sfFile = fileOpen(tmpPath, "wb");
+        if (sfFile != nullptr) {
+            bool saved = sfallSaveGameData(sfFile);
+            fileClose(sfFile);
+            if (!saved || compat_rename(tmpPath, sfPath) != 0) {
+                // sfallgv.sav write or rename failed. Clean up the temp file,
+                // close SAVE.DAT, and restore the previous save state.
+                compat_remove(tmpPath);
+                fileClose(_flptr);
+                _RestoreSave();
+                snprintf(_gmpath, sizeof(_gmpath), "%s\\%s%.2d\\", "SAVEGAME", "SLOT", _slot_cursor + 1);
+                MapDirErase(_gmpath, "BAK");
+                _partyMemberUnPrepSave();
+                backgroundSoundResume();
+                return -1;
+            }
         }
     }
+
+    // SAVE.DAT is finalized only after sfallgv.sav is safely on disk.
+    fileClose(_flptr);
+    _flptr = nullptr;
 
     snprintf(_gmpath, sizeof(_gmpath), "%s\\%s%.2d\\", "SAVEGAME", "SLOT", _slot_cursor + 1);
     MapDirErase(_gmpath, "BAK");

@@ -550,7 +550,13 @@ bool wmGetCanRestOnTile(int elevation, int tile)
     if (it != gCanRestOnTiles.end()) {
         return it->second;
     }
-    // No override — use default engine behavior.
+    // F-056: In RESTMODE_STRICT, default to false (allowlist — only
+    // explicitly-allowed tiles permit resting). In all other modes,
+    // default to true (blocklist — only explicitly-blocked tiles
+    // prohibit resting).
+    if (wmGetRestMode() == 1) {
+        return false;
+    }
     return true;
 }
 
@@ -1342,6 +1348,25 @@ int wmWorldMap_load(File* stream)
     if (fileReadInt32(stream, &(wmGenData.currentAreaId)) == -1) return -1;
     if (fileReadInt32(stream, &(wmGenData.worldPosX)) == -1) return -1;
     if (fileReadInt32(stream, &(wmGenData.worldPosY)) == -1) return -1;
+
+    // I2F-017: Validate world position coordinates loaded from save file.
+    // A crafted save with out-of-bounds coordinates would cause OOB access
+    // in wmFindCurTileFromPos (tileIndex computed without bounds check).
+    // Clamp to valid range following the pattern from wmSetPartyWorldPos.
+    {
+        int worldMaxX = WM_TILE_WIDTH * wmNumHorizontalTiles;
+        int worldMaxY = WM_TILE_HEIGHT * (wmMaxTileNum / wmNumHorizontalTiles);
+        if (wmGenData.worldPosX < 0) {
+            wmGenData.worldPosX = 0;
+        } else if (wmGenData.worldPosX >= worldMaxX) {
+            wmGenData.worldPosX = worldMaxX - 1;
+        }
+        if (wmGenData.worldPosY < 0) {
+            wmGenData.worldPosY = 0;
+        } else if (wmGenData.worldPosY >= worldMaxY) {
+            wmGenData.worldPosY = worldMaxY - 1;
+        }
+    }
     if (fileReadBool(stream, &(wmGenData.encounterIconIsVisible)) == -1) return -1;
     if (fileReadInt32(stream, &(wmGenData.encounterMapId)) == -1) return -1;
     if (fileReadInt32(stream, &(wmGenData.encounterTableId)) == -1) return -1;

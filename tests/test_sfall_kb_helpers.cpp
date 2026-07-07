@@ -124,7 +124,7 @@ static void initTestDiksTable()
     kTestDiks[156] = SDL_SCANCODE_KP_ENTER;
     kTestDiks[157] = SDL_SCANCODE_RCTRL;
     kTestDiks[179] = SDL_SCANCODE_KP_COMMA;
-    kTestDiks[181] = SDL_SCANCODE_SLASH; // DIK_DIVIDE → shares SLASH scancode
+    kTestDiks[181] = SDL_SCANCODE_KP_DIVIDE; // DIK_DIVIDE → production uses KP_DIVIDE (sfall_kb_helpers.cc:199)
     kTestDiks[183] = SDL_SCANCODE_SYSREQ;
     kTestDiks[184] = SDL_SCANCODE_RALT;
     // Navigation keys
@@ -575,6 +575,13 @@ namespace {
 
             // Simulate hook return value
             int overrideDxCode = gTestHookCallResult.returnValue;
+
+            // F-27/I2F-039: ret0=1 means "block/consume the key" — return -1 sentinel.
+            // Production: sfall_kb_helpers.cc:411-413.
+            if (overrideDxCode == 1) {
+                return -1;
+            }
+
             return static_cast<int>(testGetScancodeFromKey(overrideDxCode));
         }
 
@@ -661,6 +668,78 @@ TEST_CASE("HOOK_KEYPRESS with zero return value means no override")
     CHECK(gTestHookCallResult.hookFired == true);
     // return value 0 → key 0 → get_scancode_from_key(0) → SDL_SCANCODE_UNKNOWN
     CHECK(result == SDL_SCANCODE_UNKNOWN);
+}
+
+// I2F-039: ret0=1 sentinel — "block/consume the key" per sfall spec.
+// Production: sfall_kb_helpers.cc:407-413. When hook returns ret0=1,
+// the function returns -1 to signal the caller to fully consume the key.
+// This was missing from the test mirror and is a concrete divergence.
+TEST_CASE("HOOK_KEYPRESS — ret0=1 sentinel blocks the key (returns -1)")
+{
+    gTestHookCallResult = {};
+    gTestHookCallResult.returnValue = 1; // ret0=1 → block/consume
+
+    int result = testHandleKeyPressed(SDL_SCANCODE_A, true, true, true);
+
+    CHECK(gTestHookCallResult.hookFired == true);
+    // ret0=1 → -1 sentinel (key consumed, not remapped)
+    CHECK(result == -1);
+}
+
+TEST_CASE("HOOK_KEYPRESS — ret0=1 blocks key on release as well")
+{
+    gTestHookCallResult = {};
+    gTestHookCallResult.returnValue = 1;
+
+    int result = testHandleKeyPressed(SDL_SCANCODE_RETURN, false, true, true);
+
+    CHECK(gTestHookCallResult.hookFired == true);
+    CHECK(gTestHookCallResult.arg0 == 0); // release
+    CHECK(result == -1);
+}
+
+TEST_CASE("HOOK_KEYPRESS — ret0=1 differs from ret0=0 (unmapped)")
+{
+    // ret0=0: numReturnValues() <= 0 path → return SDL_SCANCODE_UNKNOWN
+    // ret0=1: override → return -1 sentinel (block)
+    // These are different behaviors that must not be conflated.
+
+    // ret0=0 → UNKNOWN
+    gTestHookCallResult = {};
+    gTestHookCallResult.returnValue = 0;
+    int result0 = testHandleKeyPressed(SDL_SCANCODE_A, true, true, true);
+    CHECK(result0 == SDL_SCANCODE_UNKNOWN);
+
+    // ret0=1 → -1 (block)
+    gTestHookCallResult = {};
+    gTestHookCallResult.returnValue = 1;
+    int result1 = testHandleKeyPressed(SDL_SCANCODE_A, true, true, true);
+    CHECK(result1 == -1);
+
+    // They must be different — 1 != SDL_SCANCODE_UNKNOWN (which is 0)
+    CHECK(result0 != result1);
+}
+
+// =================================================================
+// I2F-039: Production DIK table at index 181 — KP_DIVIDE divergence
+// =================================================================
+// Previous test mirror used SDL_SCANCODE_SLASH for DIK index 181,
+// but production sfall_kb_helpers.cc:199 uses SDL_SCANCODE_KP_DIVIDE.
+// This test validates the corrected mapping.
+TEST_CASE("DIK index 181 maps to KP_DIVIDE (not SLASH) — production alignment")
+{
+    if (!gTableInitialized) {
+        initTestDiksTable();
+        gTableInitialized = true;
+    }
+
+    SDL_Scancode sc = kTestDiks[181];
+    CHECK(sc == SDL_SCANCODE_KP_DIVIDE); // production: not SLASH
+    CHECK(sc != SDL_SCANCODE_SLASH);     // divergent from pre-fix mirror
+
+    // Verify inverse mapping: KP_DIVIDE → DIK 181
+    int dik = testGetKeyFromScancode(SDL_SCANCODE_KP_DIVIDE);
+    CHECK(dik == 181);
 }
 
 // =================================================================

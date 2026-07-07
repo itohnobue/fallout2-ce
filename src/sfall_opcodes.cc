@@ -4093,7 +4093,11 @@ static void op_set_selectable_perk(Program* program)
     const char* name = programStackPopString(program);
 
     // Simply delegate to set_fake_perk logic.
-    if (!active || sfallFakePerkCount >= kMaxFakePerks) {
+    if (!active) {
+        return;
+    }
+    if (sfallFakePerkCount >= kMaxFakePerks) {
+        debugPrint("set_selectable_perk: capacity exceeded (%d max) — perk '%s' not added\n", kMaxFakePerks, name ? name : "(null)");
         return;
     }
 
@@ -5214,7 +5218,40 @@ void sfallOpcodeStateSave()
     sfall_gl_vars_store("SFSwiftM", sfallSwiftLearnerMod);
     sfall_gl_vars_store("SFHpPMd ", sfallHpPerLevelMod);
 
+    // F-016: sfallPerkboxTitle (set via set_perkbox_title opcode) is NOT
+    // serialized here. The global vars system only supports int/float values;
+    // string storage is not available. This matches the existing limitation
+    // for sfallPerkNameOverrides[] and sfallPerkDescOverrides[] (see comment
+    // at op_set_perk_name). Mod scripts must re-call the opcode on game load.
+    //
+    // When string persistence is added to the global vars system, the title
+    // should be stored with a key like "SFPTTitle" and restored in
+    // sfallOpcodeStateLoad().
+
+    // F-002: Save per-stat min/max bounds set via set_stat_max (0x81B4),
+    // set_stat_min (0x81B5), and their PC/NPC variants. These modify
+    // gStatDescriptions[] limits in stat.cc and must survive save/load.
+    {
+        sfall_gl_vars_store("SFStMCnt", STAT_COUNT);
+        for (int stat = 0; stat < STAT_COUNT; stat++) {
+            char key[16] = {};
+            sprintf(key, "SFStMn%02d", stat);
+            sfall_gl_vars_store(key, statGetMinValue(stat));
+            sprintf(key, "SFStMx%02d", stat);
+            sfall_gl_vars_store(key, statGetMaxValue(stat));
+        }
+    }
+
     // Pickpocket modifier opcodes.
+    // F-013: sfallCritterPickpocketMax and sfallBasePickpocketMax are
+    // saved/loaded here but are NOT consumed by any pickpocket code path.
+    // The accessor functions sfallGetCritterPickpocketMax() and
+    // sfallGetBasePickpocketMax() exist in the header but skill.cc's
+    // skillDetermineStealResult() only consumes sfallGetPickpocketMax()
+    // (global max from set_pickpocket_max, 0x81A0), not the per-critter
+    // or per-base maxima. To fully wire these, skill.cc must be updated
+    // to consult sfallGetCritterPickpocketMax()/sfallGetBasePickpocketMax()
+    // when computing the steal cap.
     sfall_gl_vars_store("SFPkpMax", sfallPickpocketMax);
     sfall_gl_vars_store("SFCrtPMx", sfallCritterPickpocketMax);
     sfall_gl_vars_store("SFBasePx", sfallBasePickpocketMax);
@@ -5223,6 +5260,12 @@ void sfallOpcodeStateSave()
 
     // Perk level modifier.
     sfall_gl_vars_store("SFPerkLM", sfallPerkLevelMod);
+
+    // F-015: Save unspent AP bonuses (set via set_unspent_ap_bonus /
+    // set_unspent_ap_perk_bonus opcodes). Stored in stat.cc static ints;
+    // must be serialized or they reset to default (4) on game load.
+    sfall_gl_vars_store("SFUnApBn", statGetUnspentApBonus());
+    sfall_gl_vars_store("SFUnApPk", statGetUnspentApPerkBonus());
 
     // F-008: Save perk min level overrides set by set_perk_level (0x817A).
     // Store count + per-index (perk ID, current override value) pairs.
@@ -5561,6 +5604,31 @@ void sfallOpcodeStateLoad()
         sfallHpPerLevelMod = val;
     }
 
+    // F-016: sfallPerkboxTitle is NOT restored here — see comment in
+    // sfallOpcodeStateSave() for details (string persistence not available).
+    // When string serialization is added to the global vars system, restore
+    // the title here with sfall_gl_vars_fetch_string("SFPTTitle", ...).
+
+    // F-002: Restore per-stat min/max bounds set via set_stat_max (0x81B4),
+    // set_stat_min (0x81B5), and their PC/NPC variants.
+    {
+        int statCount = 0;
+        if (sfall_gl_vars_fetch("SFStMCnt", statCount)) {
+            for (int stat = 0; stat < statCount && stat < STAT_COUNT; stat++) {
+                char key[16] = {};
+                int ival = 0;
+                sprintf(key, "SFStMn%02d", stat);
+                if (sfall_gl_vars_fetch(key, ival)) {
+                    statSetMinValue(stat, ival);
+                }
+                sprintf(key, "SFStMx%02d", stat);
+                if (sfall_gl_vars_fetch(key, ival)) {
+                    statSetMaxValue(stat, ival);
+                }
+            }
+        }
+    }
+
     // Pickpocket modifier opcodes.
     if (sfall_gl_vars_fetch("SFPkpMax", val)) {
         sfallPickpocketMax = val;
@@ -5589,6 +5657,15 @@ void sfallOpcodeStateLoad()
     // Perk level modifier.
     if (sfall_gl_vars_fetch("SFPerkLM", val)) {
         sfallPerkLevelMod = val;
+    }
+
+    // F-015: Restore unspent AP bonuses set via set_unspent_ap_bonus /
+    // set_unspent_ap_perk_bonus opcodes.
+    if (sfall_gl_vars_fetch("SFUnApBn", val)) {
+        statSetUnspentApBonus(val);
+    }
+    if (sfall_gl_vars_fetch("SFUnApPk", val)) {
+        statSetUnspentApPerkBonus(val);
     }
 
     // F-008: Restore perk min level overrides set by set_perk_level (0x817A).
@@ -6569,9 +6646,9 @@ void sfallOpcodesInit()
     interpreterRegisterOpcode(0x81C5, op_set_critter_hit_chance_mod);
     // 0x81c6 - void set_base_hit_chance_mod(int max, int mod)
     interpreterRegisterOpcode(0x81C6, op_set_base_hit_chance_mod);
-    // 0x81c7 - void set_critter_skill_mod(object, int max)
+    // 0x81c7 - void set_critter_skill_mod(object, int skill, int mod)
     interpreterRegisterOpcode(0x81C7, op_set_critter_skill_mod);
-    // 0x81c8 - void set_base_skill_mod(int max)
+    // 0x81c8 - void set_base_skill_mod(int skill, int mod)
     interpreterRegisterOpcode(0x81C8, op_set_base_skill_mod);
     // 0x81c9 - void set_critter_pickpocket_mod(object, int max, int mod)
     interpreterRegisterOpcode(0x81C9, op_set_critter_pickpocket_mod);

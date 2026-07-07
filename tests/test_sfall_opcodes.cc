@@ -2371,56 +2371,47 @@ TEST_CASE("M-093+M-094: buildFid preconditions — type constants")
 // underlying implementation details are available.
 // ============================================================
 
-TEST_CASE("TODO-F28-01: deferred Iter-1 SfallOps finding (agent 3b remaining) *")
+TEST_CASE("TODO-F28-01: deferred Iter-1 SfallOps finding (agent 3b remaining) *" * doctest::skip())
 {
     // Finding from the agent 3b allocation (M-092–M-098 batch remainder).
     // This finding was allocated but never assigned to any implementation agent.
     // SKIPPED: Implementation details for this finding are not yet available.
-    // F2-019: Replaced CHECK(true) with doctest::skip() to stop inflating CI pass counts.
-    doctest::skip();
 }
 
-TEST_CASE("TODO-F28-02: deferred Iter-1 SfallOps finding (agent 3c) *")
+TEST_CASE("TODO-F28-02: deferred Iter-1 SfallOps finding (agent 3c) *" * doctest::skip())
 {
     // Finding from the agent 3c Iter-1 allocation.
     // SKIPPED: Implementation details not yet available.
-    // F2-019: Replaced CHECK(true) with doctest::skip() to stop inflating CI pass counts.
-    doctest::skip();
 }
 
-TEST_CASE("TODO-F28-03: deferred Iter-1 SfallOps finding (agent 3c) *")
+TEST_CASE("TODO-F28-03: deferred Iter-1 SfallOps finding (agent 3c) *" * doctest::skip())
 {
     // Finding from the agent 3c Iter-1 allocation.
     // SKIPPED: Implementation details not yet available.
-    doctest::skip();
 }
 
-TEST_CASE("TODO-F28-04: deferred Iter-1 SfallOps finding (agent 3c) *")
+TEST_CASE("TODO-F28-04: deferred Iter-1 SfallOps finding (agent 3c) *" * doctest::skip())
 {
     // Finding from the agent 3c Iter-1 allocation.
     // SKIPPED: Implementation details not yet available.
-    doctest::skip();
 }
 
-TEST_CASE("TODO-F28-05: deferred Iter-1 SfallOps finding (agent 3c) *")
+TEST_CASE("TODO-F28-05: deferred Iter-1 SfallOps finding (agent 3c) *" * doctest::skip())
 {
     // Finding from the agent 3c Iter-1 allocation.
     // SKIPPED: Implementation details not yet available.
-    doctest::skip();
 }
 
-TEST_CASE("TODO-F28-06: deferred Iter-1 SfallOps finding (agent 3c) *")
+TEST_CASE("TODO-F28-06: deferred Iter-1 SfallOps finding (agent 3c) *" * doctest::skip())
 {
     // Finding from the agent 3c Iter-1 allocation.
     // SKIPPED: Implementation details not yet available.
-    doctest::skip();
 }
 
-TEST_CASE("TODO-F28-07: deferred Iter-1 SfallOps finding (agent 3c) *")
+TEST_CASE("TODO-F28-07: deferred Iter-1 SfallOps finding (agent 3c) *" * doctest::skip())
 {
     // Finding from the agent 3c Iter-1 allocation.
     // SKIPPED: Implementation details not yet available.
-    doctest::skip();
 }
 
 // =================================================================

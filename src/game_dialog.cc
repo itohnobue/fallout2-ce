@@ -1001,6 +1001,13 @@ int _gdialogInitFromScript(int headFid, int reaction)
     animationStop();
 
     _boxesWereDisabled = indicatorBarHide();
+    if (gGameDialogSpeaker == nullptr) {
+        // Speaker was cleared before _gdialogInitFromScript was called —
+        // this can happen when a script terminates the dialog asynchronously
+        // during initialization.  Return -1 to signal failure.
+        debugPrint("_gdialogInitFromScript(): gGameDialogSpeaker is null, aborting init\n");
+        return -1;
+    }
     gGameDialogSpeakerIsPartyMember = objectIsPartyMember(gGameDialogSpeaker);
     _oldFont = fontGetCurrent();
     fontSetCurrent(101);
