@@ -174,9 +174,13 @@ TEST_CASE("sfallConfigInit — default config values") {
             SFALL_CONFIG_FALLOUT1_BEHAVIOR_KEY, &val, -1));
         CHECK(val == 0);
 
-        CHECK(configGetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY,
-            SFALL_CONFIG_ENABLE_HERO_APPEARANCE_MOD_KEY, &val, -1));
-        CHECK(val == 0);
+        // F-017: EnableHeroAppearanceMod key is intentionally NOT set
+        // as a default (the feature is always-on; the config flag was dead).
+        // Use the 4-arg configGetInt (no defaultValue) to check absence —
+        // the 5-arg overload always returns true because it falls back to
+        // the default value regardless of key existence.
+        CHECK_FALSE(configGetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY,
+            SFALL_CONFIG_ENABLE_HERO_APPEARANCE_MOD_KEY, &val));
 
         CHECK(configGetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY,
             SFALL_CONFIG_USE_FILESYSTEM_OVERRIDE_KEY, &val, -1));

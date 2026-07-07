@@ -18,9 +18,11 @@ bool gFallout1Behavior = false;
 //                             are registered unconditionally at sfall_opcodes.cc to
 //                             prevent script crashes; flag is parsed but never gates
 //                             any behavior.
-//   gEnableHeroAppearanceMod — WIRED: consumed by sfall_opcodes.cc hero
-//                               appearance opcode registration pipeline via
-//                               sfallConfigGetHeroAppearanceMod().
+//   gEnableHeroAppearanceMod — DEAD / UNWIRED (F-17): config flag parsed
+//                               by sfall_ini.cc but no CE code gate exists;
+//                               hero appearance feature is always-on by design.
+//                               The extern global is retained for sfall_ini.cc
+//                               backward compatibility but is never consumed.
 //   gUseFileSystemOverride   — INTENTIONALLY UNWIRED: VFS priority ordering
 //                               provides equivalent override behavior without
 //                               this flag (master_patches/ dir > .dat files).
@@ -55,7 +57,6 @@ bool sfallConfigInit(int argc, char** argv)
     configSetString(&gSfallConfig, SFALL_CONFIG_SCRIPTS_KEY, SFALL_CONFIG_INI_CONFIG_FOLDER, "");
 
     configSetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, SFALL_CONFIG_FALLOUT1_BEHAVIOR_KEY, 0);
-    configSetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, SFALL_CONFIG_ENABLE_HERO_APPEARANCE_MOD_KEY, 0);
     configSetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, SFALL_CONFIG_USE_FILESYSTEM_OVERRIDE_KEY, 0);
     configSetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, SFALL_CONFIG_OVERRIDE_ART_CACHE_SIZE_KEY, 0);
     configSetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, SFALL_CONFIG_EXTRA_SAVE_SLOTS_KEY, 0);
@@ -76,14 +77,18 @@ bool sfallConfigInit(int argc, char** argv)
     gFallout1Behavior = tempVal != 0;
     configGetInt(&gSfallConfig, SFALL_CONFIG_DEBUGGING_KEY, SFALL_CONFIG_ALLOW_UNSAFE_SCRIPTING_KEY, &tempVal, 0);
     gAllowUnsafeScripting = tempVal != 0;
-    configGetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, SFALL_CONFIG_ENABLE_HERO_APPEARANCE_MOD_KEY, &tempVal, 0);
-    gEnableHeroAppearanceMod = tempVal != 0;
     configGetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, SFALL_CONFIG_USE_FILESYSTEM_OVERRIDE_KEY, &tempVal, 0);
     gUseFileSystemOverride = tempVal != 0;
     configGetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, SFALL_CONFIG_OVERRIDE_ART_CACHE_SIZE_KEY, &tempVal, 0);
     gOverrideArtCacheSize = tempVal != 0;
     configGetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, SFALL_CONFIG_EXTRA_SAVE_SLOTS_KEY, &tempVal, 0);
     gExtraSaveSlots = tempVal != 0;
+
+    // gEnableHeroAppearanceMod is unconditionally false since F-17
+    // removed its config key and parsing. The feature is always active
+    // in CE. Reset here so that repeated sfallConfigInit/Exit cycles
+    // do not leave stale state from a previous init.
+    gEnableHeroAppearanceMod = false;
 
     gSfallConfigInitialized = true;
 
@@ -96,11 +101,6 @@ void sfallConfigExit()
         configFree(&gSfallConfig);
         gSfallConfigInitialized = false;
     }
-}
-
-bool sfallConfigGetHeroAppearanceMod()
-{
-    return gEnableHeroAppearanceMod;
 }
 
 } // namespace fallout

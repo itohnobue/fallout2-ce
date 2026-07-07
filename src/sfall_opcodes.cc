@@ -162,6 +162,20 @@ static void op_read_int(Program* program)
     programStackPushInteger(program, -1);
 }
 
+// read_string — reads a null-terminated string from a specified address.
+// CE cannot dereference arbitrary engine addresses. Registered as a
+// stub returning -1 so scripts that check for this opcode do not crash.
+// Previously unregistered — calling opcode 0x8159 triggered
+// programFatalError (longjmp abort). Now returns -1 gracefully
+// like read_short/read_int/read_byte.
+// RPU/ETu scripts do not currently call read_string directly.
+static void op_read_string(Program* program)
+{
+    int addr = programStackPopInteger(program);
+    programPrintError("%s: read_string at 0x%x — not supported in CE engine, returning -1", program->name, addr);
+    programStackPushInteger(program, -1);
+}
+
 // set_pc_base_stat
 static void op_set_pc_base_stat(Program* program)
 {
@@ -1244,10 +1258,26 @@ static void op_get_attack_type(Program* program)
     }
 }
 
+static bool sfallVfsPathContainsTraversal(const char* path);
+
 static void op_play_sfall_sound(Program* program)
 {
     int mode = programStackPopInteger(program);
     const char* path = programStackPopString(program);
+
+    // F-063: Reject paths containing ".." components to prevent path
+    // traversal. Matches the VFS opcode pattern (fs_create, fs_copy,
+    // fs_find). Without this check, a script could supply a path like
+    // "../secrets.dat" which passes through 7 function calls with zero
+    // guards. File contents are not returned to the script (only
+    // internally processed for audio decoding), so this is defense-in-
+    // depth, not data-exfiltration prevention.
+    if (sfallVfsPathContainsTraversal(path)) {
+        programPrintError("play_sfall_sound: path traversal rejected '%s'", path);
+        programStackPushInteger(program, -1);
+        return;
+    }
+
     programStackPushInteger(program, scriptSoundPlay(path, mode));
 }
 
@@ -5802,8 +5832,11 @@ int sfallGetHideRealPerks()
 // ============================================================
 
 // Movie path override storage (F-021). Set via set_movie_path (0x8177).
-// Keyed by movie ID. Integration point: movie.cc should check
-// sfallGetMoviePathOverride() before resolving movie file paths.
+// Keyed by movie ID. Integrated with movie.cc via sfallGetMoviePathOverride()
+// (called at game_movie.cc:150-157 before resolving movie file paths).
+// Note: movie path overrides are NOT serialized to save files because
+// sfall_gl_vars only supports int/float values, and movie paths are
+// char* strings. Overrides must be re-applied by mod scripts on game load.
 // (Declarations for kMaxMoviePathOverrides and sfallMoviePathOverrides[]
 // are at file scope before sfallOpcodesReset.)
 
@@ -5817,7 +5850,9 @@ const char* sfallGetMoviePathOverride(int movieId)
 
 // set_movie_path(string name, int movieid) — 0x8177
 // Replaces a movie file path for the given movie ID.
-// Stores the override; movie.cc integration is pending (separate agent).
+// The override is consumed by sfallGetMoviePathOverride() at game_movie.cc:150-157.
+// Note: overrides are NOT persisted across save/load — scripts must re-apply
+// them in a game-load handler if they need to persist.
 static void op_set_movie_path(Program* program)
 {
     int movieid = programStackPopInteger(program);
@@ -5837,7 +5872,7 @@ static void op_set_movie_path(Program* program)
         sfallMoviePathOverrides[movieid] = new char[len];
         memcpy(sfallMoviePathOverrides[movieid], name, len);
     }
-    debugPrint("set_movie_path(movieid=%d, name=\"%s\") — override stored, movie.cc integration pending\n",
+    debugPrint("set_movie_path(movieid=%d, name=\"%s\") - override stored, consumed by game_movie.cc:150-157",
         movieid, name != nullptr ? name : "(null)");
 }
 
@@ -5952,7 +5987,8 @@ void sfallOpcodesInit()
     interpreterRegisterOpcode(0x8157, op_read_short);
     // 0x8158 - int   read_int(int address)
     interpreterRegisterOpcode(0x8158, op_read_int);
-    // 0x8159 - string read_string(int address) — deliberately NOT registered (inherently unsafe)
+    // 0x8159 - int   read_string(int address) — registered as stub returning -1 (F-01)
+    interpreterRegisterOpcode(0x8159, op_read_string);
 
     // VOODOO memory write opcodes — registered as safe no-ops.
     // These pop their arguments and log a debug message, preventing script

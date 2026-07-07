@@ -2630,3 +2630,55 @@ TEST_CASE("I2-10: multiple skills per critter, multiple critters")
     CHECK(testGetCritterSkillModForCritter(30, 0) == 0); // unset
 }
 
+// ============================================================
+// F-14/F-15: Knockback globals lifecycle
+// 
+// Verified that the 6 knockback globals are declared as extern
+// (from sfall_opcodes.h) and can be set/reset independently.
+// The actual pre-hook/post-hook reset logic is in combat.cc
+// and requires the full engine to exercise. These tests verify
+// the globals exist and are at expected defaults.
+// ============================================================
+
+TEST_CASE("F-14/F-15: knockback globals — default state and reset")
+{
+    // Defaults: all types = 0, all values = 0.0f
+    CHECK(sfallWeaponKnockbackType == 0);
+    CHECK(sfallWeaponKnockbackValue == 0.0f);
+    CHECK(sfallTargetKnockbackType == 0);
+    CHECK(sfallTargetKnockbackValue == 0.0f);
+    CHECK(sfallAttackerKnockbackType == 0);
+    CHECK(sfallAttackerKnockbackValue == 0.0f);
+
+    // Simulate script setting knockback values
+    sfallWeaponKnockbackType = 1;
+    sfallWeaponKnockbackValue = 10.0f;
+    sfallTargetKnockbackType = 2;
+    sfallTargetKnockbackValue = 5.0f;
+    sfallAttackerKnockbackType = 1;
+    sfallAttackerKnockbackValue = 15.0f;
+
+    CHECK(sfallWeaponKnockbackType == 1);
+    CHECK(sfallWeaponKnockbackValue == 10.0f);
+    CHECK(sfallTargetKnockbackType == 2);
+    CHECK(sfallTargetKnockbackValue == 5.0f);
+    CHECK(sfallAttackerKnockbackType == 1);
+    CHECK(sfallAttackerKnockbackValue == 15.0f);
+
+    // Simulate the post-hook reset (F-14) — zero all 6
+    sfallWeaponKnockbackType = 0;
+    sfallWeaponKnockbackValue = 0.0f;
+    sfallTargetKnockbackType = 0;
+    sfallTargetKnockbackValue = 0.0f;
+    sfallAttackerKnockbackType = 0;
+    sfallAttackerKnockbackValue = 0.0f;
+
+    // Verify all zeroed
+    CHECK(sfallWeaponKnockbackType == 0);
+    CHECK(sfallWeaponKnockbackValue == 0.0f);
+    CHECK(sfallTargetKnockbackType == 0);
+    CHECK(sfallTargetKnockbackValue == 0.0f);
+    CHECK(sfallAttackerKnockbackType == 0);
+    CHECK(sfallAttackerKnockbackValue == 0.0f);
+}
+

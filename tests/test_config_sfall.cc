@@ -587,12 +587,14 @@ TEST_CASE("sfallConfigInit — config keys set to defaults in gSfallConfig")
         CHECK(val == 0);
     }
 
-    SUBCASE("EnableHeroAppearanceMod config key defaults to 0")
+    SUBCASE("EnableHeroAppearanceMod config key absent (F-17: always-on)")
     {
         int val = -1;
-        CHECK(configGetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY,
+        // Use 4-arg configGetInt (no defaultValue) to check absence —
+        // the 5-arg overload always returns true regardless of key existence.
+        CHECK_FALSE(configGetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY,
             SFALL_CONFIG_ENABLE_HERO_APPEARANCE_MOD_KEY, &val));
-        CHECK(val == 0);
+        // val stays -1 (unchanged) because configGetInt returned false
     }
 
     SUBCASE("UseFileSystemOverride config key defaults to 0")

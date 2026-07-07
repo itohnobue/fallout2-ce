@@ -39,17 +39,13 @@ extern bool gFallout1Behavior;
 
 // Config booleans parsed from ddraw.ini. Wired status noted per-global.
 extern bool gAllowUnsafeScripting; // INTENTIONALLY UNWIRED: opcodes registered unconditionally; flag parsed but never gates registration
-extern bool gEnableHeroAppearanceMod; // WIRED: consumed via sfallConfigGetHeroAppearanceMod()
+extern bool gEnableHeroAppearanceMod; // DEAD: feature always active; flag parsed in sfall_ini.cc but unwired in CE — no code gate exists
 extern bool gUseFileSystemOverride; // INTENTIONALLY UNWIRED: VFS priority handles this
 extern bool gOverrideArtCacheSize; // INTENTIONALLY UNWIRED: art.cc uses settings.system.art_cache_size instead
 extern bool gExtraSaveSlots; // WIRED: consumed at loadsave.cc for save slot page count
 
 bool sfallConfigInit(int argc, char** argv);
 void sfallConfigExit();
-
-// Provides read-only access to gEnableHeroAppearanceMod for consumption
-// in the hero appearance opcode registration pipeline (sfall_opcodes.cc).
-bool sfallConfigGetHeroAppearanceMod();
 
 } // namespace fallout
 

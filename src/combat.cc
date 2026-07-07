@@ -4960,26 +4960,41 @@ static void attackComputeDamage(Attack* attack, int numRounds, int baseDamageMul
                 *knockbackDistancePtr = 0;
             }
         }
-
-        // SFALL: Fix F-52 — reset knockback globals after each
-        // attackComputeDamage() call to prevent stale values from
-        // leaking into subsequent attacks (e.g., explosion extras
-        // processed in the same frame via _compute_explosion_on_extras).
-        // This must run unconditionally — when Stonewall's 50% roll
-        // suppresses knockback (shouldKnockback = false), the globals
-        // must still be cleared so they don't persist to the next
-        // attack call. Without this, a single set_*_knockback call
-        // affects every subsequent attack until explicitly cleared by
-        // remove_*_knockback or game reset.
-        sfallWeaponKnockbackType = 0;
-        sfallWeaponKnockbackValue = 0.0f;
-        sfallTargetKnockbackType = 0;
-        sfallTargetKnockbackValue = 0.0f;
-        sfallAttackerKnockbackType = 0;
-        sfallAttackerKnockbackValue = 0.0f;
     }
 
+    // SFALL: Fix F-15 — reset knockback globals unconditionally before
+    // the COMBATDAMAGE hook fires. On the miss path (DAM_HIT == 0),
+    // knockbackDistancePtr is set to nullptr at line 4782, which skips
+    // the entire knockback computation block above. Without an unconditional
+    // reset here, hook-set knockback values from a prior attack survive
+    // through misses indefinitely and contaminate every subsequent hit.
+    // Globals are reset unconditionally here (before the hook fires) to
+    // ensure clean state regardless of hit/miss path, then reset again
+    // after the hook returns (below) to clear any hook-set values.
+    sfallWeaponKnockbackType = 0;
+    sfallWeaponKnockbackValue = 0.0f;
+    sfallTargetKnockbackType = 0;
+    sfallTargetKnockbackValue = 0.0f;
+    sfallAttackerKnockbackType = 0;
+    sfallAttackerKnockbackValue = 0.0f;
+
     scriptHooks_ComputeDamage(attack, numRounds, baseDamageMult);
+
+    // SFALL: Fix F-14 — reset knockback globals after the COMBATDAMAGE
+    // hook fires. The hook can set knockback modifiers via set_sfall_return
+    // (script calls set_weapon_knockback / set_target_knockback / etc.
+    // inside the hook handler). Without a post-hook reset, those hook-set
+    // values survive past attackComputeDamage() return and contaminate the
+    // NEXT attack call (e.g., explosion extras processed in the same frame).
+    // Combined with F-15 above (unconditional pre-hook reset), this ensures
+    // knockback globals are always zeroed regardless of hit/miss and
+    // regardless of hook-side modifications.
+    sfallWeaponKnockbackType = 0;
+    sfallWeaponKnockbackValue = 0.0f;
+    sfallTargetKnockbackType = 0;
+    sfallTargetKnockbackValue = 0.0f;
+    sfallAttackerKnockbackType = 0;
+    sfallAttackerKnockbackValue = 0.0f;
 }
 
 // 0x424BAC

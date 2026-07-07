@@ -401,6 +401,13 @@ public:
             values.resize(newLen);
         } else if (newLen >= ARRAY_ACTION_SHUFFLE) {
             ListSort(values, newLen, std::less<ArrayElement>());
+        } else {
+            // F-065: Reject out-of-range action values (≤ -6).
+            // Valid negative values: -1 (no-op, handled above), -2..-5
+            // (sort/reverse/shuffle, handled by ListSort above).
+            // Values ≤ -6 were silently ignored with no error — script
+            // authors calling resize_array(arr, -10) got no effect.
+            debugPrint("ResizeArray(standard): invalid action value %d — must be in {-1, 0, positive, -2..-5}", newLen);
         }
     }
 
@@ -516,8 +523,20 @@ public:
             }
             pairs.resize(newLen);
         } else if (newLen < 0) {
-            if (newLen < (ARRAY_ACTION_SHUFFLE - 4)) return;
+            // F-065: Validate negative action values for associative arrays.
+            // Valid sort-by-key values: -2 (SORT), -3 (RSORT), -4 (REVERSE),
+            // -5 (SHUFFLE). Sort-by-value is indicated by offset -4, giving
+            // -6..-9. MapSort() handles the offset internally.
+            // Values ≤ -10 were silently ignored — script authors calling
+            // resize_array(arr, -10) got nothing with no error.
+            if (newLen < (ARRAY_ACTION_SHUFFLE - 4)) {
+                debugPrint("ResizeArray(assoc): invalid action value %d — must be in {-1, 0..size-1, -2..-9}", newLen);
+                return;
+            }
             MapSort(newLen);
+        } else {
+            // newLen >= size(): resize-to-expand is meaningless for associative arrays.
+            // Not an error — this is the expected no-op case for expansion.
         }
     }
 

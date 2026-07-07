@@ -486,6 +486,17 @@ typedef struct WmGenData {
 float gScriptWorldMapMulti = 1.0f;
 void wmSetScriptWorldMapMulti(float value)
 {
+    // F-075: Clamp to non-negative range. A negative multiplier feeds
+    // negative ticksToAdd to gameTimeAddTicks, which causes unsigned
+    // underflow in gGameTime, potentially triggering instant game-over
+    // timeout (year >= 13 checks). Zero = pause is acceptable behavior.
+    // Upper bound capped at 100.0 to prevent extreme game-time jumps
+    // from overflow (e.g., value = 1e20 would advance years instantly).
+    if (value < 0.0f) {
+        value = 0.0f;
+    } else if (value > 100.0f) {
+        value = 100.0f;
+    }
     gScriptWorldMapMulti = value;
 }
 float wmGetScriptWorldMapMulti()

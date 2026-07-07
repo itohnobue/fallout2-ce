@@ -211,6 +211,15 @@ namespace fallout {
     int gLastTarget = -1;
     int gSkillMaxCap = 300;
     int gXpModPercentage = 100;
+
+    // sfall_opcodes.cc knockback globals (F-004) — defined here so
+    // test_sfall_opcodes can reference them without linking sfall_opcodes.cc.
+    int sfallWeaponKnockbackType = 0;
+    float sfallWeaponKnockbackValue = 0.0f;
+    int sfallTargetKnockbackType = 0;
+    float sfallTargetKnockbackValue = 0.0f;
+    int sfallAttackerKnockbackType = 0;
+    float sfallAttackerKnockbackValue = 0.0f;
 }
 
 // =============================================================
@@ -359,6 +368,14 @@ namespace fallout {
         gLastTarget = -1;
         gSkillMaxCap = 300;
         gXpModPercentage = 100;
+
+        // Reset knockback globals (F-004).
+        sfallWeaponKnockbackType = 0;
+        sfallWeaponKnockbackValue = 0.0f;
+        sfallTargetKnockbackType = 0;
+        sfallTargetKnockbackValue = 0.0f;
+        sfallAttackerKnockbackType = 0;
+        sfallAttackerKnockbackValue = 0.0f;
     }
 
     void sfallOpcodesExit()

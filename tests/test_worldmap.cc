@@ -240,6 +240,12 @@ void testWmCarSetCurrentArea(int area)
 
 void testWmSetScriptWorldMapMulti(float value)
 {
+    // F-075: Clamp to [0.0, 100.0] range matching worldmap.cc fix.
+    if (value < 0.0f) {
+        value = 0.0f;
+    } else if (value > 100.0f) {
+        value = 100.0f;
+    }
     testScriptWorldMapMulti = value;
 }
 
@@ -830,9 +836,9 @@ TEST_CASE("wmSetScriptWorldMapMulti")
     testWmSetScriptWorldMapMulti(0.0f);
     CHECK(testScriptWorldMapMulti == 0.0f);
 
-    // Negative value (edge case noted in F-01)
+    // Negative value — clamped to 0.0 (F-075: prevents unsigned underflow in gameTimeAddTicks)
     testWmSetScriptWorldMapMulti(-1.0f);
-    CHECK(testScriptWorldMapMulti == -1.0f);
+    CHECK(testScriptWorldMapMulti == 0.0f);
 }
 
 // ============================================================
@@ -2354,7 +2360,7 @@ TEST_CASE("M-082: gScriptWorldMapMulti save→load round-trip — edge values")
     float loaded = testMockFileReadFloat();
     CHECK(loaded == 0.0f);
 
-    // Negative value (accepted by wmSetScriptWorldMapMulti without validation)
+    // Negative value (clamped by wmSetScriptWorldMapMulti but float round-trip is independent)
     testMockFileWriteFloat(-1.0f);
     loaded = testMockFileReadFloat();
     CHECK(loaded == -1.0f);
@@ -2757,19 +2763,19 @@ TEST_CASE("N2-029: gScriptWorldMapMulti — large positive multiplier overflow c
     CHECK(out > 0); // at minimum, the formula should not crash
 }
 
-TEST_CASE("N2-029: gScriptWorldMapMulti — setter accepts extreme values [iter-2]")
+TEST_CASE("N2-029: gScriptWorldMapMulti — setter clamps extreme values [iter-2]")
 {
-    // wmSetScriptWorldMapMulti has no validation — accepts any float
+    // F-075: wmSetScriptWorldMapMulti now clamps to [0.0, 100.0].
     float saved = testScriptWorldMapMulti;
 
     testWmSetScriptWorldMapMulti(0.0f);
     CHECK(testScriptWorldMapMulti == 0.0f);
 
     testWmSetScriptWorldMapMulti(-999.0f);
-    CHECK(testScriptWorldMapMulti == -999.0f);
+    CHECK(testScriptWorldMapMulti == 0.0f); // negative → clamped to 0
 
     testWmSetScriptWorldMapMulti(999999.0f);
-    CHECK(testScriptWorldMapMulti == 999999.0f);
+    CHECK(testScriptWorldMapMulti == 100.0f); // large positive → capped
 
     testScriptWorldMapMulti = saved; // restore
 }

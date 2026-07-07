@@ -755,6 +755,23 @@ TEST_CASE("ResizeArray — list arrays") {
         CHECK((v0 + v1 + v2) == 60); // sum unchanged
     }
 
+    SUBCASE("F-065: invalid action value ≤ -6 is no-op (standard array)") {
+        ArrayId id = CreateArray(3, 0);
+        SetArray(id, ProgramValue(0), ProgramValue(10), false, nullptr);
+        SetArray(id, ProgramValue(1), ProgramValue(5), false, nullptr);
+        SetArray(id, ProgramValue(2), ProgramValue(20), false, nullptr);
+        CHECK(LenArray(id) == 3);
+
+        // -6 is out of the valid range {-1, 0, positive, -2..-5}.
+        // Should be a safe no-op (log warning but no crash).
+        ResizeArray(id, -6);
+        CHECK(LenArray(id) == 3); // unchanged — invalid action ignored
+
+        // -10 should also be ignored
+        ResizeArray(id, -10);
+        CHECK(LenArray(id) == 3); // unchanged — invalid action ignored
+    }
+
 }
 
 TEST_CASE("ResizeArray — associative arrays") {
@@ -783,6 +800,23 @@ TEST_CASE("ResizeArray — associative arrays") {
         SetArray(id, ProgramValue(1), ProgramValue(10), false, nullptr);
         ResizeArray(id, 10); // trying to enlarge
         CHECK(LenArray(id) == 1); // unchanged (enlarging assoc is meaningless)
+    }
+
+    SUBCASE("F-065: invalid action value ≤ -10 is no-op (associative array)") {
+        ArrayId id = CreateArray(-1, 0);
+        SetArray(id, ProgramValue(1), ProgramValue(10), false, nullptr);
+        SetArray(id, ProgramValue(2), ProgramValue(5), false, nullptr);
+        SetArray(id, ProgramValue(3), ProgramValue(20), false, nullptr);
+        CHECK(LenArray(id) == 3);
+
+        // -10 is out of the valid range {-1, 0..size-1, -2..-9}.
+        // Should be a safe no-op (log warning but no crash).
+        ResizeArray(id, -10);
+        CHECK(LenArray(id) == 3); // unchanged — invalid action ignored
+
+        // -100 should also be ignored
+        ResizeArray(id, -100);
+        CHECK(LenArray(id) == 3); // unchanged — invalid action ignored
     }
 
 }
