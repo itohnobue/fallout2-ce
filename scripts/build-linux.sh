@@ -24,7 +24,7 @@ Options:
   --help      Show this help
 
 Environment:
-  Requires: cmake >= 3.18, C++17 compiler, SDL2, zlib
+  Requires: cmake >= 3.21, C++17 compiler, SDL2, zlib
 
 EOF
     exit 0
@@ -115,7 +115,21 @@ else
 fi
 
 if ! command -v cmake &>/dev/null; then
-    echo "[build-linux] ERROR: cmake not found. Install CMake >= 3.18."
+    echo "[build-linux] ERROR: cmake not found. Install CMake >= 3.21."
+    exit 1
+fi
+
+# Check cmake version >= 3.21 (required for cmake --build --preset)
+cmake_ver=$(cmake --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || true)
+if [[ -z "$cmake_ver" ]]; then
+    echo "[build-linux] ERROR: Could not parse cmake version."
+    exit 1
+fi
+major=${cmake_ver%%.*}
+minor=${cmake_ver#*.}
+minor=${minor%%.*}
+if [[ "$major" -lt 3 ]] || { [[ "$major" -eq 3 ]] && [[ "$minor" -lt 21 ]]; }; then
+    echo "[build-linux] ERROR: CMake >= 3.21 required. Found: $cmake_ver"
     exit 1
 fi
 

@@ -143,10 +143,11 @@ int falloutMain(int argc, char** argv)
                     _main_load_new(mapNameCopy);
                     free(mapNameCopy);
 
+                    // SFALL: Call "after loading" event (F-009: must run BEFORE
+                    // start procedures so gGameLoadCount is correct).
+                    sfallOnAfterNewGame();
                     // SFALL: AfterNewGameStartHook.
                     sfall_gl_scr_exec_start_proc();
-                    // SFALL: Call "after loading" event
-                    sfallOnAfterNewGame();
                     sfallOnAfterGameStarted();
                     gGameLoaded = true;
 

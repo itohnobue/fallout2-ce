@@ -3105,7 +3105,10 @@ static void opCritterRemoveTrait(Program* program)
     if (PID_TYPE(object->pid) == OBJ_TYPE_CRITTER) {
         switch (kind) {
         case CRITTER_TRAIT_PERK:
-            while (perkGetRank(object, param) > 0) {
+            // F-025: Respect the value parameter (rank count to remove).
+            // value <= 0 removes nothing; value > current ranks removes all existing ranks.
+            // Each perkRemove() call removes exactly one rank (perk.cc:547).
+            for (int removed = 0; removed < value && perkGetRank(object, param) > 0; removed++) {
                 if (perkRemove(object, param) != 0) {
                     scriptError("\nScript Error: op_critter_rm_trait: perk_sub failed");
                 }

@@ -1,7 +1,9 @@
 #include "sfall.h"
 #include "dik.h"
+#include "../test_utils.h"
 
 variable movecost_mode := 0;
+variable movecost_seen := 0;
 
 procedure movecost_mode_name(variable mode) begin
     variable name := "unknown";
@@ -37,6 +39,11 @@ procedure movecost_handler begin
         defaultCost,
         modeName));
 
+    movecost_seen := movecost_seen + 1;
+    call assertEquals("movecost arg count", len_array(args), 3);
+    call assertTrue("movecost distance >= 0", distance >= 0);
+    call assertTrue("movecost defaultCost >= 0", defaultCost >= 0);
+
     if (movecost_mode == 1) then begin
         newCost := defaultCost + distance;
     end else if (movecost_mode == 2) then begin
@@ -57,6 +64,10 @@ procedure keypress_handler begin
     if (key != DIK_M) then return;
 
     call cycle_movecost_mode;
+    if (movecost_mode == 0 and movecost_seen > 0) then begin
+        call assertTrue("movecost observed", movecost_seen > 0);
+        call report_test_results("hook_movecost");
+    end
 end
 
 procedure start begin

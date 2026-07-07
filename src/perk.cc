@@ -633,10 +633,15 @@ int perkGetFrmId(int perk)
 
 // Sets the minimum level requirement for a perk.
 // Used by set_perk_level sfall opcode (0x817A).
+// F-008: Saves the original compile-time minLevel on first override
+// so it can be restored on game reset.
 void perkSetMinLevel(int perk, int minLevel)
 {
     if (!perkIsValid(perk)) {
         return;
+    }
+    if (sfallPerkMinLevelOriginal[perk] == -1) {
+        sfallPerkMinLevelOriginal[perk] = gPerkDescriptions[perk].minLevel;
     }
     gPerkDescriptions[perk].minLevel = minLevel;
 }

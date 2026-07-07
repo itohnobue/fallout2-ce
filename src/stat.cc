@@ -715,12 +715,22 @@ int pcGetExperienceForNextLevel()
     return pcGetExperienceForLevel(gPcStatValues[PC_STAT_LEVEL] + 1);
 }
 
+// Returns the effective PC level cap, gated by gFallout1Behavior.
+// In FO1 mode (gFallout1Behavior=true), the level cap is 21.
+// In FO2 mode (gFallout1Behavior=false), the cap is PC_LEVEL_MAX (99).
+// F-002: PC_LEVEL_MAX was previously used unconditionally at all
+// call sites, allowing level 99 even in FO1 mode.
+int statGetLevelCap()
+{
+    return gFallout1Behavior ? 21 : PC_LEVEL_MAX;
+}
+
 // Returns exp to reach given level.
 //
 // 0x4AF9A8
 int pcGetExperienceForLevel(int level)
 {
-    if (level >= PC_LEVEL_MAX) {
+    if (level >= statGetLevelCap()) {
         return -1;
     }
 
@@ -862,7 +872,7 @@ int pcAddExperienceWithOptions(int xp, bool doParty, int* xpGained)
 
     gPcStatValues[PC_STAT_EXPERIENCE] = static_cast<int>(newXp);
 
-    while (gPcStatValues[PC_STAT_LEVEL] < PC_LEVEL_MAX) {
+    while (gPcStatValues[PC_STAT_LEVEL] < statGetLevelCap()) {
         if (newXp < pcGetExperienceForNextLevel()) {
             break;
         }
@@ -933,7 +943,7 @@ int pcSetExperience(int xp)
     int level = 1;
     do {
         level += 1;
-    } while (xp >= pcGetExperienceForLevel(level) && level < PC_LEVEL_MAX);
+    } while (xp >= pcGetExperienceForLevel(level) && level < statGetLevelCap());
 
     int newLevel = level - 1;
 

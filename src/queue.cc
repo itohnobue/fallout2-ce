@@ -499,7 +499,9 @@ static int explosionProcess(Object* explosive, bool animate)
     }
 
     // SFALL: Fire HOOK_ONEXPLOSION before the explosion occurs.
-    scriptHooks_OnExplosion(explosive, tile, elevation, minDamage, maxDamage, gDude);
+    // F-029: Use the computed owner (potentially nullptr for unowned explosives)
+    // instead of hardcoded gDude. Falls back to gDude if no owner is set.
+    scriptHooks_OnExplosion(explosive, tile, elevation, minDamage, maxDamage, (owner != nullptr) ? owner : gDude);
 
     if (actionExplode(tile, elevation, minDamage, maxDamage, gDude, animate) == -2) {
         queueAddEvent(50, explosive, nullptr, EVENT_TYPE_EXPLOSION);

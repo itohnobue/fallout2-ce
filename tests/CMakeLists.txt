@@ -469,3 +469,32 @@ target_include_directories(test_sfall_kb_helpers PRIVATE "${CMAKE_SOURCE_DIR}/sr
 target_include_directories(test_sfall_kb_helpers PRIVATE ${ZLIB_INCLUDE_DIRS})
 target_link_libraries(test_sfall_kb_helpers PRIVATE test_stubs doctest ${SDL2_LIBRARIES})
 add_test(NAME test_sfall_kb_helpers COMMAND test_sfall_kb_helpers)
+
+# ---- Test: loadsave integration (F-055: end-to-end save/load round-trip) ----
+# Real file I/O test for save format components. Uses std::fstream temp files.
+# Self-contained — does not link loadsave.cc or sfall_global_vars.cc.
+add_executable(test_loadsave_integration
+    test_loadsave_integration.cpp
+)
+target_link_libraries(test_loadsave_integration PRIVATE doctest)
+add_test(NAME test_loadsave_integration COMMAND test_loadsave_integration)
+
+# ============================================================
+# Stage 6 Implementation — Script Test Harness (F2-012)
+# ============================================================
+
+# ---- Test: script harness basic (F2-012: script execution test harness) ----
+# Tests the mock Program / TestProgram infrastructure that enables
+# opcode handler testing without the full game engine.
+# Links test_script_harness.cpp (harness implementation),
+# test_sources (sfall_global_vars.cc for set/get sfall global opcodes),
+# and test_stubs (debugPrint, compat_*, etc.).
+# SDL2/zlib headers needed for transitive includes from interpreter.h.
+add_executable(test_script_harness_basic
+    test_script_harness.cpp
+    test_script_harness_basic.cpp
+)
+target_include_directories(test_script_harness_basic PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_include_directories(test_script_harness_basic PRIVATE ${ZLIB_INCLUDE_DIRS})
+target_link_libraries(test_script_harness_basic PRIVATE test_sources test_stubs doctest ${SDL2_LIBRARIES})
+add_test(NAME test_script_harness_basic COMMAND test_script_harness_basic)

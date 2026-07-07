@@ -1,8 +1,10 @@
 #include "sfall.h"
 #include "dik.h"
 #include "lib.arrays.h"
+#include "../test_utils.h"
 
 variable inventorymove_blocking := false;
+variable inventorymove_seen := 0;
 
 procedure inventorymove_handler begin
     variable
@@ -29,6 +31,10 @@ procedure inventorymove_handler begin
         display_msg(string_format2("inventorymove arg2=%s pid=%d", obj_name(arg2), obj_pid(arg2)));
     display_msg(string_format1("inventorymove blocking=%d", inventorymove_blocking));
 
+    inventorymove_seen := inventorymove_seen + 1;
+    call assertEquals("inventorymove arg count", len_array(args), 3);
+    call assertTrue("inventorymove action range", action >= 0 and action <= 8);
+
     if (inventorymove_blocking) then begin
         display_msg("inventorymove blocked");
         set_sfall_return(0);
@@ -45,6 +51,10 @@ procedure keypress_handler begin
 
     inventorymove_blocking := not inventorymove_blocking;
     display_msg(string_format1("inventorymove blocking %d", inventorymove_blocking));
+    if (not inventorymove_blocking and inventorymove_seen > 0) then begin
+        call assertTrue("inventorymove observed", inventorymove_seen > 0);
+        call report_test_results("hook_inventorymove");
+    end
 end
 
 procedure start begin

@@ -390,6 +390,11 @@ int sfall_kb_handle_key_pressed(int sdlScanCode, bool pressed, SDL_Keycode keysy
 
     SDL_Scancode scanCode = static_cast<SDL_Scancode>(sdlScanCode);
     // F-03: sfall convention — arg0 = DIK keyCode, arg1 = pressed state, arg2 = SDL keysym.
+    // NOTE (F-016): arg2 is an SDL_Keycode value (not a VK_ or DIK_ code).
+    // SDL_Keycode values diverge from VK_ constants (e.g. SDLK_F=102 vs VK_F=70,
+    // only '0' aligns at 48). Scripts comparing arg2 against VK_ constants will
+    // silently mismatch. Use DIK_ codes (via arg0) or SDL_Keycode constants per
+    // SDL_keycode.h for cross-platform key identification.
     int dikCode = get_key_from_scancode(scanCode);
     ScriptHookCall hook(HOOK_KEYPRESS, 1, { dikCode, pressed ? 1 : 0, static_cast<int>(keysym) });
     hook.call();

@@ -1,8 +1,10 @@
 #include "sfall.h"
 #include "dik.h"
 #include "lib.arrays.h"
+#include "../test_utils.h"
 
 variable skip_next_turn := false;
+variable combatturn_seen := 0;
 
 procedure combatturn_event_name(variable event_type) begin
     if (event_type == 1) then return "start";
@@ -25,6 +27,10 @@ procedure combatturn_handler begin
     display_msg(string_format3("combatturn %s critter=%s loaded=%d", combatturn_event_name(event_type), critter_name, loaded_after_combat_save));
     display_msg(string_format1("combatturn args=%s", debug_array_str(args)));
 
+    combatturn_seen := combatturn_seen + 1;
+    call assertEquals("combatturn arg count", len_array(args), 3);
+    call assertTrue("combatturn event_type range", event_type == -2 or event_type == -1 or event_type == 0 or event_type == 1);
+
     if (event_type == 1 and skip_next_turn) then begin
         skip_next_turn := false;
         display_msg("combatturn skip_next_turn -> 0, skipping this turn");
@@ -42,6 +48,10 @@ procedure keypress_handler begin
 
     skip_next_turn := true;
     display_msg("combatturn skip_next_turn -> 1");
+    if (combatturn_seen > 0) then begin
+        call assertTrue("combatturn observed", combatturn_seen > 0);
+        call report_test_results("hook_combatturn");
+    end
 end
 
 procedure start begin

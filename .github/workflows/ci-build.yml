@@ -232,10 +232,9 @@ jobs:
         run: |
           cmake --build --preset linux-${{ matrix.arch }}-debug
 
-      - name: Test (x64 only)
-        if: matrix.arch == 'x64'
+      - name: Test
         run: |
-          ctest --test-dir out/build/linux-x64-debug
+          ctest --test-dir out/build/linux-${{ matrix.arch }}-debug --output-on-failure
 
       - name: Download ce.dat
         uses: actions/download-artifact@v4
@@ -328,6 +327,10 @@ jobs:
       - name: Build
         run: cmake --build build
 
+      - name: Test
+        run: |
+          ctest --test-dir build --output-on-failure
+
       - name: Download ce.dat
         uses: actions/download-artifact@v4
         with:
@@ -370,6 +373,10 @@ jobs:
       - name: Build
         run: |
           cmake --build --preset macos-debug
+
+      - name: Test
+        run: |
+          ctest --test-dir out/build/macos -C Debug --output-on-failure
 
       - name: Pack
         run: |
@@ -424,6 +431,10 @@ jobs:
           for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products Microsoft.VisualStudio.Product.BuildTools -requires Microsoft.VisualStudio.Component.VC.v141.x86.x64 Microsoft.VisualStudio.Component.VC.v141.xp -property installationPath`) do set "VS_PATH=%%i"
           call "%VS_PATH%\Common7\Tools\VsDevCmd.bat" ^
           && cmake --build --preset windows-${{ matrix.arch }}-release
+
+      - name: Test
+        run: |
+          ctest --test-dir out/build/windows-${{ matrix.arch }} -C RelWithDebInfo --output-on-failure
 
       - name: Download ce.dat
         uses: actions/download-artifact@v4

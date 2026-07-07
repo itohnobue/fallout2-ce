@@ -1,5 +1,6 @@
 #include "sfall.h"
 #include "dik.h"
+#include "../test_utils.h"
 
 variable mode := 0;
 variable hook_calls := 0;
@@ -30,6 +31,9 @@ procedure resttimer_handler begin
         display_msg(string_format1("resttimer game_time=%d", time_ticks));
     end
 
+    call assertTrue("resttimer event_type range", event_type >= -1 and event_type <= 1);
+    call assertTrue("resttimer rest_hours >= 0", rest_hours >= 0);
+
     if (mode == 1 and event_type == 0) then begin
         display_msg("resttimer interrupting normal rest");
         set_sfall_return(1);
@@ -50,6 +54,11 @@ procedure keypress_handler begin
     if (not pressed) then return;
     if (key != DIK_X) then return;
 
+    // Report results for the PREVIOUS mode before resetting counters
+    if (hook_calls > 0) then begin
+        call assertTrue("resttimer observed", hook_calls > 0);
+        call report_test_results("hook_resttimer");
+    end
     mode := mode + 1;
     if (mode > 3) then mode := 0;
     hook_calls := 0;

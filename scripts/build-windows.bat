@@ -24,7 +24,25 @@ echo [build-windows] Build preset     : %BUILD_PRESET%
 REM Check for CMake
 where cmake >nul 2>&1
 if %ERRORLEVEL% neq 0 (
-    echo [build-windows] ERROR: cmake not found. Install CMake >= 3.19.
+    echo [build-windows] ERROR: cmake not found. Install CMake >= 3.21.
+    exit /b 1
+)
+
+REM Check cmake version >= 3.21 (required for cmake --build --preset)
+for /f "tokens=3" %%v in ('cmake --version 2^>nul ^| findstr /i "cmake version"') do set CMAKE_VER=%%v
+if not defined CMAKE_VER (
+    echo [build-windows] ERROR: Could not determine cmake version.
+    exit /b 1
+)
+echo [build-windows] CMake version: %CMAKE_VER%
+for /f "tokens=1-3 delims=." %%a in ("%CMAKE_VER%") do (
+    set CMAKE_MAJOR=%%a
+    set CMAKE_MINOR=%%b
+)
+:: Use arithmetic to compare versions: major*1000 + minor vs 3021 threshold
+set /A VER_OK=(%CMAKE_MAJOR%*1000+%CMAKE_MINOR%)-3021 2>nul
+if %VER_OK% LSS 0 (
+    echo [build-windows] ERROR: CMake >= 3.21 required. Found: %CMAKE_VER%
     exit /b 1
 )
 

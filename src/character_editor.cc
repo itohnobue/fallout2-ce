@@ -5809,7 +5809,7 @@ void characterEditorSelectFolder(int folder)
 static int characterEditorUpdateLevel()
 {
     int level = pcGetStat(PC_STAT_LEVEL);
-    if (level != gCharacterEditorLastLevel && level <= PC_LEVEL_MAX) {
+    if (level != gCharacterEditorLastLevel && level <= statGetLevelCap()) {
         for (int nextLevel = gCharacterEditorLastLevel + 1; nextLevel <= level; nextLevel++) {
             int sp = pcGetStat(PC_STAT_UNSPENT_SKILL_POINTS);
             sp += 5;

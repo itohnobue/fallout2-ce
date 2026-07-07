@@ -2023,10 +2023,17 @@ static int _proto_load_pid(int pid, Proto** protoPtr)
     }
 
     if (protoRead(*protoPtr, stream) != 0) {
-        // Mark the partially-loaded proto as invalid so subsequent
-        // protoGetProto() lookups don't return corrupt data. The proto
-        // remains in the list and will be freed during eviction.
-        (*protoPtr)->pid = -1;
+        // F-037: Evict the failed proto from the cache list to prevent
+        // a pid=-1 sentinel from permanently occupying a cache slot.
+        // The proto was just appended to the tail extent by
+        // _proto_find_free_subnode, so we can remove it by decrementing
+        // the tail extent's length.
+        ProtoList* protoList = &(_protoLists[PID_TYPE(pid)]);
+        ProtoListExtent* tailExtent = protoList->tail;
+        if (tailExtent != nullptr && tailExtent->length > 0) {
+            tailExtent->length--;
+        }
+        internal_free(*protoPtr);
         *protoPtr = nullptr;
         fileClose(stream);
         return -1;

@@ -3273,6 +3273,19 @@ static int _SaveBackup()
         _automap_db_flag = true;
     }
 
+    // F-036: Backup sfallgv.sav alongside SAVE.DAT.
+    snprintf(_gmpath, sizeof(_gmpath), "%s\\%s%.2d\\", "SAVEGAME", "SLOT", _slot_cursor + 1);
+    snprintf(_str0, sizeof(_str0), "%ssfallgv.sav", _gmpath);
+    snprintf(_str1, sizeof(_str1), "%ssfallgv.bak", _gmpath);
+
+    File* sfallgvBackupStream = fileOpen(_str0, "rb");
+    if (sfallgvBackupStream != nullptr) {
+        fileClose(sfallgvBackupStream);
+        if (compat_rename(_str0, _str1) != 0) {
+            return -1;
+        }
+    }
+
     return 0;
 }
 
@@ -3343,6 +3356,14 @@ static int _RestoreSave()
         return -1;
     }
 
+    // F-036: Restore sfallgv.sav from backup. Non-fatal: the backup
+    // may not exist if this save was created before the F-036 fix.
+    snprintf(_gmpath, sizeof(_gmpath), "%s\\%s%.2d\\", "SAVEGAME", "SLOT", _slot_cursor + 1);
+    snprintf(_str0, sizeof(_str0), "%ssfallgv.sav", _gmpath);
+    snprintf(_str1, sizeof(_str1), "%ssfallgv.bak", _gmpath);
+    compat_remove(_str0);
+    compat_rename(_str1, _str0);
+
     return 0;
 }
 
@@ -3399,6 +3420,11 @@ static int _EraseSave()
     char* v1 = _strmfe(_str1, "AUTOMAP.DB", "SAV");
     snprintf(_str0, sizeof(_str0), "%s%s", _gmpath, v1);
 
+    compat_remove(_str0);
+
+    // F-036: Remove sfallgv.sav during erase.
+    snprintf(_gmpath, sizeof(_gmpath), "%s\\%s%.2d\\", "SAVEGAME", "SLOT", _slot_cursor + 1);
+    snprintf(_str0, sizeof(_str0), "%ssfallgv.sav", _gmpath);
     compat_remove(_str0);
 
     return 0;

@@ -1523,3 +1523,102 @@ TEST_CASE("I2-01: critterGetStat clamp guard — min > max does not reach std::c
     CHECK(testCritterGetStatClampGuard(-1, 100, 0) == -1);   // same, negative value
     CHECK(testCritterGetStatClampGuard(999, 100, 0) == 999);  // same, large value
 }
+
+// ============================================================
+// F-050: FO1 level cap enforcement (correlated with F-002 fix)
+// ============================================================
+//
+// Production: PC_LEVEL_MAX is defined as 99 in stat_defs.h:19.
+// The F-002 fix gates PC_LEVEL_MAX by gFallout1Behavior=false →
+// level cap = 21 in FO1 mode, 99 in FO2 mode.
+//
+// context: gFallout1Behavior is a global bool (sfall_config.cc:12).
+// stat.cc:92 uses PC_LEVEL_MAX as the max for PC_STAT_LEVEL.
+// stat.cc:723,865,936 all check `level >= PC_LEVEL_MAX` / `level < PC_LEVEL_MAX`.
+// character_editor.cc:5812 checks `level <= PC_LEVEL_MAX`.
+//
+// The fix (F-002) changes the level cap from a fixed 99 to:
+//   statGetLevelCap() → gFallout1Behavior ? 21 : 99
+//
+// These tests validate the corrected behavior.
+
+namespace {
+    // Mirror of the F-002 fixed statGetLevelCap logic
+    static constexpr int kFO1LevelCap = 21;
+    static constexpr int kFO2LevelCap = 99;
+
+    static int testStatGetLevelCap(bool fallout1Behavior)
+    {
+        return fallout1Behavior ? kFO1LevelCap : kFO2LevelCap;
+    }
+}
+
+TEST_CASE("F-050: FO1 mode level cap is 21")
+{
+    // In FO1 mode (gFallout1Behavior=true), max level is 21
+    CHECK(testStatGetLevelCap(true) == 21);
+}
+
+TEST_CASE("F-050: FO2 mode level cap is 99")
+{
+    // In FO2 mode (gFallout1Behavior=false), max level is 99
+    CHECK(testStatGetLevelCap(false) == 99);
+}
+
+TEST_CASE("F-050: FO1 level cap — level 21 is allowed in FO1 mode")
+{
+    // At exactly the cap level, the player should be allowed to be at level 21
+    int cap = testStatGetLevelCap(true);
+    int level = 21;
+    CHECK(level <= cap);
+}
+
+TEST_CASE("F-050: FO1 level cap — level 22 is blocked in FO1 mode")
+{
+    // One level above the cap should be blocked
+    int cap = testStatGetLevelCap(true);
+    int level = 22;
+    CHECK_FALSE(level <= cap);
+}
+
+TEST_CASE("F-050: FO1 level cap — level 98 is allowed in FO2 mode")
+{
+    // FO2 mode allows up to level 99
+    int cap = testStatGetLevelCap(false);
+    int level = 98;
+    CHECK(level <= cap);
+}
+
+TEST_CASE("F-050: FO1 level cap — level 100 is blocked in FO2 mode")
+{
+    // Above 99 should still be blocked in FO2 mode
+    int cap = testStatGetLevelCap(false);
+    int level = 100;
+    CHECK_FALSE(level <= cap);
+}
+
+TEST_CASE("F-050: FO1 level cap — PC_LEVEL_MAX matches FO2 cap (99)")
+{
+    // Verify that the compile-time constant matches FO2 cap
+    CHECK(TEST_PC_LEVEL_MAX == kFO2LevelCap);
+    CHECK(TEST_PC_LEVEL_MAX == 99);
+}
+
+TEST_CASE("F-050: FO1 level cap — experience calc uses correct cap")
+{
+    // Mirror of pcAddExperienceWithOptions level-up loop at stat.cc:936:
+    //   while (xp >= pcGetExperienceForLevel(level) && level < PC_LEVEL_MAX)
+    //
+    // In FO1 mode with the fix, the loop should stop at level 21.
+    // In FO2 mode, it stops at level 99.
+
+    // FO1: level 20 can gain XP to reach 21, but cannot exceed 21
+    int cap = testStatGetLevelCap(true);
+    CHECK(20 < cap);  // can still level up
+    CHECK_FALSE(21 < cap); // cannot go past cap
+
+    // FO2: level 98 can gain XP to reach 99
+    cap = testStatGetLevelCap(false);
+    CHECK(98 < cap);
+    CHECK_FALSE(99 < cap);
+}

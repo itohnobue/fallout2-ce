@@ -2,8 +2,10 @@
 #include "dik.h"
 #include "lib.arrays.h"
 #include "lib.obj.h"
+#include "../test_utils.h"
 
 variable withinperception_override := -1;
+variable withinperception_seen := 0;
 
 procedure withinperception_override_name(variable value) begin
     if (value == -1) then return "engine";
@@ -73,6 +75,11 @@ procedure withinperception_handler begin
             target_name, original_result));
     end
 
+    withinperception_seen := withinperception_seen + 1;
+    call assertEquals("withinperception arg count", len_array(args), 4);
+    call assertTrue("withinperception hook_type range", hook_type >= 0 and hook_type <= 3);
+    call assertTrue("withinperception original_result flag", original_result == 0 or original_result == 1);
+
     if (override_result == -1) then return;
 
     if (hook_type != 1 and override_result == 2) then override_result := 1;
@@ -89,6 +96,10 @@ procedure keypress_handler begin
 
     if (key == DIK_J) then begin
         call print_target_checks;
+        if (withinperception_seen > 0) then begin
+            call assertTrue("withinperception observed", withinperception_seen > 0);
+            call report_test_results("hook_withinperception");
+        end
     end else if (key == DIK_K) then begin
         call cycle_override;
     end

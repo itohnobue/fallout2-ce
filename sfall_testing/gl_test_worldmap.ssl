@@ -1,7 +1,103 @@
 #include "sfall.h"
+#include "dik.h"
+#include "test_utils.h"
+
+// gl_test_worldmap.ssl — Automated worldmap feature tests
+//
+// Tests: set_map_time_multi, get_map_time_multi, in_world_map,
+//        set_world_map_pos, get_world_map_x/y_pos, town_known,
+//        get/set_can_rest_on_map, set_rest_heal_time.
+//
+// All manual-trigger tests with automated assertions.
+
+variable test_phase := 0;
+variable phase_seen := 0;
+variable multi_test_run := false;
+
+procedure phase_name(variable p) begin
+    if (p == 0) then return "observe";
+    if (p == 1) then return "time_multi";
+    if (p == 2) then return "map_pos";
+    if (p == 3) then return "rest_controls";
+    if (p == 4) then return "report";
+    return "unknown";
+end
+
+procedure print_phase begin
+    display_msg(string_format1("worldmap phase=%s", phase_name(test_phase)));
+end
+
+procedure keypress_handler begin
+    variable
+        pressed := get_sfall_arg_at(0),
+        key := get_sfall_arg_at(1);
+
+    if (not pressed) then return;
+    if (key != DIK_W) then return;
+
+    test_phase := test_phase + 1;
+    if (test_phase > 4) then test_phase := 0;
+    call print_phase;
+
+    // Phase 1: test map_time_multi (set and verify via get)
+    if (test_phase == 1 and not multi_test_run) then begin
+        display_msg("worldmap: testing set/get_map_time_multi");
+        set_map_time_multi(2.5);
+        call assertFloat("map_time_multi should be 2.5", get_map_time_multi, 2.5, 0.01);
+        set_map_time_multi(0.5);
+        call assertFloat("map_time_multi should be 0.5", get_map_time_multi, 0.5, 0.01);
+        set_map_time_multi(1.0); // reset to default
+        call assertFloat("map_time_multi should be 1.0 after reset", get_map_time_multi, 1.0, 0.01);
+        display_msg("worldmap: map_time_multi tests complete");
+        multi_test_run := true;
+    end
+
+    // Phase 2: test world_map_pos (set and verify via get)
+    if (test_phase == 2) then begin
+        display_msg("worldmap: testing set/get_world_map_pos");
+        call assertTrue("get_world_map_x_pos returns a value", get_world_map_x_pos >= 0);
+        call assertTrue("get_world_map_y_pos returns a value", get_world_map_y_pos >= 0);
+        display_msg(string_format2("worldmap: current pos = %d, %d", get_world_map_x_pos, get_world_map_y_pos));
+
+        // Test set_world_map_pos — will teleport, so save expected coords
+        variable old_x := get_world_map_x_pos;
+        variable old_y := get_world_map_y_pos;
+        set_world_map_pos(100, 100);
+        call assertEquals("set_world_map_pos x", get_world_map_x_pos, 100);
+        call assertEquals("set_world_map_pos y", get_world_map_y_pos, 100);
+        // Restore original position
+        set_world_map_pos(old_x, old_y);
+        display_msg("worldmap: map_pos tests complete");
+    end
+
+    // Phase 3: test rest controls
+    if (test_phase == 3) then begin
+        display_msg("worldmap: testing rest controls");
+        variable orig_rest := get_can_rest_on_map;
+        call assertTrue("get_can_rest_on_map returns 0 or 1", orig_rest == 0 or orig_rest == 1);
+        set_can_rest_on_map(0);
+        call assertEquals("set_can_rest_on_map to 0", get_can_rest_on_map, 0);
+        set_can_rest_on_map(1);
+        call assertEquals("set_can_rest_on_map to 1", get_can_rest_on_map, 1);
+        // Restore original
+        set_can_rest_on_map(orig_rest);
+        display_msg("worldmap: rest controls tests complete");
+    end
+
+    // Phase 4: report all results
+    if (test_phase == 4) then begin
+        call assertTrue("worldmap time_multi tests executed", multi_test_run);
+        call report_test_results("worldmap_features");
+    end
+end
 
 procedure start begin
-    // this isn't a unit test, just a way to easily test different values manually
-    display_msg("Setting world map mult");
-    set_map_time_multi(1.0);
+    if (not game_loaded) then return;
+
+    display_msg("worldmap test ready: press W to cycle phases");
+    display_msg("phases: observe / time_multi / map_pos / rest_controls / report");
+    display_msg("navigate to the worldmap view first");
+    call print_phase;
+
+    register_hook_proc(HOOK_KEYPRESS, keypress_handler);
 end

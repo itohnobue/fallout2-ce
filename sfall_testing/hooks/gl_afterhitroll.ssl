@@ -3,8 +3,10 @@
 #include "define_lite.h"
 #include "define_extra.h"
 #include "lib.arrays.h"
+#include "../test_utils.h"
 
 variable afterhitroll_mode := 0;
+variable afterhitroll_seen := 0;
 
 procedure afterhitroll_mode_name begin
     if (afterhitroll_mode == 1) then return "force_hit";
@@ -35,6 +37,11 @@ procedure afterhitroll_handler begin
         targetName,
         bodypart));
 
+    afterhitroll_seen := afterhitroll_seen + 1;
+    call assertEquals("afterhitroll arg count", len_array(args), 7);
+    call assertTrue("afterhitroll roll range", roll >= ROLL_FAILURE and roll <= ROLL_CRITICAL_SUCCESS);
+    call assertTrue("afterhitroll bodypart range", bodypart >= BODY_HIT_TORSO and bodypart <= BODY_HIT_EYES);
+
     if (attacker != dude_obj) then return;
 
     if (afterhitroll_mode == 1) then begin
@@ -61,6 +68,10 @@ procedure keypress_handler begin
     if (afterhitroll_mode > 3) then afterhitroll_mode := 0;
 
     display_msg(string_format1("afterhitroll mode -> %s", afterhitroll_mode_name));
+    if (afterhitroll_mode == 0 and afterhitroll_seen > 0) then begin
+        call assertTrue("afterhitroll observed", afterhitroll_seen > 0);
+        call report_test_results("hook_afterhitroll");
+    end
 end
 
 procedure start begin

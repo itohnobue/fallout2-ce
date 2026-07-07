@@ -147,9 +147,16 @@ static void initTestDiksTable()
 // ---- Lazy initialization flag ----
 static bool gTableInitialized = false;
 
-// ---- Local mirror of get_scancode_from_key (sfall_kb_helpers.cc:280-283) ----
+// ---- Local mirror of get_scancode_from_key (sfall_kb_helpers.cc:280-297) ----
 static SDL_Scancode testGetScancodeFromKey(int key)
 {
+    // F-046: VK (Virtual Key) codes have the 0x80000000 flag set and use a
+    // different numbering scheme from DIK. Production code at
+    // sfall_kb_helpers.cc:293 returns SDL_SCANCODE_UNKNOWN for VK codes
+    // so callers (is_key_pressed, press_key) fail cleanly.
+    if (key & 0x80000000) {
+        return SDL_SCANCODE_UNKNOWN;
+    }
     if (!gTableInitialized) {
         initTestDiksTable();
         gTableInitialized = true;
@@ -661,11 +668,13 @@ TEST_CASE("HOOK_KEYPRESS with zero return value means no override")
 // =================================================================
 
 namespace {
-    // Local mirror of sfall_kb_is_key_pressed logic (sfall_kb_helpers.cc:302-315)
+    // Local mirror of sfall_kb_is_key_pressed logic (sfall_kb_helpers.cc:316-335)
     static bool testIsKeyPressed(int key, bool keyStateArray[256])
     {
         SDL_Scancode scancode = testGetScancodeFromKey(key);
         if (scancode == SDL_SCANCODE_UNKNOWN) {
+            // VK codes (0x80000000 flag) return SDL_SCANCODE_UNKNOWN from
+            // get_scancode_from_key, causing is_key_pressed to return false.
             return false;
         }
         return keyStateArray[static_cast<int>(scancode)];
@@ -704,4 +713,92 @@ TEST_CASE("sfall_kb_is_key_pressed — key & 0xFF masking applied")
     // DIK_A is 30; with high bits (0xFF00 | 30), should still map to SDL_SCANCODE_A
     int keyWithHighBits = 30 | 0xFF00;
     CHECK(testIsKeyPressed(keyWithHighBits, keyState) == true);
+}
+
+// =================================================================
+// F-046: VK (Virtual Key) detection path
+// =================================================================
+//
+// Production code at sfall_kb_helpers.cc:293 checks (key & 0x80000000)
+// and returns SDL_SCANCODE_UNKNOWN for VK codes. The VK flag uses a
+// completely different numbering scheme (Windows Virtual Key codes)
+// from DIK (DirectInput Key codes in 0-255 range). Without a full
+// Windows VK→SDL scancode translation table, returning UNKNOWN makes
+// callers fail cleanly rather than silently mapping to wrong scancodes.
+
+TEST_CASE("VK detection: bare VK flag returns UNKNOWN")
+{
+    // The VK flag (0x80000000) by itself, no additional key data
+    CHECK(testGetScancodeFromKey(0x80000000) == SDL_SCANCODE_UNKNOWN);
+}
+
+TEST_CASE("VK detection: VK_ESCAPE (0x80000001) returns UNKNOWN")
+{
+    // VK_ESCAPE = 0x80000001: VK flag + value 1 (DIK_ESCAPE maps to 1,
+    // but VK codes are a different scheme — VK_ESCAPE is 0x1B on Windows)
+    CHECK(testGetScancodeFromKey(0x80000001) == SDL_SCANCODE_UNKNOWN);
+}
+
+TEST_CASE("VK detection: VK_RETURN (0x8000000D) returns UNKNOWN")
+{
+    // VK_RETURN = 0x0D on Windows, with VK flag = 0x8000000D
+    CHECK(testGetScancodeFromKey(0x8000000D) == SDL_SCANCODE_UNKNOWN);
+}
+
+TEST_CASE("VK detection: VK_SPACE (0x80000020) returns UNKNOWN")
+{
+    // VK_SPACE = 0x20 on Windows, with VK flag = 0x80000020
+    // DIK_SPACE is 57 — VK flag prevents wrong mapping
+    CHECK(testGetScancodeFromKey(0x80000020) == SDL_SCANCODE_UNKNOWN);
+}
+
+TEST_CASE("VK detection: VK_SHIFT (0x80000010) returns UNKNOWN")
+{
+    // VK_SHIFT = 0x10 on Windows, with VK flag = 0x80000010
+    CHECK(testGetScancodeFromKey(0x80000010) == SDL_SCANCODE_UNKNOWN);
+}
+
+TEST_CASE("VK detection: VK_CONTROL (0x80000011) returns UNKNOWN")
+{
+    // VK_CONTROL = 0x11 on Windows, with VK flag = 0x80000011
+    CHECK(testGetScancodeFromKey(0x80000011) == SDL_SCANCODE_UNKNOWN);
+}
+
+TEST_CASE("VK detection: is_key_pressed returns false for VK codes")
+{
+    // VK codes: get_scancode_from_key returns UNKNOWN →
+    // is_key_pressed returns false (scancode == UNKNOWN guard)
+    bool keyState[256] = {};
+    keyState[0] = true; // SDL_SCANCODE_UNKNOWN = 0
+
+    CHECK(testIsKeyPressed(0x80000001, keyState) == false);
+    CHECK(testIsKeyPressed(0x8000000D, keyState) == false);
+    CHECK(testIsKeyPressed(0x80000020, keyState) == false);
+}
+
+TEST_CASE("VK detection: high-bit but non-VK keys still work")
+{
+    // Keys with high bits set but NOT the VK flag (0x80000000)
+    // should still map via DIK table. The 0xFF00 bits are masked
+    // by key & 0xFF BEFORE the VK check. Since VK check uses 0x80000000
+    // and these values have different high bits, they pass through.
+    // Example: 0x7F00001E = DIK_A (30=0x1E) with non-VK high bits
+    int di_key_high_bits = 30 | 0x70000000;
+    // 0x70000000 & 0x80000000 = 0, so VK check is false →
+    // falls through to DIK mapping
+    CHECK(testGetScancodeFromKey(di_key_high_bits) == SDL_SCANCODE_A);
+}
+
+TEST_CASE("VK detection: tap_key returns UNKNOWN for VK codes (no events)")
+{
+    // Simulate: press_key with VK → get_scancode_from_key returns UNKNOWN →
+    // scancode == UNKNOWN guard → no events enqueued
+    testClearSyntheticEvents();
+
+    // testSimulatePressKey calls testGetScancodeFromKey; VK flag → UNKNOWN → no enqueue
+    testSimulatePressKey(0x80000001); // VK_ESCAPE
+    CHECK(testSyntheticEvents.size() == 0);
+
+    testSimulatePressKey(0x80000020); // VK_SPACE
+    CHECK(testSyntheticEvents.size() == 0);
 }

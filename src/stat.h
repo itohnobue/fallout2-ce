@@ -73,6 +73,11 @@ int statGetMaxValue(int stat);
 // Reads the live (possibly overridden) value from gStatDescriptions[].
 int statGetMinValue(int stat);
 
+// Returns the effective PC level cap, gated by gFallout1Behavior.
+// FO1 mode (gFallout1Behavior=true): cap is 21.
+// FO2 mode (gFallout1Behavior=false): cap is PC_LEVEL_MAX (99).
+int statGetLevelCap();
+
 } // namespace fallout
 
 #endif /* STAT_H */

@@ -86,9 +86,9 @@ check_prerequisites() {
     xcode-select -p &>/dev/null || die "Xcode Command Line Tools not found. Run: xcode-select --install"
 
     # 4. cmake available
-    command -v cmake &>/dev/null || die "cmake not found. Install CMake >= 3.19."
+    command -v cmake &>/dev/null || die "cmake not found. Install CMake >= 3.21."
 
-    # 5. cmake version >= 3.19
+    # 5. cmake version >= 3.21
     local cmake_ver major minor
     cmake_ver=$(cmake --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || true)
     if [[ -z "$cmake_ver" ]]; then
@@ -97,8 +97,8 @@ check_prerequisites() {
     major=${cmake_ver%%.*}
     minor=${cmake_ver#*.}
     minor=${minor%%.*}
-    if [[ "$major" -lt 3 ]] || { [[ "$major" -eq 3 ]] && [[ "$minor" -lt 19 ]]; }; then
-        die "CMake >= 3.19 required. Found: $cmake_ver"
+    if [[ "$major" -lt 3 ]] || { [[ "$major" -eq 3 ]] && [[ "$minor" -lt 21 ]]; }; then
+        die "CMake >= 3.21 required. Found: $cmake_ver"
     fi
 
     # 6. security (keychain tool)
@@ -287,6 +287,12 @@ verify_outputs() {
 
     # Verify DMG structural integrity
     hdiutil verify "$DMG_PATH" || die "DMG verification failed (may be corrupted)."
+
+    # Verify DMG code signature (validates crypto seal, distinct from UDIF checksums)
+    if [[ "${SKIP_SIGNING:-0}" != "1" ]]; then
+        codesign --verify --verbose=4 "$DMG_PATH" || \
+            die "DMG code signature verification failed."
+    fi
 
     # Mount test: verify the .app inside the DMG
     log "Mounting DMG to verify contents..."

@@ -1,8 +1,10 @@
 #include "sfall.h"
 #include "dik.h"
 #include "lib.arrays.h"
+#include "../test_utils.h"
 
 variable steal_mode := 0;
+variable steal_seen := 0;
 
 procedure steal_mode_name(variable mode) begin
     if (mode == 1) then return "force_success";
@@ -37,6 +39,10 @@ procedure steal_handler begin
         quantity));
     display_msg(string_format1("steal args=%s", debug_array_str(args)));
 
+    steal_seen := steal_seen + 1;
+    call assertEquals("steal arg count", len_array(args), 6);
+    call assertTrue("steal is_planting flag", is_planting == 0 or is_planting == 1);
+
     if (thief != dude_obj) then return;
 
     if (steal_mode == 1) then begin
@@ -70,6 +76,10 @@ procedure keypress_handler begin
     if (steal_mode > 4) then steal_mode := 0;
 
     display_msg(string_format1("steal mode -> %s", steal_mode_name(steal_mode)));
+    if (steal_mode == 0 and steal_seen > 0) then begin
+        call assertTrue("steal observed", steal_seen > 0);
+        call report_test_results("hook_steal");
+    end
 end
 
 procedure start begin

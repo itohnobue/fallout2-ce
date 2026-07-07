@@ -484,11 +484,16 @@ int dialogSetReplyTitle(const char* a1)
     return 0;
 }
 
+// Forward declaration: defined in game_dialog.cc:1201.
+// F-030: Properly wired from _dialogReply below.
+int _replyAddNew(const char* a1, const char* a2);
+
 // 0x430EFC dialogReply
 int _dialogReply(const char* a1, const char* a2)
 {
-    // TODO: Incomplete.
-    // _replyAddNew(a1, a2);
+    // F-030: Wire the reply into the dialog system. _replyAddNew has proper
+    // bounds checking (dialog depth limit) at game_dialog.cc:1201-1211.
+    _replyAddNew(a1, a2);
     return 0;
 }
 

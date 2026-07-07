@@ -2,8 +2,10 @@
 #include "dik.h"
 #include "lib.arrays.h"
 #include "lib.obj.h"
+#include "../test_utils.h"
 
 variable calcapcost_override_enabled := true;
+variable calcapcost_seen := 0;
 
 procedure calcapcost_mode_name begin
     if (calcapcost_override_enabled) then return "override";
@@ -36,6 +38,11 @@ procedure calcapcost_handler begin
         calcapcost_item_name(weapon),
         weaponPid));
 
+    calcapcost_seen := calcapcost_seen + 1;
+    call assertEquals("calcapcost arg count", len_array(args), 5);
+    call assertTrue("calcapcost attackType range", attackType >= 0 and attackType <= 2);
+    call assertTrue("calcapcost isAimed flag", isAimed == 0 or isAimed == 1);
+
     if (calcapcost_override_enabled) then
         set_sfall_return(defaultCost + 3);
 end
@@ -50,6 +57,10 @@ procedure keypress_handler begin
 
     calcapcost_override_enabled := not calcapcost_override_enabled;
     display_msg(string_format1("calcapcost mode -> %s", calcapcost_mode_name));
+    if (not calcapcost_override_enabled and calcapcost_seen > 0) then begin
+        call assertTrue("calcapcost observed", calcapcost_seen > 0);
+        call report_test_results("hook_calcapcost");
+    end
     intface_redraw;
 end
 

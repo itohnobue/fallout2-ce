@@ -62,6 +62,13 @@ void sfallVfsSetRoot(const char* root);
 // Integration point: characterEditorUpdateLevel() in character_editor.cc.
 extern int gPerkFrequencyOverride;
 
+// F-008: Saved original perk min levels for set_perk_level opcode.
+// Indexed by perk ID (0..PERK_COUNT-1). -1 sentinel = never overridden.
+// When a perk is first overridden, its compile-time minLevel is saved here.
+// On reset, all overridden perks are restored from these saved originals.
+// Defined and initialized in sfall_opcodes.cc.
+extern int sfallPerkMinLevelOriginal[];
+
 // Skill points per level modifier set by mod_skill_points_per_level (0x8246).
 // Added to the base skill point calculation in characterEditorUpdateLevel().
 extern int gSkillPointsPerLevelMod;

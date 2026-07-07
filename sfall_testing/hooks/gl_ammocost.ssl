@@ -2,8 +2,10 @@
 #include "dik.h"
 #include "lib.arrays.h"
 #include "lib.obj.h"
+#include "../test_utils.h"
 
 variable ammocost_mode := 0;
+variable ammocost_seen := 0;
 
 procedure ammocost_mode_name begin
     if (ammocost_mode == 1) then return "double-single";
@@ -36,6 +38,12 @@ procedure ammocost_handler begin
         ammocost_item_name(weapon),
         weaponPid));
 
+    ammocost_seen := ammocost_seen + 1;
+    call assertEquals("ammocost arg count", len_array(args), 4);
+    call assertTrue("ammocost hookType range", hookType >= 0 and hookType <= 3);
+    call assertTrue("ammocost rounds >= 0", rounds >= 0);
+    call assertTrue("ammocost defaultCost >= 0", defaultCost >= 0);
+
     if (ammocost_mode == 1) then begin
         if (hookType == 0 or hookType == 1) then
             set_sfall_return(defaultCost + 1);
@@ -64,6 +72,10 @@ procedure keypress_handler begin
     if (ammocost_mode > 3) then ammocost_mode := 0;
 
     display_msg(string_format1("ammocost mode -> %s", ammocost_mode_name));
+    if (ammocost_mode == 0 and ammocost_seen > 0) then begin
+        call assertTrue("ammocost observed", ammocost_seen > 0);
+        call report_test_results("hook_ammocost");
+    end
     intface_redraw;
 end
 

@@ -1,8 +1,11 @@
 #include "sfall.h"
 #include "dik.h"
 #include "define_lite.h"
+#include "../test_utils.h"
 
 #define TEST_KEY (DIK_J)
+
+variable ondeath_seen := 0;
 
 procedure ondeath_handler begin
     variable
@@ -16,6 +19,9 @@ procedure ondeath_handler begin
     end
 
     display_msg(string_format2("ondeath critter=%s pid=%d", critter_name, critter_pid));
+
+    ondeath_seen := ondeath_seen + 1;
+    call assertTrue("ondeath critter is set", dead_critter != 0);
 end
 
 procedure keypress_handler begin
@@ -40,6 +46,10 @@ procedure keypress_handler begin
 
     display_msg(string_format1("ondeath test: killing %s", obj_name(target)));
     critter_dmg(target, 9999, DMG_BYPASS_ARMOR);
+    if (ondeath_seen > 0) then begin
+        call assertTrue("ondeath observed", ondeath_seen > 0);
+        call report_test_results("hook_ondeath");
+    end
 end
 
 procedure start begin

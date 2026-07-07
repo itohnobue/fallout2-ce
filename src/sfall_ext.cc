@@ -291,6 +291,23 @@ bool sfallSaveGameData(File* stream)
     return true;
 }
 
+// F-038: sfallLoadGameData is called from loadsave.cc:2098, which runs
+// AFTER the 27 engine SAVE.DAT load handlers (loadsave.cc:2073-2087) but
+// BEFORE global script start procedures (loadsave.cc:2128).
+//
+// Load order within this function:
+//   1. sfall_gl_vars_load        — globals (immediately available)
+//   2. sfallOpcodeStateLoad      — opcode state from globals
+//   3. nextObjectId, skipped sections, drugPidsCount — binary fields
+//   4. sfallArraysLoad           — sfall arrays (available from here onward)
+//   5. sfall_metarules_load      — metarule state
+//
+// Consequence: sfall arrays are NOT available during the 27-handler window
+// (step 1 above has not run yet when handlers fire). This is practically
+// benign because vanilla engine SAVE.DAT handlers do not access sfall arrays —
+// they only load engine-level game objects, critter data, and map state.
+// sfall start-procedure scripts (which DO use arrays) run AFTER this function
+// completes, so arrays are fully available to global/start scripts.
 bool sfallLoadGameData(File* stream)
 {
     if (!sfall_gl_vars_load(stream)) {

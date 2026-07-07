@@ -715,7 +715,19 @@ static void op_log(Program* program)
 static void op_ceil(Program* program)
 {
     ProgramValue programValue = programStackPopValue(program);
-    programStackPushInteger(program, static_cast<int>(ceilf(programValue.asFloat())));
+    float result = ceilf(programValue.asFloat());
+
+    // Guard against float-to-int overflow UB (F-012, R-001).
+    // ceilf(INT_MAX + 1.0f) = 2147483648.0f exceeds INT_MAX.
+    // Cast to long long first — comparing float to int loses precision
+    // because (float)INT_MAX == 2147483648.0f, same as the overflow value.
+    // Fall back to float on overflow, matching op_power pattern.
+    long long llResult = static_cast<long long>(result);
+    if (llResult > INT_MAX || llResult < INT_MIN) {
+        programStackPushFloat(program, result);
+    } else {
+        programStackPushInteger(program, static_cast<int>(result));
+    }
 }
 
 // exp
@@ -1698,7 +1710,16 @@ static void op_type_of(Program* program)
 static void op_round(Program* program)
 {
     float floatValue = programStackPopValue(program).asFloat();
-    programStackPushInteger(program, static_cast<int>(lroundf(floatValue)));
+    long int result = lroundf(floatValue);
+
+    // Guard against long-to-int overflow UB (F-012).
+    // lroundf(INT_MAX + 1.0f) = 2147483648L exceeds INT_MAX.
+    // Fall back to float on overflow, matching op_power pattern.
+    if (result > INT_MAX || result < INT_MIN) {
+        programStackPushFloat(program, static_cast<float>(result));
+    } else {
+        programStackPushInteger(program, static_cast<int>(result));
+    }
 }
 
 enum BlockType {
@@ -3341,6 +3362,14 @@ static void op_set_perk_level(Program* program)
 // need to be updated separately to read this value.
 int gSkillMaxCap = 300;
 
+// F-040: Store original stat min/max compile-time defaults captured at
+// sfallOpcodesInit() time, before any script can modify them. Restored
+// in sfallOpcodesReset() to ensure stat bounds don't persist across
+// gameReset. Follows the same pattern as gSkillMaxCap.
+static int sfallOriginalStatMins[STAT_COUNT];
+static int sfallOriginalStatMaxs[STAT_COUNT];
+static bool sfallStatBoundsCaptured = false;
+
 static void op_set_skill_max(Program* program)
 {
     int value = programStackPopInteger(program);
@@ -3554,6 +3583,11 @@ static int sfallPerkTypeOverrides[PERK_COUNT] = {};
 static int sfallPerkSpecialOverrides[PERK_COUNT][PRIMARY_STAT_COUNT] = {};
 static bool sfallPerkOverridesInited = false;
 
+// F-008: Saved original compile-time perk minLevels for set_perk_level opcode.
+// Indexed by perk ID. -1 = this perk has never been overridden.
+// Populated on first override in perkSetMinLevel(); cleared on reset.
+int sfallPerkMinLevelOriginal[PERK_COUNT];
+
 static void sfallInitPerkOverrideArrays()
 {
     if (sfallPerkOverridesInited) {
@@ -3569,6 +3603,7 @@ static void sfallInitPerkOverrideArrays()
         sfallPerkSkill2Overrides[i] = -1;
         sfallPerkSkill2MagOverrides[i] = -1000;
         sfallPerkTypeOverrides[i] = -1;
+        sfallPerkMinLevelOriginal[i] = -1; // F-008: no override yet
         for (int s = 0; s < PRIMARY_STAT_COUNT; s++) {
             sfallPerkSpecialOverrides[i][s] = -1;
         }
@@ -5034,6 +5069,16 @@ void sfallOpcodesReset()
     // Reset perk owed counter.
     gSfallPerkOwed = 0;
 
+    // F-008: Reset perk min level overrides set by set_perk_level (0x817A).
+    // Restore compile-time minLevels that were saved on first override,
+    // then clear the override tracking array.
+    for (int i = 0; i < PERK_COUNT; i++) {
+        if (sfallPerkMinLevelOriginal[i] != -1) {
+            perkSetMinLevel(i, sfallPerkMinLevelOriginal[i]);
+            sfallPerkMinLevelOriginal[i] = -1;
+        }
+    }
+
     // Reset pickpocket max override.
     sfallPickpocketMax = 0;
 
@@ -5077,6 +5122,17 @@ void sfallOpcodesReset()
     // Reset perk property override arrays (F-015).
     sfallPerkOverridesInited = false;
     sfallInitPerkOverrideArrays();
+
+    // F-040: Reset stat min/max bounds to compile-time defaults.
+    // Stat bounds are modified by op_set_stat_max/op_set_stat_min (0x81B4/0x81B5)
+    // and friends, but were not reset on gameReset. Restore original values
+    // captured in sfallOpcodesInit(). Follows the same pattern as gSkillMaxCap.
+    if (sfallStatBoundsCaptured) {
+        for (int stat = 0; stat < STAT_COUNT; stat++) {
+            statSetMinValue(stat, sfallOriginalStatMins[stat]);
+            statSetMaxValue(stat, sfallOriginalStatMaxs[stat]);
+        }
+    }
 }
 
 // Persist all opcode-related global state into the sfall global vars map
@@ -5121,6 +5177,30 @@ void sfallOpcodeStateSave()
 
     // Perk level modifier.
     sfall_gl_vars_store("SFPerkLM", sfallPerkLevelMod);
+
+    // F-008: Save perk min level overrides set by set_perk_level (0x817A).
+    // Store count + per-index (perk ID, current override value) pairs.
+    {
+        int savedCount = 0;
+        for (int i = 0; i < PERK_COUNT; i++) {
+            if (sfallPerkMinLevelOriginal[i] != -1) {
+                savedCount++;
+            }
+        }
+        sfall_gl_vars_store("SFPMLCt", savedCount);
+        int idx = 0;
+        for (int i = 0; i < PERK_COUNT; i++) {
+            if (sfallPerkMinLevelOriginal[i] != -1) {
+                char pkKey[16] = {};
+                char pvKey[16] = {};
+                sprintf(pkKey, "SFPk%03d", idx);
+                sprintf(pvKey, "SFPv%03d", idx);
+                sfall_gl_vars_store(pkKey, i);
+                sfall_gl_vars_store(pvKey, perkGetMinLevel(i));
+                idx++;
+            }
+        }
+    }
 
     // Skill modifier globals (F-013: stored per-skill).
     // gBaseSkillModMap: skill → mod for set_base_skill_mod.
@@ -5463,6 +5543,26 @@ void sfallOpcodeStateLoad()
     // Perk level modifier.
     if (sfall_gl_vars_fetch("SFPerkLM", val)) {
         sfallPerkLevelMod = val;
+    }
+
+    // F-008: Restore perk min level overrides set by set_perk_level (0x817A).
+    {
+        int savedCount = 0;
+        if (sfall_gl_vars_fetch("SFPMLCt", savedCount)) {
+            for (int idx = 0; idx < savedCount; idx++) {
+                char pkKey[16] = {};
+                char pvKey[16] = {};
+                sprintf(pkKey, "SFPk%03d", idx);
+                sprintf(pvKey, "SFPv%03d", idx);
+                int perkId = 0;
+                int minLevel = 0;
+                if (sfall_gl_vars_fetch(pkKey, perkId) && sfall_gl_vars_fetch(pvKey, minLevel)) {
+                    if (perkIsValid(perkId)) {
+                        perkSetMinLevel(perkId, minLevel);
+                    }
+                }
+            }
+        }
     }
 
     // Skill modifier globals (F-013: loaded per-skill).
@@ -6115,6 +6215,16 @@ static void op_block_combat(Program* program)
 // Note: opcodes should pop arguments off the stack in reverse order
 void sfallOpcodesInit()
 {
+    // F-040: Capture original stat min/max compile-time defaults before
+    // any script can modify them. Restored in sfallOpcodesReset().
+    if (!sfallStatBoundsCaptured) {
+        for (int stat = 0; stat < STAT_COUNT; stat++) {
+            sfallOriginalStatMins[stat] = statGetMinValue(stat);
+            sfallOriginalStatMaxs[stat] = statGetMaxValue(stat);
+        }
+        sfallStatBoundsCaptured = true;
+    }
+
     // ref. https://github.com/sfall-team/sfall/blob/71ecec3d405bd5e945f157954618b169e60068fe/artifacts/scripting/sfall%20opcode%20list.txt#L145
     // Note: we can't really implement these since address space is different.
     // We can potentially special case some of them, but we should try to avoid that.
