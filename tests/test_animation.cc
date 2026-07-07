@@ -332,7 +332,7 @@ TEST_CASE("N2-018: regression — old code would OOB read on squareTile==-1")
     // rather than attempting the OOB access. The guard covers the case where
     // squareTileFromScreenXY returns -1 for off-map coordinates during
     // animations near screen/map edges.
-    int squareTileData[2] = { -1, 10 };
+    int squareTileData[5] = { -1, 10, 0, 0, 0 };
     int fidData[20] = { [10] = 1 };
     int result = testCheckGravity(1000, 5, squareTileData, fidData);
     // The guard at elev=4 prevents reading field_0[-1].

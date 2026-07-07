@@ -10,6 +10,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest.h"
 
+#include <algorithm>
 #include <climits>
 
 namespace fallout {
@@ -205,18 +206,30 @@ static int testStatGetFrmId(int stat)
 }
 
 // Mirror of stat.cc:742-747 statSetMaxValue.
+// I2-01: Guard against UB when min > max (C++17 [alg.clamp] requires lo <= hi).
+// If new max is below current min, raise min to match.
 static void testStatSetMaxValue(int stat, int value)
 {
     if (testStatIsValid(stat)) {
         gTestStatDescriptions[stat].maximumValue = value;
+        // I2-01: Prevent min > max (would UB on std::clamp in critterGetStat)
+        if (gTestStatDescriptions[stat].minimumValue > gTestStatDescriptions[stat].maximumValue) {
+            gTestStatDescriptions[stat].minimumValue = gTestStatDescriptions[stat].maximumValue;
+        }
     }
 }
 
 // Mirror of stat.cc:751-756 statSetMinValue.
+// I2-01: Guard against UB when min > max (C++17 [alg.clamp] requires lo <= hi).
+// If new min is above current max, lower max to match.
 static void testStatSetMinValue(int stat, int value)
 {
     if (testStatIsValid(stat)) {
         gTestStatDescriptions[stat].minimumValue = value;
+        // I2-01: Prevent min > max (would UB on std::clamp in critterGetStat)
+        if (gTestStatDescriptions[stat].minimumValue > gTestStatDescriptions[stat].maximumValue) {
+            gTestStatDescriptions[stat].maximumValue = gTestStatDescriptions[stat].minimumValue;
+        }
     }
 }
 
@@ -1073,57 +1086,69 @@ TEST_CASE("M-018: statSetMaxValue/MinValue — combined max+min on non-SPECIAL s
 }
 
 // ===========================================================================
-// M-019: statSetMaxValue/MinValue inversion guard (stat.cc:742-756)
+// M-019: statSetMaxValue/MinValue inversion guard (I2-01 fix)
+// Before I2-01: set_max(3) then set_min(5) → range [5,3] with no valid values.
+// After I2-01:  set_max(3) then set_min(5) → range [5,5] (max raised to match min).
 // ===========================================================================
-// There is no guard preventing max < min. If a mod sets max=3 and min=5,
-// the range [5,3] has no valid values — critterSetBaseStat rejects everything.
-// Research: — (no RPU/ET Tu usage of set_stat_max + set_stat_min together).
+// I2-01 adds a guard that prevents min > max by adjusting the counterpart
+// when either side is set to a value that would invert the range (stat.cc:765-787).
 
-TEST_CASE("M-019: Inversion guard — max < min makes all values invalid")
+TEST_CASE("M-019: I2-01 guard — setting min > max raises max to match")
 {
     int critterPid = (TEST_OBJ_TYPE_CRITTER << 24) | 1;
     int savedMax = gTestStatDescriptions[TEST_STAT_STRENGTH].maximumValue;
     int savedMin = gTestStatDescriptions[TEST_STAT_STRENGTH].minimumValue;
 
-    SUBCASE("Inverted range [5, 3] — value 4 rejected by both checks")
+    SUBCASE("Set max=3 then min=5 — guard raises max to 5")
     {
         testStatSetMaxValue(TEST_STAT_STRENGTH, 3);
+        // min(1) <= max(3) → no guard trigger
         testStatSetMinValue(TEST_STAT_STRENGTH, 5);
+        // min(5) > max(3) → guard raises max to 5
 
-        // value=4: 4 < min(5) → -2 (min check fires first in production)
+        CHECK(gTestStatDescriptions[TEST_STAT_STRENGTH].maximumValue == 5);
+        CHECK(gTestStatDescriptions[TEST_STAT_STRENGTH].minimumValue == 5);
+
+        // value=5: passes (5 >= 5 AND 5 <= 5) → 0
+        CHECK(testCritterSetBaseStat(critterPid, TEST_STAT_STRENGTH, 5, false) == 0);
+        // value=4: below min → -2
         CHECK(testCritterSetBaseStat(critterPid, TEST_STAT_STRENGTH, 4, false) == -2);
+        // value=6: above max → -3
+        CHECK(testCritterSetBaseStat(critterPid, TEST_STAT_STRENGTH, 6, false) == -3);
     }
 
-    SUBCASE("Inverted range — value at 'max' is below 'min'")
+    SUBCASE("Set min=5 then max=3 — guard lowers min to 3")
+    {
+        int savedMax2 = gTestStatDescriptions[TEST_STAT_STRENGTH].maximumValue;
+        int savedMin2 = gTestStatDescriptions[TEST_STAT_STRENGTH].minimumValue;
+
+        testStatSetMinValue(TEST_STAT_STRENGTH, 5);
+        // max(10) >= min(5) → no guard trigger
+        testStatSetMaxValue(TEST_STAT_STRENGTH, 3);
+        // min(5) > max(3) → guard lowers min to 3
+
+        CHECK(gTestStatDescriptions[TEST_STAT_STRENGTH].minimumValue == 3);
+        CHECK(gTestStatDescriptions[TEST_STAT_STRENGTH].maximumValue == 3);
+
+        // value=3: passes (3 >= 3 AND 3 <= 3) → 0
+        CHECK(testCritterSetBaseStat(critterPid, TEST_STAT_STRENGTH, 3, false) == 0);
+
+        gTestStatDescriptions[TEST_STAT_STRENGTH].maximumValue = savedMax2;
+        gTestStatDescriptions[TEST_STAT_STRENGTH].minimumValue = savedMin2;
+    }
+
+    SUBCASE("All values in converged range [5,5] are testable")
     {
         testStatSetMaxValue(TEST_STAT_STRENGTH, 3);
         testStatSetMinValue(TEST_STAT_STRENGTH, 5);
+        // Range converged to [5,5]
 
-        // value=3: 3 < min(5) → -2 (checked before max in production: stat.cc:491-496)
-        // Actually production checks min first, so 3 < 5 → -2
-        CHECK(testCritterSetBaseStat(critterPid, TEST_STAT_STRENGTH, 3, false) == -2);
-    }
-
-    SUBCASE("Inverted range — value at 'min' is above 'max'")
-    {
-        testStatSetMaxValue(TEST_STAT_STRENGTH, 3);
-        testStatSetMinValue(TEST_STAT_STRENGTH, 5);
-
-        // value=5: passes min check (5 >= 5), fails max check (5 > 3) → -3
-        CHECK(testCritterSetBaseStat(critterPid, TEST_STAT_STRENGTH, 5, false) == -3);
-    }
-
-    SUBCASE("Inverted range — no value passes both checks")
-    {
-        // Exhaustively verify that no value in the range [3, 5]
-        // passes both min and max checks.
-        testStatSetMaxValue(TEST_STAT_STRENGTH, 3);
-        testStatSetMinValue(TEST_STAT_STRENGTH, 5);
-
-        for (int v = 3; v <= 5; v++) {
-            int result = testCritterSetBaseStat(critterPid, TEST_STAT_STRENGTH, v, false);
-            CHECK(result != 0);  // all should be rejected
-        }
+        // value=4: below converged min(5) → -2
+        CHECK(testCritterSetBaseStat(critterPid, TEST_STAT_STRENGTH, 4, false) == -2);
+        // value=5: exactly at converged range → 0
+        CHECK(testCritterSetBaseStat(critterPid, TEST_STAT_STRENGTH, 5, false) == 0);
+        // value=6: above converged max(5) → -3
+        CHECK(testCritterSetBaseStat(critterPid, TEST_STAT_STRENGTH, 6, false) == -3);
     }
 
     SUBCASE("Well-formed range [5, 10] works correctly (regression check)")
@@ -1339,4 +1364,162 @@ TEST_CASE("M-020: pcAddExperienceWithOptions — XP clamps to min/max")
         // net: xpGained = 0
         CHECK(xpGained == 0);
     }
+}
+
+// =================================================================
+// I2-01: std::clamp guard when min > max
+// =================================================================
+//
+// Finding I2-01 (MEDIUM, confirmed): The production code in statSetMaxValue
+// and statSetMinValue (stat.cc:765-787) includes a guard that prevents
+// min > max, which would cause UB in std::clamp at critterGetStat line 408
+// (C++17 [alg.clamp] requires lo <= hi).
+//
+// Without this guard: set_stat_max followed by set_stat_min (or vice versa)
+// with conflicting values could create a state where minimumValue >
+// maximumValue, triggering UB the next time critterGetStat is called.
+
+TEST_CASE("I2-01: statSetMaxValue clamps min when new max < current min")
+{
+    // Save initial state
+    int savedMax = gTestStatDescriptions[TEST_STAT_STRENGTH].maximumValue;
+    int savedMin = gTestStatDescriptions[TEST_STAT_STRENGTH].minimumValue;
+
+    // STRENGTH default: min=1, max=10
+    // Set max to 0 (below current min of 1)
+    testStatSetMaxValue(TEST_STAT_STRENGTH, 0);
+
+    // Guard: min should be lowered to match new max (0)
+    CHECK(gTestStatDescriptions[TEST_STAT_STRENGTH].maximumValue == 0);
+    CHECK(gTestStatDescriptions[TEST_STAT_STRENGTH].minimumValue == 0); // clamped down
+    CHECK(gTestStatDescriptions[TEST_STAT_STRENGTH].minimumValue <= gTestStatDescriptions[TEST_STAT_STRENGTH].maximumValue);
+
+    // Restore
+    gTestStatDescriptions[TEST_STAT_STRENGTH].maximumValue = savedMax;
+    gTestStatDescriptions[TEST_STAT_STRENGTH].minimumValue = savedMin;
+}
+
+TEST_CASE("I2-01: statSetMinValue clamps max when new min > current max")
+{
+    int savedMax = gTestStatDescriptions[TEST_STAT_ENDURANCE].maximumValue;
+    int savedMin = gTestStatDescriptions[TEST_STAT_ENDURANCE].minimumValue;
+
+    // ENDURANCE default: min=1, max=10
+    // Set min to 20 (above current max of 10)
+    testStatSetMinValue(TEST_STAT_ENDURANCE, 20);
+
+    // Guard: max should be raised to match new min (20)
+    CHECK(gTestStatDescriptions[TEST_STAT_ENDURANCE].minimumValue == 20);
+    CHECK(gTestStatDescriptions[TEST_STAT_ENDURANCE].maximumValue == 20); // clamped up
+    CHECK(gTestStatDescriptions[TEST_STAT_ENDURANCE].minimumValue <= gTestStatDescriptions[TEST_STAT_ENDURANCE].maximumValue);
+
+    // Restore
+    gTestStatDescriptions[TEST_STAT_ENDURANCE].maximumValue = savedMax;
+    gTestStatDescriptions[TEST_STAT_ENDURANCE].minimumValue = savedMin;
+}
+
+TEST_CASE("I2-01: statSetMaxValue no-op when new max >= current min")
+{
+    int savedMax = gTestStatDescriptions[TEST_STAT_AGILITY].maximumValue;
+    int savedMin = gTestStatDescriptions[TEST_STAT_AGILITY].minimumValue;
+
+    // AGILITY default: min=1, max=10. Set max to 10 (already at 10)
+    testStatSetMaxValue(TEST_STAT_AGILITY, 10);
+
+    // No change needed: min(1) <= max(10)
+    CHECK(gTestStatDescriptions[TEST_STAT_AGILITY].minimumValue == savedMin);
+    CHECK(gTestStatDescriptions[TEST_STAT_AGILITY].maximumValue == 10);
+    CHECK(gTestStatDescriptions[TEST_STAT_AGILITY].minimumValue <= gTestStatDescriptions[TEST_STAT_AGILITY].maximumValue);
+
+    gTestStatDescriptions[TEST_STAT_AGILITY].maximumValue = savedMax;
+    gTestStatDescriptions[TEST_STAT_AGILITY].minimumValue = savedMin;
+}
+
+TEST_CASE("I2-01: statSetMinValue no-op when new min <= current max")
+{
+    int savedMax = gTestStatDescriptions[TEST_STAT_LUCK].maximumValue;
+    int savedMin = gTestStatDescriptions[TEST_STAT_LUCK].minimumValue;
+
+    // LUCK default: min=1, max=10. Set min to 5
+    testStatSetMinValue(TEST_STAT_LUCK, 5);
+
+    // No change needed: min(5) <= max(10)
+    CHECK(gTestStatDescriptions[TEST_STAT_LUCK].minimumValue == 5);
+    CHECK(gTestStatDescriptions[TEST_STAT_LUCK].maximumValue == savedMax);
+    CHECK(gTestStatDescriptions[TEST_STAT_LUCK].minimumValue <= gTestStatDescriptions[TEST_STAT_LUCK].maximumValue);
+
+    gTestStatDescriptions[TEST_STAT_LUCK].maximumValue = savedMax;
+    gTestStatDescriptions[TEST_STAT_LUCK].minimumValue = savedMin;
+}
+
+TEST_CASE("I2-01: statSetMaxValue followed by statSetMinValue — converging")
+{
+    int savedMax = gTestStatDescriptions[TEST_STAT_PERCEPTION].maximumValue;
+    int savedMin = gTestStatDescriptions[TEST_STAT_PERCEPTION].minimumValue;
+
+    // PERCEPTION default: min=1, max=10
+    // Step 1: Set max to 5 (guard lowers min from 1 to not trigger, 1 <= 5 OK)
+    testStatSetMaxValue(TEST_STAT_PERCEPTION, 5);
+    CHECK(gTestStatDescriptions[TEST_STAT_PERCEPTION].maximumValue == 5);
+
+    // Step 2: Set min to 8 (above current max of 5 → guard raises max)
+    testStatSetMinValue(TEST_STAT_PERCEPTION, 8);
+    CHECK(gTestStatDescriptions[TEST_STAT_PERCEPTION].minimumValue == 8);
+    CHECK(gTestStatDescriptions[TEST_STAT_PERCEPTION].maximumValue == 8); // clamped up
+    CHECK(gTestStatDescriptions[TEST_STAT_PERCEPTION].minimumValue <= gTestStatDescriptions[TEST_STAT_PERCEPTION].maximumValue);
+
+    // Final state: min == max == 8 (converged)
+
+    gTestStatDescriptions[TEST_STAT_PERCEPTION].maximumValue = savedMax;
+    gTestStatDescriptions[TEST_STAT_PERCEPTION].minimumValue = savedMin;
+}
+
+TEST_CASE("I2-01: regression — without guard, set_stat_max(-10) + set_stat_min(20) = UB")
+{
+    // Without the I2-01 guard: setting min to 20 after max was set to -10
+    // would create min(20) > max(-10), causing UB on the next std::clamp.
+    // With the guard: the system stays self-consistent.
+    int savedMax = gTestStatDescriptions[TEST_STAT_CARRY_WEIGHT].maximumValue;
+    int savedMin = gTestStatDescriptions[TEST_STAT_CARRY_WEIGHT].minimumValue;
+
+    // CARRY_WEIGHT default: min=0, max=999
+    testStatSetMaxValue(TEST_STAT_CARRY_WEIGHT, -10);
+    // Guard: min was 0, max now -10 → min < max, guard lowers min to -10
+    CHECK(gTestStatDescriptions[TEST_STAT_CARRY_WEIGHT].minimumValue == -10);
+    CHECK(gTestStatDescriptions[TEST_STAT_CARRY_WEIGHT].maximumValue == -10);
+    CHECK(gTestStatDescriptions[TEST_STAT_CARRY_WEIGHT].minimumValue <= gTestStatDescriptions[TEST_STAT_CARRY_WEIGHT].maximumValue);
+
+    testStatSetMinValue(TEST_STAT_CARRY_WEIGHT, 20);
+    // Guard: min now 20, max was -10 → max raised to 20
+    CHECK(gTestStatDescriptions[TEST_STAT_CARRY_WEIGHT].minimumValue == 20);
+    CHECK(gTestStatDescriptions[TEST_STAT_CARRY_WEIGHT].maximumValue == 20);
+    CHECK(gTestStatDescriptions[TEST_STAT_CARRY_WEIGHT].minimumValue <= gTestStatDescriptions[TEST_STAT_CARRY_WEIGHT].maximumValue);
+
+    gTestStatDescriptions[TEST_STAT_CARRY_WEIGHT].maximumValue = savedMax;
+    gTestStatDescriptions[TEST_STAT_CARRY_WEIGHT].minimumValue = savedMin;
+}
+
+TEST_CASE("I2-01: critterGetStat clamp guard — min > max does not reach std::clamp")
+{
+    // Production: critterGetStat at stat.cc:407 guards with:
+    //   if (min <= max) { std::clamp(value, min, max); }
+    // If min > max, the clamp is skipped and the unclamped value is returned.
+
+    // Mirror of the guard: only clamp when invariant holds
+    auto testCritterGetStatClampGuard = [](int value, int minVal, int maxVal) -> int {
+        if (minVal <= maxVal) {
+            return std::clamp(value, minVal, maxVal);
+        }
+        return value; // min > max → no clamping (avoids UB)
+    };
+
+    // Normal case: min <= max
+    CHECK(testCritterGetStatClampGuard(50, 0, 100) == 50);  // in range
+    CHECK(testCritterGetStatClampGuard(-5, 0, 100) == 0);   // clamped to min
+    CHECK(testCritterGetStatClampGuard(200, 0, 100) == 100); // clamped to max
+
+    // Abnormal case: min > max — guard prevents UB, returns unclamped
+    CHECK(testCritterGetStatClampGuard(50, 100, 0) == 50);   // min>max, no clamp
+    CHECK(testCritterGetStatClampGuard(-1, 100, 0) == -1);   // same, negative value
+    CHECK(testCritterGetStatClampGuard(999, 100, 0) == 999);  // same, large value
 }

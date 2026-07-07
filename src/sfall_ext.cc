@@ -86,6 +86,40 @@ const std::vector<std::string>& sfallGetGlobalScriptPaths()
     return g_globalScriptPaths;
 }
 
+// Config key for hook script directory.  hs_*.int files are auto-discovered
+// in this directory and loaded as hook handler scripts.  Defaults to "scripts".
+static constexpr const char* kHookScriptsPathKey = "HookScriptsPath";
+
+// Parsed hook scripts path, populated by sfallParseHookScriptsPath().
+static std::string g_hookScriptsPath;
+
+/**
+ * Parse HookScriptsPath from ddraw.ini [Misc] section.
+ *
+ * Sfall hs_*.int hook scripts are auto-discovered in the directory
+ * specified by this key.  If absent or empty, defaults to "scripts".
+ */
+bool sfallParseHookScriptsPath()
+{
+    g_hookScriptsPath.clear();
+
+    char* rawPath = nullptr;
+    if (!configGetString(&gSfallConfig, SFALL_CONFIG_MISC_KEY, kHookScriptsPathKey, &rawPath)
+        || rawPath == nullptr
+        || rawPath[0] == '\0') {
+        g_hookScriptsPath = "scripts"; // default
+        return true;
+    }
+
+    g_hookScriptsPath = rawPath;
+    return true;
+}
+
+const std::string& sfallGetHookScriptsPath()
+{
+    return g_hookScriptsPath;
+}
+
 /**
  * Load mods from the mod directory
  */

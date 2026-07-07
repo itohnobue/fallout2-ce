@@ -2368,3 +2368,265 @@ TEST_CASE("TODO-F28-07: deferred Iter-1 SfallOps finding (agent 3c)")
     CHECK(true);
 }
 
+// =================================================================
+// F-13: set_critter_skill_mod / set_base_skill_mod opcode logic
+// =================================================================
+//
+// Finding F-13 (MEDIUM, confirmed): Updated op_set_critter_skill_mod to
+// take 3 args (critter, skill, mod) and op_set_base_skill_mod to take
+// 2 args (skill, mod), matching the sfall spec.  Previously they popped
+// only 2/1 args (missing the skill parameter).
+//
+// Production: sfall_opcodes.cc:4351-4383
+
+// Local mirrors of production storage maps and accessor logic.
+#include <unordered_map>
+
+static std::unordered_map<int, int> testBaseSkillModMap;
+static std::unordered_map<int, int> testGlobalCritterSkillModMap;
+static std::unordered_map<int, std::unordered_map<int, int>> testCritterSkillModMap;
+
+static void testResetSkillModMaps()
+{
+    testBaseSkillModMap.clear();
+    testGlobalCritterSkillModMap.clear();
+    testCritterSkillModMap.clear();
+}
+
+// Mirror of op_set_base_skill_mod (sfall_opcodes.cc:4374-4383)
+static void testSetBaseSkillMod(int skill, int mod)
+{
+    if (skill < 0 || skill >= 18) { // SKILL_COUNT = 18
+        return; // out of range → no-op
+    }
+    testBaseSkillModMap[skill] = mod;
+}
+
+// Mirror of op_set_critter_skill_mod (sfall_opcodes.cc:4351-4372)
+// critterPid = -1 means nullptr (global fallback)
+static void testSetCritterSkillMod(int critterPid, int skill, int mod)
+{
+    if (skill < 0 || skill >= 18) {
+        return;
+    }
+    if (critterPid < 0) {
+        // No critter — store in global critter-skill-mod map
+        testGlobalCritterSkillModMap[skill] = mod;
+    } else {
+        testCritterSkillModMap[critterPid][skill] = mod;
+    }
+}
+
+// Mirror of sfallGetBaseSkillMod (sfall_opcodes.cc:5682-5684)
+static int testGetBaseSkillMod(int skill)
+{
+    auto it = testBaseSkillModMap.find(skill);
+    return (it != testBaseSkillModMap.end()) ? it->second : 0;
+}
+
+// Mirror of sfallGetCritterSkillMod (sfall_opcodes.cc:5685-5702)
+static int testGetCritterSkillMod(int skill)
+{
+    auto it = testGlobalCritterSkillModMap.find(skill);
+    return (it != testGlobalCritterSkillModMap.end()) ? it->second : 0;
+}
+
+// Mirror of sfallGetCritterSkillModForCritter (sfall_opcodes.cc:5708-5730)
+static int testGetCritterSkillModForCritter(int critterPid, int skill)
+{
+    auto critterIt = testCritterSkillModMap.find(critterPid);
+    if (critterIt != testCritterSkillModMap.end()) {
+        auto skillIt = critterIt->second.find(skill);
+        if (skillIt != critterIt->second.end()) {
+            return skillIt->second; // per-critter override found
+        }
+    }
+    // Fall back to global critter skill mod
+    return testGetCritterSkillMod(skill);
+}
+
+TEST_CASE("F-13: set_base_skill_mod stores per-skill modifier (2-arg)")
+{
+    testResetSkillModMaps();
+
+    // Production: set_base_skill_mod(skill, mod)
+    testSetBaseSkillMod(0 /* SMALL_GUNS */, 15);
+    testSetBaseSkillMod(3 /* UNARMED */, -5);
+    testSetBaseSkillMod(17 /* BARTER */, 0); // zero is valid
+
+    CHECK(testGetBaseSkillMod(0) == 15);
+    CHECK(testGetBaseSkillMod(3) == -5);
+    CHECK(testGetBaseSkillMod(17) == 0);
+    // Unset skill returns 0
+    CHECK(testGetBaseSkillMod(1 /* BIG_GUNS */) == 0);
+}
+
+TEST_CASE("F-13: set_critter_skill_mod stores per-critter modifier (3-arg)")
+{
+    testResetSkillModMaps();
+
+    // Production: set_critter_skill_mod(critter, skill, mod)
+    testSetCritterSkillMod(100, 0 /* SMALL_GUNS */, 10);   // critter pid=100
+    testSetCritterSkillMod(100, 3 /* UNARMED */, -5);
+    testSetCritterSkillMod(200, 0 /* SMALL_GUNS */, 20);   // different critter
+
+    // Per-critter lookup
+    CHECK(testGetCritterSkillModForCritter(100, 0) == 10);
+    CHECK(testGetCritterSkillModForCritter(100, 3) == -5);
+    CHECK(testGetCritterSkillModForCritter(200, 0) == 20);
+    // Unset critter+skill returns 0
+    CHECK(testGetCritterSkillModForCritter(300, 0) == 0);
+    CHECK(testGetCritterSkillModForCritter(100, 1) == 0);
+}
+
+TEST_CASE("F-13: set_critter_skill_mod with nullptr critter uses global map")
+{
+    testResetSkillModMaps();
+
+    // Production: critter==nullptr → store in gGlobalCritterSkillModMap
+    testSetCritterSkillMod(-1, 0 /* SMALL_GUNS */, 25); // no critter (global)
+    testSetCritterSkillMod(-1, 4 /* MELEE */, 10);
+
+    CHECK(testGetCritterSkillMod(0) == 25);
+    CHECK(testGetCritterSkillMod(4) == 10);
+}
+
+TEST_CASE("F-13: set_critter_skill_mod — out of range skill is no-op")
+{
+    testResetSkillModMaps();
+
+    testSetCritterSkillMod(100, -1, 50);   // below range
+    testSetCritterSkillMod(100, 18, 50);   // above range (SKILL_COUNT=18)
+    testSetBaseSkillMod(-1, 50);           // below range
+    testSetBaseSkillMod(99, 50);           // above range
+
+    // No entries should have been created
+    CHECK(testBaseSkillModMap.empty());
+    CHECK(testGlobalCritterSkillModMap.empty());
+    CHECK(testCritterSkillModMap.empty());
+}
+
+// =================================================================
+// R-02: gGlobalCritterSkillModMap separation from gBaseSkillModMap
+// =================================================================
+//
+// Finding R-02 (MEDIUM, confirmed): gGlobalCritterSkillModMap is a
+// SEPARATE map from gBaseSkillModMap.  set_critter_skill_mod with no
+// critter writes to gGlobalCritterSkillModMap; set_base_skill_mod writes
+// to gBaseSkillModMap.  skillGetValue() applies both independently —
+// they do not double-apply the same modifier.
+//
+// Production: sfall_opcodes.cc:4347-4348
+
+TEST_CASE("R-02: gGlobalCritterSkillModMap is separate from gBaseSkillModMap")
+{
+    testResetSkillModMaps();
+
+    // Set different values for the same skill in the two maps
+    testSetBaseSkillMod(0 /* SMALL_GUNS */, 10);
+    testSetCritterSkillMod(-1, 0 /* SMALL_GUNS */, 25); // global critter
+
+    // Verify they are different
+    CHECK(testGetBaseSkillMod(0) == 10);
+    CHECK(testGetCritterSkillMod(0) == 25);
+    CHECK(testGetBaseSkillMod(0) != testGetCritterSkillMod(0));
+
+    // Changing one doesn't affect the other
+    testSetBaseSkillMod(0, 30);
+    CHECK(testGetBaseSkillMod(0) == 30);
+    CHECK(testGetCritterSkillMod(0) == 25); // unchanged
+}
+
+TEST_CASE("R-02: Both maps can coexist without collision")
+{
+    testResetSkillModMaps();
+
+    // Set same key in both maps
+    for (int skill = 0; skill < 5; skill++) {
+        testSetBaseSkillMod(skill, skill * 2);
+        testSetCritterSkillMod(-1, skill, skill * 3);
+    }
+
+    // All values are independently stored
+    for (int skill = 0; skill < 5; skill++) {
+        CHECK(testGetBaseSkillMod(skill) == skill * 2);
+        CHECK(testGetCritterSkillMod(skill) == skill * 3);
+    }
+}
+
+// =================================================================
+// I2-10: per-critter skill modifier for non-gDude critters
+// =================================================================
+//
+// Finding I2-10 (MEDIUM, confirmed): The per-critter skill modifier
+// lookup in sfallGetCritterSkillModForCritter applies to ALL critters
+// (not just gDude).  The modifier is keyed by (pid, skill) and should
+// affect NPC skill values at all 40+ call sites using skillGetValue
+// for combat, AI, barter, and skill checks.
+//
+// Production: sfall_opcodes.cc:5708-5730
+
+TEST_CASE("I2-10: per-critter skill mod works for non-gDude critters")
+{
+    testResetSkillModMaps();
+
+    // gDude typically has pid=0x1000000 (player proto), but the
+    // per-critter map uses pid directly — any critter PID works.
+    int npcPid1 = 0x1000001;
+    int npcPid2 = 0x1000002;
+
+    testSetCritterSkillMod(npcPid1, 3 /* UNARMED */, 12);
+    testSetCritterSkillMod(npcPid2, 3 /* UNARMED */, -3);
+
+    // Each NPC has its own modifier
+    CHECK(testGetCritterSkillModForCritter(npcPid1, 3) == 12);
+    CHECK(testGetCritterSkillModForCritter(npcPid2, 3) == -3);
+
+    // An NPC without any override returns the global critter skill mod
+    CHECK(testGetCritterSkillModForCritter(0x999, 3) == 0);
+}
+
+TEST_CASE("I2-10: per-critter override takes priority over global")
+{
+    testResetSkillModMaps();
+
+    // Set global critter skill mod for skill 0
+    testSetCritterSkillMod(-1, 0 /* SMALL_GUNS */, 5);
+
+    // Set per-critter override for pid=42
+    testSetCritterSkillMod(42, 0 /* SMALL_GUNS */, 15);
+
+    // Critter 42: per-critter override wins
+    CHECK(testGetCritterSkillModForCritter(42, 0) == 15);
+
+    // Critter 99: no per-critter override, falls back to global
+    CHECK(testGetCritterSkillModForCritter(99, 0) == 5);
+
+    // Unregistered critter + unset skill: both maps have no entry
+    CHECK(testGetCritterSkillModForCritter(999, 1) == 0);
+}
+
+TEST_CASE("I2-10: multiple skills per critter, multiple critters")
+{
+    testResetSkillModMaps();
+
+    // Set up: 3 critters, 2 skills each
+    testSetCritterSkillMod(10, 0, 5);   // pid=10, small_guns=5
+    testSetCritterSkillMod(10, 3, 10);  // pid=10, unarmed=10
+    testSetCritterSkillMod(20, 0, -2);  // pid=20, small_guns=-2
+    testSetCritterSkillMod(20, 5, 8);   // pid=20, throwing=8
+    testSetCritterSkillMod(30, 3, 15);  // pid=30, unarmed=15
+
+    // Verify each critter's skills independently
+    CHECK(testGetCritterSkillModForCritter(10, 0) == 5);
+    CHECK(testGetCritterSkillModForCritter(10, 3) == 10);
+    CHECK(testGetCritterSkillModForCritter(10, 5) == 0); // unset
+
+    CHECK(testGetCritterSkillModForCritter(20, 0) == -2);
+    CHECK(testGetCritterSkillModForCritter(20, 5) == 8);
+    CHECK(testGetCritterSkillModForCritter(20, 3) == 0); // unset
+
+    CHECK(testGetCritterSkillModForCritter(30, 3) == 15);
+    CHECK(testGetCritterSkillModForCritter(30, 0) == 0); // unset
+}
+

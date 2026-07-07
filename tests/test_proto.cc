@@ -1146,7 +1146,10 @@ TEST_CASE("UseItemResultCode enum values")
     CHECK(USE_ITEM_RESULT_ERROR == -1);
     CHECK(USE_ITEM_RESULT_OK == 0);
     CHECK(USE_ITEM_RESULT_REMOVE == 1);
-    CHECK(USE_ITEM_RESULT_DROP == 2);
+    // F-20 renamed: USE_ITEM_RESULT_DROP was 2, now 3 after
+    // USE_ITEM_RESULT_RETURN_TO_GAME was inserted at value 2.
+    CHECK(USE_ITEM_RESULT_RETURN_TO_GAME == 2);
+    CHECK(USE_ITEM_RESULT_DROP == 3);
 }
 
 // ============================================================================

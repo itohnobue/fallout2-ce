@@ -224,7 +224,7 @@ int _proto_list_str(int pid, char* proto_path)
     }
 
     int i = 1;
-    char string[256];
+    char string[256] = {};
     while (fileReadString(string, sizeof(string), stream)) {
         if (i == (pid & 0xFFFFFF)) {
             break;
@@ -476,6 +476,7 @@ int proto_item_subdata_init(Proto* proto, int type)
     case ITEM_TYPE_MISC:
         proto->item.data.misc.powerTypePid = -1;
         proto->item.data.misc.powerType = 20;
+        proto->item.data.misc.charges = 0;
         break;
     case ITEM_TYPE_KEY:
         proto->item.data.key.keyCode = -1;
@@ -1475,7 +1476,16 @@ void protoReset()
 {
     int i;
 
-    // Clear dirty proto tracking — all protos are being reloaded from disk.
+    // Save dirty protos before freeing caches. LRU eviction
+    // (_proto_remove_some_list) saves to disk, but protoReset
+    // calls _proto_remove_list which discards all proto data
+    // without saving. Iterate a copy: _proto_save_pid() calls
+    // gProtoDirtyPids.erase(pid), which invalidates iterators
+    // on the set being iterated.
+    auto dirtyPidsCopy = gProtoDirtyPids;
+    for (int dirtyPid : dirtyPidsCopy) {
+        _proto_save_pid(dirtyPid);
+    }
     gProtoDirtyPids.clear();
 
     // TODO: Get rid of cast.

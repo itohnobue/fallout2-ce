@@ -6,6 +6,7 @@
 #include "inventory.h"
 #include "script_sound.h"
 #include "sfall_config.h"
+#include "sfall_global_scripts.h"
 #include "sfall_global_vars.h"
 #include "sfall_opcodes.h"
 #include "sfall_script_hooks.h"
@@ -101,6 +102,10 @@ void sfallOnAfterGameStarted()
 
 void sfallOnAfterNewGame()
 {
+    // Reset game load counter so game_loaded() returns 2 (first load / new game)
+    // instead of 1 (reload).  Without this, loading a save (counter > 0) and
+    // then starting a new game in the same session would return 1 instead of 2.
+    sfall_gl_scr_reset_load_count();
     return;
 }
 

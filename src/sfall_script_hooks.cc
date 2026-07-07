@@ -41,6 +41,7 @@ static std::vector<ScriptHook> scriptHooks[HOOK_COUNT];
 constexpr size_t MAX_HOOK_CALL_DEPTH = 8;
 
 std::vector<ScriptHookCall*> ScriptHookCall::_callStack;
+bool ScriptHookCall::_gameModeChangeInProgress = false;
 
 ScriptHookCall* ScriptHookCall::current()
 {
@@ -106,14 +107,31 @@ void ScriptHookCall::call()
 {
     // programFatalError uses longjmp to abort script execution, which
     // skips _callStack.pop_back() and leaves stale entries permanently.
-    // When enough accumulate, drain the oldest entries (most likely stale).
-    // Do NOT clear all — that would destroy legitimate nested hook-call
-    // frames. Preserve the newest MAX_HOOK_CALL_DEPTH-1 entries.
+    // We drain entries where the ScriptHookCall object is no longer alive
+    // (detected via the _active flag — a live frame has _active=true set
+    // before push_back and only cleared after pop_back).  A longjmp'd
+    // call never clears _active; once the stack frame is reused the flag
+    // value changes, allowing the drain to recognise it as stale.
     if (_callStack.size() >= MAX_HOOK_CALL_DEPTH) {
-        size_t excess = _callStack.size() - MAX_HOOK_CALL_DEPTH + 1;
-        _callStack.erase(_callStack.begin(), _callStack.begin() + excess);
+        size_t drained = 0;
+        for (size_t i = 0; i < _callStack.size() && _callStack.size() - drained >= MAX_HOOK_CALL_DEPTH; ++i) {
+            if (!_callStack[i]->_active) {
+                _callStack.erase(_callStack.begin() + i);
+                --i;
+                ++drained;
+            }
+        }
+        // Fallback: if all entries are active (deep recursive nesting with
+        // no longjmp'd entries), the drain loop is a no-op and the call
+        // stack would grow past the MAX_HOOK_CALL_DEPTH cap.  Erase the
+        // oldest entry as a last resort to enforce the depth limit (R-06).
+        if (drained == 0 && _callStack.size() >= MAX_HOOK_CALL_DEPTH) {
+            debugPrint("HOOK_DRAIN: all %zu entries active, evicting oldest to enforce depth cap\n", _callStack.size());
+            _callStack.erase(_callStack.begin());
+        }
     }
 
+    _active = true;
     _callStack.push_back(this);
 
     // Copy the hook list to protect against vector invalidation during
@@ -124,8 +142,15 @@ void ScriptHookCall::call()
     // mismatch under reverse iteration. A value copy isolates our iteration
     // from concurrent mutations to the live hook list.
     auto hooksOfType = scriptHooks[_hookType];
+
     // Iterate in reverse order. In case current hook is unregistered inside
     // the call, we can just continue iteration.
+    // _scriptArgs, _scriptRetVals, and _numRetVals are all reset per-handler
+    // so each handler starts with a clean return-value slate.  The LAST
+    // handler's return values are what the caller sees, with no cross-handler
+    // leakage (R-05: if _numRetVals were only reset once before the loop,
+    // a later handler setting fewer return values than an earlier handler
+    // would leave stale values at higher indices, creating mixed return sets).
     for (int i = hooksOfType.size() - 1; i >= 0; --i) {
         const auto& hook = hooksOfType[i];
         _scriptArgs = 0;
@@ -137,6 +162,7 @@ void ScriptHookCall::call()
 
     assert(_callStack.back() == this);
     _callStack.pop_back();
+    _active = false;
 }
 
 ProgramValue ScriptHookCall::getNextArgFromScript()
@@ -272,11 +298,30 @@ int arg1 - the previous game mode
 */
 void scriptHooks_GameModeChange(int exit, int previousGameMode)
 {
+    // F-26: Do not fire the hook before the game is fully loaded.
+    // Early-init mode changes (e.g., during gameReset) should not
+    // trigger script callbacks — scripts are not yet available.
+    if (!gGameLoaded) {
+        return;
+    }
+
+    // I2-52: Reentrancy guard — prevent mode-change hooks from
+    // triggering nested mode changes that observe intermediate
+    // GameMode::currentGameMode state.  Without this guard a hook
+    // script calling, e.g., a pip-boy display that toggles GameMode
+    // flags would re-enter this function with a modified currentGameMode,
+    // potentially causing infinite recursion or broken state.
+    if (ScriptHookCall::_gameModeChangeInProgress) {
+        return;
+    }
+
     if (scriptHooks[HOOK_GAMEMODECHANGE].empty()) {
         return;
     }
 
+    ScriptHookCall::_gameModeChangeInProgress = true;
     ScriptHookCall(HOOK_GAMEMODECHANGE, 0, { exit, previousGameMode }).call();
+    ScriptHookCall::_gameModeChangeInProgress = false;
 }
 
 /*
@@ -511,11 +556,24 @@ void scriptHooks_OnDeath(Object* critter)
 Runs whenever a random encounter occurs (except the Horrigan meeting and scripted encounters), or when the player enters a local map from the world map.
 You can override the map for loading or the encounter.
 
+CE EXTENDED ARG LAYOUT (5 args):
 int     arg0 - event type: 0 - when a random encounter occurs, 1 - when the player enters from the world map
 int     arg1 - the map ID that the encounter will load
 int     arg2 - 1 when the encounter is a special encounter, 0 otherwise
 int     arg3 - encounter table number, or -1 if not an encounter
 int     arg4 - encounter index in the table, or -1 if not an encounter
+
+SFALL 4.x ORIGINAL LAYOUT (3 args — for reference, NOT used by CE):
+int     arg0 - encounter type (0=random, 1=special, 0x100=forced)
+int     arg1 - the tile number on the world map
+int     arg2 - 1 when the encounter is forced, 0 otherwise
+
+CE extended this hook with a LocalMapEnter event type (arg0=1) and extra
+context (tableId, entryId).  Mod scripts written for the sfall 3-arg layout
+will receive different values in arg0..arg2 than they expect.  If compat with
+sfall-only mods is needed, a shim script could translate the 5-arg CE layout
+back to the 3-arg sfall layout by mapping eventType+isSpecial back to the
+original encounter type encoding.
 
 int     ret0 - overrides the map ID, or pass -1 for event type 0 to cancel the encounter and continue traveling
 int     ret1 - pass 1 to cancel the encounter and load the specified map from the ret0 (only for event type 0)
@@ -842,7 +900,21 @@ int scriptHooks_AfterHitRoll(Object* attacker, Object** defenderPtr, int* hitLoc
         }
     }
     if (hook.numReturnValues() > 2) {
-        *defenderPtr = hook.getReturnValueAt(2).asObject();
+        Object* overrideDefender = hook.getReturnValueAt(2).asObject();
+        // I2-04: The hook may return nullptr to cancel the attack.
+        // However, the caller (combat.cc:4085-4154) has multiple
+        // downstream paths that dereference attack->defender without
+        // any null guard: distance recomputation, Silent Death check,
+        // enhanced knockout, damage computation, and ranged-miss
+        // handling.  Reject the null override to prevent crashes in
+        // those paths; a hook that wants to cancel the attack should
+        // set ret0=ROLL_FAILURE instead (F-39 fix covers this gap).
+        // Sibling hooks (HOOK_COMBATTURN, HOOK_CANUSEWEAPON) follow
+        // the same pattern — null Object* returns from asObject()
+        // are treated as "no override."
+        if (overrideDefender != nullptr) {
+            *defenderPtr = overrideDefender;
+        }
     }
 
     return roll;

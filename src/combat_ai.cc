@@ -2246,6 +2246,13 @@ static bool _ai_can_use_weapon(Object* critter, Object* weapon, int hitMode)
     }
 
     AiPacket* ai = aiGetPacket(critter);
+    // SFALL: Fix I2-30 — aiGetPacket can return nullptr when the critter
+    // has no valid aiPacket (e.g., non-combat NPCs, corrupted save data).
+    // Without this guard, a null dereference occurs at ai->min_to_hit below.
+    if (ai == nullptr) {
+        return scriptHooks_CanUseWeapon(false, critter, weapon, hitMode);
+    }
+
     if (result) {
         int skill = weaponGetSkillForHitMode(weapon, hitMode);
         if (skillGetValue(critter, skill) < ai->min_to_hit) {

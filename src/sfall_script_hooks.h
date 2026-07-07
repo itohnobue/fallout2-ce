@@ -267,6 +267,7 @@ typedef enum {
     HOOK_INVENTORYMOVE_GROUND = 6,
     HOOK_INVENTORYMOVE_PICKUP = 7,
     HOOK_INVENTORYMOVE_CHARACTER_PORTRAIT = 8,
+    HOOK_INVENTORYMOVE_BARTER = 9,
 } HookInventoryMoveType;
 
 typedef enum {
@@ -335,6 +336,11 @@ public:
     // so hook consumers can resolve string-table-based return values.
     Program* lastProgram() const { return _lastProgram; }
 
+    // Reentrancy guard for HOOK_GAMEMODECHANGE (I2-52).
+    // Must be public — accessed by both ScriptHookCall methods and
+    // the free function scriptHooks_GameModeChange().
+    static bool _gameModeChangeInProgress;
+
 private:
     static std::vector<ScriptHookCall*> _callStack;
 
@@ -350,6 +356,7 @@ private:
     int _scriptArgs = 0;
     int _scriptRetVals = 0;
     Program* _lastProgram = nullptr;
+    bool _active = false;               // Set in call() before push, cleared after pop. Drain uses this to skip live frames.
 };
 
 struct BarterPriceContext {

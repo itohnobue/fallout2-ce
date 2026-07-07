@@ -531,6 +531,10 @@ int itemMoveForce(Object* from, Object* to, Object* item, int quantity)
 // 0x4776AC
 void itemMoveAll(Object* from, Object* to)
 {
+    if (from == to) {
+        return;
+    }
+
     Inventory* inventory = &(from->data.inventory);
     while (inventory->length > 0) {
         InventoryItem* inventoryItem = &(inventory->items[0]);

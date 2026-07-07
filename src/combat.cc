@@ -1996,9 +1996,6 @@ int _combat_free_move;
 // 0x56D3A0 shoot_ctd
 static Attack _shoot_ctd;
 
-// 0x56D458 explosion_ctd
-static Attack _explosion_ctd;
-
 static CriticalHitDescription gBaseCriticalHitTables[SFALL_KILL_TYPE_COUNT][HIT_LOCATION_COUNT][CRTICIAL_EFFECT_COUNT];
 static CriticalHitDescription gBasePlayerCriticalHitTable[HIT_LOCATION_COUNT][CRTICIAL_EFFECT_COUNT];
 
@@ -4207,6 +4204,13 @@ static int attackCompute(Attack* attack)
 // 0x423C10
 void _compute_explosion_on_extras(Attack* attack, bool isFromAttacker, bool isGrenade, bool noDamage)
 {
+    // SFALL: Fix I2-28 — _explosion_ctd was a file-level static that could
+    // be overwritten by recursive attackComputeDamage calls (e.g., when a
+    // hook script triggered during damage computation calls back into
+    // _compute_explosion_on_extras). Replacing with a stack-local prevents
+    // nested overwrites without a recursion guard.
+    Attack explosion_ctd;
+
     Object* targetObj;
 
     if (isFromAttacker) {
@@ -4296,15 +4300,15 @@ void _compute_explosion_on_extras(Attack* attack, bool isFromAttacker, bool isGr
                 if (index == attack->extrasLength) {
                     attack->extrasHitLocation[index] = HIT_LOCATION_TORSO;
                     attack->extras[index] = obstacle;
-                    attackInit(&_explosion_ctd, attack->attacker, obstacle, attack->hitMode, HIT_LOCATION_TORSO);
+                    attackInit(&explosion_ctd, attack->attacker, obstacle, attack->hitMode, HIT_LOCATION_TORSO);
                     if (!noDamage) {
-                        _explosion_ctd.attackerFlags |= DAM_HIT;
-                        attackComputeDamage(&_explosion_ctd, 1, 2);
+                        explosion_ctd.attackerFlags |= DAM_HIT;
+                        attackComputeDamage(&explosion_ctd, 1, 2);
                     }
 
-                    attack->extrasDamage[index] = _explosion_ctd.defenderDamage;
-                    attack->extrasFlags[index] = _explosion_ctd.defenderFlags;
-                    attack->extrasKnockback[index] = _explosion_ctd.defenderKnockback;
+                    attack->extrasDamage[index] = explosion_ctd.defenderDamage;
+                    attack->extrasFlags[index] = explosion_ctd.defenderFlags;
+                    attack->extrasKnockback[index] = explosion_ctd.defenderKnockback;
                     attack->extrasLength += 1;
                 }
             }
@@ -4956,6 +4960,23 @@ static void attackComputeDamage(Attack* attack, int numRounds, int baseDamageMul
                 *knockbackDistancePtr = 0;
             }
         }
+
+        // SFALL: Fix F-52 — reset knockback globals after each
+        // attackComputeDamage() call to prevent stale values from
+        // leaking into subsequent attacks (e.g., explosion extras
+        // processed in the same frame via _compute_explosion_on_extras).
+        // This must run unconditionally — when Stonewall's 50% roll
+        // suppresses knockback (shouldKnockback = false), the globals
+        // must still be cleared so they don't persist to the next
+        // attack call. Without this, a single set_*_knockback call
+        // affects every subsequent attack until explicitly cleared by
+        // remove_*_knockback or game reset.
+        sfallWeaponKnockbackType = 0;
+        sfallWeaponKnockbackValue = 0.0f;
+        sfallTargetKnockbackType = 0;
+        sfallTargetKnockbackValue = 0.0f;
+        sfallAttackerKnockbackType = 0;
+        sfallAttackerKnockbackValue = 0.0f;
     }
 
     scriptHooks_ComputeDamage(attack, numRounds, baseDamageMult);

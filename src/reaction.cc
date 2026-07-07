@@ -19,9 +19,10 @@ int reactionSetValue(Object* critter, int value)
 // 0x4A29E8 reaction_to_level
 int reactionTranslateValue(int value)
 {
-    // F-025: FO1 uses 25/-25 reaction thresholds, FO2 uses 10/-10.
-    int goodThreshold = gFallout1Behavior ? 25 : 10;
-    int neutralThreshold = gFallout1Behavior ? -25 : -10;
+    // FO1 uses 25/-25 reaction thresholds. FO2 original binary uses 49/-51,
+    // confirmed via binary address evidence and Et Tu VOODOO patches.
+    int goodThreshold = gFallout1Behavior ? 25 : 49;
+    int neutralThreshold = gFallout1Behavior ? -25 : -51;
 
     if (value > goodThreshold) {
         return NPC_REACTION_GOOD;

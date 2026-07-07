@@ -38,10 +38,10 @@ extern Config gSfallConfig;
 extern bool gFallout1Behavior;
 
 // Config booleans parsed from ddraw.ini. Wired status noted per-global.
-extern bool gAllowUnsafeScripting; // WIRED: gates unsafe opcode registration at sfall_opcodes.cc
+extern bool gAllowUnsafeScripting; // INTENTIONALLY UNWIRED: opcodes registered unconditionally; flag parsed but never gates registration
 extern bool gEnableHeroAppearanceMod; // WIRED: consumed via sfallConfigGetHeroAppearanceMod()
 extern bool gUseFileSystemOverride; // INTENTIONALLY UNWIRED: VFS priority handles this
-extern bool gOverrideArtCacheSize; // UNWIRED: art.cc uses settings.system.art_cache_size instead
+extern bool gOverrideArtCacheSize; // INTENTIONALLY UNWIRED: art.cc uses settings.system.art_cache_size instead
 extern bool gExtraSaveSlots; // WIRED: consumed at loadsave.cc for save slot page count
 
 bool sfallConfigInit(int argc, char** argv);

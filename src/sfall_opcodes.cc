@@ -272,10 +272,14 @@ static void op_get_year(Program* program)
 }
 
 // game_loaded
+// F-058: Returns tri-state per sfall 4.x spec:
+//   2 = first load (new game or first load of save)
+//   1 = reload (subsequent save/load cycles)
+//   0 = otherwise (already consumed for this script, or not a global script)
 static void op_game_loaded(Program* program)
 {
-    bool loaded = sfall_gl_scr_is_loaded(program);
-    programStackPushInteger(program, loaded ? 1 : 0);
+    int loaded = sfall_gl_scr_is_loaded(program);
+    programStackPushInteger(program, loaded);
 }
 
 // set_global_script_repeat
@@ -1170,12 +1174,21 @@ static void op_refresh_pc_art(Program* program)
 }
 
 // create_message_window
+//
+// F-034: sfall's create_message_window is a non-blocking notification window.
+// The original CE implementation used showDialogBox which enters a blocking
+// event loop — scripts halted until the user dismissed the dialog. This
+// replacement creates a floating window via windowCreate + windowPrintBuf
+// and returns immediately without blocking script execution.
+// The window is destroyed on the next call or at opcode reset.
+static int gMessageWindow = -1;
+
 static void op_create_message_window(Program* program)
 {
-    static bool showing = false;
-
-    if (showing) {
-        return;
+    // Destroy any previous message window.
+    if (gMessageWindow != -1) {
+        windowDestroy(gMessageWindow);
+        gMessageWindow = -1;
     }
 
     const char* string = programStackPopString(program);
@@ -1185,28 +1198,38 @@ static void op_create_message_window(Program* program)
 
     char* copy = internal_strdup(string);
 
-    const char* body[4];
-    int count = 0;
+    // Parse newline-delimited body lines; first segment is the title.
+    char* body[4];
+    int bodyCount = 0;
 
     char* pch = strchr(copy, '\n');
-    while (pch != nullptr && count < 4) {
+    while (pch != nullptr && bodyCount < 4) {
         *pch = '\0';
-        body[count++] = pch + 1;
+        body[bodyCount++] = pch + 1;
         pch = strchr(pch + 1, '\n');
     }
 
-    showing = true;
-    showDialogBox(copy,
-        body,
-        count,
-        192,
-        116,
-        _colorTable[32328],
-        nullptr,
-        _colorTable[32328],
-        DIALOG_BOX_LARGE);
-    showing = false;
+    // Create a non-blocking notification window with the same default
+    // position and approximate size as the sfall message window.
+    int win = windowCreate(192, 116, 256, 128, _colorTable[0], WINDOW_MOVE_ON_TOP);
+    if (win == -1) {
+        internal_free(copy);
+        return;
+    }
 
+    // Print the title line (text before first '\n').
+    int ypos = 8;
+    windowPrintBuf(win, copy, static_cast<int>(strlen(copy)), 240, 120, 8, ypos, 0, TEXT_ALIGNMENT_LEFT);
+
+    // Print each body line below the title (16 px per line — Fallout font height).
+    for (int i = 0; i < bodyCount; i++) {
+        ypos += 16;
+        windowPrintBuf(win, body[i], static_cast<int>(strlen(body[i])),
+            240, 120, 8, ypos, 0, TEXT_ALIGNMENT_LEFT);
+    }
+
+    windowRefresh(win);
+    gMessageWindow = win;
     internal_free(copy);
 }
 
@@ -2477,16 +2500,20 @@ static void op_fs_resize(Program* program)
 
 // inc_npc_level(pid or string name) — 0x81A5
 // Increments the level of the party member NPC matching the given PID.
+// When a specific PID is provided, only that party member is targeted;
+// otherwise all eligible party members are leveled up.
 // Calls _partyMemberIncLevels() which handles the full party member
 // level-up logic: level_up_every checks, probability rolls, stat
-// adjustments, and display messages. The argument is accepted for
-// compatibility but _partyMemberIncLevels iterates all members internally.
+// adjustments, and display messages.
 static void op_inc_npc_level(Program* program)
 {
     ProgramValue arg = programStackPopValue(program);
-    (void)arg;
+    int pid = -1;
+    if (arg.isInt()) {
+        pid = arg.asInt();
+    }
 
-    _partyMemberIncLevels();
+    _partyMemberIncLevels(pid);
 }
 
 // get_npc_level(pid or string name) -> int — 0x8241
@@ -3006,11 +3033,20 @@ static void op_get_available_skill_points(Program* program)
 // mod_skill_points_per_level(int value)
 // Sets a modifier for skill points gained per level. The modifier is stored
 // and consumed by characterEditorUpdateLevel() in character_editor.cc.
+// I2-032: Clamped to [0, 10000] to prevent signed overflow UB when added
+// to skill points (e.g., sp += gSkillPointsPerLevelMod at character_editor.cc:5817).
 int gSkillPointsPerLevelMod = 0;
+static constexpr int kMaxSkillPointsPerLevelMod = 10000;
 
 static void op_mod_skill_points_per_level(Program* program)
 {
     gSkillPointsPerLevelMod = programStackPopInteger(program);
+    if (gSkillPointsPerLevelMod < 0) {
+        gSkillPointsPerLevelMod = 0;
+    }
+    if (gSkillPointsPerLevelMod > kMaxSkillPointsPerLevelMod) {
+        gSkillPointsPerLevelMod = kMaxSkillPointsPerLevelMod;
+    }
     sfall_gl_vars_store("SFSkillP", gSkillPointsPerLevelMod);
 }
 
@@ -3489,12 +3525,19 @@ static void op_set_perk_image(Program* program)
 }
 
 // set_perk_ranks(int perkID, int value) — 0x8179
+// I2-048: Validate value — only accept positive integer (rank count) or -1
+// (unlimited). Reject values <= -2 that would permanently lock out the perk.
 static void op_set_perk_ranks(Program* program)
 {
     int value = programStackPopInteger(program);
     int perkID = programStackPopInteger(program);
     if (!perkIsValid(perkID)) {
         programPrintError("set_perk_ranks: invalid perk ID %d (valid range 0-%d)", perkID, PERK_COUNT - 1);
+        return;
+    }
+    if (value <= -2) {
+        programPrintError("set_perk_ranks: invalid rank value %d for perk %d (must be >= 0 or -1 for unlimited)",
+            value, perkID);
         return;
     }
     sfallInitPerkOverrideArrays();
@@ -4022,8 +4065,16 @@ static void op_has_fake_trait(Program* program)
 // Previously commented out; now registered. ET Tu depends on this for
 // its trait system. Uses the engine's traitsSetSelected/traitsGetSelected
 // API to check if the trait is currently selected and replace it with
-// TRAIT_COUNT (none). Note: this only handles the two slot-based traits;
-// it does not reverse trait stat/skill effects (those are permanent).
+// TRAIT_COUNT (none).
+//
+// F-056: Updated to use 3-slot traitsGetSelected/traitsSetSelected to
+// support FO1's third trait slot (gFallout1Behavior allows 3 traits).
+// In FO2 mode, trait3 defaults to -1 and the third slot is ignored.
+//
+// I2-049: Also removes the trait from gAddedTraits (set via add_trait
+// metarule) to properly clean up stat/skill modifiers. Previously only
+// manipulated gSelectedTraits (2-slot engine system), leaving gameplay
+// effects from add_trait active after removal via this opcode.
 // ============================================================
 static void op_remove_trait(Program* program)
 {
@@ -4034,18 +4085,29 @@ static void op_remove_trait(Program* program)
         return;
     }
 
-    int trait1, trait2;
-    traitsGetSelected(&trait1, &trait2);
+    int trait1, trait2, trait3;
+    traitsGetSelected(&trait1, &trait2, &trait3);
 
     if (trait1 == traitID) {
-        traitsSetSelected(TRAIT_COUNT, trait2);
+        traitsSetSelected(TRAIT_COUNT, trait2, trait3);
         debugPrint("remove_trait(%d): removed from slot 1\n", traitID);
     } else if (trait2 == traitID) {
-        traitsSetSelected(trait1, TRAIT_COUNT);
+        traitsSetSelected(trait1, TRAIT_COUNT, trait3);
         debugPrint("remove_trait(%d): removed from slot 2\n", traitID);
+    } else if (trait3 == traitID) {
+        traitsSetSelected(trait1, trait2, TRAIT_COUNT);
+        debugPrint("remove_trait(%d): removed from slot 3\n", traitID);
     } else {
-        debugPrint("remove_trait(%d): trait not currently selected (selected: %d, %d)\n",
-            traitID, trait1, trait2);
+        debugPrint("remove_trait(%d): trait not currently selected (selected: %d, %d, %d)\n",
+            traitID, trait1, trait2, trait3);
+    }
+
+    // I2-049: Also remove from gAddedTraits to clean up stat/skill modifiers
+    // from the add_trait metarule. This bridges the two independent trait
+    // tracking systems. A trait may be in both gSelectedTraits (engine slots)
+    // and gAddedTraits (sfall metarule) — remove from both.
+    if (sfallRemoveTraitAdded(traitID)) {
+        debugPrint("remove_trait(%d): also removed from gAddedTraits\n", traitID);
     }
 }
 
@@ -4269,41 +4331,55 @@ static void op_set_perk_level_mod(Program* program)
 }
 
 // Skill mod globals (0x81C7, 0x81C8).
-static int sfallCritterSkillMod = 0;
-static int sfallBaseSkillMod = 0;
-
-// F-001: Per-critter skill mod storage. Key is critter proto ID (pid).
-// Previously op_set_critter_skill_mod discarded the critter parameter and
-// stored a single global, collapsing per-entity semantics. Now each critter
-// can have an independent max skill override.
-static std::unordered_map<int, int> gCritterSkillModMap;
+// F-013: Updated to match sfall spec — set_critter_skill_mod takes 3 args
+// (critter, skill, mod) and set_base_skill_mod takes 2 args (skill, mod).
+// Previously these popped only 2/1 args (missing the skill parameter) and
+// stored a single global instead of per-skill values.
+//
+// gCritterSkillModMap: per-critter per-skill modifier storage.
+//   Outer key = critter proto ID (pid), inner key = skill index.
+// gBaseSkillModMap: global per-skill base modifier storage, set via
+//   set_base_skill_mod (0x81C8).
+// gGlobalCritterSkillModMap: global per-skill critter modifier storage,
+//   set via set_critter_skill_mod (0x81C7) when called with no critter
+//   (nullptr fallback).  Separate from gBaseSkillModMap — skillGetValue()
+//   applies base and critter modifiers independently.
+static std::unordered_map<int, int> gBaseSkillModMap;
+static std::unordered_map<int, int> gGlobalCritterSkillModMap;
+static std::unordered_map<int, std::unordered_map<int, int>> gCritterSkillModMap;
 
 static void op_set_critter_skill_mod(Program* program)
 {
-    int max = programStackPopInteger(program);
+    int mod = programStackPopInteger(program);
+    int skill = programStackPopInteger(program);
     Object* critter = static_cast<Object*>(programStackPopPointer(program));
-    if (max < 1) {
-        max = 1;
+    if (skill < 0 || skill >= SKILL_COUNT) {
+        programPrintError("set_critter_skill_mod: skill %d out of range [0, %d)", skill, SKILL_COUNT);
+        return;
     }
     if (critter == nullptr) {
-        // No critter object — fall back to global modifier for backward compat.
-        sfallCritterSkillMod = max;
+        // No critter object — store in global critter-skill-mod map.
+        // gGlobalCritterSkillModMap is separate from gBaseSkillModMap so
+        // skillGetValue() does not double-apply the same modifier.
+        gGlobalCritterSkillModMap[skill] = mod;
         return;
     }
     if (FID_TYPE(critter->fid) != OBJ_TYPE_CRITTER) {
         programPrintError("set_critter_skill_mod: object is not a critter");
         return;
     }
-    gCritterSkillModMap[critter->pid] = max;
+    gCritterSkillModMap[critter->pid][skill] = mod;
 }
 
 static void op_set_base_skill_mod(Program* program)
 {
-    int max = programStackPopInteger(program);
-    if (max < 1) {
-        max = 1;
+    int mod = programStackPopInteger(program);
+    int skill = programStackPopInteger(program);
+    if (skill < 0 || skill >= SKILL_COUNT) {
+        programPrintError("set_base_skill_mod: skill %d out of range [0, %d)", skill, SKILL_COUNT);
+        return;
     }
-    sfallBaseSkillMod = max;
+    gBaseSkillModMap[skill] = mod;
 }
 
 // Pickpocket mod globals (0x81C9, 0x81CA).
@@ -4851,6 +4927,12 @@ void sfallOpcodesReset()
     gPerkFrequencyOverride = 0;
     gSkillPointsPerLevelMod = 0;
 
+    // F-034: Destroy any lingering non-blocking message window.
+    if (gMessageWindow != -1) {
+        windowDestroy(gMessageWindow);
+        gMessageWindow = -1;
+    }
+
     // Reset pipboy availability override set by set_pipboy_available (0x818B).
     gPipboyAvailableOverride = -1;
 
@@ -4867,14 +4949,14 @@ void sfallOpcodesReset()
     sfallPerkLevelMod = 0;
 
     // Reset skill/pickpocket mod globals.
-    sfallCritterSkillMod = 0;
-    sfallBaseSkillMod = 0;
+    gBaseSkillModMap.clear();
+    gGlobalCritterSkillModMap.clear();
     sfallCritterPickpocketMod = 0;
     sfallBasePickpocketMod = 0;
     sfallCritterPickpocketMax = 0;
     sfallBasePickpocketMax = 0;
 
-    // Reset per-critter skill/pickpocket mod maps (F-001).
+    // Reset per-critter skill/pickpocket mod maps (F-001, F-013).
     gCritterSkillModMap.clear();
     gCritterPickpocketModMap.clear();
 
@@ -4948,9 +5030,65 @@ void sfallOpcodeStateSave()
     // Perk level modifier.
     sfall_gl_vars_store("SFPerkLM", sfallPerkLevelMod);
 
-    // Skill modifier globals.
-    sfall_gl_vars_store("SFCrtSM ", sfallCritterSkillMod);
-    sfall_gl_vars_store("SFBaseSM", sfallBaseSkillMod);
+    // Skill modifier globals (F-013: stored per-skill).
+    // gBaseSkillModMap: skill → mod for set_base_skill_mod.
+    {
+        int skCount = static_cast<int>(gBaseSkillModMap.size());
+        sfall_gl_vars_store("SFBSMcnt", skCount);
+        int idx = 0;
+        for (const auto& [skill, mod] : gBaseSkillModMap) {
+            char skKey[16] = {};
+            char modKey[16] = {};
+            sprintf(skKey, "SFBSMsk%02d", idx);
+            sprintf(modKey, "SFBSMmv%02d", idx);
+            sfall_gl_vars_store(skKey, skill);
+            sfall_gl_vars_store(modKey, mod);
+            idx++;
+        }
+    }
+    // gGlobalCritterSkillModMap: skill → mod for set_critter_skill_mod
+    // with no critter (nullptr fallback).  Saved with "SFGCrt" prefix
+    // to avoid collision with the per-critter gCritterSkillModMap.
+    {
+        int gcCount = static_cast<int>(gGlobalCritterSkillModMap.size());
+        sfall_gl_vars_store("SFGCnt  ", gcCount);
+        int idx = 0;
+        for (const auto& [skill, mod] : gGlobalCritterSkillModMap) {
+            char skKey[16] = {};
+            char modKey[16] = {};
+            sprintf(skKey, "SFGCsk%02d", idx);
+            sprintf(modKey, "SFGCmv%02d", idx);
+            sfall_gl_vars_store(skKey, skill);
+            sfall_gl_vars_store(modKey, mod);
+            idx++;
+        }
+    }
+    // gCritterSkillModMap: pid → (skill → mod) for set_critter_skill_mod.
+    {
+        int crtCount = static_cast<int>(gCritterSkillModMap.size());
+        sfall_gl_vars_store("SFCrtSc", crtCount);
+        int idx = 0;
+        for (const auto& [pid, skillMap] : gCritterSkillModMap) {
+            char pidKey[16] = {};
+            sprintf(pidKey, "SFCrP%04d", idx);
+            sfall_gl_vars_store(pidKey, pid);
+            int skCount2 = static_cast<int>(skillMap.size());
+            char skCntKey[16] = {};
+            sprintf(skCntKey, "SFCrPn%04d", idx);
+            sfall_gl_vars_store(skCntKey, skCount2);
+            int skIdx = 0;
+            for (const auto& [skill, mod] : skillMap) {
+                char skKey[32] = {};
+                char modKey[32] = {};
+                sprintf(skKey, "SFCrSk%04d_%02d", idx, skIdx);
+                sprintf(modKey, "SFCrSv%04d_%02d", idx, skIdx);
+                sfall_gl_vars_store(skKey, skill);
+                sfall_gl_vars_store(modKey, mod);
+                skIdx++;
+            }
+            idx++;
+        }
+    }
 
     // Perk owed counter.
     sfall_gl_vars_store("SFPerkOw", gSfallPerkOwed);
@@ -5050,19 +5188,6 @@ void sfallOpcodeStateSave()
         sfall_gl_vars_store(key, entry.second.mod);      // mod value
         sprintf(key, "SFHCx%03d", idx);
         sfall_gl_vars_store(key, entry.second.max);      // max value
-        idx++;
-    }
-
-    // F-001: Per-critter skill mod map.
-    int csmCount = static_cast<int>(gCritterSkillModMap.size());
-    sfall_gl_vars_store("SFCSMcnt", csmCount);
-    idx = 0;
-    for (const auto& entry : gCritterSkillModMap) {
-        char key[16] = {};
-        sprintf(key, "SFCSMk%03d", idx);
-        sfall_gl_vars_store(key, entry.first);           // critter PID
-        sprintf(key, "SFCSMv%03d", idx);
-        sfall_gl_vars_store(key, entry.second);           // max value
         idx++;
     }
 
@@ -5207,12 +5332,95 @@ void sfallOpcodeStateLoad()
         sfallPerkLevelMod = val;
     }
 
-    // Skill modifier globals.
-    if (sfall_gl_vars_fetch("SFCrtSM ", val)) {
-        sfallCritterSkillMod = val;
+    // Skill modifier globals (F-013: loaded per-skill).
+    // gBaseSkillModMap: skill → mod for set_base_skill_mod.
+    {
+        int skCount = 0;
+        if (sfall_gl_vars_fetch("SFBSMcnt", skCount)) {
+            for (int idx = 0; idx < skCount; idx++) {
+                char skKey[16] = {};
+                char modKey[16] = {};
+                sprintf(skKey, "SFBSMsk%02d", idx);
+                sprintf(modKey, "SFBSMmv%02d", idx);
+                int skill = 0;
+                int mod = 0;
+                if (sfall_gl_vars_fetch(skKey, skill) && sfall_gl_vars_fetch(modKey, mod)) {
+                    if (skill >= 0 && skill < SKILL_COUNT) {
+                        gBaseSkillModMap[skill] = mod;
+                    }
+                }
+            }
+        }
     }
-    if (sfall_gl_vars_fetch("SFBaseSM", val)) {
-        sfallBaseSkillMod = val;
+    // gGlobalCritterSkillModMap: skill → mod for set_critter_skill_mod
+    // with no critter (nullptr fallback).  "SFGCnt  " / "SFGCsk%02d" / "SFGCmv%02d".
+    {
+        int gcCount = 0;
+        if (sfall_gl_vars_fetch("SFGCnt  ", gcCount)) {
+            for (int idx = 0; idx < gcCount; idx++) {
+                char skKey[16] = {};
+                char modKey[16] = {};
+                sprintf(skKey, "SFGCsk%02d", idx);
+                sprintf(modKey, "SFGCmv%02d", idx);
+                int skill = 0;
+                int mod = 0;
+                if (sfall_gl_vars_fetch(skKey, skill) && sfall_gl_vars_fetch(modKey, mod)) {
+                    if (skill >= 0 && skill < SKILL_COUNT) {
+                        gGlobalCritterSkillModMap[skill] = mod;
+                    }
+                }
+            }
+        }
+    }
+    // gCritterSkillModMap: pid → (skill → mod) for set_critter_skill_mod.
+    {
+        int crtCount = 0;
+        if (sfall_gl_vars_fetch("SFCrtSc", crtCount)) {
+            for (int idx = 0; idx < crtCount; idx++) {
+                char pidKey[16] = {};
+                char skCntKey[16] = {};
+                sprintf(pidKey, "SFCrP%04d", idx);
+                sprintf(skCntKey, "SFCrPn%04d", idx);
+                int pid = 0;
+                int skCount2 = 0;
+                if (sfall_gl_vars_fetch(pidKey, pid) && sfall_gl_vars_fetch(skCntKey, skCount2)) {
+                    for (int skIdx = 0; skIdx < skCount2; skIdx++) {
+                        char skKey[32] = {};
+                        char modKey[32] = {};
+                        sprintf(skKey, "SFCrSk%04d_%02d", idx, skIdx);
+                        sprintf(modKey, "SFCrSv%04d_%02d", idx, skIdx);
+                        int skill = 0;
+                        int mod = 0;
+                        if (sfall_gl_vars_fetch(skKey, skill) && sfall_gl_vars_fetch(modKey, mod)) {
+                            if (skill >= 0 && skill < SKILL_COUNT) {
+                                gCritterSkillModMap[pid][skill] = mod;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Backward compat: old saves (pre F-013) used single-int globals
+    // "SFCrtSM " and "SFBaseSM" instead of per-skill entries.
+    if (gBaseSkillModMap.empty()) {
+        int oldBase = 0;
+        if (sfall_gl_vars_fetch("SFBaseSM", oldBase) && oldBase != 0) {
+            for (int sk = 0; sk < SKILL_COUNT; sk++) {
+                gBaseSkillModMap[sk] = oldBase;
+            }
+        }
+    }
+    if (gCritterSkillModMap.empty()) {
+        int oldCrt = 0;
+        if (sfall_gl_vars_fetch("SFCrtSM ", oldCrt) && oldCrt != 0) {
+            if (gDude != nullptr) {
+                for (int sk = 0; sk < SKILL_COUNT; sk++) {
+                    gCritterSkillModMap[gDude->pid][sk] = oldCrt;
+                }
+            }
+        }
     }
 
     // Perk owed counter.
@@ -5377,25 +5585,6 @@ void sfallOpcodeStateLoad()
         }
     }
 
-    // F-001: Per-critter skill mod map.
-    {
-        int csmCount = 0;
-        if (sfall_gl_vars_fetch("SFCSMcnt", csmCount)) {
-            gCritterSkillModMap.clear();
-            for (int idx2 = 0; idx2 < csmCount; idx2++) {
-                char key[16] = {};
-                sprintf(key, "SFCSMk%03d", idx2);
-                int critterPid = 0;
-                if (sfall_gl_vars_fetch(key, critterPid)) {
-                    int maxVal = 0;
-                    sprintf(key, "SFCSMv%03d", idx2);
-                    sfall_gl_vars_fetch(key, maxVal);
-                    gCritterSkillModMap[critterPid] = maxVal;
-                }
-            }
-        }
-    }
-
     // F-001: Per-critter pickpocket mod map.
     {
         int cpmCount = 0;
@@ -5493,29 +5682,40 @@ int sfallGetSwiftLearnerMod()
 }
 
 // F-034: Skill modifier globals (0x81C7/0x81C8).
-int sfallGetCritterSkillMod()
+int sfallGetCritterSkillMod(int skill)
 {
-    return sfallCritterSkillMod;
+    auto it = gGlobalCritterSkillModMap.find(skill);
+    if (it != gGlobalCritterSkillModMap.end()) {
+        return it->second;
+    }
+    return 0;
 }
 
-int sfallGetBaseSkillMod()
+int sfallGetBaseSkillMod(int skill)
 {
-    return sfallBaseSkillMod;
+    auto it = gBaseSkillModMap.find(skill);
+    if (it != gBaseSkillModMap.end()) {
+        return it->second;
+    }
+    return 0;
 }
 
 // F-001: Per-critter skill mod accessor.
-// Returns the per-critter max skill override if one was set via
-// set_critter_skill_mod for this specific critter. Returns 0 if
-// no per-critter override exists. The caller should then check
-// sfallGetCritterSkillMod() for the global fallback.
-int sfallGetCritterSkillModForCritter(Object* critter)
+// Returns the per-(pid,skill) modifier if one was set via
+// set_critter_skill_mod for this specific critter + skill pair.
+// Returns 0 if no per-critter override exists. The caller should then
+// check sfallGetCritterSkillMod(skill) for the per-skill fallback.
+int sfallGetCritterSkillModForCritter(Object* critter, int skill)
 {
     if (critter == nullptr) {
         return 0;
     }
-    auto it = gCritterSkillModMap.find(critter->pid);
-    if (it != gCritterSkillModMap.end()) {
-        return it->second;
+    auto pidIt = gCritterSkillModMap.find(critter->pid);
+    if (pidIt != gCritterSkillModMap.end()) {
+        auto skillIt = pidIt->second.find(skill);
+        if (skillIt != pidIt->second.end()) {
+            return skillIt->second;
+        }
     }
     return 0;
 }
@@ -5730,14 +5930,14 @@ static void op_mark_movie_played(Program* program)
 
 // ============================================================
 // block_combat(int enable) — 0x824A
-// Blocks or enables combat for the calling critter. CE combat control
-// is handled internally; this opcode is a safe no-op for script
-// compatibility with gl_combat_enhance.ssl.
+// Blocks or enables combat for all critters. Sets the global gBlockCombat
+// flag which is checked at combat.cc:3482 and combat.cc:6058 to abort
+// combat initiation and attacks when non-zero.
 // ============================================================
 static void op_block_combat(Program* program)
 {
     int enable = programStackPopInteger(program);
-    (void)enable;
+    gBlockCombat = enable;
 }
 
 // Note: opcodes should pop arguments off the stack in reverse order

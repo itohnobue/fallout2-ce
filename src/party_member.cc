@@ -862,12 +862,17 @@ int _partyMemberRestingHeal(int hours)
     if (gFallout1Behavior) {
         for (int index = 0; index < gPartyMembersLength; index++) {
             PartyMemberListItem* partyMember = &(gPartyMembers[index]);
-            if (PID_TYPE(partyMember->object->pid) == OBJ_TYPE_CRITTER) {
-                int maxHp = critterGetStat(partyMember->object, STAT_MAXIMUM_HIT_POINTS);
-                int currentHp = critterGetStat(partyMember->object, STAT_CURRENT_HIT_POINTS);
-                if (currentHp < maxHp) {
-                    critterAdjustHitPoints(partyMember->object, maxHp - currentHp);
-                }
+            if (PID_TYPE(partyMember->object->pid) != OBJ_TYPE_CRITTER) continue;
+            // I2-044: Skip dead, hidden, and robot party members during
+            // rest healing, matching partyIsAnyoneCanBeHealedByRest pattern.
+            if (critterIsDead(partyMember->object)) continue;
+            if ((partyMember->object->flags & OBJECT_HIDDEN) != 0) continue;
+            if (critterGetKillType(partyMember->object) == KILL_TYPE_ROBOT) continue;
+
+            int maxHp = critterGetStat(partyMember->object, STAT_MAXIMUM_HIT_POINTS);
+            int currentHp = critterGetStat(partyMember->object, STAT_CURRENT_HIT_POINTS);
+            if (currentHp < maxHp) {
+                critterAdjustHitPoints(partyMember->object, maxHp - currentHp);
             }
         }
         return 1;
@@ -881,10 +886,15 @@ int _partyMemberRestingHeal(int hours)
 
     for (int index = 0; index < gPartyMembersLength; index++) {
         PartyMemberListItem* partyMember = &(gPartyMembers[index]);
-        if (PID_TYPE(partyMember->object->pid) == OBJ_TYPE_CRITTER) {
-            int healingRate = critterGetStat(partyMember->object, STAT_HEALING_RATE);
-            critterAdjustHitPoints(partyMember->object, healingTicks * healingRate);
-        }
+        if (PID_TYPE(partyMember->object->pid) != OBJ_TYPE_CRITTER) continue;
+        // I2-044: Skip dead, hidden, and robot party members during
+        // rest healing, matching partyIsAnyoneCanBeHealedByRest pattern.
+        if (critterIsDead(partyMember->object)) continue;
+        if ((partyMember->object->flags & OBJECT_HIDDEN) != 0) continue;
+        if (critterGetKillType(partyMember->object) == KILL_TYPE_ROBOT) continue;
+
+        int healingRate = critterGetStat(partyMember->object, STAT_HEALING_RATE);
+        critterAdjustHitPoints(partyMember->object, healingTicks * healingRate);
     }
 
     return 1;
@@ -1508,11 +1518,13 @@ bool partyMemberSupportsChemUse(Object* object, int chemUse)
 
 // partyMemberIncLevels
 // 0x495B60 partyMemberIncLevels
-int _partyMemberIncLevels()
+int _partyMemberIncLevels(int pid)
 {
     // F-013: Honor npc_engine_level_up metarule. Scripts can disable
     // auto-leveling via npc_engine_level_up(0). When disabled, skip
     // all party member level-up processing.
+    // pid: if specified (>= 0), only level up the party member with
+    // that PID; -1 means level all eligible members.
     if (!sfallGetNpcEngineLevelUpEnabled()) {
         return 0;
     }
@@ -1545,6 +1557,23 @@ int _partyMemberIncLevels()
             continue;
         }
 
+        // F-014: Filter by PID when targeting a specific party member.
+        if (pid != -1 && obj->pid != pid) {
+            continue;
+        }
+
+        // I2-043: Skip dead, hidden, and robot party members during
+        // level-up, matching partyIsAnyoneCanBeHealedByRest pattern.
+        if (critterIsDead(obj)) {
+            continue;
+        }
+        if ((obj->flags & OBJECT_HIDDEN) != 0) {
+            continue;
+        }
+        if (critterGetKillType(obj) == KILL_TYPE_ROBOT) {
+            continue;
+        }
+
         name = critterGetName(obj);
         debugPrint("\npartyMemberIncLevels: %s", name);
 
@@ -1568,7 +1597,11 @@ int _partyMemberIncLevels()
 
         levelUpInfo = &(_partyMemberLevelUpInfoList[memberIndex]);
 
-        if (levelUpInfo->level >= memberDescription->level_pids_num) {
+        // I2-011: Check that the NEXT level index is within bounds before
+        // incrementing. level_pids[0] is a -1 sentinel; valid PID entries
+        // start at index 1. Guard against OOB when PARTY_MEMBER_MAX_LEVEL=6
+        // and level_pids_num reaches the array size.
+        if (levelUpInfo->level >= memberDescription->level_pids_num - 1) {
             continue;
         }
 

@@ -635,6 +635,7 @@ void sfallArraysExit()
 {
     if (_state != nullptr) {
         delete _state;
+        _state = nullptr;
     }
 }
 

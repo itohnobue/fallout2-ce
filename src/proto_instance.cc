@@ -29,6 +29,7 @@
 #include "queue.h"
 #include "random.h"
 #include "scripts.h"
+#include "sfall_metarules.h"
 #include "sfall_script_hooks.h"
 #include "skill.h"
 #include "stat.h"
@@ -283,12 +284,12 @@ int objectExamineFunc(Object* critter, Object* target, void (*fn)(const char* st
             scriptHooks_DescriptionObj(critter, target, descStr);
             fn(descStr.c_str());
         } else {
-            if (PID_TYPE(target->pid) != OBJ_TYPE_CRITTER || !critterIsDead(target)) {
-                // HOOK_DESCRIPTIONOBJ: allow scripts to override the object description
-                std::string descStr(description);
-                scriptHooks_DescriptionObj(critter, target, descStr);
-                fn(descStr.c_str());
-            }
+            // HOOK_DESCRIPTIONOBJ: allow scripts to override the object description.
+            // Fire for ALL object types unconditionally per sfall 4.3+ semantics —
+            // dead critters with non-empty descriptions should still trigger the hook.
+            std::string descStr(description);
+            scriptHooks_DescriptionObj(critter, target, descStr);
+            fn(descStr.c_str());
         }
     }
 
@@ -910,16 +911,28 @@ static UseItemResultCode _obj_use_explosive(Object* explosive)
             displayMonitorAddMessage(messageListItem.text);
         }
     } else {
-        int seconds = inventorySetTimer(explosive);
+        // SFALL: Check for custom explosive timer delay set via
+        // item_make_explosive metarule. When a delay override exists,
+        // use it as the base timer instead of prompting the player.
+        int seconds;
+        bool hasCustomDelay = sfallGetExplosiveOverrideDelay(pid, &seconds);
+        if (hasCustomDelay) {
+            // Custom delay is in seconds; skip the timer UI prompt.
+            explosiveActivate(&(explosive->pid));
+        } else {
+            seconds = inventorySetTimer(explosive);
+        }
         if (seconds != -1) {
+            if (!hasCustomDelay) {
+                // SFALL
+                explosiveActivate(&(explosive->pid));
+            }
+
             // You set the timer.
             messageListItem.num = 589;
             if (messageListGetItem(&gProtoMessageList, &messageListItem)) {
                 displayMonitorAddMessage(messageListItem.text);
             }
-
-            // SFALL
-            explosiveActivate(&(explosive->pid));
 
             int delay = 10 * seconds;
 
@@ -1150,6 +1163,15 @@ int _protinstTestDroppedExplosive(Object* explosiveItem)
 UseItemResultCode objectUseItem(Object* userObj, Object* item)
 {
     UseItemResultCode rc = objectUseItemInternal(userObj, item);
+
+    // F-20: sfall HOOK_USEOBJ ret=2 means "return to game" — item stays
+    // in inventory, no drop.  The internal explosive-handling path uses
+    // USE_ITEM_RESULT_DROP (3) to trigger the drop-on-ground behaviour
+    // which is handled below for REMOVE and DROP.
+    if (rc == USE_ITEM_RESULT_RETURN_TO_GAME) {
+        rc = USE_ITEM_RESULT_OK;
+    }
+
     if (rc == USE_ITEM_RESULT_REMOVE || rc == USE_ITEM_RESULT_DROP) {
         Object* root = objectGetOwner(item);
         if (root != nullptr) {
@@ -1399,6 +1421,12 @@ UseItemResultCode objectUseItemOnInternal(Object* critter, Object* targetObj, Ob
 UseItemResultCode objectUseItemOn(Object* user, Object* targetObj, Object* item)
 {
     UseItemResultCode rc = objectUseItemOnInternal(user, targetObj, item);
+
+    // F-20: sfall HOOK_USEOBJON ret=2 means "return to game" — item
+    // stays in inventory, no drop.  Convert to OK before processing.
+    if (rc == USE_ITEM_RESULT_RETURN_TO_GAME) {
+        rc = USE_ITEM_RESULT_OK;
+    }
 
     if (rc == USE_ITEM_RESULT_REMOVE) {
         if (user != nullptr) {

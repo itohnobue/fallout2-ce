@@ -3175,3 +3175,155 @@ TEST_CASE("F-15: regression — OLD code enabled encounters immediately regardle
     CHECK(testShouldTriggerHorriganEncounter(false, 100, 100)); // day 100 == 100 → trigger
     CHECK(testShouldTriggerHorriganEncounter(false, 150, 100)); // day 150 > 100 → trigger
 }
+
+// =================================================================
+// R-09: wmGetPartyTerrainName 0-arg form
+// =================================================================
+//
+// Finding R-09 (LOW, verified): sfall_metarules.cc calls
+// wmGetPartyTerrainName() with 0 args to get the map-defined terrain
+// type name.  The function is declared as:
+//   const char* wmGetPartyTerrainName();   (worldmap.h:273)
+//
+// Production: worldmap.cc:6423-6433
+//
+// Behavior:
+//   1. If wmGenData.currentSubtile is null, calls wmPartyFindCurSubTile()
+//   2. If still null, returns "" (empty string)
+//   3. Otherwise returns terrain->lookupName (the terrain type's name)
+
+// Local mirror of Terrain struct and wmGetPartyTerrainName logic
+struct TestTerrain {
+    char lookupName[40];
+    int difficulty;
+    int mapsLength;
+    int maps[20];
+};
+
+struct TestSubtile {
+    int terrain; // index into terrain type list
+};
+
+// Mirror of wmGetPartyTerrainName (worldmap.cc:6423-6433)
+static const char* testWmGetPartyTerrainName(TestSubtile* currentSubtile,
+                                              TestTerrain terrainList[], int terrainCount,
+                                              bool subtileNeedsFind)
+{
+    // Production calls wmPartyFindCurSubTile() when currentSubtile is null
+    // For test: subtileNeedsFind=true means "call FindCurSubTile was needed"
+    if (currentSubtile == nullptr) {
+        if (subtileNeedsFind) {
+            // Pretend FindCurSubTile succeeded and we now have a subtile
+            // (we skip the actual lookup for test purposes)
+            static TestSubtile foundSubtile;
+            foundSubtile.terrain = 0;
+            currentSubtile = &foundSubtile;
+        }
+    }
+    if (currentSubtile == nullptr) {
+        return "";
+    }
+
+    int terrainIdx = currentSubtile->terrain;
+    if (terrainIdx < 0 || terrainIdx >= terrainCount) {
+        return "";
+    }
+    return terrainList[terrainIdx].lookupName;
+}
+
+TEST_CASE("R-09: wmGetPartyTerrainName — returns terrain name for valid subtile")
+{
+    TestTerrain terrains[3] = {};
+    strcpy(terrains[0].lookupName, "Mountain");
+    strcpy(terrains[1].lookupName, "Desert");
+    strcpy(terrains[2].lookupName, "Grassland");
+
+    TestSubtile subtile = { 1 }; // Desert
+
+    const char* name = testWmGetPartyTerrainName(&subtile, terrains, 3, false);
+    CHECK(strcmp(name, "Desert") == 0);
+}
+
+TEST_CASE("R-09: wmGetPartyTerrainName — returns empty string for null subtile")
+{
+    TestTerrain terrains[2] = {};
+    strcpy(terrains[0].lookupName, "Ocean");
+    strcpy(terrains[1].lookupName, "Forest");
+
+    // First attempt: null subtile, FindCurSubTile also fails
+    const char* name = testWmGetPartyTerrainName(nullptr, terrains, 2, false);
+    CHECK(strcmp(name, "") == 0);
+}
+
+TEST_CASE("R-09: wmGetPartyTerrainName — handles FindCurSubTile success")
+{
+    TestTerrain terrains[2] = {};
+    strcpy(terrains[0].lookupName, "Ocean");
+    strcpy(terrains[1].lookupName, "Forest");
+
+    // Null subtile but FindCurSubTile succeeds (subtileNeedsFind=true)
+    const char* name = testWmGetPartyTerrainName(nullptr, terrains, 2, true);
+    // FindCurSubTile found us a subtile at terrain[0] → "Ocean"
+    CHECK(strcmp(name, "Ocean") == 0);
+}
+
+TEST_CASE("R-09: wmGetPartyTerrainName — different terrain types")
+{
+    TestTerrain terrains[5] = {};
+    strcpy(terrains[0].lookupName, "Ocean");
+    strcpy(terrains[1].lookupName, "Mountain");
+    strcpy(terrains[2].lookupName, "Desert");
+    strcpy(terrains[3].lookupName, "Forest");
+    strcpy(terrains[4].lookupName, "City");
+
+    // Verify all terrain names are returned correctly
+    for (int i = 0; i < 5; i++) {
+        TestSubtile subtile = { i };
+        const char* name = testWmGetPartyTerrainName(&subtile, terrains, 5, false);
+        CHECK(strcmp(name, terrains[i].lookupName) == 0);
+    }
+}
+
+TEST_CASE("R-09: wmGetPartyTerrainName — out of bounds terrain index returns empty")
+{
+    TestTerrain terrains[3] = {};
+    strcpy(terrains[0].lookupName, "A");
+    strcpy(terrains[1].lookupName, "B");
+    strcpy(terrains[2].lookupName, "C");
+
+    // terrain index = 99 but terrainCount = 3 → out of bounds
+    TestSubtile subtile = { 99 };
+    const char* name = testWmGetPartyTerrainName(&subtile, terrains, 3, false);
+    CHECK(strcmp(name, "") == 0);
+
+    // Negative terrain index
+    TestSubtile negSubtile = { -1 };
+    name = testWmGetPartyTerrainName(&negSubtile, terrains, 3, false);
+    CHECK(strcmp(name, "") == 0);
+}
+
+TEST_CASE("R-09: wmGetPartyTerrainName — 0-arg form is declared in worldmap.h")
+{
+    // Verify the header declares the 0-arg form.
+    // The declaration at worldmap.h:273 is:
+    //   const char* wmGetPartyTerrainName();
+    // Since we can't link the actual production function in a self-contained
+    // test, we verify the mirror implements the same contract as the header.
+    //
+    // The production function is used by sfall_metarules.cc mf_get_terrain_name
+    // which checks gTerrainNameOverrides first, then falls back to
+    // wmGetPartyTerrainName().
+    //
+    // This test validates the fallback path: when no override exists,
+    // the map-defined terrain name is returned.
+
+    TestTerrain terrains[2] = {};
+    strcpy(terrains[0].lookupName, "Mountain");
+    strcpy(terrains[1].lookupName, "Desert");
+
+    TestSubtile subtile = { 0 };
+    const char* mapName = testWmGetPartyTerrainName(&subtile, terrains, 2, false);
+
+    // The map-defined name should be returned as-is (not a script override)
+    CHECK(strcmp(mapName, "Mountain") == 0);
+}

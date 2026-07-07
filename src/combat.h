@@ -13,6 +13,11 @@ extern unsigned int gCombatState;
 
 extern int _combat_free_move;
 
+// SFALL: block_combat (0x824A) global flag. Set by sfall opcode handler;
+// checked by attackDetermineToHit and combat init paths to abort combat
+// when non-zero. Defined in combat.cc.
+extern int gBlockCombat;
+
 int combatInit();
 void combatReset();
 void combatExit();

@@ -9,7 +9,11 @@ enum UseItemResultCode {
     USE_ITEM_RESULT_ERROR = -1,
     USE_ITEM_RESULT_OK = 0,
     USE_ITEM_RESULT_REMOVE = 1,
-    USE_ITEM_RESULT_DROP = 2,
+    // sfall HOOK_USEOBJ spec: ret=2 means "return to game" — item stays in
+    // inventory (no drop, no removal).  Internal explosive-handling still uses
+    // USE_ITEM_RESULT_DROP (3) which triggers the drop-on-ground path.
+    USE_ITEM_RESULT_RETURN_TO_GAME = 2,
+    USE_ITEM_RESULT_DROP = 3,
 };
 
 int objectGetSid(Object* object, int* sidPtr);

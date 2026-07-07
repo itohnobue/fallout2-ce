@@ -4862,6 +4862,7 @@ static void characterEditorSavePlayer()
     gCharacterEditorHitPointsBackup = critterGetHitPoints(gDude);
 
     strncpy(gCharacterEditorNameBackup, critterGetName(gDude), 32);
+    gCharacterEditorNameBackup[31] = '\0';
 
     gCharacterEditorLastLevelBackup = gCharacterEditorLastLevel;
     for (int perk = 0; perk < PERK_COUNT; perk++) {
@@ -6547,7 +6548,7 @@ static int perkDialogDrawPerks()
     }
 
     for (int perk = 0; perk < PERK_COUNT; perk++) {
-        gPerkDialogOptionList[perk].value = 0;
+        gPerkDialogOptionList[perk].value = -1;
         gPerkDialogOptionList[perk].name = nullptr;
     }
 

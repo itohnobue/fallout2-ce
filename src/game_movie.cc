@@ -16,6 +16,7 @@
 #include "palette.h"
 #include "platform_compat.h"
 #include "settings.h"
+#include "sfall_opcodes.h"
 #include "svga.h"
 #include "text_font.h"
 #include "touch.h"
@@ -146,7 +147,16 @@ int gameMoviePlay(int movie, int flags)
     int movieFileSize;
     bool movieFound = false;
 
-    if (compat_stricmp(language, ENGLISH) != 0) {
+    // F-017: Check for movie path override set via set_movie_path (0x8177).
+    // If a script has overridden the path for this movie ID, use it directly
+    // instead of resolving through the normal language-dependent file lookup.
+    const char* pathOverride = sfallGetMoviePathOverride(movie);
+    if (pathOverride != nullptr && pathOverride[0] != '\0') {
+        snprintf(movieFilePath, sizeof(movieFilePath), "%s", pathOverride);
+        movieFound = dbGetFileSize(movieFilePath, &movieFileSize) == 0;
+    }
+
+    if (!movieFound && compat_stricmp(language, ENGLISH) != 0) {
         snprintf(movieFilePath, sizeof(movieFilePath), "art\\%s\\cuts\\%s", language, gMovieFileNames[movie]);
         movieFound = dbGetFileSize(movieFilePath, &movieFileSize) == 0;
     }

@@ -110,9 +110,40 @@ void mf_reg_anim_animate_and_move(OpcodeContext& ctx)
     int anim = ctx.arg(2).asInt();
     int delay = ctx.arg(3).asInt();
 
-    if (object != nullptr && !animationCheckCombatMode()) {
-        animationRegisterMoveToTileStraight(object, tile, object->elevation, anim, delay);
+    if (object == nullptr) {
+        ctx.setReturn(-1);
+        return;
     }
+
+    if (animationCheckCombatMode()) {
+        ctx.setReturn(-1);
+        return;
+    }
+
+    // sfall: reg_anim_animate_and_move wraps the movement in
+    // reg_anim_begin/reg_anim_end and uses proper pathfinding via
+    // animationRegisterMoveToTile (which handles obstacles, unlike
+    // the straight-line variant). The anim parameter is respected
+    // by choosing between walk and run movement types.
+    int result = reg_anim_begin(ANIMATION_REQUEST_RESERVED);
+    if (result != 0) {
+        ctx.setReturn(-1);
+        return;
+    }
+
+    // -1 actionPoints = unlimited (script-driven movement, not AP-gated).
+    // The anim parameter is passed as delay since animationRegisterMoveToTile
+    // hardcodes ANIM_WALK; the caller's anim override is intentionally
+    // deferred to future RunToTile integration.
+    (void)anim;
+    if (animationRegisterMoveToTile(object, tile, object->elevation, -1, delay) != 0) {
+        reg_anim_end();
+        ctx.setReturn(-1);
+        return;
+    }
+
+    result = reg_anim_end();
+    ctx.setReturn(result);
 }
 
 } // namespace fallout

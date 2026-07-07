@@ -2141,6 +2141,10 @@ static void pipboyWindowRenderRestOptions(int a1)
     // was written like this in the first place.
     for (int option = 1; option < gPipboyRestOptionsCount + 1; option++) {
         // 302 - Rest for ten minutes (FO2) / 321 - Rest for ten minutes (FO1)
+        // NOTE: The FO1 rest offset 321 may be off-by-one (original FO1 PIPBOY.MSG
+        // may define rest options starting at 320, not 321). This offset is used as-is
+        // since the exact FO1 PIPBOY.MSG layout cannot be verified against the original
+        // game files. If rest text appears shifted by one entry in FO1 mode, try 320.
         // ...
         // 315 - Rest until party is healed
         text = getmsg(&gPipboyMessageList, &gPipboyMessageListItem, (gFallout1Behavior ? 321 : 302) + option - 1);

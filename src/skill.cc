@@ -249,11 +249,11 @@ int skillGetValue(Object* critter, int skill)
         statValueSum += critterGetStat(critter, skillDescription->stat2);
     }
 
-    int value = skillDescription->defaultValue + skillDescription->statModifier * statValueSum + (baseValue + sfallGetBaseSkillMod()) * skillDescription->baseValueMult;
+    int value = skillDescription->defaultValue + skillDescription->statModifier * statValueSum + (baseValue + sfallGetBaseSkillMod(skill)) * skillDescription->baseValueMult;
 
     if (critter == gDude) {
         if (skillIsTagged(skill)) {
-            value += (baseValue + sfallGetBaseSkillMod()) * skillDescription->baseValueMult;
+            value += (baseValue + sfallGetBaseSkillMod(skill)) * skillDescription->baseValueMult;
 
             if (!perkGetRank(critter, PERK_TAG) || skill != gTaggedSkills[3]) {
                 value += 20;
@@ -263,22 +263,31 @@ int skillGetValue(Object* critter, int skill)
         value += traitGetSkillModifier(skill);
         value += perkGetSkillModifier(critter, skill);
         value += skillGetGameDifficultyModifier(skill);
-        // F-004: Apply sfall per-critter skill modifier first, then fall back
-        // to the global modifier. Per-critter overrides set via opcode 0x81C7
-        // (set_critter_skill_mod) were previously stored but never consumed.
-        // F-34: sfallGetBaseSkillMod() is applied before baseValue multipliers
-        // (inline at line 252).
-        int perCritterSkillMod = sfallGetCritterSkillModForCritter(critter);
+    }
+
+    // Apply per-critter skill modifier for ALL critters (not just gDude).
+    // The modifier is set via set_critter_skill_mod opcode (0x81C7) keyed by
+    // (pid, skill) and should affect NPC skill values at all 40+ call sites
+    // using skillGetValue for combat, AI, barter, and skill checks.
+    {
+        int perCritterSkillMod = sfallGetCritterSkillModForCritter(critter, skill);
         if (perCritterSkillMod != 0) {
             value += perCritterSkillMod;
         } else {
-            value += sfallGetCritterSkillMod();
+            value += sfallGetCritterSkillMod(skill);
         }
     }
 
     // Use gSkillMaxCap if set by set_skill_max metarule;
     // otherwise fall back to engine default of 300.
     int maxSkill = (gSkillMaxCap > 0) ? gSkillMaxCap : 300;
+
+    // Clamp negative values to 0 to match the existing max clamp pattern.
+    // Guards against negative modifier combinations, hex-edited saves, etc.
+    if (value < 0) {
+        value = 0;
+    }
+
     if (value > maxSkill) {
         value = maxSkill;
     }
@@ -1140,6 +1149,13 @@ SkillStealResult skillsPerformStealing(Object* thief, Object* target, Object* it
     }
     if (stealChance > stealCap) {
         stealChance = stealCap;
+    }
+
+    // Guard against negative steal chance from unbounded modifier values.
+    // Setters validate max [1,100] but NOT the mod values, which can drive
+    // stealChance negative and cause all steal rolls to fail.
+    if (stealChance < 0) {
+        stealChance = 0;
     }
 
     int stealRoll;

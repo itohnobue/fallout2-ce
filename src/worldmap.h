@@ -270,6 +270,7 @@ bool wmAreaSetVisibleState(int areaIdx, int state, bool force);
 int wmAreaSetWorldPos(int areaIdx, int x, int y);
 int wmGetPartyWorldPos(int* xPtr, int* yPtr);
 int wmGetPartyCurArea(int* areaIdxPtr);
+const char* wmGetPartyTerrainName();
 void wmTownMap();
 int wmCarUseGas(int amount);
 int wmCarFillGas(int amount);

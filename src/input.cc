@@ -47,7 +47,7 @@ static void screenshotBlitter(unsigned char* src, int src_pitch, int a3, int x, 
 static void buildNormalizedQwertyKeys();
 static void _GNW95_process_key(KeyboardData* data);
 static int inputGetHookMouseButton(int sdlButton);
-static void inputHandleMouseClickHook(int sdlButton, bool pressed);
+static void inputHandleMouseClickHook(int sdlButton, int x, int y);
 
 // 0x51E23C GNW95_repeat_rate
 static int gKeyboardKeyRepeatRate = 80;
@@ -125,14 +125,18 @@ static int inputGetHookMouseButton(int sdlButton)
     }
 }
 
-static void inputHandleMouseClickHook(int sdlButton, bool pressed)
+static void inputHandleMouseClickHook(int sdlButton, int x, int y)
 {
     if (!gGameLoaded) return;
 
     int hookButton = inputGetHookMouseButton(sdlButton);
     if (hookButton == -1) return;
 
-    ScriptHookCall(HOOK_MOUSECLICK, 0, { pressed ? 1 : 0, hookButton }).call();
+    // F-28: sfall 4.x convention — arg0=button, arg1=x, arg2=y.
+    // Previously only passed pressed state + button (2 args); now
+    // forwards e.button.x/.y from the SDL event so scripts can
+    // inspect the click-time position (not just current mouse x/y).
+    ScriptHookCall(HOOK_MOUSECLICK, 0, { hookButton, x, y }).call();
 }
 
 // 0x4C8A70
@@ -1002,7 +1006,7 @@ void _GNW95_process_message()
         case SDL_MOUSEBUTTONUP:
         case SDL_MOUSEWHEEL:
             if (e.type == SDL_MOUSEBUTTONDOWN || e.type == SDL_MOUSEBUTTONUP) {
-                inputHandleMouseClickHook(e.button.button, e.type == SDL_MOUSEBUTTONDOWN);
+                inputHandleMouseClickHook(e.button.button, e.button.x, e.button.y);
             }
             handleMouseEvent(&e);
             break;
@@ -1021,13 +1025,22 @@ void _GNW95_process_message()
             keyboardData.down = (e.key.state & SDL_PRESSED) != 0;
             bool syntheticSfallKey = sfall_kb_consume_synthetic_key_event(keyboardData.key, keyboardData.down);
             if (!keyboardIsDisabled()) {
+                bool keyBlocked = false;
                 if (!e.key.repeat && !syntheticSfallKey) {
                     int keyOverride = sfall_kb_handle_key_pressed(keyboardData.key, keyboardData.down);
-                    if (keyOverride != SDL_SCANCODE_UNKNOWN) {
+                    // F-27: -1 means the hook consumed/blocked the key — skip
+                    // all default processing. SDL_SCANCODE_UNKNOWN means no
+                    // override — use original key.  Any other value remaps
+                    // the key via get_scancode_from_key().
+                    if (keyOverride == -1) {
+                        keyBlocked = true;
+                    } else if (keyOverride != SDL_SCANCODE_UNKNOWN) {
                         keyboardData.key = keyOverride;
                     }
                 }
-                _GNW95_process_key(&keyboardData);
+                if (!keyBlocked) {
+                    _GNW95_process_key(&keyboardData);
+                }
             }
             break;
         }

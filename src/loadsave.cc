@@ -198,9 +198,11 @@ static const int gLoadSaveFrmIds[LOAD_SAVE_FRM_COUNT] = {
 
 // Control max number of save/load pages.
 // Page count is initialized from sfall config in _InitLoadSave():
-//   gExtraSaveSlots=true  → 10 pages (100 slots, extended mode)
-//   gExtraSaveSlots=false → 1 page  (10 slots,  FO1/FO2 default)
-constexpr int kMaxSaveTotalSlots = 100;
+//   gExtraSaveSlots=true  → 100 pages (1000 slots, extended, matches sfall 4.5)
+//   gExtraSaveSlots=false → 1 page   (10 slots,   FO1/FO2 default)
+// NOTE: Increasing beyond 1000 would require updating kMaxSaveTotalSlots and the
+// compile-time array allocations (_LSData, _LSstatus).
+constexpr int kMaxSaveTotalSlots = 1000;
 int saveLoadPages = 10;
 constexpr int slotsPerPage = 10;
 int saveLoadTotalSlots = saveLoadPages * slotsPerPage;
@@ -405,9 +407,9 @@ void _InitLoadSave()
     _patches = settings.system.master_patches_path.c_str();
 
     // Initialize save slot page count from sfall config.
-    // gExtraSaveSlots=true  → 10 pages (100 slots, extended mode)
-    // gExtraSaveSlots=false → 1 page  (10 slots,  FO1/FO2 default)
-    saveLoadPages = gExtraSaveSlots ? 10 : 1;
+    // gExtraSaveSlots=true  → 100 pages (1000 slots, extended, matches sfall 4.5)
+    // gExtraSaveSlots=false → 1 page   (10 slots,   FO1/FO2 default)
+    saveLoadPages = gExtraSaveSlots ? 100 : 1;
     saveLoadTotalSlots = saveLoadPages * slotsPerPage;
 
     loadSaveRememberSelectedSlot();
@@ -2108,6 +2110,8 @@ static int lsgLoadGameInSlot(int slot)
 
     _loadingGame = false;
 
+    // SFALL: Increment game load counter for game_loaded() tri-state (F-058).
+    sfall_gl_scr_increment_load_count();
     // SFALL: Start global scripts.
     sfall_gl_scr_exec_start_proc();
     // SFALL: Call "after start" event

@@ -148,21 +148,28 @@ int sfallGetPerkLevelMod();
 // Skill modifier globals (F-034). Set via opcodes 0x81C7/0x81C8.
 // Integration point: skill.cc skillGetValue() should add these
 // modifiers to the skill value calculation.
-// NOTE: sfallGetCritterSkillMod() returns the global modifier.
-// For per-critter overrides set via set_critter_skill_mod (0x81C7), use
-// sfallGetCritterSkillModForCritter(Object*) which checks the per-critter
-// map keyed by critter PID.
+//
+// set_critter_skill_mod(critter, skill, mod) — 0x81C7 (3 args)
+// set_base_skill_mod(skill, mod)             — 0x81C8 (2 args)
+//
+// sfallGetCritterSkillMod(skill) returns the global per-skill modifier.
+// sfallGetCritterSkillModForCritter(critter, skill) checks the per-critter
+//   map keyed by (pid, skill) pair. Returns 0 if no override exists.
+// sfallGetBaseSkillMod(skill) returns the base per-skill modifier set via
+//   set_base_skill_mod.
 // ============================================================
-int sfallGetCritterSkillMod();
-int sfallGetBaseSkillMod();
+int sfallGetCritterSkillMod(int skill);
+int sfallGetBaseSkillMod(int skill);
 
-// F-001: Per-critter skill mod accessor. Returns the per-critter max
-// skill override set via set_critter_skill_mod (0x81C7) for the given
-// critter. Returns 0 if no per-critter override exists. The caller should
-// then consult sfallGetCritterSkillMod() for the global fallback.
+// F-001: Per-critter skill mod accessor. Returns the per-critter skill
+// modifier set via set_critter_skill_mod (0x81C7) for the given critter
+// and skill. Returns 0 if no per-(pid,skill) override exists. The caller
+// should then consult sfallGetCritterSkillMod(skill) for the per-skill
+// fallback.
 // Integration point: skill.cc skillGetValue() should call this with the
-// 'who' parameter before falling back to sfallGetCritterSkillMod().
-int sfallGetCritterSkillModForCritter(Object* critter);
+// critter and skill parameters before falling back to
+// sfallGetCritterSkillMod(skill).
+int sfallGetCritterSkillModForCritter(Object* critter, int skill);
 
 // ============================================================
 // Pickpocket modifier accessors (F-021).

@@ -14,9 +14,10 @@ bool gFallout1Behavior = false;
 // Config globals parsed from ddraw.ini.
 //
 // Wiring status summary:
-//   gAllowUnsafeScripting   — WIRED: gates VOODOO write/call_offset opcode
-//                             registration at sfall_opcodes.cc; runtime-toggleable
-//                             via set_ini_setting at sfall_ini.cc.
+//   gAllowUnsafeScripting   — INTENTIONALLY UNWIRED: VOODOO write/call_offset opcodes
+//                             are registered unconditionally at sfall_opcodes.cc to
+//                             prevent script crashes; flag is parsed but never gates
+//                             any behavior.
 //   gEnableHeroAppearanceMod — WIRED: consumed by sfall_opcodes.cc hero
 //                               appearance opcode registration pipeline via
 //                               sfallConfigGetHeroAppearanceMod().

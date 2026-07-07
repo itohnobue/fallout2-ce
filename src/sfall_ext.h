@@ -22,6 +22,15 @@ bool sfallParseGlobalScriptPaths();
 // "scripts\\sfall\\gl*.int").  Call sfallParseGlobalScriptPaths() first.
 const std::vector<std::string>& sfallGetGlobalScriptPaths();
 
+// Parses HookScriptsPath from ddraw.ini [Misc].  Returns the path string
+// (defaults to "scripts" if the key is absent or empty).  This directory
+// is where hs_*.int hook script files are auto-discovered and loaded.
+// Call sfallParseHookScriptsPath() before sfall_gl_scr_load_hook_scripts().
+bool sfallParseHookScriptsPath();
+
+// Returns the parsed hook scripts path.  Call sfallParseHookScriptsPath() first.
+const std::string& sfallGetHookScriptsPath();
+
 } // namespace fallout
 
 #endif /* SFALL_EXT_H */

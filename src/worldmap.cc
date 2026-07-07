@@ -3693,6 +3693,23 @@ static int wmRndEncounterOccurred(int* mapToLoadPtr)
             wmBlinkRndEncounterIcon(special);
         }
 
+        // SFALL: Fire HOOK_ENCOUNTER so scripts can intercept forced encounters.
+        // Pass tableId/entryId = -1 since forced encounters bypass the random table.
+        switch (scriptHooks_Encounter(EncounterHookEventType::RandomEncounter, &wmForceEncounterMapId, false, -1, -1)) {
+        case EncounterHookResult::ContinueTravel: {
+            // Hook cancelled the forced encounter — reset state and continue traveling.
+            bool didFadeOut = (wmForceEncounterFlags & ENCOUNTER_FLAG_FADEOUT) != 0;
+            wmForceEncounterMapId = -1;
+            wmForceEncounterFlags = 0;
+            if (didFadeOut) {
+                wmFadeIn();
+            }
+            return 1;
+        }
+        default:
+            break;
+        }
+
         mapLoadById(wmForceEncounterMapId);
 
         wmForceEncounterMapId = -1;
@@ -6394,6 +6411,25 @@ int wmGetPartyWorldPos(int* xPtr, int* yPtr)
     }
 
     return 0;
+}
+
+// SFALL: Returns the built-in terrain type name at the party's current worldmap
+// position. Used by the zero-argument form of get_terrain_name() to retrieve the
+// terrain name without requiring explicit coordinates.
+//
+// NOTE: This returns the map-defined terrain type name (e.g. "Mountain", "Desert"),
+// NOT a script-set override. The sfall_metarules.cc mf_get_terrain_name handler
+// should check gTerrainNameOverrides first, then fall back to this function.
+const char* wmGetPartyTerrainName()
+{
+    if (wmGenData.currentSubtile == nullptr) {
+        wmPartyFindCurSubTile();
+    }
+    if (wmGenData.currentSubtile == nullptr) {
+        return "";
+    }
+    Terrain* terrain = &(wmTerrainTypeList[wmGenData.currentSubtile->terrain]);
+    return terrain->lookupName;
 }
 
 // Returns current town.

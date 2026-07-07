@@ -27,7 +27,7 @@ struct GlobalScript {
     int repeat = 0;
     int count = 0;
     int mode = 0;
-    bool once = true;
+    bool once = true; // Set to false after first game_loaded call for this script instance
 };
 
 struct GlobalScriptsState {
@@ -36,6 +36,24 @@ struct GlobalScriptsState {
 };
 
 static GlobalScriptsState* state = nullptr;
+
+// F-058: Game load counter for game_loaded() tri-state return.
+// Incremented each time a game is loaded (loadsave.cc). Used by
+// sfall_gl_scr_is_loaded() to distinguish:
+//   2 = first load (new game, gGameLoadCount == 0)
+//   1 = reload (subsequent load, gGameLoadCount > 0)
+//   0 = normal gameplay (once already consumed)
+static int gGameLoadCount = 0;
+
+void sfall_gl_scr_increment_load_count()
+{
+    gGameLoadCount++;
+}
+
+void sfall_gl_scr_reset_load_count()
+{
+    gGameLoadCount = 0;
+}
 
 bool sfall_gl_scr_init()
 {
@@ -123,8 +141,152 @@ void sfall_gl_scr_exit()
     }
 }
 
+// F-39: Hook name → HookType mapping for hs_*.int auto-registration.
+// Procedure names like "hs_tohit", "hs_combatdamage" map to the
+// corresponding HookType enum.  Strip the 3-char "hs_" prefix and
+// match the remainder against this table.
+static constexpr struct {
+    const char* name;
+    HookType hookType;
+} kHookScriptProcNames[] = {
+    { "tohit", HOOK_TOHIT },
+    { "afterhitroll", HOOK_AFTERHITROLL },
+    { "calcapcost", HOOK_CALCAPCOST },
+    { "deathanim2", HOOK_DEATHANIM2 },
+    { "combatdamage", HOOK_COMBATDAMAGE },
+    { "ondeath", HOOK_ONDEATH },
+    { "findtarget", HOOK_FINDTARGET },
+    { "useobjon", HOOK_USEOBJON },
+    { "barterprice", HOOK_BARTERPRICE },
+    { "movecost", HOOK_MOVECOST },
+    { "itemdamage", HOOK_ITEMDAMAGE },
+    { "ammocost", HOOK_AMMOCOST },
+    { "useobj", HOOK_USEOBJ },
+    { "keypress", HOOK_KEYPRESS },
+    { "mouseclick", HOOK_MOUSECLICK },
+    { "useskill", HOOK_USESKILL },
+    { "steal", HOOK_STEAL },
+    { "withinperception", HOOK_WITHINPERCEPTION },
+    { "inventorymove", HOOK_INVENTORYMOVE },
+    { "invenwield", HOOK_INVENWIELD },
+    { "adjustfid", HOOK_ADJUSTFID },
+    { "combatturn", HOOK_COMBATTURN },
+    { "cartravel", HOOK_CARTRAVEL },
+    { "setglobalvar", HOOK_SETGLOBALVAR },
+    { "resttimer", HOOK_RESTTIMER },
+    { "gamemodechange", HOOK_GAMEMODECHANGE },
+    { "useanimobj", HOOK_USEANIMOBJ },
+    { "explosivetimer", HOOK_EXPLOSIVETIMER },
+    { "descriptionobj", HOOK_DESCRIPTIONOBJ },
+    { "useskillon", HOOK_USESKILLON },
+    { "onexplosion", HOOK_ONEXPLOSION },
+    { "setlighting", HOOK_SETLIGHTING },
+    { "sneak", HOOK_SNEAK },
+    { "stdprocedure", HOOK_STDPROCEDURE },
+    { "stdprocedure_end", HOOK_STDPROCEDURE_END },
+    { "targetobject", HOOK_TARGETOBJECT },
+    { "encounter", HOOK_ENCOUNTER },
+    { "canuseweapon", HOOK_CANUSEWEAPON },
+    { "dialog", HOOK_DIALOG },
+    { "dialogreaction", HOOK_DIALOGREACTION },
+    { "statlevelup", HOOK_STATLEVELUP },
+    { "barter", HOOK_BARTER },
+    { "message", HOOK_MESSAGE },
+};
+
+// Look up a hook procedure name suffix (without "hs_" prefix) in the mapping
+// table and return the corresponding HookType, or -1 if not found.
+static int sfall_gl_scr_find_hook_type(const char* name)
+{
+    for (const auto& entry : kHookScriptProcNames) {
+        if (compat_stricmp(name, entry.name) == 0) {
+            return static_cast<int>(entry.hookType);
+        }
+    }
+    return -1;
+}
+
+// Load and auto-register hs_*.int hook scripts from the HookScriptsPath
+// directory.  Each procedure whose name starts with "hs_" is mapped to
+// the corresponding HookType and registered via scriptHooksRegister().
+// This mirrors sfall's automatic hook script loading behaviour.
+void sfall_gl_scr_load_hook_scripts()
+{
+    const std::string& hookPath = sfallGetHookScriptsPath();
+    std::string globPattern = hookPath + "\\hs_*.int";
+
+    char** files = nullptr;
+    int filesLength = fileNameListInit(globPattern.c_str(), &files);
+    if (filesLength == 0) {
+        return;
+    }
+
+    for (int index = 0; index < filesLength; index++) {
+        char path[COMPAT_MAX_PATH];
+        snprintf(path, sizeof(path), "%s\\%s", hookPath.c_str(), files[index]);
+
+        // Pre-check file existence to prevent programCreateByPath's internal
+        // programFatalError from longjmp-ing to the calling program's context.
+        File* test = fileOpen(path, "rb");
+        if (test == nullptr) {
+            continue;
+        }
+        fileClose(test);
+
+        Program* program = programCreateByPath(path);
+        if (program == nullptr) {
+            continue;
+        }
+
+        // Walk all procedures and auto-register those matching "hs_*".
+        int procCount = program->procedureCount();
+        unsigned char* procPtr = program->procedures + 4;
+        for (int pi = 0; pi < procCount; pi++) {
+            int nameOffset = stackReadInt32(procPtr, offsetof(Procedure, nameOffset));
+            const char* procName = programGetIdentifier(program, nameOffset);
+
+            // Hook procedures use the "hs_" prefix.
+            if (procName != nullptr && strlen(procName) > 3
+                && procName[0] == 'h' && procName[1] == 's' && procName[2] == '_') {
+                int hookType = sfall_gl_scr_find_hook_type(procName + 3);
+                if (hookType >= 0 && hookType < HOOK_COUNT) {
+                    scriptHooksRegister(program,
+                        static_cast<HookType>(hookType), pi, /*atEnd=*/false);
+                }
+            }
+
+            procPtr += sizeof(Procedure);
+        }
+
+        // Run the script once so its procedures are initialized.
+        programInterpret(program, -1);
+
+        // Store the program so it participates in cleanup
+        // (scriptHooksUnregisterProgram + programFree in
+        // sfall_gl_scr_remove_all).  Mark all procs as -1
+        // so the ticker/event loops skip hook-only scripts.
+        GlobalScript scr;
+        scr.program = program;
+        for (int a = 0; a < SCRIPT_PROC_COUNT; a++) {
+            scr.procs[a] = -1;
+        }
+        state->globalScripts.push_back(std::move(scr));
+    }
+
+    if (files != nullptr) {
+        fileNameListFree(&files, 0);
+    }
+}
+
 void sfall_gl_scr_exec_start_proc()
 {
+    // Load hs_*.int hook scripts before loading global scripts.
+    // Called on every new game / game load so hook scripts are
+    // auto-registered after gameReset clears them.  Scripts are
+    // idempotent — re-loading the same file simply re-registers
+    // the same procedures.
+    sfall_gl_scr_load_hook_scripts();
+
     for (auto& path : state->paths) {
         // Pre-check file existence to prevent programCreateByPath's internal
         // programFatalError from longjmp-ing to the calling program's context.
@@ -217,11 +379,11 @@ static void sfall_gl_scr_process_simple(int mode1, int mode2)
 
 void sfall_gl_scr_process_main()
 {
-    // Only fire mode 3 (always) from the main loop ticker.
-    // Mode 0 scripts fire exclusively from map_update triggers
-    // (sfall_gl_scr_exec_map_update_scripts); including them here
-    // causes double-execution for mode 0 scripts with repeat != 0.
-    sfall_gl_scr_process_simple(3, 3);
+    // Fire mode 0 (timed) and mode 3 (always) from the main loop ticker.
+    // Mode 0 scripts with repeat != 0 receive timer-based execution here
+    // in addition to event-driven map_update execution, matching sfall
+    // semantics where mode 0 = "timed".
+    sfall_gl_scr_process_simple(0, 3);
 }
 
 void sfall_gl_scr_process_input()
@@ -246,6 +408,13 @@ static GlobalScript* sfall_gl_scr_map_program_to_scr(Program* program)
 
 void sfall_gl_scr_set_repeat(Program* program, int frames)
 {
+    // Reject negative timer values.  A negative repeat would cause
+    // per-frame execution (scr.count >= scr.repeat immediately true),
+    // matching the validation pattern in sfall_gl_scr_set_type.
+    if (frames < 0) {
+        return;
+    }
+
     GlobalScript* scr = sfall_gl_scr_map_program_to_scr(program);
     if (scr != nullptr) {
         scr->repeat = frames;
@@ -264,22 +433,25 @@ void sfall_gl_scr_set_type(Program* program, int type)
     }
 }
 
-bool sfall_gl_scr_is_loaded(Program* program)
+// F-058: Returns tri-state for game_loaded() opcode:
+//   2 = first load (once=true AND gGameLoadCount==0 — fresh game start)
+//   1 = reload (once=true AND gGameLoadCount>0 — save game loaded)
+//   0 = otherwise (once already consumed, or not a global script)
+int sfall_gl_scr_is_loaded(Program* program)
 {
     GlobalScript* scr = sfall_gl_scr_map_program_to_scr(program);
     if (scr != nullptr) {
         if (scr->once) {
             scr->once = false;
-            return true;
+            return (gGameLoadCount == 0) ? 2 : 1;
         }
 
-        return false;
+        return 0;
     }
 
     // Not a global script.
-    // Per sfall 4.4.5 fix: game_loaded() should return false for non-global scripts.
-    // (The 4.2.9-4.4.4 bug was that it always returned 1 from normal scripts.)
-    return false;
+    // Per sfall 4.4.5 fix: game_loaded() should return 0 for non-global scripts.
+    return 0;
 }
 
 void sfall_gl_scr_update(int burstSize)

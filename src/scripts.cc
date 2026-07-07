@@ -1654,6 +1654,10 @@ int scriptsInit()
     configGetInt(&gContentConfig, CONTENT_CONFIG_START_SECTION, "month", &gStartMonth, 6);
     configGetInt(&gContentConfig, CONTENT_CONFIG_START_SECTION, "day", &gStartDay, 24);
 
+    // Two-source-of-truth: gFallout1Behavior is set from gContentConfig here.
+    // Runtime script changes via set_ini_setting("ddraw.ini|Misc|Fallout1Behavior", ...)
+    // are synced back to gContentConfig in sfall_ini.cc via configSetInt(), so both
+    // sources stay in sync across restarts.
     int fallout1Behavior;
     if (configGetInt(&gContentConfig, CONTENT_CONFIG_START_SECTION, "fallout1_behavior", &fallout1Behavior)) {
         gFallout1Behavior = fallout1Behavior != 0;

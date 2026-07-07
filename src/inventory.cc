@@ -3438,6 +3438,9 @@ int inventoryEquipFunc(Object* critter, Object* item, int handIndex, bool animat
         int fid = buildFid(OBJ_TYPE_CRITTER, critter->fid & 0xFFF, hitModeAnimationCode, weaponAnimationCode, critter->rotation + 1);
         if (!artExists(fid)) {
             debugPrint("\ninven_wield failed!  ERROR ERROR ERROR!");
+            if (animate && !isoIsDisabled()) {
+                reg_anim_end();
+            }
             return -1;
         }
 
@@ -3463,6 +3466,9 @@ int inventoryEquipFunc(Object* critter, Object* item, int handIndex, bool animat
                 } else {
                     Proto* proto;
                     if (protoGetProto(critter->pid, &proto) == -1) {
+                        if (animate && !isoIsDisabled()) {
+                            reg_anim_end();
+                        }
                         return -1;
                     }
 
@@ -4470,6 +4476,11 @@ int inventoryOpenLooting(Object* looter, Object* target)
                 int currentWeight = objectGetInventoryWeight(_inven_dude);
                 int newInventoryWeight = objectGetInventoryWeight(target);
                 if (newInventoryWeight <= maxCarryWeight - currentWeight) {
+                    // SFALL: Fire HOOK_INVENTORYMOVE for each item before bulk looting.
+                    for (int i = 0; i < target->data.inventory.length; i++) {
+                        scriptHooks_InventoryMove(HOOK_INVENTORYMOVE_CONTAINER, target->data.inventory.items[i].item, target);
+                    }
+
                     itemMoveAll(target, _inven_dude);
                     _display_target_inventory(_target_stack_offset[_target_curr_stack], -1, _target_pud, INVENTORY_WINDOW_TYPE_LOOT);
                     _display_inventory(_stack_offset[_curr_stack], -1, INVENTORY_WINDOW_TYPE_LOOT);
@@ -4909,6 +4920,14 @@ static int barterAttemptTransaction(Object* dude, Object* offerTable, Object* np
         }
     }
 
+    // SFALL: Fire HOOK_INVENTORYMOVE for each item before bulk transfer.
+    for (int i = 0; i < barterTable->data.inventory.length; i++) {
+        scriptHooks_InventoryMove(HOOK_INVENTORYMOVE_BARTER, barterTable->data.inventory.items[i].item, barterTable);
+    }
+    for (int i = 0; i < offerTable->data.inventory.length; i++) {
+        scriptHooks_InventoryMove(HOOK_INVENTORYMOVE_BARTER, offerTable->data.inventory.items[i].item, offerTable);
+    }
+
     itemMoveAll(barterTable, dude);
     itemMoveAll(offerTable, npc);
     return 0;
@@ -5014,6 +5033,10 @@ static void barterMoveToTable(Object* item, int quantity, int slotIndex, int ind
         if (immediate || mouseHitTestInWindow(gInventoryWindow, INVENTORY_TRADE_INNER_LEFT_SCROLLER_TRACKING_X, INVENTORY_TRADE_INNER_LEFT_SCROLLER_TRACKING_Y, INVENTORY_TRADE_INNER_LEFT_SCROLLER_TRACKING_MAX_X, INVENTORY_SLOT_HEIGHT * gInventorySlotsCount + INVENTORY_TRADE_INNER_LEFT_SCROLLER_TRACKING_Y)) {
             int quantityToMove = barterGetMovedQuantity(item, quantity, true, true, immediate);
             if (quantityToMove != -1) {
+                if (!scriptHooks_InventoryMove(HOOK_INVENTORYMOVE_BARTER, item, sourceTable)) {
+                    inventorySetCursor(INVENTORY_WINDOW_CURSOR_HAND);
+                    return;
+                }
                 if (itemMoveForce(_inven_dude, sourceTable, item, quantityToMove) == -1) {
                     inventoryDisplayMessage(26); // There is no space left for that item.
                 }
@@ -5023,6 +5046,10 @@ static void barterMoveToTable(Object* item, int quantity, int slotIndex, int ind
         if (immediate || mouseHitTestInWindow(gInventoryWindow, INVENTORY_TRADE_INNER_RIGHT_SCROLLER_TRACKING_X, INVENTORY_TRADE_INNER_RIGHT_SCROLLER_TRACKING_Y, INVENTORY_TRADE_INNER_RIGHT_SCROLLER_TRACKING_MAX_X, INVENTORY_SLOT_HEIGHT * gInventorySlotsCount + INVENTORY_TRADE_INNER_RIGHT_SCROLLER_TRACKING_Y)) {
             int quantityToMove = barterGetMovedQuantity(item, quantity, false, true, immediate);
             if (quantityToMove != -1) {
+                if (!scriptHooks_InventoryMove(HOOK_INVENTORYMOVE_BARTER, item, sourceTable)) {
+                    inventorySetCursor(INVENTORY_WINDOW_CURSOR_HAND);
+                    return;
+                }
                 if (itemMoveForce(npc, sourceTable, item, quantityToMove) == -1) {
                     inventoryDisplayMessage(25); // You cannot pick that up. You are at your maximum weight capacity.
                 }
@@ -5070,7 +5097,11 @@ static void barterMoveFromTable(Object* item, int quantity, int slotIndex, Objec
         if (immediate || mouseHitTestInWindow(gInventoryWindow, INVENTORY_TRADE_LEFT_SCROLLER_TRACKING_X, INVENTORY_TRADE_LEFT_SCROLLER_TRACKING_Y, INVENTORY_TRADE_LEFT_SCROLLER_TRACKING_MAX_X, INVENTORY_SLOT_HEIGHT * gInventorySlotsCount + INVENTORY_TRADE_LEFT_SCROLLER_TRACKING_Y)) {
             int quantityToMove = barterGetMovedQuantity(item, quantity, true, false, immediate);
             if (quantityToMove != -1) {
-                if (itemMoveForce(sourceTable, _inven_dude, item, quantityToMove) == -1) {
+                if (!scriptHooks_InventoryMove(HOOK_INVENTORYMOVE_BARTER, item, sourceTable)) {
+                    inventorySetCursor(INVENTORY_WINDOW_CURSOR_HAND);
+                    return;
+                }
+                if (itemMove(sourceTable, _inven_dude, item, quantityToMove) == -1) {
                     inventoryDisplayMessage(26); // There is no space left for that item.
                 }
             }
@@ -5079,7 +5110,11 @@ static void barterMoveFromTable(Object* item, int quantity, int slotIndex, Objec
         if (immediate || mouseHitTestInWindow(gInventoryWindow, INVENTORY_TRADE_RIGHT_SCROLLER_TRACKING_X, INVENTORY_TRADE_RIGHT_SCROLLER_TRACKING_Y, INVENTORY_TRADE_RIGHT_SCROLLER_TRACKING_MAX_X, INVENTORY_SLOT_HEIGHT * gInventorySlotsCount + INVENTORY_TRADE_RIGHT_SCROLLER_TRACKING_Y)) {
             int quantityToMove = barterGetMovedQuantity(item, quantity, false, false, immediate);
             if (quantityToMove != -1) {
-                if (itemMoveForce(sourceTable, npc, item, quantityToMove) == -1) {
+                if (!scriptHooks_InventoryMove(HOOK_INVENTORYMOVE_BARTER, item, sourceTable)) {
+                    inventorySetCursor(INVENTORY_WINDOW_CURSOR_HAND);
+                    return;
+                }
+                if (itemMove(sourceTable, npc, item, quantityToMove) == -1) {
                     inventoryDisplayMessage(25); // You cannot pick that up. You are at your maximum weight capacity.
                 }
             }
@@ -6187,6 +6222,10 @@ int inventoryUnwieldSlot(Object* critter, InvenSlot slot)
         }
 
         if (item != nullptr) {
+            if (!scriptHooks_InvenWield(critter, item, slot, 0, 0, false)) {
+                return -1;
+            }
+
             item->flags &= ~OBJECT_WORN;
             if (correctFidForRemovedItem(critter, item, OBJECT_WORN) != 0) {
                 if (forceAdd) {

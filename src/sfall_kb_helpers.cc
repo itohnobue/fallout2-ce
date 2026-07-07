@@ -369,10 +369,9 @@ int sfall_kb_handle_key_pressed(int sdlScanCode, bool pressed)
     if (!gGameLoaded) return SDL_SCANCODE_UNKNOWN;
 
     SDL_Scancode scanCode = static_cast<SDL_Scancode>(sdlScanCode);
-    ScriptHookCall hook(HOOK_KEYPRESS, 1, {
-                                              pressed ? 1 : 0, get_key_from_scancode(scanCode),
-                                              static_cast<int>(SDL_GetKeyFromScancode(scanCode))
-                                          });
+    // F-03: sfall convention — arg0 = DIK keyCode, arg1 = pressed state, arg2 = SDL keysym.
+    int dikCode = get_key_from_scancode(scanCode);
+    ScriptHookCall hook(HOOK_KEYPRESS, 1, { dikCode, pressed ? 1 : 0 });
     hook.call();
 
     if (hook.numReturnValues() <= 0) {
@@ -380,6 +379,13 @@ int sfall_kb_handle_key_pressed(int sdlScanCode, bool pressed)
     }
 
     int overrideDxCode = hook.getReturnValueAt(0).asInt();
+    // F-27: ret0=1 means "block/consume the key" per sfall spec.
+    // Return -1 as a sentinel to signal to the caller that the key
+    // should be fully consumed (no further processing).
+    // Other values remap to the corresponding DIK scancode as before.
+    if (overrideDxCode == 1) {
+        return -1;
+    }
     return get_scancode_from_key(overrideDxCode);
 }
 

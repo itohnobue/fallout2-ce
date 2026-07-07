@@ -380,6 +380,7 @@ void mf_set_ini_setting(OpcodeContext& ctx)
             gAllowUnsafeScripting = (intVal != 0);
         } else if (compat_stricmp(triplet, "ddraw.ini|Misc|Fallout1Behavior") == 0) {
             gFallout1Behavior = (intVal != 0);
+            configSetInt(&gContentConfig, CONTENT_CONFIG_START_SECTION, "fallout1_behavior", intVal != 0 ? 1 : 0);
         } else if (compat_stricmp(triplet, "ddraw.ini|Misc|ExtraSaveSlots") == 0) {
             gExtraSaveSlots = (intVal != 0);
         } else if (compat_stricmp(triplet, "ddraw.ini|Misc|EnableHeroAppearanceMod") == 0) {

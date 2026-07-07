@@ -169,10 +169,11 @@ int gameInitWithOptions(const char* windowTitle, bool isMapper, int font, int fl
 
     // Fallout1Behavior: override start date to FO1 (December 5, 2161).
     // The start year/month/day are read from content_config by scriptsInit().
+    // month is 0-indexed (11 = December), day is 0-indexed (4 = 5th of month).
     if (gFallout1Behavior) {
         configSetInt(&gContentConfig, CONTENT_CONFIG_START_SECTION, "year", 2161);
-        configSetInt(&gContentConfig, CONTENT_CONFIG_START_SECTION, "month", 12);
-        configSetInt(&gContentConfig, CONTENT_CONFIG_START_SECTION, "day", 5);
+        configSetInt(&gContentConfig, CONTENT_CONFIG_START_SECTION, "month", 11);
+        configSetInt(&gContentConfig, CONTENT_CONFIG_START_SECTION, "day", 4);
     }
 
     // Message list repository is considered a specialized file manager, so
@@ -290,12 +291,6 @@ int gameInitWithOptions(const char* windowTitle, bool isMapper, int font, int fl
         return -1;
     }
 
-    // Fallout1Behavior: override start time to FO1 (7:21 AM).
-    // FO2 default is 8:00 AM (302400 ticks); FO1 is 7:21 AM (264600 ticks).
-    if (gFallout1Behavior) {
-        gameTimeSetTime(264600);
-    }
-
     debugPrint(">scr_init\t");
 
     if (gameLoadGlobalVars() != 0) {
@@ -311,6 +306,13 @@ int gameInitWithOptions(const char* windowTitle, bool isMapper, int font, int fl
     }
 
     debugPrint(">scr_game_init\t");
+
+    // Fallout1Behavior: override start time to FO1 (7:21 AM).
+    // FO2 _scr_game_init default is 8:00 AM (302400 ticks); FO1 is 7:21 AM (264600 ticks).
+    // Must run AFTER _scr_game_init() to avoid being clobbered by its gameTimeSetTime(302400).
+    if (gFallout1Behavior) {
+        gameTimeSetTime(264600);
+    }
 
     if (wmWorldMap_init() != 0) {
         debugPrint("Failed on wmWorldMap_init\n");
@@ -418,6 +420,9 @@ int gameInitWithOptions(const char* windowTitle, bool isMapper, int font, int fl
     // so that user-configured paths (e.g. RPU's scripts/sfall/gl*.int)
     // are available when sfall_gl_scr_init() collects script paths.
     sfallParseGlobalScriptPaths();
+
+    // Parse HookScriptsPath from ddraw.ini for hs_*.int auto-discovery.
+    sfallParseHookScriptsPath();
 
     if (!sfall_gl_scr_init()) {
         debugPrint("Failed on sfall_gl_scr_init");

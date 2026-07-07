@@ -91,6 +91,12 @@ bool sfallGetDrugDataOverride(int drugIndex, int* outAddictionRate, int* outEffe
 // Implementation is in sfall_metarules.cc.
 bool sfallIsTraitAdded(int traitId);
 
+// Removes a previously-added trait from the player's gAddedTraits set.
+// Called by op_remove_trait to ensure trait stat/skill modifiers from
+// the add_trait metarule are properly cleaned up alongside engine slot
+// traits. Returns true if the trait was present and removed.
+bool sfallRemoveTraitAdded(int traitId);
+
 // Returns the stored unjam lock time override in game hours (-1 = disabled).
 int sfallGetUnjamLocksTime();
 
@@ -116,6 +122,13 @@ bool sfallIsExplosiveOverride(int pid);
 // Returns false if no override exists (out params unchanged).
 // Used by explosiveGetDamage() in item.cc.
 bool sfallGetExplosiveOverrideDamage(int pid, int* outMinDamage, int* outMaxDamage);
+
+// Returns true if the given PID has an explosive override with a non-zero
+// delay, populating outDelay with the override's delay value (in seconds).
+// Returns false if no override exists or delay is 0 (outDelay unchanged).
+// Used by _obj_use_explosive() in proto_instance.cc to consume the custom
+// timer delay stored via the item_make_explosive metarule.
+bool sfallGetExplosiveOverrideDelay(int pid, int* outDelay);
 
 } // namespace fallout
 

@@ -42,7 +42,7 @@ bool partyMemberSupportsBestWeapon(Object* object, int bestWeapon);
 bool partyMemberSupportsDistance(Object* object, int distanceMode);
 bool partyMemberSupportsAttackWho(Object* object, int attackWho);
 bool partyMemberSupportsChemUse(Object* object, int chemUse);
-int _partyMemberIncLevels();
+int _partyMemberIncLevels(int pid = -1);
 int partyMemberGetLevel(int pid);
 bool partyIsAnyoneCanBeHealedByRest();
 int partyGetMaxWoundToHealByRest();

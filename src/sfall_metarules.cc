@@ -316,7 +316,7 @@ const MetaruleInfo kMetarules[] = {
     { "add_extra_msg_file", mf_add_extra_msg_file, 1, 2, -1, { ARG_STRING, ARG_INT } },
     { "add_iface_tag", mf_add_iface_tag, 0, 0 },
     { "add_g_timer_event", mf_add_g_timer_event, 2, 2, -1, { ARG_INT, ARG_INT } },
-    { "add_trait", mf_add_trait, 1, 1, -1, { ARG_INT } },
+    { "add_trait", mf_add_trait, 1, 3, -1, { ARG_ANY, ARG_INT, ARG_INT } },
     { "remove_trait", mf_remove_trait, 1, 1, -1, { ARG_INT } },
     { "art_cache_clear", mf_art_cache_flush, 0, 0 },
     { "art_frame_data", mf_art_frame_data, 1, 3, 0, { ARG_INTSTR, ARG_INT, ARG_INT } },
@@ -657,6 +657,13 @@ void mf_create_win(OpcodeContext& ctx)
         flags);
     if (windowIndex == -1) {
         ctx.printError("%s() - couldn't create window.", ctx.name());
+    } else {
+        // F-30: Set program->windowId so drawing metarules (draw_image,
+        // draw_image_scaled, win_fill_color, interface_print) render to
+        // the created window instead of falling back to the HUD bar.
+        ctx.program()->windowId = windowIndex;
+        // F-31: Auto-select the created window (matches sfall behavior).
+        scriptWindowSelectId(windowIndex);
     }
     ctx.setReturn(windowIndex);
 }
@@ -730,12 +737,22 @@ void mf_get_cursor_mode(OpcodeContext& ctx)
 void mf_get_flags(OpcodeContext& ctx)
 {
     Object* object = ctx.arg(0).asObject();
+    if (object == nullptr) {
+        // F-40: Guard against null object (asObject() can return nullptr).
+        ctx.setReturn(0);
+        return;
+    }
     ctx.setReturn(object->flags);
 }
 
 void mf_get_outline(OpcodeContext& ctx)
 {
     Object* object = ctx.arg(0).asObject();
+    if (object == nullptr) {
+        // F-40: Guard against null object (asObject() can return nullptr).
+        ctx.setReturn(0);
+        return;
+    }
     ctx.setReturn(object->outline);
 }
 
@@ -937,6 +954,10 @@ static int drawSfallImageToScriptWindow(OpcodeContext& ctx, bool scaled)
 {
     int window = scriptWindowGetWindow(ctx.program()->windowId);
     if (window == -1) {
+        // I2-54: Fall back to the interface bar window (matches interface_print behavior).
+        window = gInterfaceBarWindow;
+    }
+    if (window == -1) {
         ctx.printError("%s() - no created or selected window.", ctx.name());
         return 0;
     }
@@ -1104,6 +1125,14 @@ void mf_metarule_exist(OpcodeContext& ctx)
         return;
     }
 
+    // F-023: Stub metarule blacklist. These metarules are registered to prevent
+    // script crashes but their handlers are permanent no-ops. metarule_exist
+    // must return 0 so scripts can detect absence and use alternatives.
+    if (compat_stricmp(metarule, "r_write") == 0) {
+        ctx.setReturn(0);
+        return;
+    }
+
     for (int index = 0; index < (int)kMetarulesCount; index++) {
         if (compat_stricmp(kMetarules[index].name, metarule) == 0) {
             ctx.setReturn(1);
@@ -1124,6 +1153,16 @@ void mf_metarule_exist(OpcodeContext& ctx)
 void mf_add_extra_msg_file(OpcodeContext& ctx)
 {
     const char* fileName = ctx.stringArg(0);
+
+    // I2-19: Reject paths containing ".." to prevent directory traversal
+    // out of the game/ directory. Matches the existing guard pattern in
+    // sfall_ini.cc:69 and platform_compat.cc:485.
+    if (compat_path_contains_traversal(fileName)) {
+        ctx.printError("%s() - path traversal characters are not allowed in file name.", ctx.name());
+        ctx.setReturn(-2);
+        return;
+    }
+
     if (ctx.numArgs() == 2) {
         // 2-arg form: explicit fileNumber — accept it but use auto-assignment.
         // The fileNumber argument is consumed for compatibility but does not
@@ -1156,6 +1195,52 @@ void mf_opcode_exists(OpcodeContext& ctx)
         ctx.setReturn(0);
         return;
     }
+
+    // F-023: Stub opcode blacklist. These opcodes are registered with
+    // non-null handlers (to prevent script crashes on "Undefined opcode"),
+    // but those handlers are permanent no-ops. opcode_exists must return 0
+    // so scripts can detect the absence of these features at runtime and
+    // fall back to alternative implementations.
+    const std::tuple<uint16_t, const char*> stubOpcodes[] = {
+        // VOODOO direct memory write — cannot work in CE (different address space)
+        {0x81CF, "write_byte"},
+        {0x81D0, "write_short"},
+        {0x81D1, "write_int"},
+        {0x821B, "write_string"},
+        // VOODOO call_offset — cannot call engine-internal functions at arbitrary addresses
+        {0x81D2, "call_offset_v0"},
+        {0x81D3, "call_offset_v1"},
+        {0x81D4, "call_offset_v2"},
+        {0x81D5, "call_offset_v3"},
+        {0x81D6, "call_offset_v4"},
+        {0x81D7, "call_offset_r0"},
+        {0x81D8, "call_offset_r1"},
+        {0x81D9, "call_offset_r2"},
+        {0x81DA, "call_offset_r3"},
+        {0x81DB, "call_offset_r4"},
+        // Viewport override — not supported (CE uses SDL2 hardware rendering)
+        {0x81A6, "get_viewport_x"},
+        {0x81A7, "get_viewport_y"},
+        {0x81A8, "set_viewport_x"},
+        {0x81A9, "set_viewport_y"},
+        // Palette override — not supported (CE uses SDL2 hardware rendering)
+        {0x81F2, "set_palette"},
+        // Shader mode — not applicable (CE uses SDL2 without custom shaders)
+        {0x81AE, "set_shader_mode"},
+        // Game pause/resume — not directly exposed to scripts
+        {0x8222, "stop_game"},
+        {0x8223, "resume_game"},
+        // Movie tracking — handled internally
+        {0x8240, "mark_movie_played"},
+    };
+
+    for (const auto& [stubOpcode, _name] : stubOpcodes) {
+        if (opcode == stubOpcode) {
+            ctx.setReturn(0);
+            return;
+        }
+    }
+
     auto opcodeHandler = gInterpreterOpcodeHandlers[opcodeIndex];
     int opcodeExists = opcodeHandler != nullptr ? 1 : 0;
     ctx.setReturn(opcodeExists);
@@ -1248,6 +1333,11 @@ void mf_set_cursor_mode(OpcodeContext& ctx)
 void mf_set_flags(OpcodeContext& ctx)
 {
     Object* object = ctx.arg(0).asObject();
+    if (object == nullptr) {
+        // F-40: Guard against null object (asObject() can return nullptr).
+        ctx.setReturn(-1);
+        return;
+    }
     int flags = ctx.arg(1).asInt();
 
     object->flags = flags;
@@ -1257,10 +1347,11 @@ void mf_set_iface_tag_text(OpcodeContext& ctx)
 {
     int boxTag = ctx.arg(0).asInt();
 
-    if (boxTag > 4 && boxTag <= interfaceTagGetMax()) {
+    // F-36: Remove boxTag > 4 restriction — sfall 4.5.1 allows tags 0-4.
+    if (boxTag >= 0 && boxTag <= interfaceTagGetMax()) {
         interfaceTagSetText(boxTag, ctx.stringArg(1), ctx.arg(2).asInt());
     } else {
-        ctx.printError("%s() - tag value must be in the range of 5 to %d.", ctx.name(), interfaceTagGetMax());
+        ctx.printError("%s() - tag value must be in the range of 0 to %d.", ctx.name(), interfaceTagGetMax());
         ctx.setReturn(-1);
     }
 }
@@ -1268,6 +1359,11 @@ void mf_set_iface_tag_text(OpcodeContext& ctx)
 void mf_set_outline(OpcodeContext& ctx)
 {
     Object* object = ctx.arg(0).asObject();
+    if (object == nullptr) {
+        // F-40: Guard against null object (asObject() can return nullptr).
+        ctx.setReturn(-1);
+        return;
+    }
     int outline = ctx.arg(1).asInt();
     object->outline = outline;
 }
@@ -1350,6 +1446,10 @@ void mf_hide_window(OpcodeContext& ctx)
 void mf_win_fill_color(OpcodeContext& ctx)
 {
     int window = scriptWindowGetWindow(ctx.program()->windowId);
+    if (window == -1) {
+        // I2-54: Fall back to the interface bar window (matches interface_print behavior).
+        window = gInterfaceBarWindow;
+    }
     if (window == -1) {
         ctx.printError("%s() - no created or selected window.", ctx.name());
         ctx.setReturn(-1);
@@ -2042,10 +2142,9 @@ void mf_set_terrain_name(OpcodeContext& ctx)
 void mf_get_terrain_name(OpcodeContext& ctx)
 {
     if (ctx.numArgs() < 2) {
-        // Zero-arg form (return terrain name at player position) is not yet
-        // implemented — returns empty string. CE does not expose the worldmap
-        // player position API from this module.
-        ctx.setReturn("");
+        // Zero-arg form: return the built-in terrain type name at the party's
+        // current worldmap position.
+        ctx.setReturn(wmGetPartyTerrainName());
         return;
     }
 
@@ -2729,6 +2828,16 @@ void mf_interface_overlay(OpcodeContext& ctx)
         break;
     }
     case 1: { // create
+        // I2-45: Destroy any previously active overlay window to prevent
+        // leaking window slots in the managed window pool (MAX_WINDOW_COUNT=50).
+        // Without this, repeated interface_overlay(...,1) calls would exhaust
+        // the pool without freeing old window handles.
+        if (gInterfaceOverlayState.active && gInterfaceOverlayState.windowHandle != -1) {
+            windowDestroy(gInterfaceOverlayState.windowHandle);
+            gInterfaceOverlayState.windowHandle = -1;
+            gInterfaceOverlayState.active = false;
+        }
+
         // Store overlay parameters for script-level tracking.
         gInterfaceOverlayState.winType = winType;
         gInterfaceOverlayState.arg1 = ctx.numArgs() > 2 ? ctx.arg(2).asInt() : 0;
@@ -2861,13 +2970,37 @@ void mf_add_g_timer_event(OpcodeContext& ctx)
 }
 
 // add_trait(int trait_type): adds a trait to the player by numeric ID.
+// add_trait(int traitType)                  — 1-arg form: adds trait to player.
+// add_trait(object critter, int traitType, int rank) — 3-arg form (sfall 4.x):
+//   adds trait to the given critter with specified rank.
+//
+// F-057: Extended to support 3-arg signature in addition to the existing
+// 1-arg form. The 3-arg form is registered with ARG_ANY for arg0 to allow
+// both integer (1-arg) and object (3-arg) dispatch through the same handler.
 // Stores the trait in gAddedTraits for persistence and script querying.
 // Full integration with the engine's trait display/perk system requires
 // deeper changes in character_editor.cc / perk.cc — this stores the data
 // so scripts can rely on the metarule for state tracking across save/load.
 void mf_add_trait(OpcodeContext& ctx)
 {
-    int traitType = ctx.arg(0).asInt();
+    int traitType;
+    int rank = 0;
+
+    if (ctx.numArgs() >= 2) {
+        // 3-arg form: add_trait(critter, traitType, rank)
+        // arg0 = critter object (stored for future per-critter support)
+        // arg1 = trait type ID
+        // arg2 = rank (optional, defaults to 0)
+        traitType = ctx.arg(1).asInt();
+        if (ctx.numArgs() >= 3) {
+            rank = ctx.arg(2).asInt();
+        }
+        (void)rank; // Parsed but not yet consumed — reserved for per-critter trait rank storage.
+    } else {
+        // 1-arg form: add_trait(traitType) — adds to player
+        traitType = ctx.arg(0).asInt();
+    }
+
     gAddedTraits.insert(traitType);
     ctx.setReturn(1);
 }
@@ -3589,6 +3722,23 @@ const char* sfallGetTownTitleOverride(int areaIndex)
     return nullptr;
 }
 
+// Public accessor: returns true if the given PID has an explosive override
+// with a non-zero delay value, populating outDelay (in seconds).
+// Returns false if no override exists or delay is 0 (outDelay unchanged).
+// Used by _obj_use_explosive() in proto_instance.cc.
+bool sfallGetExplosiveOverrideDelay(int pid, int* outDelay)
+{
+    auto it = gExplosiveOverrides.find(pid);
+    if (it == gExplosiveOverrides.end()) {
+        return false;
+    }
+    if (it->second.delay <= 0) {
+        return false;
+    }
+    if (outDelay) *outDelay = it->second.delay;
+    return true;
+}
+
 // Public accessor: returns the override car interface art FID,
 // or -1 if no override has been set via set_car_intface_art metarule.
 int sfallGetCarIntfaceArtFid()
@@ -3621,6 +3771,20 @@ bool sfallGetDrugDataOverride(int drugIndex, int* outAddictionRate, int* outEffe
 bool sfallIsTraitAdded(int traitId)
 {
     return gAddedTraits.find(traitId) != gAddedTraits.end();
+}
+
+// Public accessor: removes a trait from gAddedTraits. Called by
+// op_remove_trait to bridge the engine's selected-traits system with
+// the sfall add_trait metarule system. Returns true if the trait was
+// present and removed, false if it was not found.
+bool sfallRemoveTraitAdded(int traitId)
+{
+    auto it = gAddedTraits.find(traitId);
+    if (it != gAddedTraits.end()) {
+        gAddedTraits.erase(it);
+        return true;
+    }
+    return false;
 }
 
 // Public accessor: returns whether npc_engine_level_up is enabled.

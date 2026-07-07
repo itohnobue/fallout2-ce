@@ -836,15 +836,103 @@ bool scriptWindowDelete(const char* windowName)
 // 0x4B7AC4
 int scriptWindowResize(const char* windowName, int x, int y, int width, int height)
 {
-    // TODO: Incomplete.
-    return -1;
+    // F-32: Implement actual resize by finding the managed window, destroying
+    // the old underlying window, and recreating with new dimensions.
+    // The managed window index, name, buttons, regions, and scale are preserved.
+    int managedIndex = -1;
+    for (int index = 0; index < MANAGED_WINDOW_COUNT; index++) {
+        ManagedWindow* mw = &(gManagedWindows[index]);
+        if (mw->window != -1 && compat_stricmp(mw->name, windowName) == 0) {
+            managedIndex = index;
+            break;
+        }
+    }
+
+    if (managedIndex == -1) {
+        return -1;
+    }
+
+    ManagedWindow* managedWindow = &(gManagedWindows[managedIndex]);
+
+    // Capture the old window handle and flags before destroying.
+    int oldWindow = managedWindow->window;
+    int flags = managedWindow->field_50;
+    int color = managedWindow->field_4C;
+
+    // Destroy the old window (but retain the managed window slot).
+    windowDestroy(oldWindow);
+
+    // Invalidate stale button IDs: the old window's Button objects were
+    // destroyed along with the window, so any ManagedButton.btn references
+    // now point to freed buttons. Reset to -1 (no-button sentinel).
+    for (int i = 0; i < managedWindow->buttonsLength; i++) {
+        managedWindow->buttons[i].btn = -1;
+    }
+
+    // Recreate the window with new dimensions.
+    managedWindow->width = width;
+    managedWindow->height = height;
+    managedWindow->window = windowCreate(x, y, width, height, color, flags);
+
+    if (managedWindow->window == -1) {
+        // Creation failed — mark the slot as empty.
+        managedWindow->name[0] = '\0';
+        return -1;
+    }
+
+    return 0;
 }
 
 // 0x4B7E7C
 int scriptWindowScale(const char* windowName, int x, int y, int width, int height)
 {
-    // TODO: Incomplete.
-    return -1;
+    // F-32: Implement scale — identical to resize but also resets the scale
+    // factors to 1.0 since the window dimensions now match the logical size.
+    // This mirrors the resize implementation but with scale factor reset.
+    int managedIndex = -1;
+    for (int index = 0; index < MANAGED_WINDOW_COUNT; index++) {
+        ManagedWindow* mw = &(gManagedWindows[index]);
+        if (mw->window != -1 && compat_stricmp(mw->name, windowName) == 0) {
+            managedIndex = index;
+            break;
+        }
+    }
+
+    if (managedIndex == -1) {
+        return -1;
+    }
+
+    ManagedWindow* managedWindow = &(gManagedWindows[managedIndex]);
+
+    // Capture the old window handle and flags before destroying.
+    int oldWindow = managedWindow->window;
+    int flags = managedWindow->field_50;
+    int color = managedWindow->field_4C;
+
+    // Destroy the old window (but retain the managed window slot).
+    windowDestroy(oldWindow);
+
+    // Invalidate stale button IDs: the old window's Button objects were
+    // destroyed along with the window, so any ManagedButton.btn references
+    // now point to freed buttons. Reset to -1 (no-button sentinel).
+    for (int i = 0; i < managedWindow->buttonsLength; i++) {
+        managedWindow->buttons[i].btn = -1;
+    }
+
+    // Recreate the window with new dimensions and reset scale to 1.0.
+    managedWindow->width = width;
+    managedWindow->height = height;
+    managedWindow->scaleX = 1.0;
+    managedWindow->scaleY = 1.0;
+    managedWindow->window = windowCreate(x, y, width, height, color, flags);
+
+    if (managedWindow->window == -1) {
+        // Creation failed — mark the slot as empty.
+        managedWindow->name[0] = '\0';
+        return -1;
+    }
+
+    return 0;
 }
 
 // 0x4B7F3C
@@ -1060,9 +1148,16 @@ int _popWindow()
     ManagedWindow* managedWindow = &(gManagedWindows[windowIndex]);
 
     int result = scriptWindowSelect(managedWindow->name);
-    if (result != -1) {
+    if (result == -1) {
+        // I2-13: Window was deleted — the stale entry must still be removed
+        // from _winStack to prevent permanent push/pop stack corruption.
+        // Without this, the stale entry is retried forever, blocking all
+        // subsequent push/pop operations.
         _winTOS--;
+        gCurrentManagedWindowIndex = -1;
+        return -1;
     }
+    _winTOS--;
     return result;
 }
 

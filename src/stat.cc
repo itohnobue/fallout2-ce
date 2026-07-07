@@ -403,7 +403,10 @@ int critterGetStat(Object* critter, int stat)
             }
         }
 
-        value = std::clamp(value, gStatDescriptions[stat].minimumValue, gStatDescriptions[stat].maximumValue);
+        // Guard against UB when min > max (C++17 [alg.clamp] requires lo <= hi).
+        if (gStatDescriptions[stat].minimumValue <= gStatDescriptions[stat].maximumValue) {
+            value = std::clamp(value, gStatDescriptions[stat].minimumValue, gStatDescriptions[stat].maximumValue);
+        }
     } else {
         switch (stat) {
         case STAT_CURRENT_HIT_POINTS:
@@ -757,19 +760,29 @@ int statGetFrmId(int stat)
 
 // Sets the maximum value for a stat (used by set_stat_max et al. sfall opcodes).
 // Validates stat index; silently ignored on invalid stat.
+// If the new max is below the current min, raise min to match to prevent
+// std::clamp UB in critterGetStat (min > max violates C++17 [alg.clamp]).
 void statSetMaxValue(int stat, int value)
 {
     if (statIsValid(stat)) {
         gStatDescriptions[stat].maximumValue = value;
+        if (gStatDescriptions[stat].minimumValue > gStatDescriptions[stat].maximumValue) {
+            gStatDescriptions[stat].minimumValue = gStatDescriptions[stat].maximumValue;
+        }
     }
 }
 
 // Sets the minimum value for a stat (used by set_stat_min et al. sfall opcodes).
 // Validates stat index; silently ignored on invalid stat.
+// If the new min is above the current max, lower max to match to prevent
+// std::clamp UB in critterGetStat (min > max violates C++17 [alg.clamp]).
 void statSetMinValue(int stat, int value)
 {
     if (statIsValid(stat)) {
         gStatDescriptions[stat].minimumValue = value;
+        if (gStatDescriptions[stat].minimumValue > gStatDescriptions[stat].maximumValue) {
+            gStatDescriptions[stat].maximumValue = gStatDescriptions[stat].minimumValue;
+        }
     }
 }
 

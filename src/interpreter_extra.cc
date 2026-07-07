@@ -363,6 +363,11 @@ static const char* _dbg_error_strs[SCRIPT_ERROR_COUNT] = {
 // 0x518F00 last_color
 static int _last_color = 1;
 
+// sfall metarule3(999): enables/disables cooperative party combat.
+// When enabled, all party members automatically attack the player's
+// current target (party_control feature from sfall / Et Tu).
+static bool gPartyCooperativeCombat = false;
+
 // 0x518F04 strName
 static char* _strName = _aCritter;
 
@@ -2173,6 +2178,14 @@ static void opMetarule3(Program* program)
             loadsaveSetCurrentSlot(page, slot);
         }
         break;
+    case 999:
+        // F-05: metarule3(999, mode) — party_control.
+        // Enables/disables cooperative party combat. When enabled (mode != 0),
+        // party members follow the player's attack orders — they will
+        // automatically target whatever the player is attacking.
+        // mode=1 enables, mode=0 disables.
+        gPartyCooperativeCombat = (param1.integerValue != 0);
+        break;
     default:
         debugPrint("\nIntextra: Error: metarule3: unknown rule %d", rule);
         break;
@@ -2438,6 +2451,10 @@ static void opKillCritter(Program* program)
 
     if (_isLoadingGame()) {
         debugPrint("\nError: attempt to destroy critter in load/save-game: %s!", program->name);
+        // I2-26: terminate early to prevent critter destruction during
+        // save/load. Six of the other seven _isLoadingGame() guards in
+        // this file use return/goto out — this one was the sole fall-through.
+        return;
     }
 
     program->flags |= PROGRAM_FLAG_CHILD_CALL;
@@ -4726,6 +4743,13 @@ static void opUseObjectOnObject(Program* program)
     }
 
     Object* self = scriptGetSelfWithOverride(program);
+
+    // I2-25: scriptGetSelfWithOverride can return nullptr for ownerless
+    // non-spatial scripts. Guard to prevent null dereference on self->pid.
+    if (self == nullptr) {
+        scriptPredefinedError(program, "use_obj_on_obj", SCRIPT_ERROR_OBJECT_IS_NULL);
+        return;
+    }
 
     if (PID_TYPE(self->pid) == OBJ_TYPE_CRITTER) {
         _action_use_an_item_on_object(self, target, item);
