@@ -488,6 +488,16 @@ bool compat_path_contains_traversal(const char* path)
         return false;
     }
 
+    // Check for absolute paths — these can escape the intended directory scope
+    // even without ".." components (M-79).
+    if (path[0] == '/' || path[0] == '\\') {
+        return true; // absolute Unix path or Windows root-relative path
+    }
+    // Check for Windows drive letter: [A-Za-z]: (e.g. C:\..., D:\...)
+    if (((path[0] >= 'A' && path[0] <= 'Z') || (path[0] >= 'a' && path[0] <= 'z')) && path[1] == ':') {
+        return true; // absolute Windows drive path
+    }
+
     // Walk the path component by component.  If any component is exactly "..",
     // the path traverses above its intended root.
     const char* p = path;

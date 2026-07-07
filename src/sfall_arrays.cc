@@ -362,6 +362,9 @@ public:
 
     ProgramValue GetArray(const ProgramValue& key, Program* program) override
     {
+        if (!key.isInt()) {
+            return ProgramValue(0);
+        }
         auto index = key.asInt();
         if (index < 0 || index >= size()) {
             return ProgramValue(0);

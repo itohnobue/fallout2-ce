@@ -47,7 +47,7 @@ typedef enum {
     // Critter death.
     HOOK_ONDEATH = 6,
 
-    // AI target selection hook. Fires at combat_ai.cc:1679,1706,1760.
+    // AI target selection hook. Fires at combat_ai.cc:1836,1874,1934.
     HOOK_FINDTARGET = 7,
 
     // Using item on critter or scenery, before normal script proc.

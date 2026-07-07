@@ -1027,7 +1027,7 @@ void _GNW95_process_message()
             if (!keyboardIsDisabled()) {
                 bool keyBlocked = false;
                 if (!e.key.repeat && !syntheticSfallKey) {
-                    int keyOverride = sfall_kb_handle_key_pressed(keyboardData.key, keyboardData.down);
+                    int keyOverride = sfall_kb_handle_key_pressed(keyboardData.key, keyboardData.down, e.key.keysym.sym);
                     // F-27: -1 means the hook consumed/blocked the key — skip
                     // all default processing. SDL_SCANCODE_UNKNOWN means no
                     // override — use original key.  Any other value remaps

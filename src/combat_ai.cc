@@ -2087,7 +2087,7 @@ static Object* _ai_best_weapon(Object* attacker, Object* weapon1, Object* weapon
     attackInit(&attack, attacker, defender, HIT_MODE_RIGHT_WEAPON_PRIMARY, HIT_LOCATION_TORSO);
 
     int attackType1;
-    int distance;
+    int distance = 0;
     int attackType2;
     int avgDamage2 = 0;
 

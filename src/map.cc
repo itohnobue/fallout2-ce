@@ -104,7 +104,9 @@ static unsigned int gIsoWindowScrollTimestamp = 0;
 static bool gIsoEnabled = false;
 
 // 0x519558 mapEntranceElevation
-static int gEnteringElevation = 0;
+// Initialized to -1 to match the sentinel value checked at mapLoad() (line 938).
+// All three reset paths (isoInit, isoReset, _map_load cleanup) also set this to -1.
+static int gEnteringElevation = -1;
 
 // 0x51955C mapEntranceTileNum
 static int gEnteringTile = -1;

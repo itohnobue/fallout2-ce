@@ -271,7 +271,7 @@ int showDialogBox(const char* title, const char** body, int bodyLength, int x, i
 
         if (!messageListLoad(&messageList, path)) {
             fontSetCurrent(savedFont);
-            // FIXME: Window is not removed.
+            windowDestroy(win);
             return -1;
         }
 

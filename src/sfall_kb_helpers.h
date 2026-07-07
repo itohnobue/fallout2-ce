@@ -1,6 +1,8 @@
 #ifndef FALLOUT_SFALL_KB_HELPERS_H_
 #define FALLOUT_SFALL_KB_HELPERS_H_
 
+#include <SDL.h>
+
 namespace fallout {
 
 // Returns `true` if given key is pressed.
@@ -15,7 +17,7 @@ bool sfall_kb_consume_synthetic_key_event(int sdlScanCode, bool pressed);
 // Clears queued synthetic `tap_key` markers after SDL key events are discarded.
 void sfall_kb_clear_synthetic_key_events();
 
-int sfall_kb_handle_key_pressed(int sdlScanCode, bool pressed);
+int sfall_kb_handle_key_pressed(int sdlScanCode, bool pressed, SDL_Keycode keysym);
 
 } // namespace fallout
 

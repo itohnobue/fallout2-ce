@@ -1739,7 +1739,7 @@ int objectSetLight(Object* obj, int lightDistance, int lightIntensity, Rect* rec
 
     int rc = _obj_turn_off_light(obj, rect);
     if (lightIntensity > 0) {
-        obj->lightDistance = std::min(lightDistance, 8);
+        obj->lightDistance = std::min(std::max(lightDistance, 0), 8);
         obj->lightIntensity = lightIntensity;
 
         // HOOK_SETLIGHTING: allow scripts to observe/override per-object lighting changes
@@ -4047,6 +4047,10 @@ static int _obj_adjust_light(Object* obj, int a2, Rect* rect)
         obj->lightDistance = 8;
     }
 
+    if (obj->lightDistance < 0) {
+        obj->lightDistance = 0;
+    }
+
     if (obj->lightIntensity > 65536) {
         obj->lightIntensity = 65536;
     }
@@ -5237,6 +5241,14 @@ Object* objectTypedFindById(int id, int type)
 
 bool isExitGridAt(int tile, int elevation)
 {
+    // Validate tile against hex grid bounds before indexing
+    // gObjectListHeadByTile. All existing callers derive tile from
+    // tileGetTileInDirection which has edge detection, but this guard
+    // provides defense-in-depth against corrupted object data.
+    if (!hexGridTileIsValid(tile)) {
+        return false;
+    }
+
     ObjectListNode* objectListNode = gObjectListHeadByTile[tile];
     while (objectListNode != nullptr) {
         Object* obj = objectListNode->obj;

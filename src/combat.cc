@@ -60,19 +60,8 @@ int gXPTableMode = 0;
 int gWorldMapFPSPatch = 0;
 int gDisableSpecialMapIDs = 0;
 
-// SFALL: Extern declarations for sfall knockback globals (defined in sfall_opcodes.cc).
-// Wired into combat knockback calculation (F-004).
-extern int sfallWeaponKnockbackType;
-extern float sfallWeaponKnockbackValue;
-extern int sfallTargetKnockbackType;
-extern float sfallTargetKnockbackValue;
-extern int sfallAttackerKnockbackType;
-extern float sfallAttackerKnockbackValue;
-
-// SFALL: Extern declarations for sfall hit chance globals (defined in sfall_opcodes.cc).
-// Wired into attackDetermineToHit() (F-005).
-extern int sfallHitChanceMod;
-extern int sfallHitChanceMax;
+// SFALL: sfall knockback and hit chance globals are declared in sfall_opcodes.h
+// (included above) — no local extern declarations needed.
 
 // SFALL: block_combat (0x824A) — global flag set by sfall opcode handler.
 // Non-zero = combat blocked (no new combat initiations). Default 0.
@@ -1993,8 +1982,9 @@ static int _combat_exps;
 // 0x56D39C combat_free_move
 int _combat_free_move;
 
-// 0x56D3A0 shoot_ctd
-static Attack _shoot_ctd;
+// 0x56D3A0 shoot_ctd — SFALL: Fix M-29. Was a file-level static; moved to
+// stack-local in _shoot_along_path to prevent reentrancy corruption via
+// COMBATDAMAGE hook callbacks (same pattern as I2-28 fix for _explosion_ctd).
 
 static CriticalHitDescription gBaseCriticalHitTables[SFALL_KILL_TYPE_COUNT][HIT_LOCATION_COUNT][CRTICIAL_EFFECT_COUNT];
 static CriticalHitDescription gBasePlayerCriticalHitTable[HIT_LOCATION_COUNT][CRTICIAL_EFFECT_COUNT];
@@ -2042,6 +2032,7 @@ int combatInit()
     max_action_points = critterGetStat(gDude, STAT_MAXIMUM_ACTION_POINTS);
 
     _combat_free_move = 0;
+    gBlockCombat = 0;
     _combat_ending_guy = nullptr;
     _combat_end_due_to_load = 0;
 
@@ -2105,6 +2096,7 @@ void combatReset()
     max_action_points = critterGetStat(gDude, STAT_MAXIMUM_ACTION_POINTS);
 
     _combat_free_move = 0;
+    gBlockCombat = 0;
     _combat_ending_guy = nullptr;
 
     gDude->data.critter.combat.ap = max_action_points;
@@ -3768,6 +3760,13 @@ static int _shoot_along_path(Attack* attack, int endTile, int rounds, int anim)
     int roundsHitMainTarget = 0;
     int currentTile = attack->attacker->tile;
 
+    // SFALL: Fix M-29 — shoot_ctd was a file-level static; now stack-local
+    // to prevent reentrancy corruption via COMBATDAMAGE hook callbacks.
+    // Values are read AFTER attackComputeDamage returns, so nested calls
+    // via hook scripts would overwrite a static's results (same pattern as
+    // the I2-28 fix for _explosion_ctd in _compute_explosion_on_extras).
+    Attack shoot_ctd;
+
     Object* critter = attack->attacker;
     while (critter != nullptr) {
         if ((remainingRounds <= 0 && anim != ANIM_FIRE_CONTINUOUS) || currentTile == endTile || attack->extrasLength >= 6) {
@@ -3805,20 +3804,20 @@ static int _shoot_along_path(Attack* attack, int endTile, int rounds, int anim)
 
                     attack->extrasHitLocation[index] = HIT_LOCATION_TORSO;
                     attack->extras[index] = critter;
-                    attackInit(&_shoot_ctd, attack->attacker, critter, attack->hitMode, HIT_LOCATION_TORSO);
-                    _shoot_ctd.attackerFlags |= DAM_HIT;
-                    attackComputeDamage(&_shoot_ctd, roundsHit, 2);
+                    attackInit(&shoot_ctd, attack->attacker, critter, attack->hitMode, HIT_LOCATION_TORSO);
+                    shoot_ctd.attackerFlags |= DAM_HIT;
+                    attackComputeDamage(&shoot_ctd, roundsHit, 2);
 
                     if (index == attack->extrasLength) {
-                        attack->extrasDamage[index] = _shoot_ctd.defenderDamage;
-                        attack->extrasFlags[index] = _shoot_ctd.defenderFlags;
-                        attack->extrasKnockback[index] = _shoot_ctd.defenderKnockback;
+                        attack->extrasDamage[index] = shoot_ctd.defenderDamage;
+                        attack->extrasFlags[index] = shoot_ctd.defenderFlags;
+                        attack->extrasKnockback[index] = shoot_ctd.defenderKnockback;
                         attack->extrasLength++;
                     } else {
                         if (anim == ANIM_FIRE_BURST) {
-                            attack->extrasDamage[index] += _shoot_ctd.defenderDamage;
-                            attack->extrasFlags[index] |= _shoot_ctd.defenderFlags;
-                            attack->extrasKnockback[index] += _shoot_ctd.defenderKnockback;
+                            attack->extrasDamage[index] += shoot_ctd.defenderDamage;
+                            attack->extrasFlags[index] |= shoot_ctd.defenderFlags;
+                            attack->extrasKnockback[index] += shoot_ctd.defenderKnockback;
                         }
                     }
                 }
@@ -4739,11 +4738,15 @@ static int attackDetermineToHit(Object* attacker, int tile, Object* defender, in
 
     // Apply defender-side per-critter hit chance modifier (set_critter_hit_chance_mod on defender).
     // Positive mod on the defender makes them harder to hit (subtract from toHit).
+    // If the defender has a stricter max than the current hitChanceMax, clamp to it.
     {
         int defenderMod = 0;
-        int ignoredMax = 0;
-        if (sfallGetCritterHitChanceMod(defender, defenderMod, ignoredMax)) {
+        int defenderMax = 0;
+        if (sfallGetCritterHitChanceMod(defender, defenderMod, defenderMax)) {
             toHit -= defenderMod;
+            if (defenderMax < hitChanceMax) {
+                hitChanceMax = defenderMax;
+            }
         }
     }
 
@@ -4760,6 +4763,16 @@ static int attackDetermineToHit(Object* attacker, int tile, Object* defender, in
 
     toHit = scriptHooks_ToHit(attacker, defender, tile, hitMode, hitLocation, toHit, toHitUncapped, useDistance);
     return toHit;
+}
+
+// SFALL: Fix M-08 — safe float-to-int conversion for knockback values.
+// static_cast<int>(float) is UB for values outside [INT_MIN, INT_MAX].
+// Clamp extreme values before casting. In practice knockback values are
+// small (0-20 hexes), but script-controlled float globals can hold any value.
+static inline int floatToIntSafe(float value) {
+    if (value > static_cast<float>(INT_MAX)) return INT_MAX;
+    if (value < static_cast<float>(INT_MIN)) return INT_MIN;
+    return static_cast<int>(value);
 }
 
 // 0x4247B8
@@ -4938,21 +4951,21 @@ static void attackComputeDamage(Attack* attack, int numRounds, int baseDamageMul
             // set_attacker_knockback (0x8197). Type 0 = none, 1 = absolute,
             // 2 = additive. Defaults are 0 (no modification).
             if (sfallWeaponKnockbackType == 1) {
-                *knockbackDistancePtr = static_cast<int>(sfallWeaponKnockbackValue);
+                *knockbackDistancePtr = floatToIntSafe(sfallWeaponKnockbackValue);
             } else if (sfallWeaponKnockbackType == 2) {
-                *knockbackDistancePtr += static_cast<int>(sfallWeaponKnockbackValue);
+                *knockbackDistancePtr += floatToIntSafe(sfallWeaponKnockbackValue);
             }
 
             if (sfallTargetKnockbackType == 1) {
-                *knockbackDistancePtr = static_cast<int>(sfallTargetKnockbackValue);
+                *knockbackDistancePtr = floatToIntSafe(sfallTargetKnockbackValue);
             } else if (sfallTargetKnockbackType == 2) {
-                *knockbackDistancePtr += static_cast<int>(sfallTargetKnockbackValue);
+                *knockbackDistancePtr += floatToIntSafe(sfallTargetKnockbackValue);
             }
 
             if (sfallAttackerKnockbackType == 1) {
-                *knockbackDistancePtr = static_cast<int>(sfallAttackerKnockbackValue);
+                *knockbackDistancePtr = floatToIntSafe(sfallAttackerKnockbackValue);
             } else if (sfallAttackerKnockbackType == 2) {
-                *knockbackDistancePtr += static_cast<int>(sfallAttackerKnockbackValue);
+                *knockbackDistancePtr += floatToIntSafe(sfallAttackerKnockbackValue);
             }
 
             // Knockback distance should never be negative.

@@ -123,6 +123,10 @@ typedef enum LoadSaveScrollDirection {
 
 typedef struct LoadSaveSlotData {
     char signature[24];
+    // NOTE: These field names are swapped relative to their semantics:
+    // versionMinor stores VERSION_MAJOR, versionMajor stores VERSION_MINOR.
+    // Both save (lsgSaveHeaderInSlot) and load (lsgLoadHeaderInSlot) use
+    // the identical mapping, so the on-disk format is consistent.
     short versionMinor;
     short versionMajor;
     // TODO: The type is probably char, but it's read with the same function as
@@ -442,6 +446,12 @@ int lsgSaveGame(int mode)
 
     _ls_error_code = 0;
     _patches = settings.system.master_patches_path.c_str();
+    // NOTE: compat_mkdir calls construct paths with _patches prefix
+    // (e.g. "_patches\SAVEGAME\SLOT01"), while fileOpen calls use
+    // relative paths without the prefix (e.g. "SAVEGAME\SLOT01\").
+    // Both resolve to the same location: fileOpen resolves relative
+    // paths through the directory xbase registered from _patches
+    // (see xfile.cc directory xbase resolution loop).
 
     // SFALL: skip slot selection if auto quicksave is enabled
     if (autoQuickSaveSlots) {
@@ -1900,7 +1910,9 @@ static int lsgPerformSaveGame()
     snprintf(_gmpath, sizeof(_gmpath), "%s\\%s\\%s%.2d", _patches, "SAVEGAME", "SLOT", _slot_cursor + 1);
     compat_mkdir(_gmpath);
 
-    strcat(_gmpath, "\\" PROTO_DIR_NAME);
+    // snprintf above may truncate if _patches path is extremely long;
+    // use snprintf with remaining buffer space instead of unbounded strcat.
+    snprintf(_gmpath + strlen(_gmpath), sizeof(_gmpath) - strlen(_gmpath), "\\" PROTO_DIR_NAME);
     compat_mkdir(_gmpath);
 
     char* protoBasePath = _gmpath + strlen(_gmpath);
@@ -3360,8 +3372,9 @@ static int _EraseSave()
     debugPrint("\nLOADSAVE: Erasing save(bad) slot...\n");
 
     snprintf(_gmpath, sizeof(_gmpath), "%s\\%s\\%s%.2d\\", _patches, "SAVEGAME", "SLOT", _slot_cursor + 1);
-    strcpy(_str0, _gmpath);
-    strcat(_str0, "SAVE.DAT");
+    // Construct full path with snprintf to avoid potential overflow from
+    // strcat after truncated snprintf (H-17).
+    snprintf(_str0, sizeof(_str0), "%sSAVE.DAT", _gmpath);
     compat_remove(_str0);
 
     snprintf(_gmpath, sizeof(_gmpath), "%s\\%s%.2d\\", "SAVEGAME", "SLOT", _slot_cursor + 1);
@@ -3375,8 +3388,7 @@ static int _EraseSave()
 
     snprintf(_gmpath, sizeof(_gmpath), "%s\\%s\\%s%.2d\\", _patches, "SAVEGAME", "SLOT", _slot_cursor + 1);
     for (int index = fileListLength - 1; index >= 0; index--) {
-        strcpy(_str0, _gmpath);
-        strcat(_str0, fileList[index]);
+        snprintf(_str0, sizeof(_str0), "%s%s", _gmpath, fileList[index]);
         compat_remove(_str0);
     }
 
@@ -3385,8 +3397,7 @@ static int _EraseSave()
     snprintf(_gmpath, sizeof(_gmpath), "%s\\%s\\%s%.2d\\", _patches, "SAVEGAME", "SLOT", _slot_cursor + 1);
 
     char* v1 = _strmfe(_str1, "AUTOMAP.DB", "SAV");
-    strcpy(_str0, _gmpath);
-    strcat(_str0, v1);
+    snprintf(_str0, sizeof(_str0), "%s%s", _gmpath, v1);
 
     compat_remove(_str0);
 

@@ -1560,32 +1560,44 @@ Wire-in points (in endgame.cc or game.cc):
     notifies scripts that the game is leaving slideshow mode. Passes exit=0,
     previous=GameMode::getCurrentGameMode().
 
-These are scaffolding — until wired in at the above call sites, HOOK_GAMEMODECHANGE
-will not fire for slideshow transitions. Scripts that listen for
-HOOK_GAMEMODECHANGE to detect slideshow start/end will not receive callbacks
-during the endgame sequence.
+These are wired in at endgamePlaySlideshow() and endgamePlayMovie()
+in endgame.cc. The endgame caller has its own reentrancy guard
+(gEndgameInProgress), and MaxHookCallDepth (8) provides a secondary
+safety net. The _gameModeChangeInProgress guard in both functions
+below adds defense-in-depth protection against recursive mode-change
+hook dispatches during the slideshow.
 
-When wired, the hook fires with:
+When the hook fires:
   arg0 - 0 (not exiting the game; normal mode transition)
   arg1 - the game mode before entering/leaving the slideshow
          (typically 0 or kWorldmap at start; 0 at end)
 */
 void scriptHooks_SlideshowStart()
 {
+    if (ScriptHookCall::_gameModeChangeInProgress) {
+        return;
+    }
     if (scriptHooks[HOOK_GAMEMODECHANGE].empty()) {
         return;
     }
 
+    ScriptHookCall::_gameModeChangeInProgress = true;
     ScriptHookCall(HOOK_GAMEMODECHANGE, 0, { 0, GameMode::getCurrentGameMode() }).call();
+    ScriptHookCall::_gameModeChangeInProgress = false;
 }
 
 void scriptHooks_SlideshowEnd()
 {
+    if (ScriptHookCall::_gameModeChangeInProgress) {
+        return;
+    }
     if (scriptHooks[HOOK_GAMEMODECHANGE].empty()) {
         return;
     }
 
+    ScriptHookCall::_gameModeChangeInProgress = true;
     ScriptHookCall(HOOK_GAMEMODECHANGE, 0, { 0, GameMode::getCurrentGameMode() }).call();
+    ScriptHookCall::_gameModeChangeInProgress = false;
 }
 
 /*

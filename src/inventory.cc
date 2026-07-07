@@ -4474,14 +4474,27 @@ int inventoryOpenLooting(Object* looter, Object* target)
                 }
                 int maxCarryWeight = critterGetStat(_inven_dude, STAT_CARRY_WEIGHT);
                 int currentWeight = objectGetInventoryWeight(_inven_dude);
-                int newInventoryWeight = objectGetInventoryWeight(target);
-                if (newInventoryWeight <= maxCarryWeight - currentWeight) {
-                    // SFALL: Fire HOOK_INVENTORYMOVE for each item before bulk looting.
-                    for (int i = 0; i < target->data.inventory.length; i++) {
-                        scriptHooks_InventoryMove(HOOK_INVENTORYMOVE_CONTAINER, target->data.inventory.items[i].item, target);
+                // SFALL: Fix F-05 — Compute filtered weight using only items
+                // that pass the HOOK_INVENTORYMOVE_CONTAINER hook. The
+                // original pre-check used objectGetInventoryWeight(target)
+                // which sums ALL items, causing false-positive "too heavy"
+                // errors when hooks block heavy items. Items that pass the
+                // hook are cached to avoid calling it twice (hook scripts
+                // may have stateful side effects).
+                std::vector<Object*> passedItems;
+                int filteredWeight = 0;
+                for (int i = 0; i < target->data.inventory.length; i++) {
+                    Object* item = target->data.inventory.items[i].item;
+                    if (scriptHooks_InventoryMove(HOOK_INVENTORYMOVE_CONTAINER, item, target)) {
+                        passedItems.push_back(item);
+                        filteredWeight += itemGetWeight(item);
                     }
-
-                    itemMoveAll(target, _inven_dude);
+                }
+                if (filteredWeight <= maxCarryWeight - currentWeight) {
+                    // Transfer only the hook-passing items.
+                    for (size_t i = 0; i < passedItems.size(); i++) {
+                        itemMove(target, _inven_dude, passedItems[i], 1);
+                    }
                     _display_target_inventory(_target_stack_offset[_target_curr_stack], -1, _target_pud, INVENTORY_WINDOW_TYPE_LOOT);
                     _display_inventory(_stack_offset[_curr_stack], -1, INVENTORY_WINDOW_TYPE_LOOT);
                 } else {
@@ -4920,16 +4933,21 @@ static int barterAttemptTransaction(Object* dude, Object* offerTable, Object* np
         }
     }
 
-    // SFALL: Fire HOOK_INVENTORYMOVE for each item before bulk transfer.
-    for (int i = 0; i < barterTable->data.inventory.length; i++) {
-        scriptHooks_InventoryMove(HOOK_INVENTORYMOVE_BARTER, barterTable->data.inventory.items[i].item, barterTable);
+    // SFALL: Move each item individually, honoring HOOK_INVENTORYMOVE
+    // return value. Items blocked by the hook (false return) stay in
+    // their respective tables.
+    for (int i = barterTable->data.inventory.length - 1; i >= 0; i--) {
+        Object* item = barterTable->data.inventory.items[i].item;
+        if (scriptHooks_InventoryMove(HOOK_INVENTORYMOVE_BARTER, item, barterTable)) {
+            itemMove(barterTable, dude, item, 1);
+        }
     }
-    for (int i = 0; i < offerTable->data.inventory.length; i++) {
-        scriptHooks_InventoryMove(HOOK_INVENTORYMOVE_BARTER, offerTable->data.inventory.items[i].item, offerTable);
+    for (int i = offerTable->data.inventory.length - 1; i >= 0; i--) {
+        Object* item = offerTable->data.inventory.items[i].item;
+        if (scriptHooks_InventoryMove(HOOK_INVENTORYMOVE_BARTER, item, offerTable)) {
+            itemMove(offerTable, npc, item, 1);
+        }
     }
-
-    itemMoveAll(barterTable, dude);
-    itemMoveAll(offerTable, npc);
     return 0;
 }
 

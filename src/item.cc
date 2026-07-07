@@ -3649,21 +3649,21 @@ bool explosiveSetDamage(int pid, int minDamage, int maxDamage)
 bool explosiveGetDamage(int pid, int* minDamagePtr, int* maxDamagePtr)
 {
     if (pid == PROTO_ID_DYNAMITE_I) {
-        *minDamagePtr = gDynamiteMinDamage;
-        *maxDamagePtr = gDynamiteMaxDamage;
+        if (minDamagePtr) *minDamagePtr = gDynamiteMinDamage;
+        if (maxDamagePtr) *maxDamagePtr = gDynamiteMaxDamage;
         return true;
     }
 
     if (pid == PROTO_ID_PLASTIC_EXPLOSIVES_I) {
-        *minDamagePtr = gPlasticExplosiveMinDamage;
-        *maxDamagePtr = gPlasticExplosiveMaxDamage;
+        if (minDamagePtr) *minDamagePtr = gPlasticExplosiveMinDamage;
+        if (maxDamagePtr) *maxDamagePtr = gPlasticExplosiveMaxDamage;
         return true;
     }
 
     for (const auto& explosive : gExplosives) {
         if (explosive.pid == pid) {
-            *minDamagePtr = explosive.minDamage;
-            *maxDamagePtr = explosive.maxDamage;
+            if (minDamagePtr) *minDamagePtr = explosive.minDamage;
+            if (maxDamagePtr) *maxDamagePtr = explosive.maxDamage;
             return true;
         }
     }

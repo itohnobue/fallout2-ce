@@ -773,7 +773,7 @@ static int gCharacterEditorTaggedSkillCount;
 static int gCharacterEditorTempTaggedSkills[NUM_TAGGED_SKILLS];
 
 // 0x570A28 free_perk_back
-static char gCharacterEditorHasFreePerkBackup;
+static unsigned char gCharacterEditorHasFreePerkBackup;
 
 // 0x570A29 free_perk
 static unsigned char gCharacterEditorHasFreePerk;
@@ -5743,6 +5743,7 @@ void characterEditorReset()
 {
     gCharacterEditorRemainingCharacterPoints = 5;
     gCharacterEditorLastLevel = 1;
+    gCharacterEditorHasFreePerk = 0;
 }
 
 int characterEditorGetWindow()

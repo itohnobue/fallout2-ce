@@ -505,6 +505,13 @@ float wmGetScriptWorldMapMulti()
 }
 
 // CE/SFALL: control healing rate during worldmap travel (hours per tick, -1 = use default).
+//
+// IMPORTANT: These override statics in worldmap.cc are the RUNTIME CONSUMER layer.
+// The AUTHORITATIVE source of truth is in sfall_metarules.cc (gWorldmapHealTime,
+// gRestHealTime, gRestMode, gMapEnterX/Y/Elevation) which handles persistence
+// (save/load). All setter paths update both copies atomically; the load path
+// replays sfall values into these worldmap copies. Do NOT add save/load logic
+// here — that responsibility belongs to sfall_metarules.cc.
 static int gWorldmapHealTime = -1;
 void wmSetWorldmapHealTime(int hours)
 {
@@ -1210,6 +1217,19 @@ int wmWorldMap_reset()
 
     // CE: Fix Pathfinder perk.
     gGameTimeIncRemainder = 0.0;
+
+    // CE/SFALL: Reset scriptable override state so that stale values
+    // from a previous session do not persist into a new game or
+    // different save load. These are the worldmap.cc consumer copies;
+    // sfall_metarules_reset() clears and forwards the sfall-side
+    // copies via wmSet*() calls to keep both layers synchronized.
+    gWorldmapHealTime = -1;
+    gRestHealTime = -1;
+    gRestMode = -1;
+    gMapEnterPositionX = -1;
+    gMapEnterPositionY = -1;
+    gMapEnterPositionElevation = -1;
+    gCanRestOnTiles.clear();
 
     wmWorldMapLoadTempData();
     wmMarkAllSubTiles(0);
@@ -6706,6 +6726,18 @@ static int wmTownMapExit()
 // 0x4C4DA4 wmCarUseGas
 int wmCarUseGas(int amount)
 {
+    // Defense-in-depth: clamp the amount to a safe range. The sole
+    // caller (wmWorldMapGenTripStep) already passes a validated value
+    // (initialized to 100, only modified by HOOK_CARTRAVEL which
+    // rejects negative overrides via fuelOverride >= 0). This clamp
+    // guards against future callers or unexpected code paths.
+    if (amount < 0) {
+        amount = 0;
+    }
+    if (amount > wmGenData.carFuel) {
+        amount = wmGenData.carFuel;
+    }
+
     if (gameGetGlobalVar(GVAR_NEW_RENO_SUPER_CAR) != 0) {
         amount -= amount * 90 / 100;
     }
@@ -7387,12 +7419,27 @@ void wmSetPartyWorldPos(int x, int y)
 
 void wmCarSetCurrentArea(int area)
 {
+    // Validate area ID before storing. While currentCarAreaId is never
+    // used as a direct array index (scripts treat it as opaque state),
+    // rejecting out-of-bounds values prevents stale/corrupt state from
+    // persisting through save/load cycles.
+    if (area < 0 || area >= wmMaxAreaNum) {
+        return;
+    }
     wmGenData.currentCarAreaId = area;
 }
 
 void wmForceEncounter(int map, unsigned int flags)
 {
-    if ((wmForceEncounterFlags & (1 << 31)) != 0) {
+    // Validate map ID against the valid range before use. Downstream
+    // consumers (wmMapIdxToName, mapLoadById) validate too, but this
+    // early reject prevents side effects (area match, hook dispatch,
+    // visual effects) from executing with an invalid map ID.
+    if (map < 0 || map >= wmMaxMapNum) {
+        return;
+    }
+
+    if ((wmForceEncounterFlags & (1u << 31)) != 0) {
         return;
     }
 
@@ -7401,9 +7448,9 @@ void wmForceEncounter(int map, unsigned int flags)
 
     // I don't quite understand the reason why locking needs one more flag.
     if ((wmForceEncounterFlags & ENCOUNTER_FLAG_LOCK) != 0) {
-        wmForceEncounterFlags |= (1 << 31);
+        wmForceEncounterFlags |= (1u << 31);
     } else {
-        wmForceEncounterFlags &= ~(1 << 31);
+        wmForceEncounterFlags &= ~(1u << 31);
     }
 }
 

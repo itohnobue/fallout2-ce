@@ -213,6 +213,8 @@ int gameSoundInit()
     }
 
     if (_gsound_get_music_path(&_sound_music_path2, GAME_CONFIG_MUSIC_PATH2_KEY) != 0) {
+        internal_free(_sound_music_path1);
+        _sound_music_path1 = nullptr;
         return -1;
     }
 
@@ -220,11 +222,19 @@ int gameSoundInit()
         if (gGameSoundDebugEnabled) {
             debugPrint("Music paths way too long.\n");
         }
+        internal_free(_sound_music_path1);
+        _sound_music_path1 = nullptr;
+        internal_free(_sound_music_path2);
+        _sound_music_path2 = nullptr;
         return -1;
     }
 
     // gsound_setup_paths
     if (_gsound_setup_paths() != 0) {
+        internal_free(_sound_music_path1);
+        _sound_music_path1 = nullptr;
+        internal_free(_sound_music_path2);
+        _sound_music_path2 = nullptr;
         return -1;
     }
 
@@ -236,6 +246,10 @@ int gameSoundInit()
             debugPrint("failed!\n");
         }
 
+        internal_free(_sound_music_path1);
+        _sound_music_path1 = nullptr;
+        internal_free(_sound_music_path2);
+        _sound_music_path2 = nullptr;
         return -1;
     }
 
@@ -250,6 +264,10 @@ int gameSoundInit()
         debugPrint("\n!!! Config file needs adustment.  Please remove the ");
         debugPrint("cache_size line and run fallout again.  This will reset ");
         debugPrint("cache_size to the new default, which is expressed in K.\n");
+        internal_free(_sound_music_path1);
+        _sound_music_path1 = nullptr;
+        internal_free(_sound_music_path2);
+        _sound_music_path2 = nullptr;
         return -1;
     }
 
@@ -263,6 +281,10 @@ int gameSoundInit()
         if (gGameSoundDebugEnabled) {
             debugPrint("Failure setting sound I/O calls.\n");
         }
+        internal_free(_sound_music_path1);
+        _sound_music_path1 = nullptr;
+        internal_free(_sound_music_path2);
+        _sound_music_path2 = nullptr;
         return -1;
     }
 
@@ -1469,8 +1491,13 @@ char* sfxBuildOpenName(Object* object, int action)
         snprintf(_sfx_file_name, sizeof(_sfx_file_name), "S%cDOORS%c", _snd_lookup_scenery_action[action], scenerySoundId);
     } else {
         Proto* proto;
-        protoGetProto(object->pid, &proto);
-        snprintf(_sfx_file_name, sizeof(_sfx_file_name), "I%cCNTNR%c", _snd_lookup_scenery_action[action], proto->item.soundId);
+        char containerSoundId;
+        if (protoGetProto(object->pid, &proto) != -1) {
+            containerSoundId = proto->item.soundId;
+        } else {
+            containerSoundId = 'A';
+        }
+        snprintf(_sfx_file_name, sizeof(_sfx_file_name), "I%cCNTNR%c", _snd_lookup_scenery_action[action], containerSoundId);
     }
     compat_strupr(_sfx_file_name);
     return _sfx_file_name;
@@ -1860,6 +1887,11 @@ int _gsound_get_music_path(char** out_value, const char* key)
     }
 
     len = strlen(value);
+
+    if (len == 0) {
+        *out_value = internal_strdup(_aSoundMusic_0);
+        return 0;
+    }
 
     if (value[len - 1] == '\\' || value[len - 1] == '/') {
         *out_value = internal_strdup(value);

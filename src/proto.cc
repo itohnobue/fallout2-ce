@@ -1106,6 +1106,10 @@ bool proto_is_subtype(Proto* proto, int subtype)
 // 0x49FFD8 proto_data_member
 int protoGetDataMember(int pid, int member, ProtoDataMemberValue* value)
 {
+    if (value == nullptr) {
+        return -1;
+    }
+
     Proto* proto;
     if (protoGetProto(pid, &proto) == -1) {
         return -1;
@@ -1164,6 +1168,8 @@ int protoGetDataMember(int pid, int member, ProtoDataMemberValue* value)
         case ITEM_DATA_MEMBER_WEAPON_RANGE:
             if (proto->item.type == ITEM_TYPE_WEAPON) {
                 value->integerValue = proto->item.data.weapon.maxRange1;
+            } else {
+                value->integerValue = 0;
             }
             break;
         default:
@@ -1201,6 +1207,15 @@ int protoGetDataMember(int pid, int member, ProtoDataMemberValue* value)
             break;
         case CRITTER_DATA_MEMBER_SID:
             value->integerValue = proto->critter.sid;
+            break;
+        case CRITTER_DATA_MEMBER_DATA:
+            // The critter data struct (CritterProtoData) is a complex
+            // aggregate that cannot be represented as a single integer.
+            // Return 0 as a safe default rather than falling through
+            // to the default error case. Scripts that need individual
+            // critter data fields should use the specialized members
+            // (e.g., CRITTER_DATA_MEMBER_BODY_TYPE, CRITTER_DATA_MEMBER_FLAGS).
+            value->integerValue = 0;
             break;
         case CRITTER_DATA_MEMBER_HEAD_FID:
             value->integerValue = proto->critter.headFid;

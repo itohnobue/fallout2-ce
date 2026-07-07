@@ -196,7 +196,7 @@ static constexpr SDL_Scancode kDiks[DIK_MAP_COUNT] = {
     SDL_SCANCODE_UNKNOWN,
     SDL_SCANCODE_KP_COMMA, // DIK_NUMPADCOMMA
     SDL_SCANCODE_UNKNOWN,
-    SDL_SCANCODE_SLASH, // DIK_DIVIDE
+    SDL_SCANCODE_KP_DIVIDE, // DIK_DIVIDE
     SDL_SCANCODE_UNKNOWN,
     SDL_SCANCODE_SYSREQ, // DIK_SYSRQ
     SDL_SCANCODE_RALT, // DIK_RMENU
@@ -276,9 +276,23 @@ static constexpr SDL_Scancode kDiks[DIK_MAP_COUNT] = {
 static std::unordered_map<SDL_Scancode, int> kScanCodeToDik;
 static std::deque<std::pair<SDL_Scancode, bool>> syntheticKeyEvents;
 
-// Translates Sfall key code (DIK or VK constant) to SDL scancode.
+// Translates Sfall key code to SDL scancode.
+//
+// VK (Virtual Key) codes have the 0x80000000 flag set and use a different
+// numbering scheme from DIK.  The function detects VK codes and returns
+// SDL_SCANCODE_UNKNOWN, causing callers (is_key_pressed, press_key) to fail
+// cleanly.  Only DIK (DirectInput Key) codes in the 0-255 range are
+// translated via the kDiks lookup table.
 static SDL_Scancode get_scancode_from_key(int key)
 {
+    // VK (Virtual Key) codes have the 0x80000000 flag set and use a different
+    // numbering scheme from DIK.  Without a full Windows VK→SDL scancode
+    // translation table, returning SDL_SCANCODE_UNKNOWN makes the callers
+    // (is_key_pressed, press_key) fail cleanly rather than silently mapping
+    // to an unrelated DIK scancode via the low-byte fallthrough.
+    if (key & 0x80000000) {
+        return SDL_SCANCODE_UNKNOWN;
+    }
     return kDiks[key & 0xFF];
 }
 
@@ -301,10 +315,16 @@ static int get_key_from_scancode(SDL_Scancode scanCode)
 
 bool sfall_kb_is_key_pressed(int key)
 {
-    // todo: sfall uses this condition to check for VK key instead of DIK:
+    // FIXME: VK (Virtual Key) codes are not supported.  Original sfall on
+    // Windows handles VK codes via GetAsyncKeyState:
     /* if ((key & 0x80000000) > 0) { // special flag to check by VK code directly
         return GetAsyncKeyState(key & 0xFFFF) & 0x8000;
     }*/
+    // The 0x80000000 VK flag is now detected in get_scancode_from_key() which
+    // returns SDL_SCANCODE_UNKNOWN — causing this function to return false
+    // cleanly.  A full cross-platform VK implementation would require a
+    // Windows VK → SDL scancode conversion table or platform-specific
+    // key-state query API.
     SDL_Scancode scancode = get_scancode_from_key(key);
     if (scancode == SDL_SCANCODE_UNKNOWN) {
         return false;
@@ -364,14 +384,14 @@ void sfall_kb_clear_synthetic_key_events()
     syntheticKeyEvents.clear();
 }
 
-int sfall_kb_handle_key_pressed(int sdlScanCode, bool pressed)
+int sfall_kb_handle_key_pressed(int sdlScanCode, bool pressed, SDL_Keycode keysym)
 {
     if (!gGameLoaded) return SDL_SCANCODE_UNKNOWN;
 
     SDL_Scancode scanCode = static_cast<SDL_Scancode>(sdlScanCode);
     // F-03: sfall convention — arg0 = DIK keyCode, arg1 = pressed state, arg2 = SDL keysym.
     int dikCode = get_key_from_scancode(scanCode);
-    ScriptHookCall hook(HOOK_KEYPRESS, 1, { dikCode, pressed ? 1 : 0 });
+    ScriptHookCall hook(HOOK_KEYPRESS, 1, { dikCode, pressed ? 1 : 0, static_cast<int>(keysym) });
     hook.call();
 
     if (hook.numReturnValues() <= 0) {

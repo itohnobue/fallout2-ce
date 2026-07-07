@@ -273,6 +273,7 @@ bool configGetIntList(Config* config, const char* sectionKey, const char* key, i
 
     char temp[CONFIG_FILE_MAX_LINE_LENGTH];
     string = strncpy(temp, string, CONFIG_FILE_MAX_LINE_LENGTH - 1);
+    temp[CONFIG_FILE_MAX_LINE_LENGTH - 1] = '\0'; // Ensure null termination (M-78: strncpy may omit null byte)
 
     char* pch;
     while (1) {

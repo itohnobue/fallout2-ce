@@ -824,7 +824,7 @@ static void opDelayedCall(Program* program)
         data[arg] = programStackPopInteger(program);
     }
 
-    if (data[0] >= program->procedureCount()) {
+    if (data[0] < 0 || data[0] >= program->procedureCount()) {
         programFatalError("Invalid procedure offset given to delayed call");
     }
 
@@ -851,7 +851,7 @@ static void opConditionalCall(Program* program)
         data[arg] = programStackPopInteger(program);
     }
 
-    if (data[0] >= program->procedureCount()) {
+    if (data[0] < 0 || data[0] >= program->procedureCount()) {
         programFatalError("Invalid procedure offset given to conditional call");
     }
 
@@ -883,7 +883,7 @@ static void opCancel(Program* program)
 {
     const int data = programStackPopInteger(program);
 
-    if (data >= program->procedureCount()) {
+    if (data < 0 || data >= program->procedureCount()) {
         programFatalError("Invalid procedure offset given to cancel");
     }
 
@@ -936,6 +936,9 @@ static void opStore(Program* program)
     const int addr = programStackPopInteger(program);
     ProgramValue value = programStackPopValue(program);
     const size_t pos = program->framePointer + addr;
+    if (pos >= program->stackValues->size()) {
+        programFatalError("Invalid local variable address %d (frame=%zu, stack size=%d)", addr, program->framePointer, (int)program->stackValues->size());
+    }
 
     const ProgramValue oldValue = program->stackValues->at(pos);
 
@@ -956,8 +959,12 @@ static void opStore(Program* program)
 static void opFetch(Program* program)
 {
     const int addr = programStackPopInteger(program);
+    const size_t pos = program->framePointer + addr;
+    if (pos >= program->stackValues->size()) {
+        programFatalError("Invalid local variable address %d (frame=%zu, stack size=%d)", addr, program->framePointer, (int)program->stackValues->size());
+    }
 
-    const ProgramValue value = program->stackValues->at(program->framePointer + addr);
+    const ProgramValue value = program->stackValues->at(pos);
     programStackPushValue(program, value);
 }
 
@@ -2221,7 +2228,7 @@ static void opCall(Program* program)
 {
     const int value = programStackPopInteger(program);
 
-    if (value >= program->procedureCount()) {
+    if (value < 0 || value >= program->procedureCount()) {
         programFatalError("Invalid procedure index %d given to call (max %d)", value, program->procedureCount());
     }
 
@@ -2423,8 +2430,12 @@ static void opStopProgram(Program* program)
 static void opFetchGlobalVariable(Program* program)
 {
     const int addr = programStackPopInteger(program);
+    const int index = program->basePointer + addr;
+    if (index < 0 || (size_t)index >= program->stackValues->size()) {
+        programFatalError("Invalid global variable address %d (stack size %d)", index, (int)program->stackValues->size());
+    }
 
-    const ProgramValue value = program->stackValues->at(program->basePointer + addr);
+    const ProgramValue value = program->stackValues->at(index);
     programStackPushValue(program, value);
 }
 
@@ -2433,13 +2444,17 @@ static void opStoreGlobalVariable(Program* program)
 {
     const int addr = programStackPopInteger(program);
     ProgramValue value = programStackPopValue(program);
+    const int index = program->basePointer + addr;
+    if (index < 0 || (size_t)index >= program->stackValues->size()) {
+        programFatalError("Invalid global variable address %d (stack size %d)", index, (int)program->stackValues->size());
+    }
 
-    const ProgramValue oldValue = program->stackValues->at(program->basePointer + addr);
+    const ProgramValue oldValue = program->stackValues->at(index);
     if (oldValue.opcode == VALUE_TYPE_DYNAMIC_STRING) {
         interpreterStringRefCountDecrease(program, oldValue.opcode, oldValue.integerValue);
     }
 
-    program->stackValues->at(program->basePointer + addr) = value;
+    program->stackValues->at(index) = value;
 
     if (value.opcode == VALUE_TYPE_DYNAMIC_STRING) {
         // NOTE: Uninline.
@@ -2462,7 +2477,7 @@ static void opFetchProcedureAddress(Program* program)
 {
     const int procedureIndex = programStackPopInteger(program);
 
-    if (procedureIndex >= program->procedureCount()) {
+    if (procedureIndex < 0 || procedureIndex >= program->procedureCount()) {
         programFatalError("Invalid procedure index %d given to fetch_proc_address (max %d)", procedureIndex, program->procedureCount());
     }
 
@@ -2848,6 +2863,7 @@ void programInterpret(Program* program, int numInstructions)
     }
 
     if (interpreterBusy) {
+        debugPrint("\nScript Warning: %s: reentrant dispatch dropped (interpreterBusy flag set)\n", program->name);
         return;
     }
 
@@ -3272,14 +3288,22 @@ void _updatePrograms()
             programInterpret(curr->program, interpreterCpuBurstSize);
 
             if (curr->program->exited) {
+                // Unregister any hooks registered by the exiting program
+                // to prevent use-after-free in hook dispatch. Must be done
+                // before programListNodeFree which calls programFree.
+                scriptHooksUnregisterProgram(curr->program);
+
                 // SFALL: Defense-in-depth against use-after-free in
                 // sfallAnimCallbackInvoke (F-13). When a non-global
                 // script that registered an animation callback exits
                 // mid-game, clear the callback pointer to prevent
                 // sfallAnimCallbackInvoke from dereferencing freed memory.
                 // The primary fix is in programFree() — this guards
-                // the mid-game script cleanup path.
-                sfallAnimCallbackReset();
+                // the mid-game script cleanup path. Only reset if the
+                // exiting program owns the callback.
+                if (sfallAnimCallbackProgram == curr->program) {
+                    sfallAnimCallbackReset();
+                }
                 programListNodeFree(curr);
             }
         }
@@ -3351,7 +3375,7 @@ static void interpreterPrintStats()
 
 void programStackPushValue(Program* program, const ProgramValue& programValue)
 {
-    if (program->stackValues->size() > 0x1000) {
+    if (program->stackValues->size() >= 0x1000) {
         programFatalError("programStackPushValue: Stack overflow.");
     }
 
@@ -3448,7 +3472,7 @@ void* programStackPopPointer(Program* program)
 
 void programReturnStackPushValue(Program* program, ProgramValue& programValue)
 {
-    if (program->returnStackValues->size() > 0x1000) {
+    if (program->returnStackValues->size() >= 0x1000) {
         programFatalError("programReturnStackPushValue: Stack overflow.");
     }
 

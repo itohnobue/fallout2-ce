@@ -49,8 +49,9 @@ char* compat_strdup(const char* string);
 long getFileSize(FILE* stream);
 
 // Returns true if the path contains ".." as a path component (directory
-// traversal).  Used to validate user-controlled paths before passing them
-// to filesystem operations.
+// traversal), is an absolute path (leading '/', '\', or drive letter on Windows),
+// or otherwise attempts to escape the intended directory scope.
+// Used to validate user-controlled paths before passing them to filesystem operations.
 bool compat_path_contains_traversal(const char* path);
 
 } // namespace fallout

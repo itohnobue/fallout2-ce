@@ -1390,6 +1390,10 @@ static void opAnimateStand(Program* program)
         }
 
         object = scriptGetSelfWithOverride(program);
+        if (object == nullptr) {
+            scriptPredefinedError(program, "animate_stand_obj", SCRIPT_ERROR_OBJECT_IS_NULL);
+            return;
+        }
     }
 
     if (!animationCheckCombatMode()) {
@@ -1415,6 +1419,10 @@ static void opAnimateStandReverse(Program* program)
         }
 
         object = scriptGetSelfWithOverride(program);
+        if (object == nullptr) {
+            scriptPredefinedError(program, "animate_stand_reverse_obj", SCRIPT_ERROR_OBJECT_IS_NULL);
+            return;
+        }
     }
 
     if (!animationCheckCombatMode()) {
@@ -1811,6 +1819,11 @@ static void opUseObject(Program* program)
     }
 
     Object* self = scriptGetSelfWithOverride(program);
+    if (self == nullptr) {
+        scriptPredefinedError(program, "use_obj", SCRIPT_ERROR_OBJECT_IS_NULL);
+        return;
+    }
+
     if (PID_TYPE(self->pid) == OBJ_TYPE_CRITTER) {
         _action_use_an_object(script->target, object);
     } else {
@@ -2838,6 +2851,10 @@ static void opGameDialogSystemEnter(Program* program)
     }
 
     Object* self = scriptGetSelfWithOverride(program);
+    if (self == nullptr) {
+        return;
+    }
+
     if (PID_TYPE(self->pid) == OBJ_TYPE_CRITTER) {
         if (!critterIsActive(self)) {
             return;

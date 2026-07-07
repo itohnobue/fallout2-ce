@@ -1859,6 +1859,9 @@ static int intLibSoundDelete(int value)
     }
 
     int index = value & ~0xA0000000;
+    if (index < 0 || index >= INT_LIB_SOUNDS_CAPACITY) {
+        return 0;
+    }
     Sound* sound = gIntLibSounds[index];
     if (sound == nullptr) {
         return 0;
@@ -2006,6 +2009,9 @@ static int intLibSoundPause(int value)
     }
 
     int index = value & ~0xA0000000;
+    if (index < 0 || index >= INT_LIB_SOUNDS_CAPACITY) {
+        return 0;
+    }
     Sound* sound = gIntLibSounds[index];
     if (sound == nullptr) {
         return 0;
@@ -2035,6 +2041,9 @@ static int intLibSoundStop(int value)
     }
 
     int index = value & ~0xA0000000;
+    if (index < 0 || index >= INT_LIB_SOUNDS_CAPACITY) {
+        return 0;
+    }
     Sound* sound = gIntLibSounds[index];
     if (sound == nullptr) {
         return 0;
@@ -2056,6 +2065,9 @@ static int intLibSoundRewind(int value)
     }
 
     int index = value & ~0xA0000000;
+    if (index < 0 || index >= INT_LIB_SOUNDS_CAPACITY) {
+        return 0;
+    }
     Sound* sound = gIntLibSounds[index];
     if (sound == nullptr) {
         return 0;
@@ -2082,6 +2094,9 @@ static int intLibSoundResume(int value)
     }
 
     int index = value & ~0xA0000000;
+    if (index < 0 || index >= INT_LIB_SOUNDS_CAPACITY) {
+        return 0;
+    }
     Sound* sound = gIntLibSounds[index];
     if (sound == nullptr) {
         return 0;

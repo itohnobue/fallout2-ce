@@ -779,6 +779,15 @@ void mf_get_object_data(OpcodeContext& ctx)
     Object* ptr = ctx.arg(0).asObject();
     int rawOffset = ctx.arg(1).asInt();
 
+    // asObject() returns nullptr for integer 0 (the canonical "null"
+    // in Fallout scripts) and for non-pointer types. Guard against
+    // null dereference — peer functions in this file have the same guard.
+    if (ptr == nullptr) {
+        ctx.printError("%s(): object is null (asObject() returned nullptr)", ctx.name());
+        ctx.setReturn(-1);
+        return;
+    }
+
     if (rawOffset < 0 || rawOffset % 4 != 0) {
         ctx.printError("%s(): bad offset %d", ctx.name(), rawOffset);
         ctx.setReturn(-1);
@@ -2090,6 +2099,15 @@ void mf_set_object_data(OpcodeContext& ctx)
     int rawOffset = ctx.arg(1).asInt();
     int value = ctx.arg(2).asInt();
 
+    // asObject() returns nullptr for integer 0 and non-pointer types.
+    // Guard against null dereference — peer functions in this file
+    // have the same guard.
+    if (ptr == nullptr) {
+        ctx.printError("%s(): object is null (asObject() returned nullptr)", ctx.name());
+        ctx.setReturn(-1);
+        return;
+    }
+
     if (rawOffset < 0 || rawOffset % 4 != 0) {
         ctx.printError("%s(): bad offset %d (must be non-negative, multiple of 4)", ctx.name(), rawOffset);
         ctx.setReturn(-1);
@@ -3265,12 +3283,21 @@ void sfall_metarules_reset()
     gNextTimerId = 1;
     gDrugDataOverrides.clear();
     gInterfaceOverlayState = {};
+
+    // Forward reset state to the worldmap runtime consumer layer.
+    // Without this, worldmap.cc's gWorldmapHealTime / gRestHealTime /
+    // gRestMode / gMapEnterPosition* survive gameReset() and leak into
+    // the next game session (new game or different save load).
+    wmSetWorldmapHealTime(-1);
+    wmSetRestHealTime(-1);
+    wmSetRestMode(-1);
+    wmSetMapEnterPosition(-1, -1, -1);
 }
 
 // --- Metarule state save/load ---
 //
 // Persistence format (simple tagged binary):
-//   Version int32 (currently 3)
+//   Version int32 (currently 5)
 //   For each scalar: int32 value
 //   For each map: int32 count, then (key, value) pairs
 //   For each set: int32 count, then values
@@ -3280,7 +3307,7 @@ void sfall_metarules_reset()
 // On load, if the version marker doesn't match, the function returns early
 // (sfall_metarules_reset() has already restored defaults) — forward compatibility.
 
-#define METARULES_SAVE_VERSION 4
+#define METARULES_SAVE_VERSION 5
 
 static bool metarulesSaveStringMap(File* stream, const std::map<int, std::string>& map)
 {
@@ -3596,6 +3623,10 @@ void sfall_metarules_save(File* stream)
 
     // Version 3 additions: unjam locks time, NPC fake data with metadata.
     fileWriteInt32(stream, gUnjamLocksTimeHours);
+
+    // Version 5 addition: block combat flag (sfall global, not part of
+    // core combat stream).
+    fileWriteInt32(stream, gBlockCombat);
 }
 
 void sfall_metarules_load(File* stream)
@@ -3633,6 +3664,14 @@ void sfall_metarules_load(File* stream)
     if (fileReadInt32(stream, &gMapEnterX) == -1) return;
     if (fileReadInt32(stream, &gMapEnterY) == -1) return;
     if (fileReadInt32(stream, &gMapEnterElevation) == -1) return;
+
+    // Forward restored map enter position to the worldmap runtime
+    // consumer layer for consistency with the replay pattern used by
+    // healing/rest values (lines 3626-3628). The primary consumer
+    // (map.cc:948) reads sfall globals via sfallGetMapEnterX/Y, but
+    // the wmHasMapEnterPosition/wmGetMapEnterPosition fallback should
+    // also see the restored values.
+    wmSetMapEnterPosition(gMapEnterX, gMapEnterY, gMapEnterElevation);
 
     // String
     char nameBuf[256];
@@ -3708,6 +3747,13 @@ void sfall_metarules_load(File* stream)
     // For version 1-2 saves, sfall_metarules_reset() already sets -1 as default.
     if (version >= 3) {
         if (fileReadInt32(stream, &gUnjamLocksTimeHours) == -1) return;
+    }
+
+    // Version 5 addition: block combat flag.
+    // For version 1-4 saves, combatReset() (called during gameReset()) sets 0
+    // as default.
+    if (version >= 5) {
+        if (fileReadInt32(stream, &gBlockCombat) == -1) return;
     }
 }
 

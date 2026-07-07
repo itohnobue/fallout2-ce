@@ -1071,6 +1071,15 @@ static void op_get_mouse_buttons(Program* program)
 
 static void op_get_window_under_mouse(Program* program)
 {
+    // NOTE: _win_last_button_winID() returns the window that received the last
+    // button interaction (click/enter/exit), NOT the window currently under the
+    // mouse cursor. After mouse movement without button interaction, the returned
+    // value is stale. A proper fix would require a window_manager function that
+    // calls mouseGetPosition() and iterates gWindows[] (topmost-to-bottommost)
+    // to find the window whose rect contains the current mouse coordinates.
+    // Such a function needs to be implemented in window_manager.cc/.h and is
+    // outside the scope of this change (sfall_opcodes.cc cannot access the
+    // file-static gWindows array directly).
     programStackPushInteger(program, _win_last_button_winID());
 }
 
@@ -2541,6 +2550,27 @@ static void op_inc_npc_level(Program* program)
     int pid = -1;
     if (arg.isInt()) {
         pid = arg.asInt();
+    } else if (arg.isString()) {
+        // String input (NPC name): resolve to PID by iterating known party
+        // member PIDs and matching the proto display name against the input.
+        const char* name = arg.asString(program);
+
+        for (int i = 0; i < gPartyMemberDescriptionsLength; i++) {
+            int candidatePid = gPartyMemberPids[i];
+            const char* protoName = protoGetName(candidatePid);
+            if (protoName != nullptr && strcmp(name, protoName) == 0) {
+                pid = candidatePid;
+                break;
+            }
+        }
+
+        if (pid <= 0) {
+            debugPrint("inc_npc_level: could not find party member proto matching name '%s'", name);
+            return;
+        }
+    } else {
+        debugPrint("inc_npc_level: argument must be an int (PID) or string (name)");
+        return;
     }
 
     _partyMemberIncLevels(pid);
@@ -2705,6 +2735,14 @@ static void op_show_iface_tag(fallout::Program* program)
     case DudeState::DUDE_STATE_ADDICTED:
         dudeEnableState(tag);
         break;
+    case 1: // POISONED — engine-driven indicator, cannot be force-shown via sfall API.
+            // The indicator appears automatically when critterGetPoison(gDude) > POISON_INDICATOR_THRESHOLD.
+        debugPrint("show_iface_tag(POISONED): poison indicator is engine-driven and cannot be force-shown via sfall script.");
+        break;
+    case 2: // RADIATED — engine-driven indicator, cannot be force-shown via sfall API.
+            // The indicator appears automatically when critterGetRadiation(gDude) > RADATION_INDICATOR_THRESHOLD.
+        debugPrint("show_iface_tag(RADIATED): radiation indicator is engine-driven and cannot be force-shown via sfall script.");
+        break;
     default:
         interfaceTagShow(tag);
     }
@@ -2719,6 +2757,14 @@ static void op_hide_iface_tag(fallout::Program* program)
     case DudeState::DUDE_STATE_LEVEL_UP_AVAILABLE:
     case DudeState::DUDE_STATE_ADDICTED:
         dudeDisableState(tag);
+        break;
+    case 1: // POISONED — engine-driven indicator, cannot be force-hidden via sfall API.
+            // The indicator disappears automatically when poison level falls below the threshold.
+        debugPrint("hide_iface_tag(POISONED): poison indicator is engine-driven and cannot be force-hidden via sfall script.");
+        break;
+    case 2: // RADIATED — engine-driven indicator, cannot be force-hidden via sfall API.
+            // The indicator disappears automatically when radiation level falls below the threshold.
+        debugPrint("hide_iface_tag(RADIATED): radiation indicator is engine-driven and cannot be force-hidden via sfall script.");
         break;
     default:
         interfaceTagHide(tag);
@@ -3408,6 +3454,13 @@ static void op_set_npc_stat_min(Program* program)
 // ============================================================
 // set_perk_name (0x8189) — sets display name override for a perk.
 // Stored in static table; perkGetName() needs integration to read it.
+//
+// NOTE: sfallPerkNameOverrides and sfallPerkDescOverrides are NOT persisted
+// in save/load because the sfall global vars system (sfall_gl_vars_store)
+// only supports int and float values — there is no string storage API.
+// Mod scripts MUST re-populate name/desc overrides on game load via
+// set_perk_name / set_perk_desc opcodes. These arrays are cleared in
+// sfallOpcodesReset() but are NOT restored by sfallOpcodeStateLoad().
 // ============================================================
 static constexpr int kMaxPerkNameOverrides = 128;
 static char* sfallPerkNameOverrides[kMaxPerkNameOverrides] = {};
@@ -3794,6 +3847,15 @@ static void op_get_perk_available(Program* program)
 // API compatibility but do not distinguish per-entity knockback. Converting
 // to per-entity storage would require a map from (Object*, knockbackType)
 // to values, which is not implemented. Reset via sfallOpcodesReset().
+//
+// Design tradeoff: Single active knockback override at a time is sufficient
+// for the synchronous single-attack combat model — the engine processes one
+// attack at a time, consumes the globals in combat.cc, and the values are
+// re-read on each attack. Scripts that need different knockback values for
+// different entities must set the globals before each attack and be aware that
+// only the most recent setter wins if called in rapid succession. Per-entity
+// storage would add per-object map complexity without changing the synchronous
+// consumption pattern.
 // ============================================================
 int sfallWeaponKnockbackType = 0;
 float sfallWeaponKnockbackValue = 0.0f;
@@ -5260,6 +5322,39 @@ void sfallOpcodeStateSave()
         sprintf(key, "SFFTI%03d", i);
         sfall_gl_vars_store(key, sfallFakeTraits[i].image);
     }
+
+    // Custom death model globals — set via set_dm_model / set_df_model (0x81FF/0x8200).
+    // These are simple int values used in op_refresh_pc_art to override the hero proto FID.
+    sfall_gl_vars_store("SFDMale ", gCustomMaleHeroModelNum);
+    sfall_gl_vars_store("SFDFmale", gCustomFemaleHeroModelNum);
+
+    // Per-critter aimed-shot override maps (F-016).
+    // Format: "SFFAScnt" stores entry count, "SFFASkNNN" stores key (PID),
+    // "SFFASvNNN" stores value (bool as 0/1) for entry index NNN.
+    int fasCount = static_cast<int>(gForceAimedShotsMap.size());
+    sfall_gl_vars_store("SFFAScnt", fasCount);
+    idx = 0;
+    for (const auto& entry : gForceAimedShotsMap) {
+        char key[16] = {};
+        sprintf(key, "SFFASk%03d", idx);
+        sfall_gl_vars_store(key, entry.first);
+        sprintf(key, "SFFASv%03d", idx);
+        sfall_gl_vars_store(key, entry.second ? 1 : 0);
+        idx++;
+    }
+
+    // Disable aimed shots map — same format with "SFDAS" prefix.
+    int dasCount = static_cast<int>(gDisableAimedShotsMap.size());
+    sfall_gl_vars_store("SFDAScnt", dasCount);
+    idx = 0;
+    for (const auto& entry : gDisableAimedShotsMap) {
+        char key[16] = {};
+        sprintf(key, "SFDASk%03d", idx);
+        sfall_gl_vars_store(key, entry.first);
+        sprintf(key, "SFDASv%03d", idx);
+        sfall_gl_vars_store(key, entry.second ? 1 : 0);
+        idx++;
+    }
 }
 
 // Restore opcode globals from the sfall global vars map after
@@ -5355,6 +5450,14 @@ void sfallOpcodeStateLoad()
     }
     if (sfall_gl_vars_fetch("SFBasePn", val)) {
         sfallBasePickpocketMod = val;
+    }
+
+    // Custom death model globals — set via set_dm_model / set_df_model.
+    if (sfall_gl_vars_fetch("SFDMale ", val)) {
+        gCustomMaleHeroModelNum = val;
+    }
+    if (sfall_gl_vars_fetch("SFDFmale", val)) {
+        gCustomFemaleHeroModelNum = val;
     }
 
     // Perk level modifier.
@@ -5680,6 +5783,40 @@ void sfallOpcodeStateLoad()
                 sprintf(key, "SFFTI%03d", i);
                 if (sfall_gl_vars_fetch(key, ival)) {
                     sfallFakeTraits[i].image = ival;
+                }
+            }
+        }
+    }
+
+    // Per-critter aimed-shot override maps (F-016).
+    {
+        int fasCount = 0;
+        if (sfall_gl_vars_fetch("SFFAScnt", fasCount)) {
+            gForceAimedShotsMap.clear();
+            for (int idx2 = 0; idx2 < fasCount; idx2++) {
+                char key[16] = {};
+                sprintf(key, "SFFASk%03d", idx2);
+                int pid = 0;
+                if (sfall_gl_vars_fetch(key, pid)) {
+                    sprintf(key, "SFFASv%03d", idx2);
+                    int ival = 0;
+                    sfall_gl_vars_fetch(key, ival);
+                    gForceAimedShotsMap[pid] = (ival != 0);
+                }
+            }
+        }
+        int dasCount = 0;
+        if (sfall_gl_vars_fetch("SFDAScnt", dasCount)) {
+            gDisableAimedShotsMap.clear();
+            for (int idx2 = 0; idx2 < dasCount; idx2++) {
+                char key[16] = {};
+                sprintf(key, "SFDASk%03d", idx2);
+                int pid = 0;
+                if (sfall_gl_vars_fetch(key, pid)) {
+                    sprintf(key, "SFDASv%03d", idx2);
+                    int ival = 0;
+                    sfall_gl_vars_fetch(key, ival);
+                    gDisableAimedShotsMap[pid] = (ival != 0);
                 }
             }
         }

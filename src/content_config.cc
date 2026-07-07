@@ -3,6 +3,7 @@
 #include <cstring> // for strcmp
 #include <iterator>
 
+#include "debug.h"
 #include "game_config_migration.h"
 #include "platform_compat.h"
 
@@ -23,6 +24,7 @@ void contentConfigInit()
     contentConfigTryMigrateFromSfall(kConfigPatchPath);
 
     if (!configInit(&gContentConfig)) {
+        debugPrint("\nCONTENT CONFIG: Failed to initialize content config dictionary!\n");
         return;
     }
 

@@ -319,6 +319,10 @@ void sfall_gl_scr_exec_start_proc()
 
 void sfall_gl_scr_remove_all()
 {
+    if (state == nullptr) {
+        return;
+    }
+
     tickersRemove(sfall_gl_scr_process_input);
 
     for (auto& scr : state->globalScripts) {

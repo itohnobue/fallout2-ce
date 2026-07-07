@@ -3599,20 +3599,24 @@ void gameDialogBarterCleanupTables()
     Inventory* inventory;
     int length;
 
-    inventory = &(gGameDialogPlayerTableObj->data.inventory);
-    length = inventory->length;
-    for (int index = 0; index < length; index++) {
-        Object* item = inventory->items->item;
-        int quantity = itemGetQuantity(gGameDialogPlayerTableObj, item);
-        itemMoveForce(gGameDialogPlayerTableObj, gDude, item, quantity);
+    if (gGameDialogPlayerTableObj != nullptr) {
+        inventory = &(gGameDialogPlayerTableObj->data.inventory);
+        length = inventory->length;
+        for (int index = 0; index < length; index++) {
+            Object* item = inventory->items->item;
+            int quantity = itemGetQuantity(gGameDialogPlayerTableObj, item);
+            itemMoveForce(gGameDialogPlayerTableObj, gDude, item, quantity);
+        }
     }
 
-    inventory = &(gGameDialogBartererTableObj->data.inventory);
-    length = inventory->length;
-    for (int index = 0; index < length; index++) {
-        Object* item = inventory->items->item;
-        int quantity = itemGetQuantity(gGameDialogBartererTableObj, item);
-        itemMoveForce(gGameDialogBartererTableObj, gGameDialogSpeaker, item, quantity);
+    if (gGameDialogBartererTableObj != nullptr) {
+        inventory = &(gGameDialogBartererTableObj->data.inventory);
+        length = inventory->length;
+        for (int index = 0; index < length; index++) {
+            Object* item = inventory->items->item;
+            int quantity = itemGetQuantity(gGameDialogBartererTableObj, item);
+            itemMoveForce(gGameDialogBartererTableObj, gGameDialogSpeaker, item, quantity);
+        }
     }
 
     if (_barterer_temp_obj != nullptr) {
