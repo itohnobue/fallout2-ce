@@ -251,6 +251,11 @@ typedef enum {
     HOOK_COUNT = 62,
 } HookType;
 
+// Number of implemented hook types (active enum entries with fire functions or
+// declared fire sites). Updated when new hook types are added to the enum.
+// Phase 7 added HOOK_DIALOG(49) through HOOK_MESSAGE(53): +5 → 43.
+constexpr int HOOK_IMPLEMENTED_COUNT = 43;
+
 typedef enum {
     REST_EVENT_TYPE_CANCEL = -1,
     REST_EVENT_TYPE_PROGRESS = 0,

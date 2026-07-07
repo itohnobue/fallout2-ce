@@ -4170,17 +4170,28 @@ static void op_has_fake_perk(Program* program)
     programStackPushInteger(program, result);
 }
 
-// has_fake_trait(name) -> int
+// has_fake_trait(name or id) -> int
 static void op_has_fake_trait(Program* program)
 {
-    const char* name = programStackPopString(program);
+    // Accept either string name or integer extraTraitID.
+    // Mirrors op_has_fake_perk's dual-mode (lines 4144-4171) for API symmetry.
+    ProgramValue arg = programStackPopValue(program);
     int result = 0;
 
-    for (int i = 0; i < sfallFakeTraitCount; i++) {
-        if (sfallFakeTraits[i].name != nullptr
-            && strcmp(sfallFakeTraits[i].name, name) == 0) {
-            result = i + 1;
-            break;
+    if (arg.isString()) {
+        const char* name = arg.asString(program);
+        for (int i = 0; i < sfallFakeTraitCount; i++) {
+            if (sfallFakeTraits[i].name != nullptr
+                && strcmp(sfallFakeTraits[i].name, name) == 0) {
+                result = i + 1;
+                break;
+            }
+        }
+    } else {
+        int extraTraitID = arg.integerValue;
+        // extraTraitID is 1-indexed
+        if (extraTraitID > 0 && extraTraitID <= sfallFakeTraitCount) {
+            result = extraTraitID;
         }
     }
 
@@ -5072,10 +5083,17 @@ void sfallOpcodesReset()
     // F-008: Reset perk min level overrides set by set_perk_level (0x817A).
     // Restore compile-time minLevels that were saved on first override,
     // then clear the override tracking array.
-    for (int i = 0; i < PERK_COUNT; i++) {
-        if (sfallPerkMinLevelOriginal[i] != -1) {
-            perkSetMinLevel(i, sfallPerkMinLevelOriginal[i]);
-            sfallPerkMinLevelOriginal[i] = -1;
+    // F2-023: Guard with sfallPerkOverridesInited — before sfallOpcodesInit()
+    // sets sentinels to -1, sfallPerkMinLevelOriginal is zero-initialized.
+    // Without this guard, the first pre-init reset calls perkSetMinLevel(i, 0)
+    // for all 119 perks (0 != -1 sentinel check passes, but 0 is not a valid
+    // sentinel — it's the uninitialized zero value).
+    if (sfallPerkOverridesInited) {
+        for (int i = 0; i < PERK_COUNT; i++) {
+            if (sfallPerkMinLevelOriginal[i] != -1) {
+                perkSetMinLevel(i, sfallPerkMinLevelOriginal[i]);
+                sfallPerkMinLevelOriginal[i] = -1;
+            }
         }
     }
 
@@ -5134,6 +5152,34 @@ void sfallOpcodesReset()
         }
     }
 }
+
+// ============================================================
+// F2-042: TEST-ONLY accessors for file-static maps.
+// gCritterHitChanceOverrides, gForceAimedShotsMap, and
+// gDisableAimedShotsMap are declared file-static and were
+// previously structurally inaccessible from unit tests.
+// These accessors allow tests to verify that sfallOpcodesReset()
+// correctly clears all three maps.
+// Guarded behind TEST_ACCESSORS_ENABLED to prevent accidental
+// production use; test files define the macro before including
+// sfall_opcodes.h.
+// ============================================================
+#if defined(TEST_ACCESSORS_ENABLED)
+int sfallGetCritterHitChanceOverrideCount()
+{
+    return static_cast<int>(gCritterHitChanceOverrides.size());
+}
+
+int sfallGetForceAimedShotsMapCount()
+{
+    return static_cast<int>(gForceAimedShotsMap.size());
+}
+
+int sfallGetDisableAimedShotsMapCount()
+{
+    return static_cast<int>(gDisableAimedShotsMap.size());
+}
+#endif
 
 // Persist all opcode-related global state into the sfall global vars map
 // before sfall_gl_vars_save() writes to sfallgv.sav.

@@ -1502,10 +1502,16 @@ void scriptHooks_Sneak(int* resultPtr, int* durationPtr, Object* critter)
         return;
     }
 
-    *resultPtr = hook.getReturnValueAt(0).asInt();
+    const int overrideResult = hook.getReturnValueAt(0).asInt();
+    if (overrideResult != -1) {
+        *resultPtr = overrideResult;
+    }
 
     if (hook.numReturnValues() > 1) {
-        *durationPtr = hook.getReturnValueAt(1).asInt();
+        const int overrideDuration = hook.getReturnValueAt(1).asInt();
+        if (overrideDuration >= 0) {
+            *durationPtr = overrideDuration;
+        }
     }
 }
 

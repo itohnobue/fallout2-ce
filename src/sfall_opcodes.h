@@ -301,6 +301,18 @@ void sfallSetPerkOwed(int value);
 // ============================================================
 const char* sfallGetMoviePathOverride(int movieId);
 
+// ============================================================
+// TEST-ONLY accessors for file-static maps (F2-042).
+// These maps are cleared in sfallOpcodesReset() but were previously
+// structurally inaccessible from unit tests (file-static, no accessor).
+// Use only for verifying reset correctness in test suites.
+// ============================================================
+#if defined(TEST_ACCESSORS_ENABLED)
+int sfallGetCritterHitChanceOverrideCount();
+int sfallGetForceAimedShotsMapCount();
+int sfallGetDisableAimedShotsMapCount();
+#endif
+
 } // namespace fallout
 
 #endif /* FALLOUT_SFALL_OPCODES_H_ */

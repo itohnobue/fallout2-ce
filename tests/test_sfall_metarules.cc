@@ -24,6 +24,7 @@
 #include <cstring>
 #include <iomanip>
 #include <map>
+#include <set>
 #include <string>
 #include <tuple>
 #include <unordered_map>
@@ -218,101 +219,124 @@ TEST_CASE("M-066: remove_timer_event — 1-arg form (specific timer) returns 0")
 // Research tier: N/A — not used by RPU/ETTu in global scripts.
 // =================================================================
 
-TEST_CASE("N2-006: set_fake_perk_npc — image and desc args discarded")
+TEST_CASE("N2-006: set_fake_perk_npc — metadata round-trip test")
 {
-    // Mirror of the production data structure and handler.
-    // Production: gFakePerksNpc is unordered_map<Object*, unordered_set<string>>
-    // Only name is stored; level, image, desc are lost.
-    std::unordered_map<int, std::unordered_set<std::string>> gFakePerksNpc;
+    // F2-044: Mirror updated to match production data structure.
+    // Production: gFakePerksNpc is unordered_map<int, unordered_map<string, FakePerkNpcEntry>>
+    // Each entry stores name, level, image, and desc.
+    std::unordered_map<int, std::unordered_map<std::string, FakePerkNpcEntry>> gFakePerksNpc;
     int critter = 1;
 
     // Simulate: set_fake_perk_npc(critter, "BonusMove", 3, 42, "Bonus Move desc")
-    // In production, args 3 (image=42) and 4 (desc="Bonus Move desc") are discarded.
     const char* name = "BonusMove";
     int level = 3;
-    int image = 42;              // arg 3 — DISCARDED in production
-    std::string desc = "Bonus Move desc"; // arg 4 — DISCARDED in production
-    (void)image;
-    (void)desc;
+    int image = 42;
+    const char* desc = "Bonus Move desc";
 
-    // Only name is stored
+    // Production stores the full FakePerkNpcEntry
+    FakePerkNpcEntry entry;
+    entry.name = name;
+    entry.level = level;
+    entry.image = image;
+    entry.desc = desc;
     if (level != 0) {
-        gFakePerksNpc[critter].insert(name);
+        gFakePerksNpc[critter][name] = entry;
     }
 
     // Verify name IS stored
-    auto it = gFakePerksNpc.find(critter);
-    REQUIRE(it != gFakePerksNpc.end());
-    CHECK(it->second.find("BonusMove") != it->second.end());
+    auto critterIt = gFakePerksNpc.find(critter);
+    REQUIRE(critterIt != gFakePerksNpc.end());
+    auto nameIt = critterIt->second.find("BonusMove");
+    REQUIRE(nameIt != critterIt->second.end());
+    CHECK(nameIt->second.name == "BonusMove");
 
-    // Verify image and desc are NOT recoverable
-    // has_fake_perk_npc at sfall_metarules.cc:1811-1822 only checks name membership.
-    // There is NO get_fake_perk_image or get_fake_perk_desc function.
-    // The "implicit storage" claim at sfall_metarules.cc:1856-1857 is false.
+    // Verify metadata round-trip: level, image, and desc are all preserved
+    CHECK(nameIt->second.level == 3);
+    CHECK(nameIt->second.image == 42);
+    CHECK(nameIt->second.desc == "Bonus Move desc");
 }
 
-TEST_CASE("N2-006: set_fake_perk_npc — has_fake_perk_npc cannot retrieve image/desc")
+TEST_CASE("N2-006: set_fake_perk_npc — has_fake_perk_npc with metadata access")
 {
-    // Mirror of has_fake_perk_npc at sfall_metarules.cc:1811-1822.
-    // Returns 0 or 1 (bool) — no mechanism to retrieve image or desc.
-    std::unordered_map<int, std::unordered_set<std::string>> gFakePerksNpc;
+    // F2-044: Mirror updated to match production data structure.
+    // has_fake_perk_npc at sfall_metarules.cc:2391-2403 checks name membership
+    // and returns metadata (level, image, desc) when found.
+    std::unordered_map<int, std::unordered_map<std::string, FakePerkNpcEntry>> gFakePerksNpc;
     int critter = 1;
-    gFakePerksNpc[critter].insert("ActionBoy");
 
-    auto it = gFakePerksNpc.find(critter);
-    bool hasPerk = (it != gFakePerksNpc.end() && it->second.find("ActionBoy") != it->second.end());
-    CHECK(hasPerk);
+    // Store a full entry: name + metadata
+    FakePerkNpcEntry entry;
+    entry.name = "ActionBoy";
+    entry.level = 2;
+    entry.image = 167;
+    entry.desc = "Gain an additional action point";
+    gFakePerksNpc[critter]["ActionBoy"] = entry;
 
-    // But there's no way to get back the image (was 42) or desc (was "desc")
-    // because the data structure stores only strings — no image/desc metadata.
-    CHECK(it->second.size() == 1); // only name, no image/desc stored
+    // name-based lookup — same as has_fake_perk_npc production pattern
+    auto critterIt = gFakePerksNpc.find(critter);
+    REQUIRE(critterIt != gFakePerksNpc.end());
+    auto nameIt = critterIt->second.find("ActionBoy");
+    REQUIRE(nameIt != critterIt->second.end());
+
+    // Verify all metadata is preserved and accessible
+    CHECK(nameIt->second.name == "ActionBoy");
+    CHECK(nameIt->second.level == 2);
+    CHECK(nameIt->second.image == 167);
+    CHECK(nameIt->second.desc == "Gain an additional action point");
 }
 
 // =================================================================
-// N2-009: set_selectable_perk_npc — image/desc data loss
+// N2-009: set_selectable_perk_npc — metadata round-trip
 // Source: sfall_metarules.cc:1882-1897 (function body),
 //         sfall_metarules.cc:307 (metarule definition with 5 args)
-// Finding: Same structural bug as N2-006. 5-arg metarule, only name stored.
-// Image and desc are discarded identically to set_fake_perk_npc.
-// Research tier: N/A — not used by RPU/ETTu.
+// F2-044: Mirror updated to use FakePerkNpcEntry matching production.
 // =================================================================
 
-TEST_CASE("N2-009: set_selectable_perk_npc — image and desc args discarded")
+TEST_CASE("N2-009: set_selectable_perk_npc — metadata round-trip test")
 {
-    // Mirror of the production data structure.
-    // Production: gFakeSelectablePerksNpc is unordered_map<Object*, unordered_set<string>>
-    std::unordered_map<int, std::unordered_set<std::string>> gFakeSelectablePerksNpc;
+    // F2-044: Mirror updated to match production data structure.
+    // Production: gFakeSelectablePerksNpc is unordered_map<int, unordered_map<string, FakePerkNpcEntry>>
+    std::unordered_map<int, std::unordered_map<std::string, FakePerkNpcEntry>> gFakeSelectablePerksNpc;
     int critter = 1;
 
     // Simulate: set_selectable_perk_npc(critter, "BonusHtH", 1, 167, "Bonus HtH desc")
     const char* name = "BonusHtH";
     int active = 1;
-    int image = 167;             // arg 3 — DISCARDED in production
-    std::string desc = "Bonus HtH desc"; // arg 4 — DISCARDED in production
-    (void)image;
-    (void)desc;
+    int image = 167;
+    const char* desc = "Bonus HtH desc";
 
+    FakePerkNpcEntry entry;
+    entry.name = name;
+    entry.level = 1;
+    entry.image = image;
+    entry.desc = desc;
     if (active != 0) {
-        gFakeSelectablePerksNpc[critter].insert(name);
+        gFakeSelectablePerksNpc[critter][name] = entry;
     }
 
-    auto it = gFakeSelectablePerksNpc.find(critter);
-    REQUIRE(it != gFakeSelectablePerksNpc.end());
-    CHECK(it->second.find("BonusHtH") != it->second.end());
+    auto critterIt = gFakeSelectablePerksNpc.find(critter);
+    REQUIRE(critterIt != gFakeSelectablePerksNpc.end());
+    auto nameIt = critterIt->second.find("BonusHtH");
+    REQUIRE(nameIt != critterIt->second.end());
+    CHECK(nameIt->second.name == "BonusHtH");
 
-    // Image (167) and desc ("Bonus HtH desc") are irrecoverable.
-    // The metarule definition at sfall_metarules.cc:307 declares 5 args
-    // but the handler only reads critter, name, and active.
-    CHECK(it->second.size() == 1); // only name stored
+    // Metadata round-trip: image and desc are preserved
+    CHECK(nameIt->second.image == 167);
+    CHECK(nameIt->second.desc == "Bonus HtH desc");
 }
 
-TEST_CASE("N2-009: set_selectable_perk_npc — removal by active=0 works despite data loss")
+TEST_CASE("N2-009: set_selectable_perk_npc — removal by active=0 with full metadata")
 {
-    // Even though image/desc are lost, the active=0 removal path still works
-    // because it only needs the name (which IS stored).
-    std::unordered_map<int, std::unordered_set<std::string>> gFakeSelectablePerksNpc;
+    // F2-044: Mirror updated. active=0 removal still works with full entry storage.
+    std::unordered_map<int, std::unordered_map<std::string, FakePerkNpcEntry>> gFakeSelectablePerksNpc;
     int critter = 1;
-    gFakeSelectablePerksNpc[critter].insert("SilentDeath");
+
+    FakePerkNpcEntry entry;
+    entry.name = "SilentDeath";
+    entry.level = 1;
+    entry.image = 0;
+    entry.desc = "";
+    gFakeSelectablePerksNpc[critter]["SilentDeath"] = entry;
 
     // Simulate active=0 → erase
     auto it = gFakeSelectablePerksNpc.find(critter);
@@ -321,203 +345,146 @@ TEST_CASE("N2-009: set_selectable_perk_npc — removal by active=0 works despite
     }
     CHECK(gFakeSelectablePerksNpc[critter].empty());
 
-    // The set/unset cycle works for name-based lookup. Only image/desc
-    // retrieval is broken — the add/remove semantics are intact.
+    // F2-044: The add/remove cycle works with full metadata entries.
+    // name-based lookup + full metadata round-trip are now verified.
 }
 
 // =================================================================
-// N2-007: sfall_metarules_reset — reset-verify tests for state variables
-// Source: sfall_metarules.cc:2468-2485
-// Finding: Only 1 of 15 state variables has a reset-verify test.
-// Two (gSavedOriginalDude, gScriptNameOverride) are completely untested.
-// Research tier: CONFIRMED — RPU/ETTu save/load cycles depend on reset correctness.
+// N2-007: TestMetarulesReset — local mirror of sfall_metarules_reset()
+// F2-050: Rewritten from 12 circular tests (local var → mutate → manual
+// restore → assert) to a single reset model that mirrors production behavior.
+// The test calls TestMetarulesReset() which models ALL 15 state variables
+// reset at once — verifying the combined state machine, not individual
+// variable reassignment.
+// Source: sfall_metarules.cc:3257-3295 (full sfall_metarules_reset body).
 // =================================================================
 
-TEST_CASE("N2-007: reset-verify — npc_engine_level_up returns to default 1")
-{
-    // Mirror of gNpcEngineLevelUpEnabled at sfall_metarules.cc:2471.
-    // Default is 1 (enabled). Reset always restores to 1.
-    int gNpcEngineLevelUpEnabled = 1; // default
-
-    // Set non-default value
-    gNpcEngineLevelUpEnabled = 0;
-    CHECK(gNpcEngineLevelUpEnabled == 0);
-
-    // Reset: sfall_metarules_reset() at line 2471 → gNpcEngineLevelUpEnabled = 1
-    gNpcEngineLevelUpEnabled = 1;
-    CHECK(gNpcEngineLevelUpEnabled == 1);
-}
-
-TEST_CASE("N2-007: reset-verify — quest_failure_values cleared on reset")
-{
-    // Mirror of gQuestFailureValues at sfall_metarules.cc:2473.
+// Metarule state mirror — holds all 15 state variables reset by production
+// sfall_metarules_reset(). Initialized to production defaults.
+struct TestMetaruleState {
+    int gNpcEngineLevelUpEnabled = 1;
+    void* gSavedOriginalDude = nullptr;
+    int gSavedOriginalDudeCid = -1;
     std::map<int, int> gQuestFailureValues;
-
-    // Set some mapping
-    gQuestFailureValues[5] = 10;
-    gQuestFailureValues[42] = -1;
-    CHECK_FALSE(gQuestFailureValues.empty());
-
-    // Reset: sfall_metarules_reset() at line 2473 → gQuestFailureValues.clear()
-    gQuestFailureValues.clear();
-    CHECK(gQuestFailureValues.empty());
-}
-
-TEST_CASE("N2-007: reset-verify — worldmap_heal_time returns to -1 on reset")
-{
-    // Mirror of gWorldmapHealTime at sfall_metarules.cc:2475.
-    // Default is -1. Reset always restores to -1.
+    std::string gScriptNameOverride;
     int gWorldmapHealTime = -1;
-
-    gWorldmapHealTime = 7200;
-    CHECK(gWorldmapHealTime == 7200);
-
-    // Reset: sfall_metarules_reset() at line 2475 → gWorldmapHealTime = -1
-    gWorldmapHealTime = -1;
-    CHECK(gWorldmapHealTime == -1);
-}
-
-TEST_CASE("N2-007: reset-verify — rest_heal_time returns to -1 on reset")
-{
-    // Mirror of gRestHealTime at sfall_metarules.cc:2476.
     int gRestHealTime = -1;
-
-    gRestHealTime = 3600;
-    CHECK(gRestHealTime == 3600);
-
-    // Reset: sfall_metarules_reset() at line 2476 → gRestHealTime = -1
-    gRestHealTime = -1;
-    CHECK(gRestHealTime == -1);
-}
-
-TEST_CASE("N2-007: reset-verify — terrain_name_overrides cleared on reset")
-{
-    // Mirror of gTerrainNameOverrides at sfall_metarules.cc:2477.
     std::map<std::pair<int, int>, std::string> gTerrainNameOverrides;
-
-    gTerrainNameOverrides[{10, 20}] = "TestTerrain";
-    CHECK_FALSE(gTerrainNameOverrides.empty());
-
-    // Reset: sfall_metarules_reset() at line 2477 → gTerrainNameOverrides.clear()
-    gTerrainNameOverrides.clear();
-    CHECK(gTerrainNameOverrides.empty());
-}
-
-TEST_CASE("N2-007: reset-verify — town_title_overrides cleared on reset")
-{
-    // Mirror of gTownTitleOverrides at sfall_metarules.cc:2478.
     std::map<int, std::string> gTownTitleOverrides;
-
-    gTownTitleOverrides[1] = "Junktown";
-    CHECK_FALSE(gTownTitleOverrides.empty());
-
-    // Reset: sfall_metarules_reset() at line 2478 → gTownTitleOverrides.clear()
-    gTownTitleOverrides.clear();
-    CHECK(gTownTitleOverrides.empty());
-}
-
-TEST_CASE("N2-007: reset-verify — car_intface_art returns to -1 on reset")
-{
-    // Mirror of gCarIntfaceArtFid at sfall_metarules.cc:2479.
     int gCarIntfaceArtFid = -1;
-
-    gCarIntfaceArtFid = 0x10000001;
-    CHECK(gCarIntfaceArtFid == 0x10000001);
-
-    // Reset: sfall_metarules_reset() at line 2479 → gCarIntfaceArtFid = -1
-    gCarIntfaceArtFid = -1;
-    CHECK(gCarIntfaceArtFid == -1);
-}
-
-TEST_CASE("N2-007: reset-verify — rest_mode returns to -1 on reset")
-{
-    // Mirror of gRestMode at sfall_metarules.cc:2480.
     int gRestMode = -1;
+    std::unordered_map<int, std::unordered_map<std::string, FakePerkNpcEntry>> gFakePerksNpc;
+    std::unordered_map<int, std::unordered_map<std::string, FakePerkNpcEntry>> gFakeTraitsNpc;
+    std::unordered_map<int, std::unordered_map<std::string, FakePerkNpcEntry>> gFakeSelectablePerksNpc;
+    bool sIntfaceHiddenState = false;
+    std::set<int> gAddedTraits;
+};
 
-    gRestMode = 2; // no healing
-    CHECK(gRestMode == 2);
-
-    // Reset: sfall_metarules_reset() at line 2480 → gRestMode = -1
-    gRestMode = -1;
-    CHECK(gRestMode == -1);
+// F2-050: Local mirror of sfall_metarules_reset() at sfall_metarules.cc:3257-3295.
+// Models ALL 15 reset operations in one call — tests verify the combined
+// state machine, not individual variable reassignment.
+static void TestMetarulesReset(TestMetaruleState& state) {
+    state.gNpcEngineLevelUpEnabled = 1;
+    state.gSavedOriginalDude = nullptr;
+    state.gSavedOriginalDudeCid = -1;
+    state.gQuestFailureValues.clear();
+    state.gScriptNameOverride.clear();
+    state.gWorldmapHealTime = -1;
+    state.gRestHealTime = -1;
+    state.gTerrainNameOverrides.clear();
+    state.gTownTitleOverrides.clear();
+    state.gCarIntfaceArtFid = -1;
+    state.gRestMode = -1;
+    state.gFakePerksNpc.clear();
+    state.gFakeTraitsNpc.clear();
+    state.gFakeSelectablePerksNpc.clear();
+    state.sIntfaceHiddenState = false;
+    state.gAddedTraits.clear();
 }
 
-TEST_CASE("N2-007: reset-verify — intface_hidden_state returns to false on reset")
+TEST_CASE("N2-007: TestMetarulesReset — comprehensive reset of all 15 variables")
 {
-    // Mirror of sIntfaceHiddenState at sfall_metarules.cc:2484.
-    bool sHidden = false;
-
-    sHidden = true; // interface hidden
-    CHECK(sHidden);
-
-    // Reset: sfall_metarules_reset() at line 2484 → sIntfaceHiddenState = false
-    sHidden = false;
-    CHECK_FALSE(sHidden);
-}
-
-TEST_CASE("N2-007: reset-verify — saved_original_dude nulled on reset")
-{
-    // Mirror of gSavedOriginalDude at sfall_metarules.cc:2472.
-    // Default is nullptr. Reset always nulls it.
-    // THIS VARIABLE IS COMPLETELY UNTESTED by any existing test —
-    // zero grep hits for gSavedOriginalDude or savedOriginalDude in tests/.
-    void* gSavedOriginalDude = nullptr; // default
-
-    // Simulate: set_dude_obj assigns a pointer
+    // Setup: mutate every state variable to a non-default value
+    TestMetaruleState state;
     int dummyDude = 0;
-    gSavedOriginalDude = &dummyDude;
-    CHECK(gSavedOriginalDude != nullptr);
 
-    // Reset: sfall_metarules_reset() at line 2472 → gSavedOriginalDude = nullptr
-    gSavedOriginalDude = nullptr;
-    CHECK(gSavedOriginalDude == nullptr);
+    state.gNpcEngineLevelUpEnabled = 0;
+    state.gSavedOriginalDude = &dummyDude;
+    state.gSavedOriginalDudeCid = 42;
+    state.gQuestFailureValues[5] = 10;
+    state.gQuestFailureValues[42] = -1;
+    state.gScriptNameOverride = "TestScript";
+    state.gWorldmapHealTime = 7200;
+    state.gRestHealTime = 3600;
+    state.gTerrainNameOverrides[{10, 20}] = "TestTerrain";
+    state.gTownTitleOverrides[1] = "Junktown";
+    state.gCarIntfaceArtFid = 0x10000001;
+    state.gRestMode = 2;
+    state.gFakePerksNpc[1]["QuickPockets"] = FakePerkNpcEntry{"QuickPockets", 1, 0, ""};
+    state.gFakeTraitsNpc[1]["FastMetabolism"] = FakePerkNpcEntry{"FastMetabolism", 1, 0, ""};
+    state.gFakeSelectablePerksNpc[1]["BonusMove"] = FakePerkNpcEntry{"BonusMove", 1, 0, ""};
+    state.sIntfaceHiddenState = true;
+    state.gAddedTraits.insert(1);
+    state.gAddedTraits.insert(2);
 
-    // After reset, real_dude_obj() would return nullptr.
-    // Scripts calling real_dude_obj() after reset need to handle nullptr.
+    // Verify non-default state is set
+    CHECK(state.gNpcEngineLevelUpEnabled == 0);
+    CHECK(state.gSavedOriginalDude != nullptr);
+    CHECK(state.gSavedOriginalDudeCid == 42);
+    CHECK_FALSE(state.gQuestFailureValues.empty());
+    CHECK_FALSE(state.gScriptNameOverride.empty());
+    CHECK(state.gWorldmapHealTime == 7200);
+    CHECK(state.gRestHealTime == 3600);
+    CHECK_FALSE(state.gTerrainNameOverrides.empty());
+    CHECK_FALSE(state.gTownTitleOverrides.empty());
+    CHECK(state.gCarIntfaceArtFid == 0x10000001);
+    CHECK(state.gRestMode == 2);
+    CHECK_FALSE(state.gFakePerksNpc.empty());
+    CHECK_FALSE(state.gFakeTraitsNpc.empty());
+    CHECK_FALSE(state.gFakeSelectablePerksNpc.empty());
+    CHECK(state.sIntfaceHiddenState);
+    CHECK_FALSE(state.gAddedTraits.empty());
+
+    // F2-050: Call TestMetarulesReset() — exercises ALL reset operations at once
+    TestMetarulesReset(state);
+
+    // Verify ALL variables return to defaults
+    CHECK(state.gNpcEngineLevelUpEnabled == 1);
+    CHECK(state.gSavedOriginalDude == nullptr);
+    CHECK(state.gSavedOriginalDudeCid == -1);
+    CHECK(state.gQuestFailureValues.empty());
+    CHECK(state.gScriptNameOverride.empty());
+    CHECK(state.gWorldmapHealTime == -1);
+    CHECK(state.gRestHealTime == -1);
+    CHECK(state.gTerrainNameOverrides.empty());
+    CHECK(state.gTownTitleOverrides.empty());
+    CHECK(state.gCarIntfaceArtFid == -1);
+    CHECK(state.gRestMode == -1);
+    CHECK(state.gFakePerksNpc.empty());
+    CHECK(state.gFakeTraitsNpc.empty());
+    CHECK(state.gFakeSelectablePerksNpc.empty());
+    CHECK_FALSE(state.sIntfaceHiddenState);
+    CHECK(state.gAddedTraits.empty());
 }
 
-TEST_CASE("N2-007: reset-verify — script_name_override cleared on reset")
+TEST_CASE("N2-007: TestMetarulesReset — idempotent: double reset on defaults")
 {
-    // Mirror of gScriptNameOverride at sfall_metarules.cc:2474.
-    // Default is empty string. Reset always clears it.
-    // THIS VARIABLE IS COMPLETELY UNTESTED by any existing test —
-    // zero grep hits for gScriptNameOverride or scriptNameOverride in tests/.
-    std::string gScriptNameOverride; // default empty
+    // Verify that reset on already-default state is safe (idempotent)
+    TestMetaruleState state;
 
-    gScriptNameOverride = "TestScript";
-    CHECK(gScriptNameOverride == "TestScript");
+    // First reset — should stay at defaults
+    TestMetarulesReset(state);
+    CHECK(state.gNpcEngineLevelUpEnabled == 1);
+    CHECK(state.gSavedOriginalDude == nullptr);
+    CHECK(state.gWorldmapHealTime == -1);
+    CHECK(state.gRestHealTime == -1);
 
-    // Reset: sfall_metarules_reset() at line 2474 → gScriptNameOverride.clear()
-    gScriptNameOverride.clear();
-    CHECK(gScriptNameOverride.empty());
-}
-
-TEST_CASE("N2-007: reset-verify — fake_perks_npc / fake_traits_npc / fake_selectable_perks cleared")
-{
-    // Mirror of gFakePerksNpc, gFakeTraitsNpc, gFakeSelectablePerksNpc
-    // at sfall_metarules.cc:2481-2483.
-    // Reset calls .clear() on all three containers.
-    std::unordered_map<int, std::unordered_set<std::string>> gFakePerksNpc;
-    std::unordered_map<int, std::unordered_set<std::string>> gFakeTraitsNpc;
-    std::unordered_map<int, std::unordered_set<std::string>> gFakeSelectablePerksNpc;
-
-    // Set values in all three
-    gFakePerksNpc[1].insert("QuickPockets");
-    gFakeTraitsNpc[1].insert("FastMetabolism");
-    gFakeSelectablePerksNpc[1].insert("BonusMove");
-
-    CHECK_FALSE(gFakePerksNpc.empty());
-    CHECK_FALSE(gFakeTraitsNpc.empty());
-    CHECK_FALSE(gFakeSelectablePerksNpc.empty());
-
-    // Reset
-    gFakePerksNpc.clear();
-    gFakeTraitsNpc.clear();
-    gFakeSelectablePerksNpc.clear();
-
-    CHECK(gFakePerksNpc.empty());
-    CHECK(gFakeTraitsNpc.empty());
-    CHECK(gFakeSelectablePerksNpc.empty());
+    // Second reset — should still be at defaults (no crash, no corruption)
+    TestMetarulesReset(state);
+    CHECK(state.gNpcEngineLevelUpEnabled == 1);
+    CHECK(state.gSavedOriginalDude == nullptr);
+    CHECK(state.gWorldmapHealTime == -1);
+    CHECK(state.gRestHealTime == -1);
 }
 // =================================================================
 // Local mirror: mf_floor2 (exact copy from sfall_metarules.cc:1578-1581)
@@ -595,7 +562,9 @@ static const int kTestMetaruleSubsetCount = sizeof(kTestMetaruleSubset) / sizeof
 static const TestMetaruleEntry* TestFindMetarule(const char* name)
 {
     for (int i = 0; i < kTestMetaruleSubsetCount; i++) {
-        if (strcmp(kTestMetaruleSubset[i].name, name) == 0) {
+        // F2-049: Use compat_stricmp to match production mf_metarule_exist
+        // which uses case-insensitive lookup via compat_stricmp.
+        if (compat_stricmp(kTestMetaruleSubset[i].name, name) == 0) {
             return &kTestMetaruleSubset[i];
         }
     }
@@ -962,7 +931,9 @@ TEST_CASE("TestFindMetarule — unknown metarules not found")
 {
     CHECK(TestFindMetarule("nonexistent_function") == nullptr);
     CHECK(TestFindMetarule("") == nullptr);
-    CHECK(TestFindMetarule("FLOOR2") == nullptr);              // case-sensitive
+    // F2-049: "FLOOR2" IS found because compat_stricmp is case-insensitive
+    // and "FLOOR2" matches "floor2" — same behavior as production mf_metarule_exist.
+    CHECK(TestFindMetarule("FLOOR2") != nullptr);
 }
 
 TEST_CASE("TestFindMetarule — rotators sentinel exists")

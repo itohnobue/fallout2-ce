@@ -213,13 +213,20 @@ const char* TestProgram::lookupString(int id) const
 
 void simOpCeil(TestProgram& tp)
 {
-    // Mirrors op_ceil at sfall_opcodes.cc:715-718:
-    //   ProgramValue programValue = programStackPopValue(program);
-    //   programStackPushInteger(program, static_cast<int>(ceilf(programValue.asFloat())));
+    // Mirrors op_ceil at sfall_opcodes.cc:715-731 with overflow guard.
+    // F2-025 fix: Added overflow guard matching production code.
+    // ceilf(float > INT_MAX) exceeds int range — static_cast<int> is UB.
+    // Cast to long long for comparison (float can't represent INT_MAX exactly,
+    // but long long can hold the rounded result without overflow).
     ProgramValue pv = tp.popValue();
-    // NOTE: F2-012 overflow guard would go here:
-    //   if (result > INT_MAX || result < INT_MIN) { pushFloat; return; }
-    tp.pushInt(static_cast<int>(ceilf(pv.asFloat())));
+    float result = ceilf(pv.asFloat());
+    long long llResult = static_cast<long long>(result);
+    if (llResult > static_cast<long long>(std::numeric_limits<int>::max())
+        || llResult < static_cast<long long>(std::numeric_limits<int>::min())) {
+        tp.pushFloat(result);
+    } else {
+        tp.pushInt(static_cast<int>(result));
+    }
 }
 
 void simOpRound(TestProgram& tp)

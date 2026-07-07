@@ -338,6 +338,7 @@ add_test(NAME test_character_editor COMMAND test_character_editor)
 add_executable(test_loadsave
     test_loadsave.cc
 )
+target_include_directories(test_loadsave PRIVATE "${CMAKE_SOURCE_DIR}/src")
 target_link_libraries(test_loadsave PRIVATE doctest)
 add_test(NAME test_loadsave COMMAND test_loadsave)
 
@@ -498,3 +499,164 @@ target_include_directories(test_script_harness_basic PRIVATE "${CMAKE_SOURCE_DIR
 target_include_directories(test_script_harness_basic PRIVATE ${ZLIB_INCLUDE_DIRS})
 target_link_libraries(test_script_harness_basic PRIVATE test_sources test_stubs doctest ${SDL2_LIBRARIES})
 add_test(NAME test_script_harness_basic COMMAND test_script_harness_basic)
+
+# ============================================================
+# Stage 7 Implementation — OPCODES CORE & EXT Tests (2 entries)
+# Added by s7-impl-opcodes-a agent
+# ============================================================
+
+# ---- Test: opcodes core & ext (F-063, F-065, F-079, F-082, F-084-F-088) ----
+# Comprehensive behavioral tests for opcode findings.
+# Links test_sources for sfall_global_vars, test_stubs for extern globals.
+# SDL2/zlib headers needed for transitive includes from interpreter.h/perk.h.
+add_executable(test_opcodes_core_ext
+    test_opcodes_core_ext.cc
+)
+target_include_directories(test_opcodes_core_ext PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_include_directories(test_opcodes_core_ext PRIVATE ${ZLIB_INCLUDE_DIRS})
+target_link_libraries(test_opcodes_core_ext PRIVATE test_sources test_stubs doctest ${SDL2_LIBRARIES})
+add_test(NAME test_opcodes_core_ext COMMAND test_opcodes_core_ext)
+
+# ---- Test: opcodes boundary values (F-063, F-079, F-082, F-084-F-088) ----
+# Boundary value tests: INT_MIN/INT_MAX, capacity limits, edge-case sweeps.
+# Same link dependencies as test_opcodes_core_ext.
+add_executable(test_opcodes_boundary
+    test_opcodes_boundary.cc
+)
+target_include_directories(test_opcodes_boundary PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_include_directories(test_opcodes_boundary PRIVATE ${ZLIB_INCLUDE_DIRS})
+target_link_libraries(test_opcodes_boundary PRIVATE test_sources test_stubs doctest ${SDL2_LIBRARIES})
+add_test(NAME test_opcodes_boundary COMMAND test_opcodes_boundary)
+
+# ============================================================
+# Stage 7 Implementation — META Domain Tests (2 entries)
+# Added by s7-impl-meta agent
+# Covers F-111 through F-115, F2-042, F2-051
+# ============================================================
+
+# ---- Test: meta comprehensive (F-111, F-112, F-113, F-114, F-115, F2-042) ----
+# Self-contained mirror tests — does not link sfall_metarules.cc or
+# sfall_opcodes.cc (50+ engine dependencies each).
+add_executable(test_meta_comprehensive
+    test_meta_comprehensive.cc
+)
+target_link_libraries(test_meta_comprehensive PRIVATE doctest)
+add_test(NAME test_meta_comprehensive COMMAND test_meta_comprehensive)
+
+# ---- Test: meta integration (F2-051: ListAsArray → sfall_lists_fill) ----
+# Self-contained mirror test — does not link sfall_arrays.cc or
+# sfall_lists.cc (50+ engine dependencies each).
+add_executable(test_meta_integration
+    test_meta_integration.cc
+)
+target_include_directories(test_meta_integration PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_link_libraries(test_meta_integration PRIVATE doctest)
+add_test(NAME test_meta_integration COMMAND test_meta_integration)
+
+# ============================================================
+# Stage 7 Implementation — SAVELOAD Domain Tests (3 entries)
+# Added by s7-impl-saveload agent
+# Covers F-001 through F-013, F2-003 through F2-007
+# ============================================================
+
+# ---- Test: saveload roundtrip (F-001, F-003, F-007, F-013) ----
+# Self-contained mirror tests — 27-handler round-trip, header identity,
+# quick save/load, perk min level key format.
+# Does not link loadsave.cc (50+ engine file I/O dependencies).
+add_executable(test_saveload_roundtrip
+    test_saveload_roundtrip.cc
+)
+target_link_libraries(test_saveload_roundtrip PRIVATE doctest)
+add_test(NAME test_saveload_roundtrip COMMAND test_saveload_roundtrip)
+
+# ---- Test: saveload state (F-002: 97-global sfallOpcodeState round-trip) ----
+# Self-contained mirror tests — sfallOpcodeStateSave→Load for all
+# categories of globals with key format validation.
+add_executable(test_saveload_state
+    test_saveload_state.cc
+)
+target_link_libraries(test_saveload_state PRIVATE doctest)
+add_test(NAME test_saveload_state COMMAND test_saveload_state)
+
+# ---- Test: saveload recovery (F-004, F-010, F-011, F-012, F2-004, F2-005, F2-007) ----
+# Self-contained mirror tests — error-path recovery, handler failure,
+# backup/restore, _isLoadingGame temporal window, sfallgv.sav sub-paths.
+add_executable(test_saveload_recovery
+    test_saveload_recovery.cc
+)
+target_include_directories(test_saveload_recovery PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_link_libraries(test_saveload_recovery PRIVATE doctest)
+add_test(NAME test_saveload_recovery COMMAND test_saveload_recovery)
+
+# ============================================================
+# Stage 9 Fix — Register Unregistered Test Files (7 entries)
+# ============================================================
+
+# ---- Test: state leak comprehensive (C-01: F-043–F-049, F2-016) ----
+# Self-contained — provides its own extern globals. Does NOT link
+# test_common_stubs.cc or test_sources to avoid duplicate symbol errors.
+add_executable(test_state_leak_comprehensive
+    test_state_leak_comprehensive.cc
+)
+target_include_directories(test_state_leak_comprehensive PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_link_libraries(test_state_leak_comprehensive PRIVATE doctest)
+add_test(NAME test_state_leak_comprehensive COMMAND test_state_leak_comprehensive)
+
+# ---- Test: hooks comprehensive (H-02: 74 TEST_CASEs) ----
+# Header-level test — validates HookType mechanics, dispatch, handlers.
+# Does not link sfall_script_hooks.cc.
+add_executable(test_hooks_comprehensive
+    test_hooks_comprehensive.cc
+)
+target_include_directories(test_hooks_comprehensive PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_link_libraries(test_hooks_comprehensive PRIVATE doctest)
+add_test(NAME test_hooks_comprehensive COMMAND test_hooks_comprehensive)
+
+# ---- Test: hooks new types (H-02) ----
+# Header-level test — validates new hook subtype definitions.
+# Does not link sfall_script_hooks.cc.
+add_executable(test_hooks_new_types
+    test_hooks_new_types.cc
+)
+target_include_directories(test_hooks_new_types PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_link_libraries(test_hooks_new_types PRIVATE doctest)
+add_test(NAME test_hooks_new_types COMMAND test_hooks_new_types)
+
+# ---- Test: hooks return values (H-02) ----
+# Header-level test — validates return value dispatch and handler chaining.
+# Does not link sfall_script_hooks.cc.
+add_executable(test_hooks_return_values
+    test_hooks_return_values.cc
+)
+target_include_directories(test_hooks_return_values PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_link_libraries(test_hooks_return_values PRIVATE doctest)
+add_test(NAME test_hooks_return_values COMMAND test_hooks_return_values)
+
+# ---- Test: opcodes ext animation (H-04) ----
+# Self-contained mirror test — extended animation opcodes.
+# Does not include any src/ headers.
+add_executable(test_opcodes_ext_animation
+    test_opcodes_ext_animation.cc
+)
+target_link_libraries(test_opcodes_ext_animation PRIVATE doctest)
+add_test(NAME test_opcodes_ext_animation COMMAND test_opcodes_ext_animation)
+
+# ---- Test: opcodes ext combat (H-04) ----
+# Self-contained mirror test — extended combat opcodes.
+# Does not include any src/ headers.
+add_executable(test_opcodes_ext_combat
+    test_opcodes_ext_combat.cc
+)
+target_link_libraries(test_opcodes_ext_combat PRIVATE doctest)
+add_test(NAME test_opcodes_ext_combat COMMAND test_opcodes_ext_combat)
+
+# ---- Test: opcodes ext misc (H-04, M-15) ----
+# Integration test — calls sfall_gl_vars_store/fetch (in test_sources).
+# Follows test_opcodes_core_ext pattern for link dependencies.
+add_executable(test_opcodes_ext_misc
+    test_opcodes_ext_misc.cc
+)
+target_include_directories(test_opcodes_ext_misc PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_include_directories(test_opcodes_ext_misc PRIVATE ${ZLIB_INCLUDE_DIRS})
+target_link_libraries(test_opcodes_ext_misc PRIVATE test_sources test_stubs doctest ${SDL2_LIBRARIES})
+add_test(NAME test_opcodes_ext_misc COMMAND test_opcodes_ext_misc)

@@ -14,6 +14,7 @@
 #include "debug.h"
 #include "interpreter.h"
 #include "object.h"
+#include "stat_defs.h"
 #include "platform_compat.h"
 #include "settings.h"
 #include "sfall_script_hooks.h"
@@ -319,11 +320,40 @@ namespace fallout {
 // =============================================================
 namespace fallout {
 
-    void statSetMaxValue(int /*stat*/, int /*value*/)
+    // Test-local mirror for stat max/min values.
+    // Production stores in gStatDescriptions[].maximumValue (file-static in stat.cc).
+    // This array enables set/get round-trips in unit tests.
+    static int gTestStatMaxValues[STAT_COUNT] = {};
+    static int gTestStatMinValues[STAT_COUNT] = {};
+
+    void statSetMaxValue(int stat, int value)
     {
-        // No-op: gStatDescriptions[] is a file-scope static in stat.cc,
-        // not accessible from test context. The stub allows tests to
-        // verify that the function is callable without crashing.
+        if (stat >= 0 && stat < STAT_COUNT) {
+            gTestStatMaxValues[stat] = value;
+        }
+    }
+
+    void statSetMinValue(int stat, int value)
+    {
+        if (stat >= 0 && stat < STAT_COUNT) {
+            gTestStatMinValues[stat] = value;
+        }
+    }
+
+    int statGetMaxValue(int stat)
+    {
+        if (stat >= 0 && stat < STAT_COUNT) {
+            return gTestStatMaxValues[stat];
+        }
+        return -1;  // invalid stat
+    }
+
+    int statGetMinValue(int stat)
+    {
+        if (stat >= 0 && stat < STAT_COUNT) {
+            return gTestStatMinValues[stat];
+        }
+        return -1;  // invalid stat
     }
 
     int perkGetMaxRank(int /*perk*/)

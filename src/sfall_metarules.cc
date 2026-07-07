@@ -1134,6 +1134,15 @@ void mf_metarule_exist(OpcodeContext& ctx)
         return;
     }
 
+    // F2-047: "sfall" sentinel. ET Tu scripts use metarule_exist("sfall") to
+    // detect sfall presence and enable CE-specific features. Without this
+    // sentinel, scripts receive 0 and disable CE feature paths. Same pattern
+    // as the "rotators" sentinel above — returns 1 unconditionally.
+    if (compat_stricmp(metarule, "sfall") == 0) {
+        ctx.setReturn(1);
+        return;
+    }
+
     // F-023: Stub metarule blacklist. These metarules are registered to prevent
     // script crashes but their handlers are permanent no-ops. metarule_exist
     // must return 0 so scripts can detect absence and use alternatives.
@@ -3171,6 +3180,14 @@ void mf_message_box(OpcodeContext& ctx)
     }
 
     char* copy = internal_strdup(string);
+
+    // F2-045: internal_strdup can return nullptr on allocation failure (OOM).
+    // mf_interface_print (same file, ~20 lines earlier) has the same guard.
+    // Without this check, strchr(copy, '\n') dereferences nullptr.
+    if (copy == nullptr) {
+        ctx.setReturn(-1);
+        return;
+    }
 
     const char* body[4];
     int count = 0;

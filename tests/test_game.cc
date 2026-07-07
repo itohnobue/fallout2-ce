@@ -1,9 +1,29 @@
 // Unit tests for game.cc — state machine and globalVarsRead precedence fix.
 //
-// Tests mirror the production implementations:
-//   - gameGetState / gameRequestState / gameUpdateState  (game.cc:1135-1190)
-//   - globalVarsRead operator-precedence fix             (game.cc:1076-1132)
-//   - SpeedMulti initialization logic                    (game.cc:391-405)
+// F2-020 — MIRROR LIMITATIONS:
+// This file tests LOCAL MIRRORS of production functions, not the production
+// code itself. No #include "game.h" is used. All 749 lines exercise the
+// test-local namespace fallout definitions below, not src/game.cc.
+//
+// Production functions mirrored (watch for drift):
+//   gameGetState         (game.cc:1135-1138)  → testGameGetState             (this file:36)
+//   gameRequestState     (game.cc:1140-1161)  → testGameRequestState         (this file:42)
+//   gameUpdateState      (game.cc:1163-?)     → testGameUpdateStateStep      (this file:67, partial)
+//   SpeedMulti init      (game.cc:391-405)    → testSpeedMultiInit           (this file:79)
+//   SpeedMulti config    (game.cc:396-404)    → testSpeedMultiConfigInit     (this file:409)
+//   FO1Behavior date     (game.cc:170-176)    → testFO1BehaviorInit          (this file:455)
+//   globalVarsRead       (game.cc:1090-1132)  → testGlobalVarsParse         (this file:487)
+//
+// The config chain integration (sfall_gl_vars_store via live global var 0)
+// is also mirrored: the production code stores into a real sfall global
+// variable; this test uses a local int array instead.
+//
+// RISK: If production game.cc changes any of these functions, the mirrors
+// will silently pass stale tests. Drift is undetectable without linking
+// against production object files. Future work should either:
+//   a) Link test_game.cc against game.o (requires resolving all engine
+//      dependencies: config.h, sfall_global_vars.h, etc.), or
+//   b) Add CI checks that detect production/mirror divergence.
 //
 // Reference source: src/game.cc:1054-1190
 

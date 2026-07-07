@@ -224,29 +224,32 @@ TEST_CASE("Deliberately absent hooks — gap verification")
 TEST_CASE("HOOK_COUNT consistency — implemented + absent + reserved = 62")
 {
     // From sfall_script_hooks.h enum (not commented out):
-    // 37 implemented hooks: 0,1,2,4,5,6,8,10,11,16,17,18,19,20,
+    // 43 implemented hooks: 0,1,2,4,5,6,7,8,10,11,16,17,18,19,20,
     //   21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,38,39,
-    //   40,41,42,43,48
+    //   40,41,42,43,48,49,50,51,52,53
+    // Phase 7 added HOOK_DIALOG(49) through HOOK_MESSAGE(53): +5 → 43.
     //
-    // 9 deliberately absent (commented out with rationale):
-    //   3(DEATHANIM1), 7(FINDTARGET), 9(REMOVEINVENOBJ),
+    // 8 deliberately absent (commented out with rationale):
+    //   3(DEATHANIM1), 9(REMOVEINVENOBJ),
     //   37(SUBCOMBATDAMAGE), 44(ADJUSTPOISON), 45(ADJUSTRADS),
     //   46(ROLLCHECK), 47(BESTWEAPON), 61(BUILDSFXWEAPON)
+    // NOTE: HOOK_FINDTARGET=7 is IMPLEMENTED (active fire sites at
+    //   combat_ai.cc:1836,1874,1934). Previous test incorrectly listed it as absent.
     //
     // 4 obsolete hex hooks (commented out, not in enum): 12-15
     //
-    // 12 reserved: 49-60
+    // 7 reserved: 54-60 (49-53 now implemented as Phase 7 hook types)
     //
-    // Total: 37 + 9 + 4 + 12 = 62 = HOOK_COUNT
+    // Total: 43 + 8 + 4 + 7 = 62 = HOOK_COUNT
 
     // Verify HOOK_COUNT covers all categories
     CHECK(static_cast<int>(HOOK_COUNT) == 62);
 
     // Verify the number of defined (implemented) hook IDs in the enum
-    constexpr int kImplementedHookIds = 37;
-    constexpr int kCommentedOutAbsent = 9;
+    constexpr int kImplementedHookIds = 43;
+    constexpr int kCommentedOutAbsent = 8;
     constexpr int kObsoleteHexSlots = 4;     // 12-15 (commented out, not in enum)
-    constexpr int kReservedSlots = 12;       // 49-60
+    constexpr int kReservedSlots = 7;        // 54-60 (49-53 now implemented)
 
     constexpr int kExpectedHOOKCOUNT = kImplementedHookIds + kCommentedOutAbsent + kObsoleteHexSlots + kReservedSlots;
     CHECK(kExpectedHOOKCOUNT == 62);
@@ -257,7 +260,7 @@ TEST_CASE("HOOK_COUNT consistency — implemented + absent + reserved = 62")
     // in scriptHooks[] but their trigger sites are external.
     constexpr int kExternalHooks = 2; // HOOK_KEYPRESS + HOOK_MOUSECLICK
     constexpr int kGameEngineHooks = kImplementedHookIds - kExternalHooks;
-    CHECK(kGameEngineHooks == 35); // 37 - 2 = 35 engine-internal hooks
+    CHECK(kGameEngineHooks == 41); // 43 - 2 = 41 engine-internal hooks
 }
 
 // =================================================================
