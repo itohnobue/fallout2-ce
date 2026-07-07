@@ -915,6 +915,7 @@ static int wmTownMapButtonId[ENTRANCE_LIST_CAPACITY];
 
 static bool mousePressed;
 bool gDidMeetFrankHorrigan;
+int gHorriganEncounterDay = -1; // -1 = not set, >=0 = earliest game day for Horrigan encounters
 
 static WmGenData wmGenData;
 
@@ -1030,6 +1031,7 @@ int wmWorldMap_init()
 static int wmGenDataInit()
 {
     gDidMeetFrankHorrigan = false;
+    gHorriganEncounterDay = -1;
     wmGenData.currentAreaId = -1;
     // F-072: Read start position from content config, defaulting to FO2 Arroyo (173, 122).
     // Et Tu mods set start_x_pos=823, start_y_pos=72 for FO1 Vault 13 entrance.
@@ -1086,6 +1088,7 @@ static int wmGenDataInit()
 static int wmGenDataReset()
 {
     gDidMeetFrankHorrigan = false;
+    gHorriganEncounterDay = -1;
     wmGenData.currentSubtile = nullptr;
     wmGenData.dword_672E18 = 0;
     wmGenData.isWalking = false;
@@ -1296,6 +1299,8 @@ int wmWorldMap_save(File* stream)
         }
     }
 
+    if (fileWriteInt32(stream, gHorriganEncounterDay) == -1) return -1;
+
     return 0;
 }
 
@@ -1423,6 +1428,13 @@ int wmWorldMap_load(File* stream)
         // If fileReadInt32 returned -1 (EOF from older save), just skip.
         // gCanRestOnTiles retains whatever runtime state it had (empty
         // on fresh load), which is acceptable.
+    }
+
+    // Load gHorriganEncounterDay — written AFTER gCanRestOnTiles at end of stream.
+    // Older save files (pre-I2-071) may not contain this field. Detect by checking
+    // for EOF; if EOF, use default value -1.
+    if (fileReadInt32(stream, &gHorriganEncounterDay) == -1) {
+        gHorriganEncounterDay = -1; // backward compat: old saves don't have this field
     }
 
     wmInterfaceCenterOnParty();
@@ -3645,7 +3657,8 @@ static int wmRndEncounterOccurred(int* mapToLoadPtr)
 
     if (!gDidMeetFrankHorrigan) {
         unsigned int gameTime = gameTimeGetTime();
-        if (gameTime / GAME_TIME_TICKS_PER_DAY > 35) {
+        int currentDay = gameTime / GAME_TIME_TICKS_PER_DAY;
+        if (currentDay > 35 && (gHorriganEncounterDay < 0 || currentDay >= gHorriganEncounterDay)) {
             // SFALL: Add a flashing icon to the Horrigan encounter.
             wmBlinkRndEncounterIcon(true);
 

@@ -15,6 +15,7 @@
 #include "memory_manager.h"
 #include "platform_compat.h"
 #include "sfall_global_scripts.h"
+#include "sfall_opcodes.h"
 #include "sfall_script_hooks.h"
 #include "svga.h"
 
@@ -492,6 +493,15 @@ void programFree(Program* program)
 
     // NOTE: Uninline.
     _purgeProgram(program);
+
+    // SFALL: Fix use-after-free in sfallAnimCallbackInvoke.
+    // When a program that registered an animation callback is freed,
+    // the global sfallAnimCallbackProgram pointer must be cleared to
+    // prevent sfallAnimCallbackInvoke from reading freed memory.
+    if (sfallAnimCallbackProgram == program) {
+        sfallAnimCallbackProgram = nullptr;
+        sfallAnimCallbackProcedureIndex = -1;
+    }
 
     if (program->dynamicStrings != nullptr) {
         internal_free_safe(program->dynamicStrings, __FILE__, __LINE__); // "..\\int\\INTRPRET.C", 429
@@ -3262,6 +3272,14 @@ void _updatePrograms()
             programInterpret(curr->program, interpreterCpuBurstSize);
 
             if (curr->program->exited) {
+                // SFALL: Defense-in-depth against use-after-free in
+                // sfallAnimCallbackInvoke (F-13). When a non-global
+                // script that registered an animation callback exits
+                // mid-game, clear the callback pointer to prevent
+                // sfallAnimCallbackInvoke from dereferencing freed memory.
+                // The primary fix is in programFree() — this guards
+                // the mid-game script cleanup path.
+                sfallAnimCallbackReset();
                 programListNodeFree(curr);
             }
         }

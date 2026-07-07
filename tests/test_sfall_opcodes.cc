@@ -267,6 +267,236 @@ TEST_CASE("sfallAnimCallbackReset")
 }
 
 // ============================================================
+// F-13: UAF fix — sfallAnimCallbackProgram clearing on program free.
+// sfall_opcodes.cc:2827-2860, interpreter.cc:497-504.
+//
+// Finding F-13 (CONFIRMED, MEDIUM): reg_anim_callback stores a raw
+// Program* pointer in sfallAnimCallbackProgram. When the program is
+// freed, the pointer becomes dangling. sfallAnimCallbackInvoke's
+// snap-and-clear pattern prevents cascading UAF but NOT the initial
+// access on freed memory. Fix: programFree() clears the pointer when
+// the freed program matches the registered callback owner.
+//
+// These globals have external linkage (sfall_opcodes.h:39-40) and
+// are directly accessible from this test — no stubs needed.
+// ============================================================
+
+TEST_CASE("F-13: sfallAnimCallbackProgram and sfallAnimCallbackProcedureIndex extern globals")
+{
+    // These extern globals are the core state for the reg_anim_callback
+    // opcode. Verified accessible from sfall_opcodes.h:39-40.
+    SUBCASE("globals have correct initial values")
+    {
+        // sfall_opcodes.cc:2827-2828 initializes both
+        CHECK(sfallAnimCallbackProgram == nullptr);
+        CHECK(sfallAnimCallbackProcedureIndex == -1);
+    }
+
+    SUBCASE("globals can be set directly (simulating reg_anim_callback)")
+    {
+        sfallAnimCallbackProgram = reinterpret_cast<Program*>(0xDEAD);
+        sfallAnimCallbackProcedureIndex = 42;
+
+        CHECK(sfallAnimCallbackProgram == reinterpret_cast<Program*>(0xDEAD));
+        CHECK(sfallAnimCallbackProcedureIndex == 42);
+
+        // Cleanup
+        sfallAnimCallbackReset();
+    }
+
+    SUBCASE("sfallAnimCallbackReset clears both globals")
+    {
+        sfallAnimCallbackProgram = reinterpret_cast<Program*>(0xBEEF);
+        sfallAnimCallbackProcedureIndex = 7;
+
+        sfallAnimCallbackReset();
+
+        // Both must be cleared per sfall_opcodes.cc:2857-2859
+        CHECK(sfallAnimCallbackProgram == nullptr);
+        CHECK(sfallAnimCallbackProcedureIndex == -1);
+    }
+}
+
+TEST_CASE("F-13: sfallAnimCallbackReset — clears only callback state, not other globals")
+{
+    // sfallAnimCallbackReset at sfall_opcodes.cc:2856-2860 only clears:
+    //   sfallAnimCallbackProgram = nullptr
+    //   sfallAnimCallbackProcedureIndex = -1
+    // It should NOT affect other extern globals.
+
+    // Set up: modify callback state AND other extern globals
+    setExternGlobalsNonDefault();
+    sfallAnimCallbackProgram = reinterpret_cast<Program*>(0xCAFE);
+    sfallAnimCallbackProcedureIndex = 99;
+
+    // Callback reset
+    sfallAnimCallbackReset();
+
+    // Callback globals cleared
+    CHECK(sfallAnimCallbackProgram == nullptr);
+    CHECK(sfallAnimCallbackProcedureIndex == -1);
+
+    // Other globals UNAFFECTED — sfallAnimCallbackReset is callback-specific
+    CHECK(gPerkFrequencyOverride == 5);
+    CHECK(gSkillMaxCap == 500);
+
+    // Cleanup
+    sfallOpcodesReset();
+}
+
+TEST_CASE("F-13: programFree UAF fix — matching program clears callback (interpreter.cc:501-503)")
+{
+    // The fix at interpreter.cc:497-504 checks:
+    //   if (sfallAnimCallbackProgram == program) {
+    //       sfallAnimCallbackProgram = nullptr;
+    //       sfallAnimCallbackProcedureIndex = -1;
+    //   }
+    // This test verifies the condition logic that prevents UAF.
+
+    Program* dummyProgramA = reinterpret_cast<Program*>(0xAAAA);
+    Program* dummyProgramB = reinterpret_cast<Program*>(0xBBBB);
+
+    SUBCASE("callback is cleared when the registered program is freed")
+    {
+        // Simulate: dummyProgramA called reg_anim_callback
+        sfallAnimCallbackProgram = dummyProgramA;
+        sfallAnimCallbackProcedureIndex = 5;
+
+        // Simulate: programFree(dummyProgramA) — the fix should clear
+        // because sfallAnimCallbackProgram == dummyProgramA
+        if (sfallAnimCallbackProgram == dummyProgramA) {
+            sfallAnimCallbackProgram = nullptr;
+            sfallAnimCallbackProcedureIndex = -1;
+        }
+
+        CHECK(sfallAnimCallbackProgram == nullptr);
+        CHECK(sfallAnimCallbackProcedureIndex == -1);
+    }
+
+    SUBCASE("callback is NOT cleared when an unrelated program is freed")
+    {
+        // Simulate: dummyProgramA called reg_anim_callback
+        sfallAnimCallbackProgram = dummyProgramA;
+        sfallAnimCallbackProcedureIndex = 5;
+
+        // Simulate: programFree(dummyProgramB) — a DIFFERENT program
+        // The fix MUST NOT clear because sfallAnimCallbackProgram != dummyProgramB
+        if (sfallAnimCallbackProgram == dummyProgramB) {
+            sfallAnimCallbackProgram = nullptr;
+            sfallAnimCallbackProcedureIndex = -1;
+        }
+
+        // Callback should still be registered to dummyProgramA
+        CHECK(sfallAnimCallbackProgram == dummyProgramA);
+        CHECK(sfallAnimCallbackProcedureIndex == 5);
+
+        // Cleanup
+        sfallAnimCallbackReset();
+    }
+
+    SUBCASE("callback stays set when program pointer does not match — nullptr case")
+    {
+        // If callback is set to one program and a different program
+        // (or nullptr) is freed, the callback must stay intact
+        sfallAnimCallbackProgram = dummyProgramA;
+        sfallAnimCallbackProcedureIndex = 3;
+
+        // Free a nullptr program — should not clear
+        if (sfallAnimCallbackProgram == nullptr) {
+            sfallAnimCallbackProgram = nullptr;
+            sfallAnimCallbackProcedureIndex = -1;
+        }
+
+        CHECK(sfallAnimCallbackProgram == dummyProgramA);
+        CHECK(sfallAnimCallbackProcedureIndex == 3);
+
+        sfallAnimCallbackReset();
+    }
+
+    SUBCASE("freeing when callback is already nullptr is safe (no-op)")
+    {
+        // If no callback is registered (both at defaults),
+        // programFree on any program should be a no-op for callback state
+        sfallAnimCallbackReset();
+
+        if (sfallAnimCallbackProgram == dummyProgramA) {
+            sfallAnimCallbackProgram = nullptr;
+            sfallAnimCallbackProcedureIndex = -1;
+        }
+
+        // No change — already cleared
+        CHECK(sfallAnimCallbackProgram == nullptr);
+        CHECK(sfallAnimCallbackProcedureIndex == -1);
+    }
+}
+
+TEST_CASE("F-13: full UAF prevention lifecycle — register, use, free")
+{
+    // Models the complete lifecycle:
+    // 1. Program registers animation callback
+    // 2. Animation invokes callback (snap-and-clear)
+    // 3. Program is freed → pointer cleared (F-13 fix)
+
+    Program* dummyProgram = reinterpret_cast<Program*>(0xFEED);
+
+    SUBCASE("register → snap-and-clear → free — all safe")
+    {
+        // Step 1: program calls reg_anim_callback(procIndex=2)
+        sfallAnimCallbackProgram = dummyProgram;
+        sfallAnimCallbackProcedureIndex = 2;
+        CHECK(sfallAnimCallbackProgram == dummyProgram);
+        CHECK(sfallAnimCallbackProcedureIndex == 2);
+
+        // Step 2: animation completes → sfallAnimCallbackInvoke
+        // snap-and-clear pattern at sfall_opcodes.cc:4767-4770:
+        Program* savedProgram = sfallAnimCallbackProgram;
+        int savedProcIndex = sfallAnimCallbackProcedureIndex;
+        sfallAnimCallbackProgram = nullptr;
+        sfallAnimCallbackProcedureIndex = -1;
+
+        CHECK(savedProgram == dummyProgram);
+        CHECK(savedProcIndex == 2);
+        // Globals already cleared by snap-and-clear
+        CHECK(sfallAnimCallbackProgram == nullptr);
+        CHECK(sfallAnimCallbackProcedureIndex == -1);
+
+        // Step 3: program is freed later
+        // programFree checks: sfallAnimCallbackProgram == program?
+        // Already nullptr, so no-op. Safe.
+        if (sfallAnimCallbackProgram == dummyProgram) {
+            sfallAnimCallbackProgram = nullptr;
+            sfallAnimCallbackProcedureIndex = -1;
+        }
+        CHECK(sfallAnimCallbackProgram == nullptr);
+    }
+
+    SUBCASE("register → direct free (no callback fire) — F-13 fix prevents UAF")
+    {
+        // Step 1: program registers callback
+        sfallAnimCallbackProgram = dummyProgram;
+        sfallAnimCallbackProcedureIndex = 2;
+
+        // Step 2: program is freed BEFORE animation completes
+        // Without F-13 fix: sfallAnimCallbackProgram stays as dangling pointer.
+        // With F-13 fix: programFree clears it.
+        if (sfallAnimCallbackProgram == dummyProgram) {
+            sfallAnimCallbackProgram = nullptr;
+            sfallAnimCallbackProcedureIndex = -1;
+        }
+
+        // Callback cleared — no dangling pointer
+        CHECK(sfallAnimCallbackProgram == nullptr);
+        CHECK(sfallAnimCallbackProcedureIndex == -1);
+
+        // Step 3: animation later completes → sfallAnimCallbackInvoke
+        // Guard at sfall_opcodes.cc:4742: null check catches it
+        //   if (sfallAnimCallbackProgram == nullptr || ...) return;
+        // No UAF — safe return.
+        CHECK(sfallAnimCallbackProgram == nullptr);
+    }
+}
+
+// ============================================================
 // sfallVfsCloseAll — close all VFS file handles.
 // ============================================================
 

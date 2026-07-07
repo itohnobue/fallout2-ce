@@ -22,6 +22,7 @@
 #include "geometry.h"
 #include "interface.h"
 #include "item.h"
+#include "kb.h"
 #include "light.h"
 #include "loadsave.h"
 #include "map.h"
@@ -100,6 +101,15 @@ typedef enum Metarule3 {
     METARULE3_CAR_OUT_OF_FUEL = 110,
     // probably returns city index
     METARULE3_MAP_GET_LOAD_AREA = 111,
+
+    // sfall metarule3 extensions
+    METARULE3_SET_HORRIGAN_ENCOUNTER = 200,
+    METARULE3_CLEAR_KEYBOARD_BUFFER = 201,
+    METARULE3_GET_CURRENT_SAVE_SLOT = 210,
+    METARULE3_SET_CURRENT_SAVE_SLOT = 211,
+    METARULE3_GET_CURRENT_QSAVE_PAGE = 212,
+    METARULE3_GET_CURRENT_QSAVE_SLOT = 213,
+    METARULE3_SET_CURRENT_QSAVE_SLOT = 214,
 } Metarule3;
 
 typedef enum CritterTrait {
@@ -2097,6 +2107,71 @@ static void opMetarule3(Program* program)
         break;
     case METARULE3_MAP_GET_LOAD_AREA:
         result.integerValue = mapGetLoadedAreaId();
+        break;
+    case METARULE3_SET_HORRIGAN_ENCOUNTER:
+        if (1) {
+            // metarule3(200, days): 0 = disable Horrigan encounters permanently,
+            // 1-127 = set days until Horrigan encounter.
+            // The static DisableHorrigan config (sfall_callbacks.cc:84-89) sets
+            // gDidMeetFrankHorrigan=true at startup. This metarule3 allows
+            // dynamic runtime control from scripts.
+            int days = param1.integerValue;
+            if (days == 0) {
+                gDidMeetFrankHorrigan = true;
+                gHorriganEncounterDay = -1; // clear any pending countdown
+            } else if (days > 0) {
+                // Schedule encounters to start after 'days' game days from now.
+                unsigned int gameTime = gameTimeGetTime();
+                int currentDay = gameTime / GAME_TIME_TICKS_PER_DAY;
+                gHorriganEncounterDay = currentDay + days;
+                gDidMeetFrankHorrigan = false;
+            }
+        }
+        break;
+    case METARULE3_CLEAR_KEYBOARD_BUFFER:
+        // metarule3(201): Clears the keyboard input buffer.
+        // Useful for scripts during cinematic sequences, keypress hooks, etc.
+        keyboardReset();
+        break;
+    case METARULE3_GET_CURRENT_SAVE_SLOT:
+        // metarule3(210): Returns the current save slot number (0-based).
+        result.integerValue = loadsaveGetCurrentSlot();
+        break;
+    case METARULE3_SET_CURRENT_SAVE_SLOT:
+        if (1) {
+            // metarule3(211, page, slot): Sets the current save slot.
+            // page = page number (0-based), slot = slot within page (0-based).
+            int page = param1.integerValue;
+            int slot = param2.integerValue;
+            loadsaveSetCurrentSlot(page, slot);
+        }
+        break;
+    case METARULE3_GET_CURRENT_QSAVE_PAGE:
+        // metarule3(212): Returns the current quicksave page.
+        // CE uses the same page as the main save slot (no separate quicksave
+        // page tracking — quicksaves cycle through the main save slot list).
+        result.integerValue = loadsaveGetCurrentPage();
+        break;
+    case METARULE3_GET_CURRENT_QSAVE_SLOT:
+        // metarule3(213): Returns the current quicksave slot within the page.
+        // CE does not maintain a separate quicksave slot cursor; quicksaves
+        // use the main save slot cursor. Returns the slot-within-page of the
+        // current main save slot.
+        result.integerValue = loadsaveGetCurrentSlotInPage();
+        break;
+    case METARULE3_SET_CURRENT_QSAVE_SLOT:
+        if (1) {
+            // metarule3(214, page, slot, index): Sets the quicksave slot.
+            // In sfall this sets a separate quicksave cursor; in CE quicksaves
+            // share the main save slot cursor. We set the main cursor to the
+            // specified page+slot position. The third arg (index) is unused but
+            // accepted for API compatibility.
+            int page = param1.integerValue;
+            int slot = param2.integerValue;
+            // param3 (index) intentionally unused — CE does not have separate
+            // quicksave slot tracking.
+            loadsaveSetCurrentSlot(page, slot);
+        }
         break;
     default:
         debugPrint("\nIntextra: Error: metarule3: unknown rule %d", rule);

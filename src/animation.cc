@@ -2908,6 +2908,14 @@ void _object_animate()
             }
 
             sad->step = ANIM_COMPLETE;
+
+            // SFALL: Fire registered animation callback on reverse completion.
+            // Forward animations invoke sfallAnimCallbackInvoke at line 2865;
+            // reverse animations (e.g., dissolve effects, de-spawn sequences)
+            // that reach frame 0 should also trigger the callback, matching
+            // original sfall reg_anim_callback behavior.
+            sfallAnimCallbackInvoke(object);
+
             _anim_set_continue(sad->animationSequenceIndex, 1);
         } else {
             int x;

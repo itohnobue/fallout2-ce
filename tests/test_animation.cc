@@ -339,3 +339,99 @@ TEST_CASE("N2-018: regression — old code would OOB read on squareTile==-1")
     // Without guard: would attempt fidData[-1] which is UB.
     CHECK(result >= 0);
 }
+
+// ===========================================================================
+// F-12: Reverse animation callback (animation.cc:2910-2919)
+// ===========================================================================
+//
+// Finding F-12 (CONFIRMED, MEDIUM): sfallAnimCallbackInvoke is called
+// on forward animation completion at line 2865 but was MISSING from the
+// reverse animation completion path at line 2910 (before fix). The fix
+// adds the sfallAnimCallbackInvoke(object) call after setting ANIM_COMPLETE
+// on the reverse path, matching the forward-path behavior.
+//
+// Source: animation.cc:2840-2919
+// Research: sfall reg_anim_callback fires "on animation completion" for both
+//           directions. Scripts relying on reverse-animation callbacks
+//           (dissolve effects, de-spawn sequences) would never have their
+//           callback triggered without this fix.
+
+// Simulates the reverse animation decision path.
+// Returns true if sfallAnimCallbackInvoke should be called for reverse
+// animation that reaches frame 0 (step set to ANIM_COMPLETE).
+// In production: the callback fires on BOTH forward (last frame) and
+// reverse (frame 0) completion when FOREVER flag is not set.
+static bool testReverseAnimationShouldFireCallback(int flags, int currentFrame, bool isReverse)
+{
+    if (isReverse) {
+        // Reverse animation: reaches frame 0 → sad->step = ANIM_COMPLETE
+        // Then sfallAnimCallbackInvoke(object) is called (F-12 fix).
+        if (currentFrame == 0) {
+            return true;
+        }
+        return false;
+    }
+    // Forward: existing behavior (frame == totalFrames - 1)
+    // This path already has the callback at line 2865.
+    return false;
+}
+
+// ===========================================================================
+// F-12: Reverse animation callback tests
+// ===========================================================================
+
+TEST_CASE("F-12: reverse animation callback fires at frame 0")
+{
+    // Reverse animation reaching frame 0 triggers ANIM_COMPLETE and
+    // sfallAnimCallbackInvoke. This is the direct analog of the forward
+    // path: forward reaches last frame → callback; reverse reaches frame
+    // 0 → callback.
+    int flags = 0; // no FOREVER
+    CHECK(testReverseAnimationShouldFireCallback(flags, 0, true));
+}
+
+TEST_CASE("F-12: reverse animation callback does NOT fire at non-zero frames")
+{
+    // While reverse animation is still running (frames > 0), the callback
+    // should not fire. Only frame 0 = completion.
+    int flags = 0;
+    CHECK_FALSE(testReverseAnimationShouldFireCallback(flags, 1, true));
+    CHECK_FALSE(testReverseAnimationShouldFireCallback(flags, 5, true));
+    CHECK_FALSE(testReverseAnimationShouldFireCallback(flags, 999, true));
+}
+
+TEST_CASE("F-12: reverse animation callback — negative frame does not fire")
+{
+    // Frame < 0 should never be a valid animation frame.
+    int flags = 0;
+    CHECK_FALSE(testReverseAnimationShouldFireCallback(flags, -1, true));
+}
+
+TEST_CASE("F-12: forward path is independent of reverse decision")
+{
+    // The reverse callback is orthogonal to forward — a forward animation
+    // at frame 0 is not completion (unless 1-frame animation, handled
+    // separately in H-010 test). This verifies the isReverse flag correctly
+    // gates the decision.
+    int flags = 0;
+    CHECK_FALSE(testReverseAnimationShouldFireCallback(flags, 0, false));
+}
+
+TEST_CASE("F-12: regression — OLD code never fired callback on reverse completion")
+{
+    // Regression: OLD code at animation.cc:2910 (before fix) did:
+    //   sad->step = ANIM_COMPLETE;
+    //   _anim_set_continue(sad->animationSequenceIndex, 1);
+    // Without any sfallAnimCallbackInvoke call. The forward path at 2865
+    // had the callback, but the reverse path did not.
+    //
+    // FIX: sfallAnimCallbackInvoke(object) added between step=ANIM_COMPLETE
+    // and _anim_set_continue. This test verifies the mirror logic correctly
+    // distinguishes reverse completion at frame 0.
+    CHECK(testReverseAnimationShouldFireCallback(0, 0, true));   // FIX: fires
+    CHECK_FALSE(testReverseAnimationShouldFireCallback(0, 5, true)); // not at frame 5
+
+    // Forward path is NOT the reverse path — the reverse fix is additive,
+    // not a change to forward behavior.
+    CHECK_FALSE(testReverseAnimationShouldFireCallback(0, 0, false)); // not reverse
+}

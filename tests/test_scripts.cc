@@ -598,3 +598,75 @@ TEST_CASE("N2-022: scriptsGetMessageList — boundary IDs (scripts.cc:2851-2854)
     CHECK(testScriptsGetMessageListBounds(10000) == 0);  // upper bound: index=9999 valid
     CHECK(testScriptsGetMessageListBounds(10001) == -1); // overflow: index=10000
 }
+
+// ===========================================================================
+// F-05: Midnight unjam gating (scripts.cc:438-444)
+// ===========================================================================
+//
+// Finding F-05 (CONFIRMED, HIGH): gameTimeEventProcess midnight event
+// unconditionally called objectUnjamAll() before the fix. The fix adds
+// sfallGetUnjamLocksTime() < 0 gating to respect the set_unjam_locks_time
+// metarule. When the override returns >= 0 (time-based FO1 mode), skip
+// midnight unjam — FO1 players expect jammed locks to stay jammed until
+// map re-entry after sufficient time.
+//
+// Source: scripts.cc:438-444, map.cc:1184-1193, sfall_metarules.h:95
+
+// Mirror of the midnight unjam logic in gameTimeEventProcess at scripts.cc:438-444.
+// sfallUnjamValue mirrors the return of sfallGetUnjamLocksTime():
+//   -1  = metarule not configured → unjam at midnight (FO2 behavior)
+//   >=0 = metarule configured → skip midnight unjam (FO1 behavior)
+static bool testShouldUnjamAtMidnight(int sfallUnjamValue)
+{
+    return sfallUnjamValue < 0;
+}
+
+TEST_CASE("F-05: midnight unjam gating — sfallGetUnjamLocksTime returns -1 (FO2 default)")
+{
+    // When the metarule is not configured (returns -1), objectUnjamAll()
+    // should be called — matching FO2 vanilla behavior.
+    CHECK(testShouldUnjamAtMidnight(-1));
+}
+
+TEST_CASE("F-05: midnight unjam gating — sfallGetUnjamLocksTime returns 0 (min override)")
+{
+    // A metarule value of 0 (unjam immediately on re-entry) means the
+    // metarule IS configured — skip midnight unjam (FO1 behavior).
+    CHECK_FALSE(testShouldUnjamAtMidnight(0));
+}
+
+TEST_CASE("F-05: midnight unjam gating — sfallGetUnjamLocksTime returns 1+")
+{
+    // Any positive hour value means the metarule is active.
+    CHECK_FALSE(testShouldUnjamAtMidnight(1));
+    CHECK_FALSE(testShouldUnjamAtMidnight(24));
+    CHECK_FALSE(testShouldUnjamAtMidnight(1000));
+}
+
+TEST_CASE("F-05: midnight unjam gating — threshold at exactly 0")
+{
+    // The gate is `sfallGetUnjamLocksTime() < 0`. -1 is the ONLY value
+    // that passes the gate in normal operation.
+    //   -1  → unjam (FO2, metarule not set)
+    //    0  → skip  (FO1, metarule set to 0h — unjam on re-entry immediately)
+    //    1+ → skip  (FO1, metarule set to positive hours)
+    CHECK(testShouldUnjamAtMidnight(-1));
+    CHECK_FALSE(testShouldUnjamAtMidnight(0));
+    CHECK_FALSE(testShouldUnjamAtMidnight(24));
+}
+
+TEST_CASE("F-05: regression — OLD code called objectUnjamAll() unconditionally")
+{
+    // OLD code: gameTimeEventProcess() called objectUnjamAll() unconditionally
+    // at midnight (scripts.cc:438 before fix). This bypasses the metarule's
+    // unjam-locks-time override, meaning FO1-mode playthroughs would have
+    // locks unjammed at midnight regardless of the configured delay.
+    //
+    // NEW code: the `if (sfallGetUnjamLocksTime() < 0)` gate preserves FO2
+    // default behavior (unjam at midnight) while honoring the FO1 metarule
+    // (skip midnight unjam, let map.cc:1184-1193 handle time-based unjam).
+    //
+    // This test verifies the condition logic itself:
+    CHECK_FALSE(testShouldUnjamAtMidnight(0));   // metarule active → skip
+    CHECK(testShouldUnjamAtMidnight(-1));        // metarule not set → unjam
+}

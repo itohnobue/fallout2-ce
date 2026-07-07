@@ -37,6 +37,7 @@
 #include "pipboy.h"
 #include "platform_compat.h"
 #include "proto_instance.h"
+#include "queue.h"
 #include "scripts.h"
 #include "sfall_animation.h"
 #include "sfall_arrays.h" // For CreateTempArray, SetArray
@@ -111,6 +112,8 @@ static void mf_string_compare(OpcodeContext& ctx);
 static void mf_string_find(OpcodeContext& ctx);
 static void mf_string_to_case(OpcodeContext& ctx);
 void mf_string_format(OpcodeContext& ctx);
+static void mf_string_format_array(OpcodeContext& ctx);
+static void mf_string_replace(OpcodeContext& ctx);
 static void mf_floor2(OpcodeContext& ctx);
 // Rotators fork compatibility wrappers (C-06)
 static void mf_r_get_ini_string(OpcodeContext& ctx);
@@ -236,10 +239,10 @@ static int gMapEnterElevation = -1;
 
 // Unjam locks time override (set by set_unjam_locks_time metarule).
 // Stores the number of game hours before jammed locks auto-unjam.
-// NOTE: Full engine integration (timer-based auto-unjam) requires deeper
-// changes — the engine currently only unjams unconditionally on map entry
-// via objectUnjamAll() in map.cc:1149. This global stores the override
-// for future script queries and eventual engine integration.
+// NOTE: The map-entry path (map.cc:1184-1193) correctly applies time-based
+// gating via this override. The midnight-event path (scripts.cc:438) still
+// calls objectUnjamAll() unconditionally, bypassing this override.
+// This global stores the configured value for script queries and both paths.
 static int gUnjamLocksTimeHours = -1;
 
 // Explosive properties set via item_make_explosive metarule.
@@ -424,6 +427,9 @@ const MetaruleInfo kMetarules[] = {
     { "spatial_radius", mf_spatial_radius, 1, 1, 0, { ARG_OBJECT } },
     { "string_compare", mf_string_compare, 2, 3, 0, { ARG_STRING, ARG_STRING, ARG_INT } },
     { "string_find", mf_string_find, 2, 3, -1, { ARG_STRING, ARG_STRING, ARG_INT } },
+    { "string_find_from", mf_string_find, 3, 3, -1, { ARG_STRING, ARG_STRING, ARG_INT } },
+    { "string_format_array", mf_string_format_array, 2, 2, 0, { ARG_STRING, ARG_INT } },
+    { "string_replace", mf_string_replace, 3, 3, -1, { ARG_STRING, ARG_STRING, ARG_STRING } },
     { "string_format", mf_string_format, 2, 8, 0, { ARG_STRING, ARG_ANY, ARG_ANY, ARG_ANY, ARG_ANY, ARG_ANY, ARG_ANY, ARG_ANY } },
     { "string_to_case", mf_string_to_case, 2, 2, -1, { ARG_STRING, ARG_INT } },
     { "tile_by_position", mf_tile_by_position, 2, 2, -1, { ARG_INT, ARG_INT } },
@@ -1551,6 +1557,52 @@ void mf_string_to_case(OpcodeContext& ctx)
     ctx.setReturn(s.c_str());
 }
 
+// string_replace(str, search, replace): returns a copy of str with all
+// occurrences of search replaced by replace. Returns str unchanged if
+// search is empty or not found.
+// Uses the 5120-byte output buffer pattern for safety.
+void mf_string_replace(OpcodeContext& ctx)
+{
+    const char* str = ctx.stringArg(0);
+    const char* search = ctx.stringArg(1);
+    const char* replace = ctx.stringArg(2);
+
+    // Guard against empty search string to avoid infinite loops.
+    if (strlen(search) == 0) {
+        ctx.setReturn(str);
+        return;
+    }
+
+    // Truncate result to 5120 bytes to match string_format behaviour.
+    const int kMaxResultLen = 5120;
+    std::string result;
+    result.reserve(strlen(str) + strlen(replace));
+
+    const char* pos = str;
+    const char* found;
+    size_t searchLen = strlen(search);
+
+    while ((found = strstr(pos, search)) != nullptr) {
+        // Append everything before the match.
+        result.append(pos, found - pos);
+        // Append the replacement.
+        result.append(replace);
+        // Advance past the search string to avoid infinite loops.
+        pos = found + searchLen;
+        // Safety: truncate if output exceeds max length.
+        if (result.size() > (size_t)kMaxResultLen) {
+            break;
+        }
+    }
+    // Append the remainder after the last match.
+    result.append(pos);
+
+    if (result.size() > (size_t)kMaxResultLen) {
+        result.resize(kMaxResultLen);
+    }
+    ctx.setReturn(result.c_str());
+}
+
 void mf_string_format(OpcodeContext& ctx)
 {
     ProgramValue formatArgs[7];
@@ -1655,6 +1707,138 @@ void mf_string_format(OpcodeContext& ctx)
                 : 0;
             // Write the value as decimal digits directly into newFmt[]
             // with bounds checking against the allocated buffer.
+            int remaining = newFmtLen - j;
+            int written = snprintf(newFmt.get() + j,
+                remaining > 0 ? remaining + 1 : 0, "%d", widthVal);
+            if (written > 0) {
+                if (written > remaining) {
+                    written = remaining;
+                }
+                j += written;
+            }
+            ++valIdx;
+        } else {
+            newFmt[j++] = c;
+        }
+    }
+
+    if (bufCount > 0) {
+        newFmt[j] = '\0';
+        if (strlen(newFmt.get()) < bufCount) {
+            strcpy(outBuf, newFmt.get());
+        } else {
+            strncpy(outBuf, newFmt.get(), bufCount - 1);
+            outBuf[bufCount - 1] = '\0';
+        }
+    }
+
+    ctx.setReturn(out);
+}
+
+// string_format_array(format, arrayId): formats a string using values from
+// a sfall array. Reads array elements via LenArray()/GetArrayKey() and
+// applies the same format processing as string_format.
+void mf_string_format_array(OpcodeContext& ctx)
+{
+    const char* format = ctx.stringArg(0);
+    int arrayId = ctx.arg(1).asInt();
+
+    if (!ArrayExists(arrayId)) {
+        debugPrint("%s(): array %d does not exist", ctx.name(), arrayId);
+        ctx.setReturn("Error");
+        return;
+    }
+
+    int fmtLen = static_cast<int>(strlen(format));
+    if (fmtLen == 0) {
+        ctx.setReturn("");
+        return;
+    }
+    if (fmtLen > 1024) {
+        debugPrint("%s(): format string exceeds maximum length of 1024 characters.", ctx.name());
+        ctx.setReturn("Error");
+        return;
+    }
+
+    int arrayLen = LenArray(arrayId);
+    // Read array values into a local array (max 8 for safety).
+    const int kMaxArgs = 8;
+    ProgramValue formatArgs[kMaxArgs];
+    int numArgs = arrayLen;
+    if (numArgs > kMaxArgs) {
+        numArgs = kMaxArgs;
+    }
+    for (int i = 0; i < numArgs; i++) {
+        ProgramValue key = GetArrayKey(arrayId, i, ctx.program());
+        formatArgs[i] = GetArray(arrayId, key, ctx.program());
+    }
+
+    int newFmtLen = fmtLen;
+    for (int i = 0; i < fmtLen; i++) {
+        if (format[i] == '%') newFmtLen++;
+    }
+
+    auto newFmt = std::make_unique<char[]>(newFmtLen + 1);
+
+    bool conversion = false;
+    int j = 0;
+    int valIdx = 0;
+
+    char out[5120 + 1] = { 0 };
+    int bufCount = sizeof(out) - 1;
+    char* outBuf = out;
+
+    for (int i = 0; i < fmtLen; i++) {
+        char c = format[i];
+        if (!conversion) {
+            if (c == '%') conversion = true;
+        } else if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '%') {
+            int partLen;
+            if (c == '%') {
+                newFmt[j] = '\0';
+                strncpy(outBuf, newFmt.get(), std::min(j, bufCount - 1));
+                partLen = j;
+            } else {
+                if (c == 'h' || c == 'l' || c == 'j' || c == 'z' || c == 't' || c == 'w' || c == 'L' || c == 'I') continue;
+                if (++valIdx == numArgs + 1) {
+                    debugPrint("%s() - format string contains more conversions than array elements (%d): %s",
+                        ctx.name(), numArgs, format);
+                }
+                static const ProgramValue kDefaultFormatArg;
+                const auto& arg = (valIdx <= numArgs) ? formatArgs[valIdx - 1] : kDefaultFormatArg;
+
+                if (c == 'S' || c == 'Z') {
+                    c = 's';
+                }
+                if ((c == 's' && !arg.isString()) || c == 'n') {
+                    c = 'd';
+                }
+                newFmt[j++] = c;
+                newFmt[j] = '\0';
+                partLen = arg.isFloat()
+                    ? snprintf(outBuf, bufCount, newFmt.get(), arg.floatValue)
+                    : arg.isInt()    ? snprintf(outBuf, bufCount, newFmt.get(), arg.integerValue)
+                    : arg.isString() ? snprintf(outBuf, bufCount, newFmt.get(), arg.asString(ctx.program()))
+                                     : snprintf(outBuf, bufCount, newFmt.get(), "<UNSUPPORTED TYPE>");
+                if (partLen < 0) {
+                    partLen = 0;
+                } else if (partLen > bufCount) {
+                    partLen = bufCount;
+                }
+            }
+            outBuf += partLen;
+            bufCount -= partLen;
+            conversion = false;
+            j = 0;
+            if (bufCount <= 0) {
+                break;
+            }
+            continue;
+        }
+        if (c == '*') {
+            int widthVal = (valIdx < numArgs)
+                ? formatArgs[valIdx].asInt()
+                : 0;
             int remaining = newFmtLen - j;
             int written = snprintf(newFmt.get() + j,
                 remaining > 0 ? remaining + 1 : 0, "%d", widthVal);
@@ -2397,15 +2581,23 @@ void mf_lock_is_jammed(OpcodeContext& ctx)
 
 // remove_timer_event(int timerId): removes a timer event by ID.
 // Called with 0 args to remove ALL timer events.
-// Note: only removes from the local tracking vector. Timer events already
-// submitted to the engine queue via scriptAddTimerEvent cannot be cancelled
-// individually — the engine does not support single-timer removal by
-// caller-assigned ID (scriptAddTimerEvent returns 0/-1, not a timer ID).
+// Removes from both the local tracking vector AND the engine event queue
+// via queueClearByEventType(EVENT_TYPE_SCRIPT, _scrQueueRemoveFixed).
 void mf_remove_timer_event(OpcodeContext& ctx)
 {
+    Object* owner = scriptGetSelf(ctx.program());
+
+    if (owner == nullptr) {
+        debugPrint("%s(): called with null script owner\n", ctx.name());
+    }
+
     if (ctx.numArgs() == 0) {
-        // Remove all timer events from local tracking.
+        // Remove all timer events from local tracking AND engine queue.
         int removed = (int)gPendingTimerEvents.size();
+        for (auto& event : gPendingTimerEvents) {
+            _scrSetQueueTestVals(owner, event.opcode);
+            queueClearByEventType(EVENT_TYPE_SCRIPT, _scrQueueRemoveFixed);
+        }
         gPendingTimerEvents.clear();
         ctx.setReturn(removed);
     } else {
@@ -2414,6 +2606,9 @@ void mf_remove_timer_event(OpcodeContext& ctx)
         auto it = gPendingTimerEvents.begin();
         while (it != gPendingTimerEvents.end()) {
             if (it->timerId == timerId) {
+                // Cancel the engine-queued event via queue mechanism.
+                _scrSetQueueTestVals(owner, it->opcode);
+                queueClearByEventType(EVENT_TYPE_SCRIPT, _scrQueueRemoveFixed);
                 it = gPendingTimerEvents.erase(it);
                 removed++;
             } else {
@@ -2624,18 +2819,20 @@ void mf_interface_print(OpcodeContext& ctx)
 // these metarules discoverable via metarule_exist() and prevent script crashes
 // when called. TODO: full engine integration for each as APIs become available.
 
-// add_g_timer_event(int opcode, int delay): registers a timed event to fire
-// the given script opcode/procedure after the specified delay (in ticks).
+// add_g_timer_event(int delay, int fixedParam): registers a timed event to
+// fire the given script procedure (passed as fixedParam) after the specified
+// delay (in ticks). Matches the sfall 4.x API: delay is the FIRST argument,
+// the opcode/procedure ID is the SECOND argument.
 // Submits the event to the engine timer system via scriptAddTimerEvent, which
 // dispatches it as EVENT_TYPE_SCRIPT with the opcode as fixedParam consumed
 // by the script's SCRIPT_PROC_TIMED_EVENT_PROC handler.
 // Returns a positive timerId on success, -1 on failure.
 void mf_add_g_timer_event(OpcodeContext& ctx)
 {
-    int opcode = ctx.arg(0).asInt();
-    int delay = ctx.arg(1).asInt();
+    int delay = ctx.arg(0).asInt();
+    int opcode = ctx.arg(1).asInt();
     if (delay <= 0) {
-        debugPrint("%s(opcode=%d, delay=%d): delay must be positive", ctx.name(), opcode, delay);
+        debugPrint("%s(delay=%d, opcode=%d): delay must be positive", ctx.name(), delay, opcode);
         ctx.setReturn(-1);
         return;
     }
@@ -2775,10 +2972,10 @@ void mf_get_town_title(OpcodeContext& ctx)
 
 // set_unjam_locks_time(int hours): overrides the number of game hours before
 // jammed locks automatically unjam. Stores the override in gUnjamLocksTimeHours.
-// NOTE: Full engine integration (timer-based auto-unjam) requires deeper
-// changes — the engine currently calls objectUnjamAll() unconditionally on
-// every map entry (map.cc:1149) regardless of elapsed game time. This metarule
-// stores the configured value for script queries and eventual engine wiring.
+// NOTE: The map-entry path (map.cc:1184-1193) correctly uses this override
+// for time-based unjam gating. The midnight-event path (scripts.cc:438) still
+// calls objectUnjamAll() unconditionally, bypassing this override.
+// This metarule stores the configured value for script queries and both paths.
 void mf_set_unjam_locks_time(OpcodeContext& ctx)
 {
     int hours = ctx.arg(0).asInt();

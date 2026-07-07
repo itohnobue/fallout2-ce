@@ -331,6 +331,12 @@ namespace fallout {
 // =============================================================
 namespace fallout {
 
+    // Animation callback globals — defined as extern in sfall_opcodes.h.
+    // The real definitions live in sfall_opcodes.cc but that file has 150+
+    // engine dependencies, so we provide test-safe definitions here.
+    Program* sfallAnimCallbackProgram = nullptr;
+    int sfallAnimCallbackProcedureIndex = -1;
+
     void sfallVfsCloseAll()
     {
         // No-op: VFS handle slots are not available in test context.
@@ -338,7 +344,9 @@ namespace fallout {
 
     void sfallAnimCallbackReset()
     {
-        // No-op: animation callback state is not available in test context.
+        // Resets animation callback state to defaults.
+        sfallAnimCallbackProgram = nullptr;
+        sfallAnimCallbackProcedureIndex = -1;
     }
 
     void sfallOpcodesReset()

@@ -237,6 +237,7 @@ typedef enum Map {
 
 extern unsigned char* circleBlendTable;
 extern bool gDidMeetFrankHorrigan;
+extern int gHorriganEncounterDay; // -1 = not set, >=0 = earliest game day for Horrigan encounters
 
 int wmWorldMap_init();
 void wmWorldMap_exit();

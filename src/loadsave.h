@@ -25,6 +25,14 @@ void lsgInit();
 int MapDirErase(const char* path, const char* extension);
 int _MapDirEraseFile_(const char* relativePath, const char* fileName);
 
+// Metarule3(210-214) save slot accessors — exposed for script-level save slot
+// query and control. These access the internal slot cursor state that is
+// normally only manipulated through the save/load UI.
+int loadsaveGetCurrentSlot();
+void loadsaveSetCurrentSlot(int page, int slot);
+int loadsaveGetCurrentPage();
+int loadsaveGetCurrentSlotInPage();
+
 } // namespace fallout
 
 #endif /* LOAD_SAVE_GAME_H */

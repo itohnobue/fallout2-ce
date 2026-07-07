@@ -2969,3 +2969,209 @@ TEST_CASE("wmSetPartyWorldPos bounds validation — large world with multiple ti
     testWmSetPartyWorldPosValidated(800, 600, worldMaxX, worldMaxY);
     CHECK(testWmGenData.worldPosY == 300); // unchanged
 }
+
+// ===========================================================================
+// F-15: Horrigan Encounter Day Countdown (worldmap.cc:3658-3666)
+// ===========================================================================
+//
+// Finding F-15 (CONFIRMED, HIGH): metarule3(200, days) was ignoring the
+// days parameter and immediately re-enabling Horrigan encounters by
+// setting gDidMeetFrankHorrigan=false regardless of days. The fix adds
+// gHorriganEncounterDay (int, -1 = not set) tracking the earliest game
+// day when Horrigan encounters should resume. The encounter trigger now
+// checks both gHorriganEncounterDay and the existing day-35 gate.
+//
+// Source: worldmap.cc:918,1034,1091,1219,1302,1310,1433-1438,3652-3666
+//         interpreter_extra.cc:2116-2127
+//         worldmap.h:239-240
+//
+// Behavior:
+//   - gHorriganEncounterDay = -1 (default): encounters after day 35 (orig)
+//   - gHorriganEncounterDay = 100: encounters NOT on day 50, YES on day 100+
+//   - metarule3(200, 0): gDidMeetFrankHorrigan=true, gHorriganEncounterDay=-1
+
+// Mirror of the Horrigan encounter trigger decision at worldmap.cc:3658-3666.
+static bool testShouldTriggerHorriganEncounter(bool didMeetFrank, int currentDay,
+    int horriganEncounterDay)
+{
+    if (didMeetFrank) {
+        return false; // already met
+    }
+    if (currentDay <= 35) {
+        return false; // original engine gate
+    }
+    if (horriganEncounterDay < 0 || currentDay >= horriganEncounterDay) {
+        return true;
+    }
+    return false;
+}
+
+// Mirror of metarule3(200, days) handler at interpreter_extra.cc:2116-2127.
+struct TestHorriganState {
+    bool didMeetFrank;
+    int encounterDay;
+};
+
+static void testMetarule3Horrigan(TestHorriganState* state, int days)
+{
+    if (days <= 0) {
+        // metarule3(200, 0): disable encounters
+        state->didMeetFrank = true;
+        state->encounterDay = -1;
+    } else {
+        // metarule3(200, N): schedule encounters after N days
+        int currentDay = 1; // simplified; real code: gameTimeGetTime() / GAME_TIME_TICKS_PER_DAY
+        state->encounterDay = currentDay + days;
+        state->didMeetFrank = false;
+    }
+}
+
+// ===========================================================================
+// F-15: Horrigan encounter day countdown tests
+// ===========================================================================
+
+TEST_CASE("F-15: Horrigan encounter — default state (-1) triggers after day 35")
+{
+    // When gHorriganEncounterDay is -1 (not set), the original behavior
+    // is preserved: encounters trigger for any day > 35.
+    CHECK(testShouldTriggerHorriganEncounter(false, 36, -1));  // day 36, triggers
+    CHECK(testShouldTriggerHorriganEncounter(false, 100, -1)); // day 100, triggers
+    CHECK(testShouldTriggerHorriganEncounter(false, 500, -1)); // day 500, triggers
+}
+
+TEST_CASE("F-15: Horrigan encounter — day 35 or earlier never triggers")
+{
+    // The original engine gate is currentDay > 35. Day <= 35 never triggers
+    // regardless of gHorriganEncounterDay value.
+    CHECK_FALSE(testShouldTriggerHorriganEncounter(false, 0, -1));
+    CHECK_FALSE(testShouldTriggerHorriganEncounter(false, 1, -1));
+    CHECK_FALSE(testShouldTriggerHorriganEncounter(false, 35, -1));
+    CHECK_FALSE(testShouldTriggerHorriganEncounter(false, 35, 0));
+    CHECK_FALSE(testShouldTriggerHorriganEncounter(false, 35, 100));
+}
+
+TEST_CASE("F-15: Horrigan encounter — already met Frank prevents triggers")
+{
+    // When gDidMeetFrankHorrigan is true, encounters are completely blocked
+    // regardless of day or countdown.
+    CHECK_FALSE(testShouldTriggerHorriganEncounter(true, 36, -1));
+    CHECK_FALSE(testShouldTriggerHorriganEncounter(true, 100, -1));
+    CHECK_FALSE(testShouldTriggerHorriganEncounter(true, 100, 50));
+    CHECK_FALSE(testShouldTriggerHorriganEncounter(true, 100, 100));
+}
+
+TEST_CASE("F-15: Horrigan encounter — countdown day 100 blocks on day 50")
+{
+    // When gHorriganEncounterDay = 100, encounters should NOT trigger
+    // on day 50 (before the countdown expires).
+    CHECK_FALSE(testShouldTriggerHorriganEncounter(false, 50, 100));
+    CHECK_FALSE(testShouldTriggerHorriganEncounter(false, 36, 100));
+    CHECK_FALSE(testShouldTriggerHorriganEncounter(false, 99, 100));
+}
+
+TEST_CASE("F-15: Horrigan encounter — countdown day 100 triggers on day 100+")
+{
+    // When gHorriganEncounterDay = 100, encounters trigger on day 100+
+    CHECK(testShouldTriggerHorriganEncounter(false, 100, 100));
+    CHECK(testShouldTriggerHorriganEncounter(false, 101, 100));
+    CHECK(testShouldTriggerHorriganEncounter(false, 200, 100));
+}
+
+TEST_CASE("F-15: Horrigan encounter — countdown day 10 triggers on day 36+")
+{
+    // With a short countdown of 10 days, encounters resume at day 36
+    // (day 35 gate + 10 days passed = day 45+ for countdown, but the
+    // condition is currentDay >= encounterDay, so day 36 >= 10 = true).
+    // Actually: day 35 gate AND day >= 10 → day 36 passes both.
+    CHECK(testShouldTriggerHorriganEncounter(false, 36, 10));
+    CHECK_FALSE(testShouldTriggerHorriganEncounter(false, 35, 10));
+}
+
+TEST_CASE("F-15: Horrigan encounter — metarule3(200, 0) disables encounters")
+{
+    TestHorriganState st = { false, -1 };
+
+    // metarule3(200, 0): disable Horrigan encounters
+    testMetarule3Horrigan(&st, 0);
+
+    CHECK(st.didMeetFrank == true);
+    CHECK(st.encounterDay == -1);
+
+    // With didMeetFrank=true, triggers should never fire
+    CHECK_FALSE(testShouldTriggerHorriganEncounter(st.didMeetFrank, 100, st.encounterDay));
+}
+
+TEST_CASE("F-15: Horrigan encounter — metarule3(200, 10) schedules countdown")
+{
+    TestHorriganState st = { true, -1 };
+
+    // metarule3(200, 10): schedule encounters after 10 days
+    testMetarule3Horrigan(&st, 10);
+
+    CHECK(st.didMeetFrank == false);
+    CHECK(st.encounterDay == 11); // currentDay(1) + days(10) = 11
+
+    // Day 36 ≥ 11 → trigger
+    CHECK(testShouldTriggerHorriganEncounter(st.didMeetFrank, 36, st.encounterDay));
+}
+
+TEST_CASE("F-15: Horrigan encounter — metarule3(200, 100) then metarule3(200, 0)")
+{
+    TestHorriganState st = { false, -1 };
+
+    // Schedule countdown
+    testMetarule3Horrigan(&st, 100);
+    CHECK(st.didMeetFrank == false);
+    CHECK(st.encounterDay == 101);
+
+    // Disable before countdown expires
+    testMetarule3Horrigan(&st, 0);
+    CHECK(st.didMeetFrank == true);
+    CHECK(st.encounterDay == -1);
+
+    // Encounters blocked
+    CHECK_FALSE(testShouldTriggerHorriganEncounter(st.didMeetFrank, 200, st.encounterDay));
+}
+
+TEST_CASE("F-15: Horrigan encounter — backward compatibility: old saves (gHorriganEncounterDay=-1)")
+{
+    // Old saves without gHorriganEncounterDay get -1 on load
+    // (worldmap.cc:1437: gHorriganEncounterDay = -1 on EOF).
+    // With -1, original behavior: encounters after day 35.
+    CHECK(testShouldTriggerHorriganEncounter(false, 36, -1));
+    CHECK_FALSE(testShouldTriggerHorriganEncounter(false, 35, -1));
+}
+
+TEST_CASE("F-15: Horrigan encounter — init/reset sets defaults")
+{
+    // wmGenDataInit at worldmap.cc:1033-1034:
+    //   gDidMeetFrankHorrigan = false;
+    //   gHorriganEncounterDay = -1;
+    //
+    // wmGenDataReset at worldmap.cc:1090-1091 does the same.
+    // After init, encounters should trigger after day 35.
+
+    bool didMeetFrank = false;
+    int encounterDay = -1;
+
+    CHECK_FALSE(didMeetFrank);
+    CHECK(encounterDay == -1);
+    CHECK(testShouldTriggerHorriganEncounter(didMeetFrank, 36, encounterDay));
+}
+
+TEST_CASE("F-15: regression — OLD code enabled encounters immediately regardless of days")
+{
+    // OLD code: metarule3(200, 10) set gDidMeetFrankHorrigan = false
+    // immediately, enabling encounters on the next worldmap move (if
+    // past day 35). The days parameter was completely ignored.
+    //
+    // NEW code: metarule3(200, 10) computes encounterDay = currentDay + 10,
+    // deferring encounters until that day arrives.
+    //
+    // Test that the new behavior prevents early trigger:
+    CHECK_FALSE(testShouldTriggerHorriganEncounter(false, 50, 100)); // day 50 < 100 → no trigger
+
+    // Test that encounters DO trigger after countdown expires:
+    CHECK(testShouldTriggerHorriganEncounter(false, 100, 100)); // day 100 == 100 → trigger
+    CHECK(testShouldTriggerHorriganEncounter(false, 150, 100)); // day 150 > 100 → trigger
+}

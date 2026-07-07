@@ -2824,8 +2824,8 @@ static void op_register_hook_proc_spec(Program* program)
 // do not crash.
 // ============================================================
 
-static Program* sfallAnimCallbackProgram = nullptr;
-static int sfallAnimCallbackProcedureIndex = -1;
+Program* sfallAnimCallbackProgram = nullptr;
+int sfallAnimCallbackProcedureIndex = -1;
 
 // F-084 NOTE: sfallAnimCallbackProgram is set by reg_anim_callback and
 // used by sfallAnimCallbackInvoke (which snap-and-clears before invoke).
@@ -3029,9 +3029,10 @@ static void op_mod_skill_points_per_level(Program* program)
 // (hit chance, rest healing, encounter dialog, etc.) are handled in
 // separate engine modules (combat.cc, worldmap.cc, pipboy.cc, etc.).
 //
-// Registration is gated behind AllowUnsafeScripting=1 in ddraw.ini
-// [Misc] section. If not enabled, these opcodes are not registered
-// and scripts will see unregistered opcode errors.
+// VOODOO write opcodes are always registered as safe no-ops.
+// AllowUnsafeScripting (ddraw.ini [Debugging] section) is parsed but
+// intentionally unwired — these opcodes cannot perform actual memory
+// writes in CE regardless of the setting.
 // ============================================================
 
 static void op_write_byte(Program* program)
@@ -5757,12 +5758,11 @@ void sfallOpcodesInit()
     // These pop their arguments and log a debug message, preventing script
     // crashes on unregistered opcode errors.
     //
-    // NOTE: AllowUnsafeScripting gates registration because these opcodes
-    // perform no useful work in CE — they exist only for script compatibility.
-    // Always registering them (unconditionally) prevents script-terminating
-    // programFatalError when scripts call them with AllowUnsafeScripting=0.
-    // The opcode implementations respect gAllowUnsafeScripting internally:
-    // when disabled, they pop arguments and push 0 as a safe fallback.
+    // VOODOO write/call opcodes are always registered as no-ops.
+    // AllowUnsafeScripting is parsed but intentionally unwired —
+    // these opcodes cannot perform actual memory writes in CE.
+    // Unconditional registration prevents script-terminating
+    // programFatalError when scripts call VOODOO functions.
     {
         // 0x81cf - void  write_byte(int address, int value)
         interpreterRegisterOpcode(0x81CF, op_write_byte);

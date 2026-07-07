@@ -4,6 +4,7 @@
 namespace fallout {
 
 struct Object;
+struct Program;
 class ScriptHookCall;
 
 ScriptHookCall* hookOpcodeGetCurrentCall(const char* opcodeName);
@@ -32,6 +33,12 @@ void sfallOpcodeStateLoad();
 // sfallAnimCallbackProcedureIndex to -1, preventing stale pointer
 // use-after-free after game reset.
 void sfallAnimCallbackReset();
+
+// Global program pointer for the registered animation callback.
+// Must have external linkage — referenced via extern in interpreter.cc
+// to clear on program free (use-after-free prevention).
+extern Program* sfallAnimCallbackProgram;
+extern int sfallAnimCallbackProcedureIndex;
 
 // Invoke the registered sfall animation callback procedure on the given object.
 // Called from animation completion paths. The callback procedure receives the

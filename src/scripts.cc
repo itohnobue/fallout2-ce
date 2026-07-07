@@ -435,7 +435,13 @@ int gameTimeEventProcess(Object* obj, void* data)
         return 0;
     }
 
-    objectUnjamAll();
+    // SFALL: Respect set_unjam_locks_time metarule — skip midnight
+    // auto-unjam when the override is active, matching FO1 behavior where
+    // jammed locks stay jammed until map re-entry after sufficient time.
+    // The map-entry path (map.cc:1184-1193) applies the time-based gating.
+    if (sfallGetUnjamLocksTime() < 0) {
+        objectUnjamAll();
+    }
 
     if (!_gdialogActive()) {
         _scriptsCheckGameEvents(&movie_index, -1);

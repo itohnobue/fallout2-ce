@@ -1596,6 +1596,28 @@ int lsgGetTotalSlotCount()
     return saveLoadTotalSlots;
 }
 
+int loadsaveGetCurrentSlot()
+{
+    return _slot_cursor;
+}
+
+void loadsaveSetCurrentSlot(int page, int slot)
+{
+    int newSlot = page * slotsPerPage + slot;
+    _slot_cursor = std::clamp(newSlot, 0, saveLoadTotalSlots - 1);
+    _currentSlotPage = _slot_cursor / slotsPerPage;
+}
+
+int loadsaveGetCurrentPage()
+{
+    return _currentSlotPage;
+}
+
+int loadsaveGetCurrentSlotInPage()
+{
+    return _slot_cursor % slotsPerPage;
+}
+
 // 0x47D2E4
 static int lsgWindowInit(int windowType)
 {
