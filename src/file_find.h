@@ -37,7 +37,12 @@ typedef struct DirectoryFileFindData {
 #else
     DIR* dir;
     struct dirent* entry;
-    char pattern[COMPAT_MAX_FNAME];
+    // NOTE: pattern MUST be >= COMPAT_MAX_PATH because compat_makepath assumes
+    // all destination buffers are COMPAT_MAX_PATH (260) bytes. A smaller
+    // buffer (e.g. COMPAT_MAX_FNAME = 256) causes a deterministic 4-byte
+    // stack overflow in release builds where -fstack-protector-strong is
+    // enabled (stack canary corruption → __stack_chk_fail → SIGABRT).
+    char pattern[COMPAT_MAX_PATH];
 #endif
 } DirectoryFileFindData;
 

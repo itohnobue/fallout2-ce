@@ -1,18 +1,24 @@
-// Unit tests for platform_compat.cc path traversal security.
+// Unit tests for platform_compat.cc — path traversal security and overflow regression.
 //
-// Tests the fork-added compat_path_contains_traversal() function which
-// validates user-controlled paths before passing them to VFS operations.
+// path traversal tests: mirror compat_path_contains_traversal() from
+// platform_compat.cc:446-480 (fork-added user-controlled path validation).
 //
-// Production source: platform_compat.cc:446-480
-// Called by: sfall_ext.cc:190 (GlobalScriptPaths validation)
+// overflow regression tests: compile-time sizeof guards for Stage 5 fixes
+// (F-11: DirectoryFileFindData.pattern size regression).
 //
 // Self-contained test — does not link platform_compat.cc.
-// Mirrors the production logic from platform_compat.cc:446-480.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest.h"
 
 #include <cstring>
+#include <cstddef>
+
+// Stage 5 overflow regression headers — needed for sizeof/static_assert checks.
+// These are header-only; no linking of platform_compat.cc required.
+#include "dfile.h"
+#include "file_find.h"
+#include "platform_compat.h"
 
 // ============================================================================
 // Mirrored production logic from platform_compat.cc:446-480
@@ -183,4 +189,50 @@ TEST_CASE("path traversal: edge cases — not traversal")
         CHECK(testPathContainsTraversal(".file") == false);
         CHECK(testPathContainsTraversal("scripts/.file") == false);
     }
+}
+
+// ============================================================================
+// Stage 5 Overflow Regression Tests
+// ============================================================================
+//
+// F-11 (CRITICAL — crash root cause):
+//   DirectoryFileFindData.pattern was COMPAT_MAX_FNAME (256 bytes) but
+//   compat_makepath writes up to COMPAT_MAX_PATH (260 bytes) — deterministic
+//   4-byte stack overflow corrupting the canary → SIGABRT on every startup.
+//   Fixed by expanding pattern to COMPAT_MAX_PATH at file_find.h:45.
+//
+//   TEST: static_assert + runtime sizeof check — if pattern is ever shrunk
+//   back (e.g., someone changes it back to COMPAT_MAX_FNAME), the test
+//   binary fails to compile. This is the most robust regression guard.
+
+TEST_CASE("F-11 regression: DirectoryFileFindData::pattern is COMPAT_MAX_PATH sized")
+{
+    // Compile-time guard: pattern must be at least COMPAT_MAX_PATH bytes.
+    // If someone reverts the Stage 5 fix and shrinks pattern back to
+    // COMPAT_MAX_FNAME (256), this static_assert fires.
+    static_assert(sizeof(fallout::DirectoryFileFindData::pattern) >= COMPAT_MAX_PATH,
+        "F-11 REGRESSION: DirectoryFileFindData::pattern must be >= COMPAT_MAX_PATH (260) "
+        "because compat_makepath assumes all destination buffers are COMPAT_MAX_PATH-sized. "
+        "See file_find.h:40-45 and the Stage 5 fix (s5-impl-report.md).");
+
+    // Runtime confirmation — exact size is COMPAT_MAX_PATH (260).
+    CHECK(sizeof(fallout::DirectoryFileFindData::pattern) == COMPAT_MAX_PATH);
+
+    // Verify pattern is >= every component max that compat_makepath may write.
+    CHECK(sizeof(fallout::DirectoryFileFindData::pattern) >= COMPAT_MAX_PATH);
+    CHECK(sizeof(fallout::DirectoryFileFindData::pattern) >= COMPAT_MAX_DIR);
+    CHECK(sizeof(fallout::DirectoryFileFindData::pattern) >= COMPAT_MAX_FNAME);
+    CHECK(sizeof(fallout::DirectoryFileFindData::pattern) >= COMPAT_MAX_EXT);
+}
+
+TEST_CASE("F-11 regression: DFileFindData::pattern is also COMPAT_MAX_PATH sized")
+{
+    // DFileFindData.pattern (dfile.h:120) was already COMPAT_MAX_PATH and
+    // served as the reference convention for the DirectoryFileFindData fix.
+    // Verify it hasn't regressed either.
+    static_assert(sizeof(fallout::DFileFindData::pattern) >= COMPAT_MAX_PATH,
+        "DFileFindData::pattern must be >= COMPAT_MAX_PATH (260).");
+
+    CHECK(sizeof(fallout::DFileFindData::pattern) == COMPAT_MAX_PATH);
+    CHECK(sizeof(fallout::DFileFindData::pattern) >= COMPAT_MAX_PATH);
 }

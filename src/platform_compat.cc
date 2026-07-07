@@ -164,7 +164,7 @@ void compat_makepath(char* path, const char* drive, const char* dir, const char*
 
             if (path > pathStart && compatIsPathSeparator(path[-1])) {
                 path--;
-            } else {
+            } else if (path < pathStart + COMPAT_MAX_PATH) {
                 *path = '/';
             }
         }
@@ -173,7 +173,9 @@ void compat_makepath(char* path, const char* drive, const char* dir, const char*
     if (dir != nullptr) {
         if (*dir != '\0') {
             if (!compatIsPathSeparator(*dir) && compatIsPathSeparator(*path)) {
-                path++;
+                if (path < pathStart + COMPAT_MAX_PATH - 1) {
+                    path++;
+                }
             }
 
             size_t remaining = (size_t)(pathStart + COMPAT_MAX_PATH - path);
@@ -185,7 +187,7 @@ void compat_makepath(char* path, const char* drive, const char* dir, const char*
 
             if (path > pathStart && compatIsPathSeparator(path[-1])) {
                 path--;
-            } else {
+            } else if (path < pathStart + COMPAT_MAX_PATH) {
                 *path = '/';
             }
         }
@@ -193,7 +195,9 @@ void compat_makepath(char* path, const char* drive, const char* dir, const char*
 
     if (fname != nullptr && *fname != '\0') {
         if (!compatIsPathSeparator(*fname) && compatIsPathSeparator(*path)) {
-            path++;
+            if (path < pathStart + COMPAT_MAX_PATH - 1) {
+                path++;
+            }
         }
 
         size_t remaining = (size_t)(pathStart + COMPAT_MAX_PATH - path);
@@ -204,7 +208,9 @@ void compat_makepath(char* path, const char* drive, const char* dir, const char*
         path = strchr(path, '\0');
     } else {
         if (compatIsPathSeparator(*path)) {
-            path++;
+            if (path < pathStart + COMPAT_MAX_PATH - 1) {
+                path++;
+            }
         }
     }
 
@@ -213,7 +219,7 @@ void compat_makepath(char* path, const char* drive, const char* dir, const char*
             // Reserve space for the leading dot if needed.
             size_t remaining = (size_t)(pathStart + COMPAT_MAX_PATH - path);
             if (*ext != '.') {
-                if (remaining > 0) {
+                if (remaining > 0 && path < pathStart + COMPAT_MAX_PATH) {
                     *path++ = '.';
                     remaining--;
                 }
@@ -268,7 +274,8 @@ int compat_mkdir_recursive(const char* path)
     compat_splitpath(path, drive, nullptr, nullptr, nullptr);
 
     char pathCopy[COMPAT_MAX_PATH];
-    strcpy(pathCopy, path);
+    strncpy(pathCopy, path, COMPAT_MAX_PATH - 1);
+    pathCopy[COMPAT_MAX_PATH - 1] = '\0';
 
     // Skip drive root (e.g. "C:\\" or leading "/") to avoid mkdir("") or mkdir("C:").
     char* sep = pathCopy + strlen(drive);

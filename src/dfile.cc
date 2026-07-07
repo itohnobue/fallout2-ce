@@ -157,7 +157,7 @@ DBase* dbaseOpen(const char* filePath, int* errorFlags)
         // NULL guard bypass → fread overflow and OOB null write.
         // Upper bound protects against corrupted DAT footers with unrealistic
         // path sizes.
-        if (pathLength < 0 || pathLength > COMPAT_MAX_PATH) {
+        if (pathLength < 0 || pathLength > COMPAT_MAX_PATH - 1) {
             break;
         }
 
@@ -255,7 +255,8 @@ bool dbaseFindFirstEntry(DBase* dbase, DFileFindData* findFileData, const char* 
     for (int index = 0; index < dbase->entriesLength; index++) {
         DBaseEntry* entry = &(dbase->entries[index]);
         if (fpattern_windows_match(pattern, entry->path)) {
-            strcpy(findFileData->fileName, entry->path);
+            strncpy(findFileData->fileName, entry->path, COMPAT_MAX_PATH - 1);
+            findFileData->fileName[COMPAT_MAX_PATH - 1] = '\0';
             strcpy(findFileData->pattern, pattern);
             findFileData->index = index;
             return true;
@@ -271,7 +272,8 @@ bool dbaseFindNextEntry(DBase* dbase, DFileFindData* findFileData)
     for (int index = findFileData->index + 1; index < dbase->entriesLength; index++) {
         DBaseEntry* entry = &(dbase->entries[index]);
         if (fpattern_windows_match(findFileData->pattern, entry->path)) {
-            strcpy(findFileData->fileName, entry->path);
+            strncpy(findFileData->fileName, entry->path, COMPAT_MAX_PATH - 1);
+            findFileData->fileName[COMPAT_MAX_PATH - 1] = '\0';
             findFileData->index = index;
             return true;
         }
@@ -880,6 +882,14 @@ static bool dbaseParseZip(DBase* dbase, FILE* stream, int& errorFlags)
         }
 
         fileName[fileNameLength] = '\0';
+
+        // Reject entry names that exceed COMPAT_MAX_PATH — they would
+        // overflow fixed-size buffers in dbaseFindFirstEntry/dbaseFindNextEntry.
+        if (fileNameLength >= COMPAT_MAX_PATH) {
+            free(fileName);
+            continue;
+        }
+
         for (unsigned short j = 0; j < fileNameLength; j++) {
             if (fileName[j] == '/') {
                 fileName[j] = '\\';

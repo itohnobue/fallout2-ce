@@ -399,14 +399,29 @@ add_executable(test_animation
 target_link_libraries(test_animation PRIVATE doctest)
 add_test(NAME test_animation COMMAND test_animation)
 
-# ---- Test: platform_compat.cc (path traversal security) ----
+# ---- Test: platform_compat.cc (path traversal security + overflow regression) ----
 # Self-contained test — does not link platform_compat.cc.
 # Tests compat_path_contains_traversal from platform_compat.cc:446-480.
+# Includes Stage 5 overflow regression static_assert guards (F-11).
+# Needs src/ include path for file_find.h and platform_compat.h (sizeof checks).
 add_executable(test_platform_compat
     test_platform_compat.cc
 )
+target_include_directories(test_platform_compat PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_include_directories(test_platform_compat PRIVATE ${ZLIB_INCLUDE_DIRS})
 target_link_libraries(test_platform_compat PRIVATE doctest)
 add_test(NAME test_platform_compat COMMAND test_platform_compat)
+
+# ---- Test: platform_compat overflow regression (Stage 5: F-01, F-11, F-13) ----
+# Self-contained test — mirrors compat_makepath, compat_splitpath, and
+# compat_mkdir_recursive from platform_compat.cc to avoid stub conflicts.
+# The sizeof static_assert in test_platform_compat.cc catches structural
+# regressions (shrinking pattern back to COMPAT_MAX_FNAME).
+add_executable(test_platform_compat_overflow
+    test_platform_compat_overflow.cc
+)
+target_link_libraries(test_platform_compat_overflow PRIVATE doctest)
+add_test(NAME test_platform_compat_overflow COMMAND test_platform_compat_overflow)
 
 # ============================================================
 # Stage 5 Implementation — New Test Executables (4 entries)
