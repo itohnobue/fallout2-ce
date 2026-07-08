@@ -18,6 +18,7 @@
 #include "doctest.h"
 
 #include "sfall_script_hooks.h"
+#include "animation.h"
 
 #include <string>
 #include <type_traits>
@@ -88,7 +89,7 @@ TEST_CASE("Implemented hooks — all enabled hooks IDs are sequential and < HOOK
 TEST_CASE("EncounterHookEventType enum values")
 {
     CHECK(static_cast<int>(EncounterHookEventType::RandomEncounter) == 0);
-    CHECK(static_cast<int>(EncounterHookEventType::LocalMapEnter) == 1);
+    CHECK(static_cast<int>(EncounterHookEventType::LocalMapEnter) == 2);
 }
 
 TEST_CASE("EncounterHookResult enum values")
@@ -1131,24 +1132,42 @@ TEST_CASE("F-07: UseSkill — SKILL_COUNT defines valid skill ID range")
     // Production validation: overrideResult == -1 or in [0, SKILL_COUNT-1]
     CHECK(SKILL_COUNT > 0);
     // Known skill IDs must be within [0, SKILL_COUNT-1]
-    CHECK(SKILL_SMALL_GUNS >= 0 && SKILL_SMALL_GUNS < SKILL_COUNT);
-    CHECK(SKILL_BIG_GUNS >= 0 && SKILL_BIG_GUNS < SKILL_COUNT);
-    CHECK(SKILL_ENERGY_WEAPONS >= 0 && SKILL_ENERGY_WEAPONS < SKILL_COUNT);
-    CHECK(SKILL_UNARMED >= 0 && SKILL_UNARMED < SKILL_COUNT);
-    CHECK(SKILL_MELEE_WEAPONS >= 0 && SKILL_MELEE_WEAPONS < SKILL_COUNT);
-    CHECK(SKILL_THROWING >= 0 && SKILL_THROWING < SKILL_COUNT);
-    CHECK(SKILL_FIRST_AID >= 0 && SKILL_FIRST_AID < SKILL_COUNT);
-    CHECK(SKILL_DOCTOR >= 0 && SKILL_DOCTOR < SKILL_COUNT);
-    CHECK(SKILL_SNEAK >= 0 && SKILL_SNEAK < SKILL_COUNT);
-    CHECK(SKILL_LOCKPICK >= 0 && SKILL_LOCKPICK < SKILL_COUNT);
-    CHECK(SKILL_STEAL >= 0 && SKILL_STEAL < SKILL_COUNT);
-    CHECK(SKILL_TRAPS >= 0 && SKILL_TRAPS < SKILL_COUNT);
-    CHECK(SKILL_SCIENCE >= 0 && SKILL_SCIENCE < SKILL_COUNT);
-    CHECK(SKILL_REPAIR >= 0 && SKILL_REPAIR < SKILL_COUNT);
-    CHECK(SKILL_SPEECH >= 0 && SKILL_SPEECH < SKILL_COUNT);
-    CHECK(SKILL_BARTER >= 0 && SKILL_BARTER < SKILL_COUNT);
-    CHECK(SKILL_GAMBLING >= 0 && SKILL_GAMBLING < SKILL_COUNT);
-    CHECK(SKILL_OUTDOORSMAN >= 0 && SKILL_OUTDOORSMAN < SKILL_COUNT);
+    CHECK(SKILL_SMALL_GUNS >= 0);
+    CHECK(SKILL_SMALL_GUNS < SKILL_COUNT);
+    CHECK(SKILL_BIG_GUNS >= 0);
+    CHECK(SKILL_BIG_GUNS < SKILL_COUNT);
+    CHECK(SKILL_ENERGY_WEAPONS >= 0);
+    CHECK(SKILL_ENERGY_WEAPONS < SKILL_COUNT);
+    CHECK(SKILL_UNARMED >= 0);
+    CHECK(SKILL_UNARMED < SKILL_COUNT);
+    CHECK(SKILL_MELEE_WEAPONS >= 0);
+    CHECK(SKILL_MELEE_WEAPONS < SKILL_COUNT);
+    CHECK(SKILL_THROWING >= 0);
+    CHECK(SKILL_THROWING < SKILL_COUNT);
+    CHECK(SKILL_FIRST_AID >= 0);
+    CHECK(SKILL_FIRST_AID < SKILL_COUNT);
+    CHECK(SKILL_DOCTOR >= 0);
+    CHECK(SKILL_DOCTOR < SKILL_COUNT);
+    CHECK(SKILL_SNEAK >= 0);
+    CHECK(SKILL_SNEAK < SKILL_COUNT);
+    CHECK(SKILL_LOCKPICK >= 0);
+    CHECK(SKILL_LOCKPICK < SKILL_COUNT);
+    CHECK(SKILL_STEAL >= 0);
+    CHECK(SKILL_STEAL < SKILL_COUNT);
+    CHECK(SKILL_TRAPS >= 0);
+    CHECK(SKILL_TRAPS < SKILL_COUNT);
+    CHECK(SKILL_SCIENCE >= 0);
+    CHECK(SKILL_SCIENCE < SKILL_COUNT);
+    CHECK(SKILL_REPAIR >= 0);
+    CHECK(SKILL_REPAIR < SKILL_COUNT);
+    CHECK(SKILL_SPEECH >= 0);
+    CHECK(SKILL_SPEECH < SKILL_COUNT);
+    CHECK(SKILL_BARTER >= 0);
+    CHECK(SKILL_BARTER < SKILL_COUNT);
+    CHECK(SKILL_GAMBLING >= 0);
+    CHECK(SKILL_GAMBLING < SKILL_COUNT);
+    CHECK(SKILL_OUTDOORSMAN >= 0);
+    CHECK(SKILL_OUTDOORSMAN < SKILL_COUNT);
 }
 
 TEST_CASE("F-07: UseSkill — -1 (no override) and invalid IDs")
@@ -1158,10 +1177,10 @@ TEST_CASE("F-07: UseSkill — -1 (no override) and invalid IDs")
     CHECK(noOverride == -1);
 
     // SKILL_COUNT is out of range (valid IDs are 0..SKILL_COUNT-1)
-    CHECK_FALSE(SKILL_COUNT >= 0 && SKILL_COUNT < SKILL_COUNT);
+    CHECK_FALSE(SKILL_COUNT < SKILL_COUNT);
     // 999 is out of range
     constexpr int bogusSkill = 999;
-    CHECK_FALSE(bogusSkill >= 0 && bogusSkill < SKILL_COUNT);
+    CHECK_FALSE(bogusSkill < SKILL_COUNT);
 }
 
 TEST_CASE("F-07: UseItem/UseItemOn — valid action codes are -1, 0, 1, 2")
@@ -1198,11 +1217,13 @@ TEST_CASE("F-07: AdjustFid — FID_TYPE macro extracts correct bits")
     // FID layout: xxxxTTTT xxxxxxxx xxxxxxxx xxxxxxxx (bits 24-27 = type)
     // Build a test FID with OBJ_TYPE_CRITTER in the type field.
     constexpr int critterFid = (OBJ_TYPE_CRITTER << 24) | 0x00ABCD;
-    CHECK(FID_TYPE(critterFid) == OBJ_TYPE_CRITTER);
+    constexpr int critterFidType = FID_TYPE(critterFid);
+    CHECK(critterFidType == OBJ_TYPE_CRITTER);
 
     // A non-critter FID should fail the validation.
     constexpr int sceneryFid = (OBJ_TYPE_SCENERY << 24) | 0x00ABCD;
-    CHECK_FALSE(FID_TYPE(sceneryFid) == OBJ_TYPE_CRITTER);
+    constexpr int sceneryFidType = FID_TYPE(sceneryFid);
+    CHECK_FALSE(sceneryFidType == OBJ_TYPE_CRITTER);
 }
 
 TEST_CASE("F-07: SetGlobalVar — override detection logic")

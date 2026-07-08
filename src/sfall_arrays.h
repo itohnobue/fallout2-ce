@@ -49,6 +49,28 @@ ArrayId LoadArray(const ProgramValue& key, Program* program);
 bool sfallArraysSave(File* stream);
 bool sfallArraysLoad(File* stream);
 
+// arrays_equal(array1, array2) -> int
+// Returns 1 if both arrays have the same keys and values in the same order,
+// 0 otherwise. Compares element-by-element: sizes must match, and each
+// (key, value) pair must be equal at every index. F-003 (M-8).
+int ArraysEqual(ArrayId array1, ArrayId array2, Program* program);
+
+// array_filter(array, filterProcedurePtr) -> newArrayId
+// Creates a new array containing only elements for which the callback
+// procedure returns non-zero. The callback is invoked as:
+//   procedure(elementValue)
+// and its return value determines whether the element is kept (non-zero)
+// or discarded (0). F-004 (M-9).
+ArrayId ArrayFilter(ArrayId arrayId, Program* program, int procedureIndex);
+
+// array_transform(array, transformProcedurePtr) -> newArrayId
+// Creates a new array with each element transformed by the callback
+// procedure. The callback is invoked as:
+//   procedure(elementValue)
+// and its return value replaces the element's value in the new array.
+// F-005 (M-10).
+ArrayId ArrayTransform(ArrayId arrayId, Program* program, int procedureIndex);
+
 } // namespace fallout
 
 #endif /* FALLOUT_SFALL_ARRAYS_H_ */

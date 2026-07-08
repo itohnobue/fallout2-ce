@@ -1158,4 +1158,164 @@ bool sfallArraysLoad(File* stream)
     return true;
 }
 
+// arrays_equal(array1, array2) -> int
+// Returns 1 if both arrays have the same keys and values in the same order,
+// 0 otherwise. Compares element-by-element: sizes must match, and each
+// (key, value) pair must be equal at every index.
+// Uses GetArrayKey() and GetArray() so the comparison works for both list
+// and associative arrays. Order-sensitive — arrays with the same elements
+// in different insertion order are NOT equal. This matches sfall behavior
+// where array iteration is always in insertion order.
+// F-003 (M-8): Implements the missing arrays_equal function called by
+// gl_test_arrays.ssl in Et Tu tests.
+int ArraysEqual(ArrayId array1, ArrayId array2, Program* program)
+{
+    SFallArray* a1 = get_array_by_id(array1);
+    SFallArray* a2 = get_array_by_id(array2);
+
+    if (a1 == nullptr) return (a2 == nullptr) ? 1 : 0;
+    if (a2 == nullptr) return 0;
+
+    int size1 = a1->size();
+    int size2 = a2->size();
+    if (size1 != size2) return 0;
+
+    for (int i = 0; i < size1; i++) {
+        ProgramValue key1 = a1->GetArrayKey(i, program);
+        ProgramValue key2 = a2->GetArrayKey(i, program);
+
+        // Keys must be equal. For list arrays, keys are sequential integers.
+        ArrayElement k1 { key1, program };
+        ArrayElement k2 { key2, program };
+        if (!(k1 == k2)) return 0;
+
+        // Values must be equal at each key.
+        ProgramValue val1 = a1->GetArray(key1, program);
+        ProgramValue val2 = a2->GetArray(key2, program);
+        ArrayElement v1 { val1, program };
+        ArrayElement v2 { val2, program };
+        if (!(v1 == v2)) return 0;
+    }
+
+    return 1;
+}
+
+// array_filter(array, filterProcedurePtr) -> newArrayId
+// Creates a new array of the same type (list or associative) containing only
+// the elements for which the callback procedure returns non-zero. The callback
+// is invoked once per element with the element value pushed onto the program
+// stack. If the return value is non-zero (truthy), the element is kept.
+// The original array is not modified.
+// F-004 (M-9): Implements the missing array_filter function.
+ArrayId ArrayFilter(ArrayId arrayId, Program* program, int procedureIndex)
+{
+    SFallArray* src = get_array_by_id(arrayId);
+    if (src == nullptr) {
+        return 0;
+    }
+
+    if (procedureIndex < 0 || procedureIndex >= program->procedureCount()) {
+        programPrintError("array_filter: procedure index %d is out of range", procedureIndex);
+        return 0;
+    }
+
+    // GetArrayKey(-1) returns 0 for list arrays, 1 for associative arrays.
+    bool isAssoc = (src->GetArrayKey(-1, program).integerValue == 1);
+
+    ArrayId resultId = CreateTempArray(isAssoc ? -1 : 0, 0);
+    SFallArray* dst = get_array_by_id(resultId);
+    if (dst == nullptr) {
+        return 0;
+    }
+
+    int size = src->size();
+    int keepCount = 0;
+    for (int i = 0; i < size; i++) {
+        ProgramValue key = src->GetArrayKey(i, program);
+        ProgramValue val = src->GetArray(key, program);
+
+        // Push the value onto the stack and call the callback procedure.
+        programStackPushValue(program, val);
+        programExecuteProcedure(program, procedureIndex);
+        ProgramValue retVal = programStackPopValue(program);
+
+        // Truthy check: non-zero int, non-zero float, non-null pointer/string.
+        bool keep = false;
+        if (retVal.isInt()) {
+            keep = retVal.asInt() != 0;
+        } else if (retVal.isFloat()) {
+            keep = retVal.asFloat() != 0.0f;
+        } else {
+            // Pointer, string, or other — treat non-null as truthy.
+            // For strings, the integerValue is a string table index;
+            // a valid (non-empty) string always has a non-zero effect.
+            keep = (retVal.integerValue != 0);
+        }
+
+        if (keep) {
+            // For list arrays, resize before setting so the index is in bounds.
+            // Use sequential indices for list, original key for assoc.
+            if (!isAssoc) {
+                ResizeArray(resultId, keepCount + 1);
+            }
+            ProgramValue targetKey = isAssoc ? key : ProgramValue(keepCount);
+            dst->SetArray(targetKey, val, false, program);
+            keepCount++;
+        }
+    }
+
+    return resultId;
+}
+
+// array_transform(array, transformProcedurePtr) -> newArrayId
+// Creates a new array of the same type where each element's value has been
+// replaced by the return value of the callback procedure. The callback is
+// invoked once per element with the element value pushed onto the program
+// stack. The return value from the callback becomes the new element value.
+// The original array is not modified.
+// F-005 (M-10): Implements the missing array_transform function.
+ArrayId ArrayTransform(ArrayId arrayId, Program* program, int procedureIndex)
+{
+    SFallArray* src = get_array_by_id(arrayId);
+    if (src == nullptr) {
+        return 0;
+    }
+
+    if (procedureIndex < 0 || procedureIndex >= program->procedureCount()) {
+        programPrintError("array_transform: procedure index %d is out of range", procedureIndex);
+        return 0;
+    }
+
+    // GetArrayKey(-1) returns 0 for list arrays, 1 for associative arrays.
+    bool isAssoc = (src->GetArrayKey(-1, program).integerValue == 1);
+
+    ArrayId resultId = CreateTempArray(isAssoc ? -1 : 0, 0);
+    SFallArray* dst = get_array_by_id(resultId);
+    if (dst == nullptr) {
+        return 0;
+    }
+
+    int size = src->size();
+    for (int i = 0; i < size; i++) {
+        ProgramValue key = src->GetArrayKey(i, program);
+        ProgramValue val = src->GetArray(key, program);
+
+        // Push the value onto the stack and call the callback procedure.
+        programStackPushValue(program, val);
+        programExecuteProcedure(program, procedureIndex);
+        ProgramValue retVal = programStackPopValue(program);
+
+        // For list arrays, resize before setting so the index is in bounds.
+        if (!isAssoc) {
+            ResizeArray(resultId, i + 1);
+        }
+        // Set the transformed value; for list arrays use sequential indices,
+        // for associative arrays preserve the original key.
+        ProgramValue targetKey = isAssoc ? key : ProgramValue(i);
+        dst->SetArray(targetKey, retVal, false, program);
+    }
+
+    return resultId;
+}
+
 } // namespace fallout

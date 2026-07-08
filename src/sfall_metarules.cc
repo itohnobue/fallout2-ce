@@ -180,6 +180,12 @@ static void mf_unjam_lock(OpcodeContext& ctx);
 // F2-24: Explosion metarule wrapper — dispatches sub-metarule operations
 // that are currently only reachable via opcode 0x8261.
 static void mf_explosions_metarule(OpcodeContext& ctx);
+// F-9 (FIX): talking_head_mood — FO1 mood override for dialog heads.
+// Called by VOODOO_talking_head_mood macro in Et Tu's gl_fo1mechanics.ssl.
+// Stores a mood index (-1=reset/use engine default, 0=neutral, 1=good)
+// that overrides the engine-calculated dialog reaction for talking head
+// animation selection in game_dialog.cc _gdSetupFidget.
+static void mf_talking_head_mood(OpcodeContext& ctx);
 
 // Tracks nesting depth of mf_message_box calls.
 // Must be reset across save/load via sfall_metarules_reset() to prevent
@@ -221,6 +227,14 @@ static int gCarIntfaceArtFid = -1;
 
 // set_rest_mode: rest behavior mode (-1 = use default, 0 = disabled, 1 = strict, 2 = no healing)
 static int gRestMode = -1;
+
+// F-9 (FIX): talking_head_mood metarule override.
+// -1 = no override (use engine-calculated reaction), 0-2 = forced mood index.
+// Consumer: game_dialog.cc _gdSetupFidget — check this before computing
+// the reaction-based mood animation FID. The FO1 dialog system uses different
+// mood thresholds than FO2; this metarule allows scripts to force a specific
+// mood regardless of engine calculation.
+static int gTalkingHeadMood = -1;
 
 // Fake perk/trait storage for NPC critters.
 // Key: CID (int, stable across save/load), Value: map of perk/trait name → metadata.
@@ -436,6 +450,7 @@ const MetaruleInfo kMetarules[] = {
     { "string_replace", mf_string_replace, 3, 3, -1, { ARG_STRING, ARG_STRING, ARG_STRING } },
     { "string_format", mf_string_format, 2, 8, 0, { ARG_STRING, ARG_ANY, ARG_ANY, ARG_ANY, ARG_ANY, ARG_ANY, ARG_ANY, ARG_ANY } },
     { "string_to_case", mf_string_to_case, 2, 2, -1, { ARG_STRING, ARG_INT } },
+    { "talking_head_mood", mf_talking_head_mood, 1, 1, 0, { ARG_INT } },
     { "tile_by_position", mf_tile_by_position, 2, 2, -1, { ARG_INT, ARG_INT } },
     { "tile_refresh_display", mf_tile_refresh_display, 0, 0 },
     { "unjam_lock", mf_unjam_lock, 1, 1, -1, { ARG_OBJECT } },
@@ -3294,6 +3309,30 @@ void mf_get_town_title(OpcodeContext& ctx)
     } else {
         ctx.setReturn("");
     }
+}
+
+// F-9 (FIX): talking_head_mood(int mood): overrides the talking head mood in dialogs.
+// Called by VOODOO_talking_head_mood macro in Et Tu's gl_fo1mechanics.ssl.
+// mood values: -1 = reset to engine default, 0 = neutral, 1 = good/bad
+// (the exact mapping depends on the FO1 vs FO2 mood thresholds in reaction.cc).
+// Sets gTalkingHeadMood which should be checked by game_dialog.cc
+// _gdSetupFidget() to override the reaction-based mood for head animations.
+void mf_talking_head_mood(OpcodeContext& ctx)
+{
+    int mood = ctx.arg(0).asInt();
+    // Clamp to known range: -1 (reset), 0 (neutral), 1 (good/bad).
+    // The Et Tu Fo1in2 macro passes explicitly validated values.
+    if (mood < -1) mood = -1;
+    if (mood > 1) mood = 1;
+    gTalkingHeadMood = mood;
+    ctx.setReturn(0);
+}
+
+// API for game_dialog.cc to query the talking head mood override.
+// Returns -1 if no override is set (use engine-calculated reaction).
+int sfallGetTalkingHeadMood()
+{
+    return gTalkingHeadMood;
 }
 
 // set_unjam_locks_time(int hours): overrides the number of game hours before

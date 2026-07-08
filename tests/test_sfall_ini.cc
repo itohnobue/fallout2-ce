@@ -84,7 +84,7 @@ struct MetaruleInfo {
 // Now provided by test_common_stubs.cc — do NOT redefine here.
 
 // programStackPushValue stub (called by OpcodeContext::pushReturnValue).
-void programStackPushValue(Program*, const ProgramValue&) {}
+// Now provided by test_common_stubs.cc — do NOT redefine here.
 
 // --- OpcodeContext out-of-line method definitions ---
 

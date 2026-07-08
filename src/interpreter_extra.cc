@@ -366,7 +366,11 @@ static int _last_color = 1;
 // sfall metarule3(999): enables/disables cooperative party combat.
 // When enabled, all party members automatically attack the player's
 // current target (party_control feature from sfall / Et Tu).
-static bool gPartyCooperativeCombat = false;
+// F-1: Made non-static — exported via sfall_script_hooks.h for combat AI wiring.
+// When enabled (metarule3(999, 1)), party members should attack the player's
+// current target. Wire-in point: combat_ai.cc _aiFindTarget() — check this flag
+// and prefer gDude->data.critter.combat.whoHitMe as the attack target.
+bool gPartyCooperativeCombat = false;
 
 // 0x518F04 strName
 static char* _strName = _aCritter;

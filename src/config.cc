@@ -42,6 +42,39 @@ static bool configWriteStandard(Config* config, const char* filePath);
 static bool configWriteSideBySide(Config* config, const char* filePath, int flags);
 static bool configWriteSection(FILE* stream, const char* sectionName, ConfigSection* section, const StringSet* handledKeys);
 
+// F-14 (FIX): Validate INI value for write safety.
+// INI files are parsed line-by-line with configParseLine. Characters that
+// introduce new lines (\n, \r) or section headers ([, ]) in a key or value
+// can inject arbitrary config entries when the file is re-read. This function
+// rejects such values before they reach the write path. The return value
+// matches the fprintf convention: true = safe to write, false = reject.
+static bool configWriteIsValueSafe(const char* str)
+{
+    if (str == nullptr) return false;
+    for (const char* p = str; *p != '\0'; ++p) {
+        unsigned char ch = static_cast<unsigned char>(*p);
+        if (ch == '\n' || ch == '\r') {
+            return false; // newlines inject new config lines
+        }
+    }
+    return true;
+}
+
+// F-14 (FIX): Validate INI section/key name for write safety.
+// Rejects names containing '[' or ']' which would inject section headers,
+// and '=' or ';' which would corrupt the key=value parse.
+static bool configWriteIsNameSafe(const char* str)
+{
+    if (str == nullptr) return false;
+    for (const char* p = str; *p != '\0'; ++p) {
+        unsigned char ch = static_cast<unsigned char>(*p);
+        if (ch == '\n' || ch == '\r' || ch == '[' || ch == ']') {
+            return false;
+        }
+    }
+    return true;
+}
+
 // Last section key read from .INI file.
 //
 // 0x518224
@@ -479,6 +512,11 @@ static bool configWriteStandard(Config* config, const char* filePath)
 
     bool ok = true;
     for (int i = 0; i < config->entriesLength && ok; i++) {
+        // F-14 (FIX): Validate section name before writing.
+        if (!configWriteIsNameSafe(config->entries[i].key)) {
+            ok = false;
+            break;
+        }
         if (fprintf(stream, "[%s]\n", config->entries[i].key) < 0) {
             ok = false;
             break;
@@ -486,7 +524,16 @@ static bool configWriteStandard(Config* config, const char* filePath)
         ConfigSection* section = (ConfigSection*)config->entries[i].value;
         for (int j = 0; j < section->entriesLength && ok; j++) {
             DictionaryEntry* entry = &(section->entries[j]);
-            if (fprintf(stream, "%s=%s\n", entry->key, *(char**)entry->value) < 0) {
+            char* value = *(char**)entry->value;
+            // F-14 (FIX): Reject values containing newlines to prevent
+            // injection of additional config lines/sections on re-read.
+            if (!configWriteIsValueSafe(value)) {
+                debugPrint("Config: rejected unsafe value for key '%s' in section '%s' (contains control characters)\n",
+                    entry->key, config->entries[i].key);
+                ok = false;
+                break;
+            }
+            if (fprintf(stream, "%s=%s\n", entry->key, value) < 0) {
                 ok = false;
                 break;
             }
@@ -534,7 +581,14 @@ static bool configWriteSection(FILE* stream, const char* sectionName, ConfigSect
     for (int i = 0; i < section->entriesLength; i++) {
         DictionaryEntry* entry = &(section->entries[i]);
         if (handledKeys == nullptr || handledKeys->find(entry->key) == handledKeys->end()) {
-            if (fprintf(stream, "%s=%s\n", entry->key, *(char**)entry->value) < 0) {
+            char* value = *(char**)entry->value;
+            // F-14 (FIX): Validate value before writing.
+            if (!configWriteIsValueSafe(value)) {
+                debugPrint("Config: rejected unsafe value for key '%s' in section '%s'\n",
+                    entry->key, sectionName ? sectionName : "(null)");
+                return false;
+            }
+            if (fprintf(stream, "%s=%s\n", entry->key, value) < 0) {
                 return false;
             }
         }

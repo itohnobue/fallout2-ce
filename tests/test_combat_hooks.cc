@@ -164,7 +164,7 @@ TEST_CASE("AmmoCostHookType enum values")
 TEST_CASE("EncounterHookEventType enum values")
 {
     CHECK(static_cast<int>(EncounterHookEventType::RandomEncounter) == 0);
-    CHECK(static_cast<int>(EncounterHookEventType::LocalMapEnter) == 1);
+    CHECK(static_cast<int>(EncounterHookEventType::LocalMapEnter) == 2);
 }
 
 TEST_CASE("EncounterHookResult enum values")

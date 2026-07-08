@@ -34,6 +34,10 @@ struct FloatVarEntry {
 // Magic number for save format identification: "SFGV" (Sfall Global Vars).
 static const uint32_t kSfallGlobalVarsMagic = 0x53464756;
 static const int32_t kSfallGlobalVarsVersion = 1;
+// F-16 (FIX): Maximum number of entries for both integer and float global vars.
+// Mirrors the load-time cap at line 181 (which rejects counts > 10000).
+// The integer store has this check at line 308; the float store was missing it.
+static constexpr size_t kMaxGlobalVars = 10000;
 
 static bool sfall_gl_vars_store(uint64_t key, int value);
 static bool sfall_gl_vars_fetch(uint64_t key, int& value);
@@ -154,7 +158,7 @@ bool sfall_gl_vars_load(File* stream)
         memcpy(&count, &magicOrCount, sizeof(count));
     }
 
-    if (count < 0 || count > 10000) {
+    if (count < 0 || count > static_cast<int>(kMaxGlobalVars)) {
         return false;
     }
 
@@ -178,7 +182,7 @@ bool sfall_gl_vars_load(File* stream)
             return false;
         }
 
-        if (floatCount < 0 || floatCount > 10000) {
+        if (floatCount < 0 || floatCount > static_cast<int>(kMaxGlobalVars)) {
             return false;
         }
 
@@ -305,10 +309,10 @@ static bool sfall_gl_vars_store(uint64_t key, int value)
     // unconditionally; beyond-cap entries added before this fix was
     // applied will persist through save/load. The cap only restricts
     // new keys added at runtime starting now.
-    if (sfall_gl_vars_state->vars.size() >= 10000
+    if (sfall_gl_vars_state->vars.size() >= kMaxGlobalVars
         && sfall_gl_vars_state->vars.find(key) == sfall_gl_vars_state->vars.end()) {
-        debugPrint("sfall_gl_vars_store: global vars cap (10000) exceeded, rejecting key %llu\n",
-            static_cast<unsigned long long>(key));
+        debugPrint("sfall_gl_vars_store: global vars cap (%zu) exceeded, rejecting key %llu\n",
+            kMaxGlobalVars, static_cast<unsigned long long>(key));
         return false;
     }
 
@@ -344,13 +348,28 @@ bool sfall_gl_vars_store_float(const char* key, float value)
     if (!ok) {
         return false;
     }
+    // F-16 (FIX): Same size cap as integer vars to prevent unbounded runtime growth.
+    if (sfall_gl_vars_state->floatVars.size() >= kMaxGlobalVars
+        && sfall_gl_vars_state->floatVars.find(numericKey) == sfall_gl_vars_state->floatVars.end()) {
+        debugPrint("sfall_gl_vars_store_float: float vars cap (%zu) exceeded, rejecting key\n",
+            kMaxGlobalVars);
+        return false;
+    }
     sfall_gl_vars_state->floatVars[numericKey] = value;
     return true;
 }
 
 bool sfall_gl_vars_store_float(int key, float value)
 {
-    sfall_gl_vars_state->floatVars[static_cast<uint64_t>(key)] = value;
+    uint64_t numericKey = static_cast<uint64_t>(key);
+    // F-16 (FIX): Same size cap as integer vars to prevent unbounded runtime growth.
+    if (sfall_gl_vars_state->floatVars.size() >= kMaxGlobalVars
+        && sfall_gl_vars_state->floatVars.find(numericKey) == sfall_gl_vars_state->floatVars.end()) {
+        debugPrint("sfall_gl_vars_store_float: float vars cap (%zu) exceeded, rejecting key %llu\n",
+            kMaxGlobalVars, static_cast<unsigned long long>(key));
+        return false;
+    }
+    sfall_gl_vars_state->floatVars[numericKey] = value;
     return true;
 }
 

@@ -1760,6 +1760,34 @@ static Object* _ai_danger_source(Object* a1)
         }
 
         attackWho = aiGetAttackWho(a1);
+
+        // Cooperative party combat: when enabled via metarule3(999, 1),
+        // party members prefer the player's current combat target.
+        // The flag is set in interpreter_extra.cc and exported via
+        // sfall_script_hooks.h. If the player has no valid target
+        // (null, dead, knocked out, same team, or self), fall through
+        // to normal target selection below.
+        if (gPartyCooperativeCombat) {
+            Object* playerTarget = gDude->data.critter.combat.whoHitMe;
+            if (playerTarget != nullptr && playerTarget != a1
+                && (playerTarget->data.critter.combat.results & (DAM_DEAD | DAM_KNOCKED_OUT)) == 0
+                && playerTarget->data.critter.combat.team != a1->data.critter.combat.team) {
+                // Allow HOOK_FINDTARGET to override the target via script.
+                ScriptHookCall hook(HOOK_FINDTARGET, 1, { a1, playerTarget });
+                hook.call();
+                if (hook.numReturnValues() > 0) {
+                    Object* hookCandidate = hook.getReturnValueAt(0).asObject();
+                    if (hookCandidate != nullptr && PID_TYPE(hookCandidate->pid) == OBJ_TYPE_CRITTER) {
+                        return hookCandidate;
+                    } else if (hookCandidate != nullptr) {
+                        debugPrint("HOOK_FINDTARGET: script returned non-critter object (pid=%d), ignoring override",
+                            hookCandidate->pid);
+                    }
+                }
+                return playerTarget;
+            }
+        }
+
         switch (attackWho) {
         case ATTACK_WHO_WHOMEVER_ATTACKING_ME:
             if (1) {

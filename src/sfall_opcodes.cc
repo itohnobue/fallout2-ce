@@ -5,9 +5,12 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <dirent.h>
 #include <limits.h>
 #include <math.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <unordered_map>
 
 #include "animation.h"
@@ -473,6 +476,20 @@ static void op_available_global_script_types(Program* program)
 }
 
 // set_sfall_global
+// F-15 (ITER2-M14): Fire HOOK_SETGLOBALVAR for int-keyed int-value sfall
+// global writes. Vanilla opSetGlobalVar (interpreter_extra.cc:1276) routes
+// through scriptHooks_SetGlobalVar() which dispatches to registered hook
+// scripts. sfall globals bypassed this hook entirely — two separate global
+// var systems, only vanilla got the hook coverage.
+//
+// The hook interface is (int varIndex, int value) → int override. This maps
+// naturally to int-keyed int-value sfall globals. String-keyed globals and
+// float-valued globals do not fit the int-keyed hook contract — those paths
+// store directly without hook dispatch.
+//
+// Recursion protection: the ScriptHookCall system has MAX_HOOK_CALL_DEPTH=8
+// (global) and per-type depth cap of 4, which guards against infinite
+// recursion if a hook handler calls set_sfall_global again.
 static void op_set_sfall_global(Program* program)
 {
     ProgramValue value = programStackPopValue(program);
@@ -491,25 +508,47 @@ static void op_set_sfall_global(Program* program)
             const char* key = programGetString(program, variable.opcode, variable.integerValue);
             sfall_gl_vars_store(key, value.integerValue);
         } else if (variable.opcode == VALUE_TYPE_INT) {
-            sfall_gl_vars_store(variable.integerValue, value.integerValue);
+            // Fire HOOK_SETGLOBALVAR to let registered scripts inspect/override
+            // the value before storing. Mirrors the pattern used by vanilla
+            // opSetGlobalVar at interpreter_extra.cc:1276.
+            int overrideValue = scriptHooks_SetGlobalVar(variable.integerValue, value.integerValue);
+            sfall_gl_vars_store(variable.integerValue, overrideValue);
         }
     }
 }
 
 // get_sfall_global_int
+// F-011 (ITER2-M2): Use the bool return from sfall_gl_vars_fetch to
+// distinguish "key not found" from "key stored with value 0". When the
+// key is not found, we push INT_MIN as a sentinel so scripts can
+// reliably detect absence vs. a stored value of 0 (or any other valid
+// int). Positive scripts never set INT_MIN as a meaningful value.
+// The float counterpart (op_get_sfall_global_float) already correctly
+// uses the bool return and falls back to int storage.
 static void op_get_sfall_global_int(Program* program)
 {
     ProgramValue variable = programStackPopValue(program);
 
     int value = 0;
+    bool found = false;
     if ((variable.opcode & VALUE_TYPE_MASK) == VALUE_TYPE_STRING) {
         const char* key = programGetString(program, variable.opcode, variable.integerValue);
-        sfall_gl_vars_fetch(key, value);
+        found = sfall_gl_vars_fetch(key, value);
     } else if (variable.opcode == VALUE_TYPE_INT) {
-        sfall_gl_vars_fetch(variable.integerValue, value);
+        found = sfall_gl_vars_fetch(variable.integerValue, value);
     }
 
-    programStackPushInteger(program, value);
+    if (!found) {
+        // Key not found — push sentinel to distinguish from "found with 0".
+        // INT_MIN is chosen because no real script stores INT_MIN as a global
+        // variable value; it serves as an unambiguous "not set" indicator.
+        // This differs from original sfall 4.x which returns 0 for both
+        // "not found" and "found with 0", but CE exposes the stronger
+        // semantics since sfall_gl_vars_fetch already provides them.
+        programStackPushInteger(program, INT_MIN);
+    } else {
+        programStackPushInteger(program, value);
+    }
 }
 
 // get_sfall_global_float
@@ -1364,13 +1403,19 @@ static void op_list_as_array(Program* program)
 }
 
 // atoi
+// F-12 (ITER2-M3): Check strtol result against INT_MAX/INT_MIN to prevent
+// silent truncation on LP64 platforms. strtol returns long (64-bit on LP64)
+// and ERANGE only catches values exceeding LONG_MAX. Input "3000000000" →
+// strtol returns 3000000000L (no ERANGE) → static_cast<int>() truncates to
+// -1294967296. The same fix pattern is used in config.cc:275 and
+// sfall_ini.cc:280: errno == ERANGE || l < INT_MIN || l > INT_MAX.
 static void op_parse_int(Program* program)
 {
     const char* string = programStackPopString(program);
     errno = 0;
     long result = strtol(string, nullptr, 0);
-    if (errno == ERANGE) {
-        programStackPushInteger(program, (result == LONG_MAX) ? INT_MAX : INT_MIN);
+    if (errno == ERANGE || result < INT_MIN || result > INT_MAX) {
+        programStackPushInteger(program, (result == LONG_MAX || result > INT_MAX) ? INT_MAX : INT_MIN);
     } else {
         programStackPushInteger(program, static_cast<int>(result));
     }
@@ -1669,6 +1714,41 @@ static void op_arrayexpr(Program* program)
     auto key = programStackPopValue(program);
     SetArrayFromExpression(key, value, program);
     programStackPushInteger(program, 0);
+}
+
+// arrays_equal(array1, array2) -> int
+// Returns 1 if both arrays have the same keys and values, 0 otherwise.
+// F-003 (M-8): Implements the missing arrays_equal function.
+static void op_arrays_equal(Program* program)
+{
+    auto array2 = static_cast<ArrayId>(programStackPopInteger(program));
+    auto array1 = static_cast<ArrayId>(programStackPopInteger(program));
+    programStackPushInteger(program, ArraysEqual(array1, array2, program));
+}
+
+// array_filter(array, filterProcedurePtr) -> newArrayId
+// Creates a new array containing only elements that pass the filter.
+// The filter procedure is called for each element value and the return
+// value determines inclusion (non-zero = keep, 0 = discard).
+// F-004 (M-9): Implements the missing array_filter function.
+static void op_array_filter(Program* program)
+{
+    auto procedureIndex = programStackPopInteger(program);
+    auto arrayId = static_cast<ArrayId>(programStackPopInteger(program));
+    auto resultId = ArrayFilter(arrayId, program, procedureIndex);
+    programStackPushInteger(program, static_cast<int>(resultId));
+}
+
+// array_transform(array, transformProcedurePtr) -> newArrayId
+// Creates a new array with each element value replaced by the transform
+// procedure's return value.
+// F-005 (M-10): Implements the missing array_transform function.
+static void op_array_transform(Program* program)
+{
+    auto procedureIndex = programStackPopInteger(program);
+    auto arrayId = static_cast<ArrayId>(programStackPopInteger(program));
+    auto resultId = ArrayTransform(arrayId, program, procedureIndex);
+    programStackPushInteger(program, static_cast<int>(resultId));
 }
 
 // scan_array
@@ -2063,6 +2143,55 @@ void sfallVfsSetRoot(const char* root)
     }
 }
 
+// Simple wildcard pattern matcher supporting '*' (matches any sequence of
+// characters) and '?' (matches any single character). Used by fs_find for
+// glob-based file searching. Returns true if 'name' matches 'pattern'.
+// Does NOT support character classes ([abc]), brace expansion, or other
+// extended glob syntax — this matches the subset supported by original sfall.
+// F-006 (M-11): Implements the wildcard matching that sfall's fs_find uses
+// for glob-based file searching.
+static bool sfallVfsGlobMatch(const char* pattern, const char* name)
+{
+    const char* star = nullptr;
+    const char* nameAfterStar = nullptr;
+
+    while (*name != '\0') {
+        if (*pattern == '*') {
+            star = pattern++;
+            nameAfterStar = name;
+        } else if (*pattern == '?' || *pattern == *name) {
+            pattern++;
+            name++;
+        } else if (star != nullptr) {
+            pattern = star + 1;
+            name = ++nameAfterStar;
+        } else {
+            return false;
+        }
+    }
+
+    // Consume any trailing '*' characters in the pattern.
+    while (*pattern == '*') {
+        pattern++;
+    }
+
+    return *pattern == '\0';
+}
+
+// Check if a path contains any wildcard characters that would indicate
+// a glob pattern rather than a literal filename.
+static bool sfallVfsPathHasGlob(const char* path)
+{
+    if (path == nullptr) return false;
+    while (*path != '\0') {
+        if (*path == '*' || *path == '?') {
+            return true;
+        }
+        path++;
+    }
+    return false;
+}
+
 // Resolve a VFS path against the sandbox root. Returns true and writes
 // the resolved path to outBuf (size COMPAT_MAX_PATH) on success.
 // Returns false if the path is invalid (absolute, empty, contains "..",
@@ -2259,6 +2388,12 @@ static void op_fs_copy(Program* program)
 }
 
 // fs_find(path) -> fileId (or -1 if not found)
+// Supports wildcard/glob patterns ('*' and '?') for file searching.
+// When the path contains wildcards, the directory portion is resolved
+// and the first matching file is opened. When the path is a literal
+// filename (no wildcards), the existing direct fopen behavior is used.
+// F-006 (M-11): Implements wildcard pattern matching. Original code
+// did plain fopen with no glob support, matching sfall's fs_find API.
 static void op_fs_find(Program* program)
 {
     const char* path = programStackPopString(program);
@@ -2277,7 +2412,111 @@ static void op_fs_find(Program* program)
         return;
     }
 
-    FILE* file = compat_fopen(resolvedPath, "rb");
+    // Check if the resolved path contains wildcards.
+    const char* lastSlash = nullptr;
+    const char* pattern = resolvedPath;
+    for (const char* p = resolvedPath; *p != '\0'; p++) {
+        if (*p == '/' || *p == '\\') {
+            lastSlash = p;
+        }
+    }
+
+    if (lastSlash != nullptr) {
+        pattern = lastSlash + 1;
+    }
+
+    // If no wildcards in the pattern, use the fast path (direct fopen).
+    if (!sfallVfsPathHasGlob(pattern)) {
+        FILE* file = compat_fopen(resolvedPath, "rb");
+        if (file == nullptr) {
+            programStackPushInteger(program, -1);
+            return;
+        }
+
+        int handle = sfallVfsAllocHandle();
+        if (handle < 0) {
+            programPrintError("fs_find: no free VFS handles");
+            fclose(file);
+            programStackPushInteger(program, -1);
+            return;
+        }
+
+        sfallVfsFiles[handle] = file;
+        sfallVfsFileMode[handle] = 1; // read-only ("rb")
+        sfallVfsFilePath[handle] = internal_strdup(resolvedPath);
+        programStackPushInteger(program, handle);
+        return;
+    }
+
+    // Wildcard path: extract the directory portion and list its contents.
+    char dirPath[COMPAT_MAX_PATH];
+    if (lastSlash != nullptr) {
+        size_t dirLen = static_cast<size_t>(lastSlash - resolvedPath);
+        if (dirLen >= sizeof(dirPath)) {
+            dirLen = sizeof(dirPath) - 1;
+        }
+        memcpy(dirPath, resolvedPath, dirLen);
+        dirPath[dirLen] = '\0';
+    } else {
+        // No directory separator — pattern is relative to CWD.
+        strncpy(dirPath, ".", sizeof(dirPath) - 1);
+        dirPath[sizeof(dirPath) - 1] = '\0';
+    }
+
+    DIR* dir = opendir(dirPath);
+    if (dir == nullptr) {
+        programPrintError("fs_find: cannot open directory '%s' for glob search", dirPath);
+        programStackPushInteger(program, -1);
+        return;
+    }
+
+    char foundPath[COMPAT_MAX_PATH];
+    bool matchFound = false;
+
+    struct dirent* entry;
+    while ((entry = readdir(dir)) != nullptr) {
+        // Skip "." and ".." entries.
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+
+        // Only match regular files (not directories, symlinks, etc.).
+        // We construct the full path for stat, but only if it fits.
+        char fullPath[COMPAT_MAX_PATH];
+        if (lastSlash != nullptr) {
+            int written = snprintf(fullPath, sizeof(fullPath), "%s/%s", dirPath, entry->d_name);
+            if (written < 0 || static_cast<size_t>(written) >= sizeof(fullPath)) {
+                continue;
+            }
+        } else {
+            // Pattern was just a filename with wildcards, no directory.
+            strncpy(fullPath, entry->d_name, sizeof(fullPath) - 1);
+            fullPath[sizeof(fullPath) - 1] = '\0';
+        }
+
+        struct stat st;
+        if (stat(fullPath, &st) != 0) {
+            continue;
+        }
+        if (!S_ISREG(st.st_mode)) {
+            continue;
+        }
+
+        if (sfallVfsGlobMatch(pattern, entry->d_name)) {
+            strncpy(foundPath, fullPath, sizeof(foundPath) - 1);
+            foundPath[sizeof(foundPath) - 1] = '\0';
+            matchFound = true;
+            break;
+        }
+    }
+    closedir(dir);
+
+    if (!matchFound) {
+        programStackPushInteger(program, -1);
+        return;
+    }
+
+    FILE* file = compat_fopen(foundPath, "rb");
     if (file == nullptr) {
         programStackPushInteger(program, -1);
         return;
@@ -2293,9 +2532,7 @@ static void op_fs_find(Program* program)
 
     sfallVfsFiles[handle] = file;
     sfallVfsFileMode[handle] = 1; // read-only ("rb")
-    // F-270: store an owned copy to prevent use-after-free when the
-    // program exits and frees its dynamicStrings backing store.
-    sfallVfsFilePath[handle] = internal_strdup(resolvedPath);
+    sfallVfsFilePath[handle] = internal_strdup(foundPath);
     programStackPushInteger(program, handle);
 }
 
@@ -2493,6 +2730,70 @@ static void op_fs_read_int(Program* program)
     programStackPushInteger(program, value);
 }
 
+// fs_read_string(id) -> string (empty string on error)
+// Reads a null-terminated string from the VFS file. Reads up to 1024
+// bytes including the null terminator. Returns empty string on error.
+// F-002 (M-7): Implements the missing VFS string read path. Write
+// counterparts (fs_write_string at 0x81fe, fs_write_bstring at 0x8208)
+// exist but no read path for strings — RPU/ET Tu scripts that write
+// strings via fs_write_string had no way to read them back.
+static void op_fs_read_string(Program* program)
+{
+    int id = programStackPopInteger(program);
+
+    if (id < 0 || id >= kVfsMaxFiles || sfallVfsFiles[id] == nullptr) {
+        programPrintError("fs_read_string: invalid VFS handle %d", id);
+        programStackPushString(program, "");
+        return;
+    }
+
+    // Read bytes until null terminator or EOF, max 1024 chars.
+    char buf[1025];
+    int i = 0;
+    int c;
+    while (i < 1024 && (c = fgetc(sfallVfsFiles[id])) != EOF && c != '\0') {
+        buf[i++] = static_cast<char>(c);
+    }
+    buf[i] = '\0';
+    programStackPushString(program, buf);
+}
+
+// fs_read_bstring(id) -> string (empty string on error)
+// Reads a length-prefixed byte string from the VFS file. Reads 1 byte
+// as the length prefix, then reads that many bytes. Returns empty
+// string on error. Matches the wire format written by fs_write_bstring.
+// F-002 (M-7): Implements the missing VFS bstring read path.
+static void op_fs_read_bstring(Program* program)
+{
+    int id = programStackPopInteger(program);
+
+    if (id < 0 || id >= kVfsMaxFiles || sfallVfsFiles[id] == nullptr) {
+        programPrintError("fs_read_bstring: invalid VFS handle %d", id);
+        programStackPushString(program, "");
+        return;
+    }
+
+    // Read 1-byte length prefix.
+    int lenByte = fgetc(sfallVfsFiles[id]);
+    if (lenByte == EOF || lenByte < 0) {
+        programStackPushString(program, "");
+        return;
+    }
+    unsigned char length = static_cast<unsigned char>(lenByte);
+
+    // Read 'length' bytes of string data.
+    char buf[256];
+    size_t nread = 0;
+    if (length > 0) {
+        nread = fread(buf, 1, length, sfallVfsFiles[id]);
+        if (nread < length) {
+            programPrintError("fs_read_bstring: short read on handle %d (expected %u, got %zu)", id, length, nread);
+        }
+    }
+    buf[nread] = '\0';
+    programStackPushString(program, buf);
+}
+
 // fs_read_float(id) -> float (0.0 on error)
 static void op_fs_read_float(Program* program)
 {
@@ -2652,15 +2953,62 @@ static void op_fs_resize(Program* program)
         sfallVfsFileMode[id] = 2; // now read-write
     }
 
-    // F-48: Check fseek return value matching the pattern used by
-    // fs_size (lines 2517, 2528) and fs_seek (line 2582).
-    if (fseek(sfallVfsFiles[id], static_cast<long>(size) - 1, SEEK_SET) != 0) {
-        programPrintError("fs_resize: fseek failed on handle %d", id);
+    // F-13 (ITER2-M5): Support file truncation on shrink. The old code used a
+    // grow-only pattern (fseek + fputc) which leaves stale data when the new
+    // size is smaller than the current file size. If original file is 100 bytes
+    // and script calls fs_resize(handle, 50), position 49 gets \0 but bytes
+    // 50-99 remain as stale data. Use ftruncate() (POSIX) on shrink.
+    //
+    // Logic:
+    //   1. Save current file position.
+    //   2. Determine current file size (seek to end, ftell).
+    //   3. If new_size > current_size: grow via existing fseek + fputc pattern.
+    //   4. If new_size < current_size: truncate via ftruncate.
+    //   5. If new_size == current_size: no-op.
+    //   6. Restore position to min(saved_pos, new_size).
+    long savedPos = ftell(sfallVfsFiles[id]);
+    if (savedPos == -1L) {
+        programPrintError("fs_resize: ftell (save pos) failed on handle %d", id);
         return;
     }
-    // F2-064: check fputc return value.
-    if (fputc(0, sfallVfsFiles[id]) == EOF) {
-        programPrintError("fs_resize: fputc failed on handle %d", id);
+
+    if (fseek(sfallVfsFiles[id], 0, SEEK_END) != 0) {
+        programPrintError("fs_resize: fseek to end failed on handle %d", id);
+        return;
+    }
+    long currentSize = ftell(sfallVfsFiles[id]);
+    if (currentSize == -1L) {
+        programPrintError("fs_resize: ftell (size) failed on handle %d", id);
+        return;
+    }
+
+    long newSize = static_cast<long>(size);
+    if (newSize > currentSize) {
+        // Growing: use existing fseek + fputc pattern to extend the file.
+        // F-48: Check fseek return value matching the pattern used by
+        // fs_size (lines 2517, 2528) and fs_seek (line 2582).
+        if (fseek(sfallVfsFiles[id], newSize - 1, SEEK_SET) != 0) {
+            programPrintError("fs_resize: fseek failed on handle %d", id);
+            return;
+        }
+        // F2-064: check fputc return value.
+        if (fputc(0, sfallVfsFiles[id]) == EOF) {
+            programPrintError("fs_resize: fputc failed on handle %d", id);
+        }
+    } else if (newSize < currentSize) {
+        // Shrinking: truncate the file to the requested size.
+        if (ftruncate(fileno(sfallVfsFiles[id]), static_cast<off_t>(newSize)) != 0) {
+            programPrintError("fs_resize: ftruncate to %ld failed on handle %d", newSize, id);
+        }
+    }
+    // else: newSize == currentSize, no-op.
+
+    // Restore position to min(original position, new size) so the file
+    // pointer is valid after resize. If the file was shrunk below the
+    // original position, seek to the new end of file.
+    long restorePos = (savedPos < newSize) ? savedPos : newSize;
+    if (fseek(sfallVfsFiles[id], restorePos, SEEK_SET) != 0) {
+        programPrintError("fs_resize: fseek restore failed on handle %d", id);
     }
 }
 
@@ -2844,6 +3192,20 @@ static void op_sprintf(Program* program)
 
     mf_string_format(ctx);
     ctx.pushReturnValue();
+}
+
+// string_null_or_empty(str) -> int
+// Returns 1 if the string is null or empty (zero length), 0 otherwise.
+// F-007 (M-14): Implements the missing string_null_or_empty function
+// used by newer sfall scripts (observed in Et Tu script sources).
+static void op_string_null_or_empty(Program* program)
+{
+    const char* str = programStackPopString(program);
+    if (str == nullptr || str[0] == '\0') {
+        programStackPushInteger(program, 1);
+    } else {
+        programStackPushInteger(program, 0);
+    }
 }
 
 static void op_charcode(Program* program)
@@ -7255,6 +7617,12 @@ void sfallOpcodesInit()
     interpreterRegisterOpcode(0x8256, op_get_array_key);
     // 0x8257 - int   arrayexpr(any key, any value)
     interpreterRegisterOpcode(0x8257, op_arrayexpr);
+    // 0x8285 - int   arrays_equal(int array1, int array2)
+    interpreterRegisterOpcode(0x8285, op_arrays_equal);
+    // 0x8286 - int   array_filter(int array, procedure filterProc)
+    interpreterRegisterOpcode(0x8286, op_array_filter);
+    // 0x8287 - int   array_transform(int array, procedure transformProc)
+    interpreterRegisterOpcode(0x8287, op_array_transform);
 
     // 0x81a0 - void set_pickpocket_max(int percentage)
     interpreterRegisterOpcode(0x81A0, op_set_pickpocket_max);
@@ -7449,6 +7817,10 @@ void sfallOpcodesInit()
     interpreterRegisterOpcode(0x820b, op_fs_read_int);
     // 0x820c - float fs_read_float(int id)
     interpreterRegisterOpcode(0x820c, op_fs_read_float);
+    // 0x8282 - string fs_read_string(int id)
+    interpreterRegisterOpcode(0x8282, op_fs_read_string);
+    // 0x8283 - string fs_read_bstring(int id)
+    interpreterRegisterOpcode(0x8283, op_fs_read_bstring);
     // 0x81ff - void  fs_delete(int id)
     interpreterRegisterOpcode(0x81ff, op_fs_delete);
     // 0x8200 - int   fs_size(int id)
@@ -7552,6 +7924,8 @@ void sfallOpcodesInit()
     interpreterRegisterOpcode(0x8251, op_charcode);
     // 0x8253 - int   typeof(any value)
     interpreterRegisterOpcode(0x8253, op_type_of);
+    // 0x8284 - int   string_null_or_empty(string str)
+    interpreterRegisterOpcode(0x8284, op_string_null_or_empty);
 
     // 0x823a - int get_tile_fid(int tileData)
     interpreterRegisterOpcode(0x823A, op_get_tile_fid);

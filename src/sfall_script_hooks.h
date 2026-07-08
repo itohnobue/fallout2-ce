@@ -12,6 +12,15 @@
 
 namespace fallout {
 
+// F-1 (FIX): gPartyCooperativeCombat — cooperatively attacks player's target.
+// Set by metarule3(999, mode) in interpreter_extra.cc. When enabled (true),
+// party member NPCs should select the same target as the player (gDude) in
+// combat. Wire this flag into combat_ai.cc target selection: when a party
+// member evaluates targets, if gPartyCooperativeCombat is true, prefer
+// gDude->data.critter.combat.whoHitMe (the player's current target) over
+// the default AI target selection logic.
+extern bool gPartyCooperativeCombat;
+
 // Some hooks are implemented in sfall but aren't worth porting over:
 // - useless, never deployed in popular mods
 // - bad for performance and/or stability
@@ -404,7 +413,13 @@ enum AmmoCostHookType {
 
 enum class EncounterHookEventType {
     RandomEncounter = 0,
-    LocalMapEnter = 1,
+    // F-10 (FIX): Changed from 1 to 2 to avoid conflict with sfall's arg0
+    // encoding where 1 = special encounter. Value 2 is a CE-specific extension
+    // for entering a local map from worldmap — sfall does not define this case
+    // in its original HOOK_ENCOUNTER documentation (which uses 0=random, 1=special,
+    // 0x100=forced). Using 2 ensures CE's LocalMapEnter does not collide with
+    // sfall's arg0=1 for special encounters.
+    LocalMapEnter = 2,
 };
 
 enum class EncounterHookResult {

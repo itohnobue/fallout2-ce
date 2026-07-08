@@ -276,22 +276,299 @@ static constexpr SDL_Scancode kDiks[DIK_MAP_COUNT] = {
 static std::unordered_map<SDL_Scancode, int> kScanCodeToDik;
 static std::deque<std::pair<SDL_Scancode, bool>> syntheticKeyEvents;
 
+// F-8 (FIX): VK→SDL scancode mapping table.
+// Windows Virtual Key codes use a sparse numbering scheme (0x01-0xAF).
+// This 256-entry flat table maps VK codes (with the 0x80000000 flag stripped)
+// to SDL scancodes. Entries not mapped remain SDL_SCANCODE_UNKNOWN.
+// References: Windows VK_ constants → SDL scancode equivalents.
+static constexpr SDL_Scancode kVkToSdl[256] = {
+    // 0x00-0x0F
+    SDL_SCANCODE_UNKNOWN, // 0x00 (unused)
+    SDL_SCANCODE_UNKNOWN, // 0x01 VK_LBUTTON
+    SDL_SCANCODE_UNKNOWN, // 0x02 VK_RBUTTON
+    SDL_SCANCODE_CANCEL,  // 0x03 VK_CANCEL
+    SDL_SCANCODE_UNKNOWN, // 0x04 VK_MBUTTON
+    SDL_SCANCODE_UNKNOWN, // 0x05 VK_XBUTTON1
+    SDL_SCANCODE_UNKNOWN, // 0x06 VK_XBUTTON2
+    SDL_SCANCODE_UNKNOWN, // 0x07
+    SDL_SCANCODE_BACKSPACE, // 0x08 VK_BACK
+    SDL_SCANCODE_TAB,      // 0x09 VK_TAB
+    SDL_SCANCODE_UNKNOWN,  // 0x0A
+    SDL_SCANCODE_UNKNOWN,  // 0x0B
+    SDL_SCANCODE_CLEAR,    // 0x0C VK_CLEAR
+    SDL_SCANCODE_RETURN,   // 0x0D VK_RETURN
+    SDL_SCANCODE_UNKNOWN,  // 0x0E
+    SDL_SCANCODE_UNKNOWN,  // 0x0F
+    // 0x10-0x1F
+    SDL_SCANCODE_LSHIFT,   // 0x10 VK_SHIFT
+    SDL_SCANCODE_LCTRL,    // 0x11 VK_CONTROL
+    SDL_SCANCODE_LALT,     // 0x12 VK_MENU
+    SDL_SCANCODE_PAUSE,    // 0x13 VK_PAUSE
+    SDL_SCANCODE_CAPSLOCK, // 0x14 VK_CAPITAL
+    SDL_SCANCODE_UNKNOWN,  // 0x15 VK_KANA
+    SDL_SCANCODE_UNKNOWN,  // 0x16
+    SDL_SCANCODE_UNKNOWN,  // 0x17 VK_JUNJA
+    SDL_SCANCODE_UNKNOWN,  // 0x18 VK_FINAL
+    SDL_SCANCODE_UNKNOWN,  // 0x19 VK_HANJA
+    SDL_SCANCODE_UNKNOWN,  // 0x1A
+    SDL_SCANCODE_ESCAPE,   // 0x1B VK_ESCAPE
+    SDL_SCANCODE_UNKNOWN,  // 0x1C VK_CONVERT
+    SDL_SCANCODE_UNKNOWN,  // 0x1D VK_NONCONVERT
+    SDL_SCANCODE_UNKNOWN,  // 0x1E VK_ACCEPT
+    SDL_SCANCODE_UNKNOWN,  // 0x1F VK_MODECHANGE
+    // 0x20-0x2F
+    SDL_SCANCODE_SPACE,    // 0x20 VK_SPACE
+    SDL_SCANCODE_PAGEUP,   // 0x21 VK_PRIOR
+    SDL_SCANCODE_PAGEDOWN, // 0x22 VK_NEXT
+    SDL_SCANCODE_END,      // 0x23 VK_END
+    SDL_SCANCODE_HOME,     // 0x24 VK_HOME
+    SDL_SCANCODE_LEFT,     // 0x25 VK_LEFT
+    SDL_SCANCODE_UP,       // 0x26 VK_UP
+    SDL_SCANCODE_RIGHT,    // 0x27 VK_RIGHT
+    SDL_SCANCODE_DOWN,     // 0x28 VK_DOWN
+    SDL_SCANCODE_UNKNOWN,  // 0x29 VK_SELECT
+    SDL_SCANCODE_UNKNOWN,  // 0x2A VK_PRINT
+    SDL_SCANCODE_UNKNOWN,  // 0x2B VK_EXECUTE
+    SDL_SCANCODE_PRINTSCREEN, // 0x2C VK_SNAPSHOT
+    SDL_SCANCODE_INSERT,   // 0x2D VK_INSERT
+    SDL_SCANCODE_DELETE,   // 0x2E VK_DELETE
+    SDL_SCANCODE_UNKNOWN,  // 0x2F VK_HELP
+    // 0x30-0x39: VK_0 through VK_9 (ASCII digits)
+    SDL_SCANCODE_0, // 0x30 VK_0
+    SDL_SCANCODE_1, // 0x31 VK_1
+    SDL_SCANCODE_2, // 0x32 VK_2
+    SDL_SCANCODE_3, // 0x33 VK_3
+    SDL_SCANCODE_4, // 0x34 VK_4
+    SDL_SCANCODE_5, // 0x35 VK_5
+    SDL_SCANCODE_6, // 0x36 VK_6
+    SDL_SCANCODE_7, // 0x37 VK_7
+    SDL_SCANCODE_8, // 0x38 VK_8
+    SDL_SCANCODE_9, // 0x39 VK_9
+    // 0x3A-0x40
+    SDL_SCANCODE_UNKNOWN, // 0x3A
+    SDL_SCANCODE_UNKNOWN, // 0x3B
+    SDL_SCANCODE_UNKNOWN, // 0x3C
+    SDL_SCANCODE_UNKNOWN, // 0x3D
+    SDL_SCANCODE_UNKNOWN, // 0x3E
+    SDL_SCANCODE_UNKNOWN, // 0x3F
+    SDL_SCANCODE_UNKNOWN, // 0x40
+    // 0x41-0x5A: VK_A through VK_Z (ASCII uppercase letters)
+    SDL_SCANCODE_A, // 0x41 VK_A
+    SDL_SCANCODE_B, // 0x42 VK_B
+    SDL_SCANCODE_C, // 0x43 VK_C
+    SDL_SCANCODE_D, // 0x44 VK_D
+    SDL_SCANCODE_E, // 0x45 VK_E
+    SDL_SCANCODE_F, // 0x46 VK_F
+    SDL_SCANCODE_G, // 0x47 VK_G
+    SDL_SCANCODE_H, // 0x48 VK_H
+    SDL_SCANCODE_I, // 0x49 VK_I
+    SDL_SCANCODE_J, // 0x4A VK_J
+    SDL_SCANCODE_K, // 0x4B VK_K
+    SDL_SCANCODE_L, // 0x4C VK_L
+    SDL_SCANCODE_M, // 0x4D VK_M
+    SDL_SCANCODE_N, // 0x4E VK_N
+    SDL_SCANCODE_O, // 0x4F VK_O
+    SDL_SCANCODE_P, // 0x50 VK_P
+    SDL_SCANCODE_Q, // 0x51 VK_Q
+    SDL_SCANCODE_R, // 0x52 VK_R
+    SDL_SCANCODE_S, // 0x53 VK_S
+    SDL_SCANCODE_T, // 0x54 VK_T
+    SDL_SCANCODE_U, // 0x55 VK_U
+    SDL_SCANCODE_V, // 0x56 VK_V
+    SDL_SCANCODE_W, // 0x57 VK_W
+    SDL_SCANCODE_X, // 0x58 VK_X
+    SDL_SCANCODE_Y, // 0x59 VK_Y
+    SDL_SCANCODE_Z, // 0x5A VK_Z
+    // 0x5B-0x5F
+    SDL_SCANCODE_LGUI,     // 0x5B VK_LWIN
+    SDL_SCANCODE_RGUI,     // 0x5C VK_RWIN
+    SDL_SCANCODE_APPLICATION, // 0x5D VK_APPS
+    SDL_SCANCODE_UNKNOWN,  // 0x5E
+    SDL_SCANCODE_UNKNOWN,  // 0x5F VK_SLEEP
+    // 0x60-0x6F: VK_NUMPAD0 through VK_DIVIDE
+    SDL_SCANCODE_KP_0,       // 0x60 VK_NUMPAD0
+    SDL_SCANCODE_KP_1,       // 0x61 VK_NUMPAD1
+    SDL_SCANCODE_KP_2,       // 0x62 VK_NUMPAD2
+    SDL_SCANCODE_KP_3,       // 0x63 VK_NUMPAD3
+    SDL_SCANCODE_KP_4,       // 0x64 VK_NUMPAD4
+    SDL_SCANCODE_KP_5,       // 0x65 VK_NUMPAD5
+    SDL_SCANCODE_KP_6,       // 0x66 VK_NUMPAD6
+    SDL_SCANCODE_KP_7,       // 0x67 VK_NUMPAD7
+    SDL_SCANCODE_KP_8,       // 0x68 VK_NUMPAD8
+    SDL_SCANCODE_KP_9,       // 0x69 VK_NUMPAD9
+    SDL_SCANCODE_KP_MULTIPLY, // 0x6A VK_MULTIPLY
+    SDL_SCANCODE_KP_PLUS,    // 0x6B VK_ADD
+    SDL_SCANCODE_UNKNOWN,    // 0x6C VK_SEPARATOR
+    SDL_SCANCODE_KP_MINUS,   // 0x6D VK_SUBTRACT
+    SDL_SCANCODE_KP_PERIOD,  // 0x6E VK_DECIMAL
+    SDL_SCANCODE_KP_DIVIDE,  // 0x6F VK_DIVIDE
+    // 0x70-0x7B: VK_F1 through VK_F12
+    SDL_SCANCODE_F1,  // 0x70 VK_F1
+    SDL_SCANCODE_F2,  // 0x71 VK_F2
+    SDL_SCANCODE_F3,  // 0x72 VK_F3
+    SDL_SCANCODE_F4,  // 0x73 VK_F4
+    SDL_SCANCODE_F5,  // 0x74 VK_F5
+    SDL_SCANCODE_F6,  // 0x75 VK_F6
+    SDL_SCANCODE_F7,  // 0x76 VK_F7
+    SDL_SCANCODE_F8,  // 0x77 VK_F8
+    SDL_SCANCODE_F9,  // 0x78 VK_F9
+    SDL_SCANCODE_F10, // 0x79 VK_F10
+    SDL_SCANCODE_F11, // 0x7A VK_F11
+    SDL_SCANCODE_F12, // 0x7B VK_F12
+    // 0x7C-0x8F
+    SDL_SCANCODE_UNKNOWN, // 0x7C
+    SDL_SCANCODE_UNKNOWN, // 0x7D
+    SDL_SCANCODE_UNKNOWN, // 0x7E
+    SDL_SCANCODE_UNKNOWN, // 0x7F
+    SDL_SCANCODE_UNKNOWN, // 0x80
+    SDL_SCANCODE_UNKNOWN, // 0x81
+    SDL_SCANCODE_UNKNOWN, // 0x82
+    SDL_SCANCODE_UNKNOWN, // 0x83
+    SDL_SCANCODE_UNKNOWN, // 0x84
+    SDL_SCANCODE_UNKNOWN, // 0x85
+    SDL_SCANCODE_UNKNOWN, // 0x86
+    SDL_SCANCODE_UNKNOWN, // 0x87
+    SDL_SCANCODE_UNKNOWN, // 0x88
+    SDL_SCANCODE_UNKNOWN, // 0x89
+    SDL_SCANCODE_UNKNOWN, // 0x8A
+    SDL_SCANCODE_UNKNOWN, // 0x8B
+    SDL_SCANCODE_UNKNOWN, // 0x8C
+    SDL_SCANCODE_UNKNOWN, // 0x8D
+    SDL_SCANCODE_UNKNOWN, // 0x8E
+    SDL_SCANCODE_UNKNOWN, // 0x8F
+    // 0x90-0x9F
+    SDL_SCANCODE_NUMLOCKCLEAR, // 0x90 VK_NUMLOCK
+    SDL_SCANCODE_SCROLLLOCK,   // 0x91 VK_SCROLL
+    SDL_SCANCODE_UNKNOWN, // 0x92
+    SDL_SCANCODE_UNKNOWN, // 0x93
+    SDL_SCANCODE_UNKNOWN, // 0x94
+    SDL_SCANCODE_UNKNOWN, // 0x95
+    SDL_SCANCODE_UNKNOWN, // 0x96
+    SDL_SCANCODE_UNKNOWN, // 0x97
+    SDL_SCANCODE_UNKNOWN, // 0x98
+    SDL_SCANCODE_UNKNOWN, // 0x99
+    SDL_SCANCODE_UNKNOWN, // 0x9A
+    SDL_SCANCODE_UNKNOWN, // 0x9B
+    SDL_SCANCODE_UNKNOWN, // 0x9C
+    SDL_SCANCODE_UNKNOWN, // 0x9D
+    SDL_SCANCODE_UNKNOWN, // 0x9E
+    SDL_SCANCODE_UNKNOWN, // 0x9F
+    // 0xA0-0xA5: VK_LSHIFT through VK_RMENU (modifier extended keys)
+    SDL_SCANCODE_LSHIFT, // 0xA0 VK_LSHIFT
+    SDL_SCANCODE_RSHIFT, // 0xA1 VK_RSHIFT
+    SDL_SCANCODE_LCTRL,  // 0xA2 VK_LCONTROL
+    SDL_SCANCODE_RCTRL,  // 0xA3 VK_RCONTROL
+    SDL_SCANCODE_LALT,   // 0xA4 VK_LMENU
+    SDL_SCANCODE_RALT,   // 0xA5 VK_RMENU
+    // 0xA6-0xAF: Browser/media keys — no SDL equivalents in standard scancode set
+    SDL_SCANCODE_UNKNOWN, // 0xA6 VK_BROWSER_BACK
+    SDL_SCANCODE_UNKNOWN, // 0xA7 VK_BROWSER_FORWARD
+    SDL_SCANCODE_UNKNOWN, // 0xA8 VK_BROWSER_REFRESH
+    SDL_SCANCODE_UNKNOWN, // 0xA9 VK_BROWSER_STOP
+    SDL_SCANCODE_UNKNOWN, // 0xAA VK_BROWSER_SEARCH
+    SDL_SCANCODE_UNKNOWN, // 0xAB VK_BROWSER_FAVORITES
+    SDL_SCANCODE_UNKNOWN, // 0xAC VK_BROWSER_HOME
+    SDL_SCANCODE_AUDIOMUTE,  // 0xAD VK_VOLUME_MUTE
+    SDL_SCANCODE_VOLUMEDOWN, // 0xAE VK_VOLUME_DOWN
+    SDL_SCANCODE_VOLUMEUP,   // 0xAF VK_VOLUME_UP
+    // 0xB0-0xFF: remaining slots
+    SDL_SCANCODE_UNKNOWN, // 0xB0 VK_MEDIA_NEXT_TRACK
+    SDL_SCANCODE_UNKNOWN, // 0xB1 VK_MEDIA_PREV_TRACK
+    SDL_SCANCODE_UNKNOWN, // 0xB2 VK_MEDIA_STOP
+    SDL_SCANCODE_UNKNOWN, // 0xB3 VK_MEDIA_PLAY_PAUSE
+    SDL_SCANCODE_UNKNOWN, // 0xB4 VK_LAUNCH_MAIL
+    SDL_SCANCODE_UNKNOWN, // 0xB5 VK_LAUNCH_MEDIA_SELECT
+    SDL_SCANCODE_UNKNOWN, // 0xB6 VK_LAUNCH_APP1
+    SDL_SCANCODE_UNKNOWN, // 0xB7 VK_LAUNCH_APP2
+    SDL_SCANCODE_UNKNOWN, // 0xB8
+    SDL_SCANCODE_UNKNOWN, // 0xB9
+    // 0xBA-0xBF: OEM keys
+    SDL_SCANCODE_SEMICOLON,    // 0xBA VK_OEM_1 (;:)
+    SDL_SCANCODE_EQUALS,       // 0xBB VK_OEM_PLUS (=+)
+    SDL_SCANCODE_COMMA,        // 0xBC VK_OEM_COMMA (,<)
+    SDL_SCANCODE_MINUS,        // 0xBD VK_OEM_MINUS (-_)
+    SDL_SCANCODE_PERIOD,       // 0xBE VK_OEM_PERIOD (.>)
+    SDL_SCANCODE_SLASH,        // 0xBF VK_OEM_2 (/?)
+    SDL_SCANCODE_GRAVE,        // 0xC0 VK_OEM_3 (`~)
+    SDL_SCANCODE_UNKNOWN, // 0xC1
+    SDL_SCANCODE_UNKNOWN, // 0xC2
+    SDL_SCANCODE_UNKNOWN, // 0xC3
+    SDL_SCANCODE_UNKNOWN, // 0xC4
+    SDL_SCANCODE_UNKNOWN, // 0xC5
+    SDL_SCANCODE_UNKNOWN, // 0xC6
+    SDL_SCANCODE_UNKNOWN, // 0xC7
+    SDL_SCANCODE_UNKNOWN, // 0xC8
+    SDL_SCANCODE_UNKNOWN, // 0xC9
+    SDL_SCANCODE_UNKNOWN, // 0xCA
+    SDL_SCANCODE_UNKNOWN, // 0xCB
+    SDL_SCANCODE_UNKNOWN, // 0xCC
+    SDL_SCANCODE_UNKNOWN, // 0xCD
+    SDL_SCANCODE_UNKNOWN, // 0xCE
+    SDL_SCANCODE_UNKNOWN, // 0xCF
+    SDL_SCANCODE_UNKNOWN, // 0xD0
+    SDL_SCANCODE_UNKNOWN, // 0xD1
+    SDL_SCANCODE_UNKNOWN, // 0xD2
+    SDL_SCANCODE_UNKNOWN, // 0xD3
+    SDL_SCANCODE_UNKNOWN, // 0xD4
+    SDL_SCANCODE_UNKNOWN, // 0xD5
+    SDL_SCANCODE_UNKNOWN, // 0xD6
+    SDL_SCANCODE_UNKNOWN, // 0xD7
+    SDL_SCANCODE_UNKNOWN, // 0xD8
+    SDL_SCANCODE_UNKNOWN, // 0xD9
+    SDL_SCANCODE_UNKNOWN, // 0xDA
+    SDL_SCANCODE_LEFTBRACKET,  // 0xDB VK_OEM_4 ([{)
+    SDL_SCANCODE_BACKSLASH,    // 0xDC VK_OEM_5 (\|)
+    SDL_SCANCODE_RIGHTBRACKET, // 0xDD VK_OEM_6 (]})
+    SDL_SCANCODE_APOSTROPHE,   // 0xDE VK_OEM_7 ('")
+    SDL_SCANCODE_UNKNOWN, // 0xDF VK_OEM_8
+    SDL_SCANCODE_UNKNOWN, // 0xE0
+    SDL_SCANCODE_UNKNOWN, // 0xE1
+    SDL_SCANCODE_UNKNOWN, // 0xE2 VK_OEM_102 (<> on non-US)
+    SDL_SCANCODE_UNKNOWN, // 0xE3
+    SDL_SCANCODE_UNKNOWN, // 0xE4
+    SDL_SCANCODE_UNKNOWN, // 0xE5
+    SDL_SCANCODE_UNKNOWN, // 0xE6
+    SDL_SCANCODE_UNKNOWN, // 0xE7
+    SDL_SCANCODE_UNKNOWN, // 0xE8
+    SDL_SCANCODE_UNKNOWN, // 0xE9
+    SDL_SCANCODE_UNKNOWN, // 0xEA
+    SDL_SCANCODE_UNKNOWN, // 0xEB
+    SDL_SCANCODE_UNKNOWN, // 0xEC
+    SDL_SCANCODE_UNKNOWN, // 0xED
+    SDL_SCANCODE_UNKNOWN, // 0xEE
+    SDL_SCANCODE_UNKNOWN, // 0xEF
+    SDL_SCANCODE_UNKNOWN, // 0xF0
+    SDL_SCANCODE_UNKNOWN, // 0xF1
+    SDL_SCANCODE_UNKNOWN, // 0xF2
+    SDL_SCANCODE_UNKNOWN, // 0xF3
+    SDL_SCANCODE_UNKNOWN, // 0xF4
+    SDL_SCANCODE_UNKNOWN, // 0xF5
+    SDL_SCANCODE_UNKNOWN, // 0xF6
+    SDL_SCANCODE_UNKNOWN, // 0xF7
+    SDL_SCANCODE_UNKNOWN, // 0xF8
+    SDL_SCANCODE_UNKNOWN, // 0xF9
+    SDL_SCANCODE_UNKNOWN, // 0xFA
+    SDL_SCANCODE_UNKNOWN, // 0xFB
+    SDL_SCANCODE_UNKNOWN, // 0xFC
+    SDL_SCANCODE_UNKNOWN, // 0xFD
+    SDL_SCANCODE_UNKNOWN, // 0xFE
+    SDL_SCANCODE_UNKNOWN, // 0xFF
+};
+
 // Translates Sfall key code to SDL scancode.
 //
 // VK (Virtual Key) codes have the 0x80000000 flag set and use a different
-// numbering scheme from DIK.  The function detects VK codes and returns
-// SDL_SCANCODE_UNKNOWN, causing callers (is_key_pressed, press_key) to fail
-// cleanly.  Only DIK (DirectInput Key) codes in the 0-255 range are
-// translated via the kDiks lookup table.
+// numbering scheme from DIK.  DIK (DirectInput Key) codes in the 0-255 range
+// are translated via the kDiks lookup table.
+//
+// F-8 (FIX): VK codes are now mapped via the kVkToSdl 256-entry table.
+// Previously they returned SDL_SCANCODE_UNKNOWN unconditionally, making
+// key_pressed_vk() completely inoperable.
 static SDL_Scancode get_scancode_from_key(int key)
 {
-    // VK (Virtual Key) codes have the 0x80000000 flag set and use a different
-    // numbering scheme from DIK.  Without a full Windows VK→SDL scancode
-    // translation table, returning SDL_SCANCODE_UNKNOWN makes the callers
-    // (is_key_pressed, press_key) fail cleanly rather than silently mapping
-    // to an unrelated DIK scancode via the low-byte fallthrough.
     if (key & 0x80000000) {
-        return SDL_SCANCODE_UNKNOWN;
+        // VK (Virtual Key) code — strip the flag and look up in VK table.
+        return kVkToSdl[key & 0xFF];
     }
     return kDiks[key & 0xFF];
 }
@@ -315,16 +592,8 @@ static int get_key_from_scancode(SDL_Scancode scanCode)
 
 bool sfall_kb_is_key_pressed(int key)
 {
-    // FIXME: VK (Virtual Key) codes are not supported.  Original sfall on
-    // Windows handles VK codes via GetAsyncKeyState:
-    /* if ((key & 0x80000000) > 0) { // special flag to check by VK code directly
-        return GetAsyncKeyState(key & 0xFFFF) & 0x8000;
-    }*/
-    // The 0x80000000 VK flag is now detected in get_scancode_from_key() which
-    // returns SDL_SCANCODE_UNKNOWN — causing this function to return false
-    // cleanly.  A full cross-platform VK implementation would require a
-    // Windows VK → SDL scancode conversion table or platform-specific
-    // key-state query API.
+    // F-8 (FIX): VK codes are now supported via the kVkToSdl mapping table.
+    // The 0x80000000 flag triggers VK→SDL translation in get_scancode_from_key().
     SDL_Scancode scancode = get_scancode_from_key(key);
     if (scancode == SDL_SCANCODE_UNKNOWN) {
         return false;

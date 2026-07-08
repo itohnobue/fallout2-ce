@@ -703,8 +703,30 @@ EncounterHookResult scriptHooks_Encounter(EncounterHookEventType eventType, int*
     }
 
     const int maxReturnValues = eventType == EncounterHookEventType::RandomEncounter ? 2 : 1;
+
+    // F-10 (FIX): Compute sfall-compatible arg0 encoding.
+    // Sfall convention: 0 = normal random encounter, 1 = special encounter,
+    // 0x100 (256) = forced encounter. CE-specific: LocalMapEnter uses value 2
+    // to avoid collision with sfall's arg0=1 for special encounters.
+    // For random encounters, special encounters are flagged with arg0=1.
+    // For LocalMapEnter, the enum value (2) is passed directly.
+    //
+    // NOTE: Forced encounters (arg0=0x100) are not yet distinguishable from
+    // normal random encounters in this function signature. The worldmap.cc
+    // call site at line 3784 passes RandomEncounter with isSpecial=false for
+    // forced encounters — worldmap.cc must be updated to use a dedicated
+    // EncounterHookEventType::ForcedEncounter value or pass a separate isForced
+    // flag to achieve full sfall compatibility.
+    int arg0;
+    if (eventType == EncounterHookEventType::RandomEncounter) {
+        arg0 = isSpecial ? 1 : 0;
+    } else {
+        // LocalMapEnter — enum value (2) is already non-conflicting.
+        arg0 = static_cast<int>(eventType);
+    }
+
     ScriptHookCall hook(HOOK_ENCOUNTER, maxReturnValues,
-        { static_cast<int>(eventType),
+        { arg0,
             *mapIdPtr,
             isSpecial ? 1 : 0,
             tableId,

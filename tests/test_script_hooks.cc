@@ -119,7 +119,7 @@ TEST_CASE("Hook sub-enum values are correct")
 
     // EncounterHookEventType
     CHECK(static_cast<int>(EncounterHookEventType::RandomEncounter) == 0);
-    CHECK(static_cast<int>(EncounterHookEventType::LocalMapEnter) == 1);
+    CHECK(static_cast<int>(EncounterHookEventType::LocalMapEnter) == 2);
 }
 
 TEST_CASE("HOOKS constants are reasonable")

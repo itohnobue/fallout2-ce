@@ -130,6 +130,11 @@ bool sfallGetExplosiveOverrideDamage(int pid, int* outMinDamage, int* outMaxDama
 // timer delay stored via the item_make_explosive metarule.
 bool sfallGetExplosiveOverrideDelay(int pid, int* outDelay);
 
+// F-9 (FIX): Returns the talking head mood override set by the
+// talking_head_mood metarule. -1 = no override (use engine default).
+// Consumer: game_dialog.cc _gdSetupFidget() for FO1 mood animation selection.
+int sfallGetTalkingHeadMood();
+
 } // namespace fallout
 
 #endif /* FALLOUT_SFALL_METARULES_H_ */

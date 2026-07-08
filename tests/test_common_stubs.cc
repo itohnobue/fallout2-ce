@@ -486,6 +486,34 @@ namespace fallout {
         sfallAnimCallbackProcedureIndex = -1;
     }
 
+    // Hit-chance globals — defined as extern in sfall_opcodes.h.
+    // The real definitions live in sfall_opcodes.cc.
+    int sfallHitChanceMod = 0;
+    int sfallHitChanceMax = 95;
+
+    int sfallGetPerkLevelMod() { return 0; }
+    int sfallGetHpPerLevelMod() { return 0; }
+    int sfallGetPyromaniacMod() { return 0; }
+    int sfallGetSwiftLearnerMod() { return 0; }
+
+    bool sfallGetCritterHitChanceMod(Object* /*critter*/, int& /*outMod*/, int& /*outMax*/)
+    {
+        return false;  // no per-critter override in test context
+    }
+
+    // programStackPopValue / programStackPushValue — called by ArrayFilter
+    // and ArrayTransform in sfall_arrays.cc. Provide minimal no-op stubs.
+    // Also used by OpcodeContext::pushReturnValue in sfall_ini.cc.
+    ProgramValue programStackPopValue(Program* /*program*/)
+    {
+        return ProgramValue();  // empty value
+    }
+
+    void programStackPushValue(Program* /*program*/, const ProgramValue& /*value*/)
+    {
+        // no-op: test context has no interpreter stack
+    }
+
     void sfallOpcodesReset()
     {
         // Reset extern globals to their documented defaults.
@@ -504,6 +532,10 @@ namespace fallout {
         sfallTargetKnockbackValue = 0.0f;
         sfallAttackerKnockbackType = 0;
         sfallAttackerKnockbackValue = 0.0f;
+
+        // Reset hit-chance globals (F-20).
+        sfallHitChanceMod = 0;
+        sfallHitChanceMax = 95;
     }
 
     void sfallOpcodesExit()
