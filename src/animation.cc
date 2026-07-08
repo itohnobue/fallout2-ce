@@ -3387,10 +3387,15 @@ static unsigned int animationComputeTicksPerFrame(Object* object, int fid)
         sfall_gl_vars_fetch(0, speedMulti);
         if (speedMulti != 100) {
             fps = (fps * speedMulti) / 100;
-            if (fps <= 0) {
-                fps = 1; // Prevent division by zero (0 would freeze the game)
-            }
         }
+    }
+
+    // SFALL: Fix I2-M24 — fps<=0 guard moved outside the speedMulti!=100
+    // branch so it applies unconditionally. Previously, when speedMulti==100
+    // (no script override), fps could be 0 from the caller, causing
+    // division-by-zero UB in 1000/fps below.
+    if (fps <= 0) {
+        fps = 1;
     }
 
     return std::max(1000 / fps, 1);

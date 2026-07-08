@@ -44,6 +44,17 @@ $ cmake --preset macos
 $ cmake --build out/build/macos --config RelWithDebInfo --target fallout2-ce
 ```
 
+For ARM64-only builds (faster compile, no universal binary):
+
+```console
+$ cmake --preset macos-arm64-debug
+$ cmake --build out/build/macos-arm64-debug --target fallout2-ce
+```
+
+Available ARM64 presets:
+- `macos-arm64-debug` — Debug build, arm64 only
+- `macos-arm64-release` — RelWithDebInfo build, arm64 only
+
 Alternative manual configuration without presets:
 
 ```console
@@ -126,9 +137,9 @@ $ cmake --preset Mingw-x64-debug
 $ cmake --build out/build/Mingw-x64-debug
 ```
 
-Available presets:
-- `Mingw-x64-Debug` / `Mingw-x64-Release` — x86_64 MinGW
-- `Mingw-x86-Debug` / `Mingw-x86-Release` — 32-bit MinGW
+Available configure presets:
+- `Mingw-x64-debug` / `Mingw-x64-release` — x86_64 MinGW
+- `Mingw-x86-debug` / `Mingw-x86-release` — 32-bit MinGW
 
 ---
 
@@ -199,10 +210,21 @@ The project includes two additional build targets:
 
 ## Testing
 
-The project uses in-game `.ssl` script tests in `sfall_testing/`. These require the Fallout 2 game runtime and the sfall Modders Pack `compile.exe` to execute.
+### In-Game SSL Script Tests
 
-A CTest-based headless C++ test suite is also available. Run `ctest --test-dir out/build/<preset-name>` after configuration (e.g., `ctest --test-dir out/build/macos`). See `tests/CMakeLists.txt` for registered test targets.
+The project uses in-game `.ssl` script tests in `sfall_testing/`. These require the Fallout 2 game runtime and the sfall Modders Pack `compile.exe` to compile. **`compile.exe` is Windows-only** — cross-compile on Linux/macOS via Wine or use the CTest suite for headless testing.
 
 To run tests interactively: load the game with the `gl_*.ssl` scripts compiled into your mod scripts directory. Each test script logs results to the in-game console.
 
 See `sfall_testing/` for the full list of test scripts covering opcodes, hooks, and engine integration.
+
+### CTest C++ Test Suite
+
+A CTest-based headless C++ test suite is available using the [doctest](https://github.com/doctest/doctest) testing framework (vendored at `third_party/doctest/`). **You must complete the CMake configure step first** (`cmake --preset <name>`) before running tests — CTest requires an existing build directory with generated test targets.
+
+```console
+$ cmake --preset macos
+$ ctest --test-dir out/build/macos --output-on-failure
+```
+
+See `tests/CMakeLists.txt` for all registered test targets.

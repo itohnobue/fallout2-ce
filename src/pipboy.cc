@@ -761,7 +761,10 @@ static int pipboyWindowInit(int intent)
                 const HolidayDescription* holidayDescription = &(gHolidayDescriptions[holiday]);
                 const char* holidayName = getmsg(&gPipboyMessageList, &gPipboyMessageListItem, holidayDescription->textId);
                 char holidayNameCopy[256];
-                strcpy(holidayNameCopy, holidayName);
+                // SFALL: Fix I2-M26 — strcpy overflow. getmsg() can return
+                // up to 1024 bytes, overflowing the 256-byte stack buffer.
+                strncpy(holidayNameCopy, holidayName, sizeof(holidayNameCopy) - 1);
+                holidayNameCopy[sizeof(holidayNameCopy) - 1] = '\0';
 
                 int len = fontGetStringWidth(holidayNameCopy);
                 fontDrawText(gPipboyWindowBuffer + PIPBOY_WINDOW_WIDTH * (_pipboyFrmImages[PIPBOY_FRM_LOGO].getHeight() + 174) + 6 + _pipboyFrmImages[PIPBOY_FRM_LOGO].getWidth() / 2 + 323 - len / 2,
@@ -806,7 +809,9 @@ static int pipboyWindowInit(int intent)
             const HolidayDescription* holidayDescription = &(gHolidayDescriptions[holiday]);
             const char* holidayName = getmsg(&gPipboyMessageList, &gPipboyMessageListItem, holidayDescription->textId);
             char holidayNameCopy[256];
-            strcpy(holidayNameCopy, holidayName);
+            // SFALL: Fix I2-M26 — second call site.
+            strncpy(holidayNameCopy, holidayName, sizeof(holidayNameCopy) - 1);
+            holidayNameCopy[sizeof(holidayNameCopy) - 1] = '\0';
 
             int length = fontGetStringWidth(holidayNameCopy);
             fontDrawText(gPipboyWindowBuffer + PIPBOY_WINDOW_WIDTH * (_pipboyFrmImages[PIPBOY_FRM_LOGO].getHeight() + 174) + 6 + _pipboyFrmImages[PIPBOY_FRM_LOGO].getWidth() / 2 + 323 - length / 2,
@@ -1341,7 +1346,9 @@ static void pipboyWindowQuestList(int selectedLocationIndex)
 
                     pipboyDrawText(beginning, flags, color);
                     *ending = c;
-                    gPipboyCurrentLine++;
+                    if (gPipboyCurrentLine < gPipboyLinesCount) {
+                        gPipboyCurrentLine++;
+                    }
                 }
             } else {
                 debugPrint("\n ** Word wrap error in pipboy! **\n");
@@ -1491,7 +1498,10 @@ static void pipboyRenderHolodiskText()
     if (_view_page != 0) {
         int page = 0;
         int numberOfLines = 0;
-        for (; holodiskTextId < holodiskTextId + 500; holodiskTextId += 1) {
+        // SFALL: Fix I2-M29 — loop condition holodiskTextId < holodiskTextId+500
+        // is always true (algebraic identity). Use holodisk->description+500
+        // as the proper upper bound, matching the error check above.
+        for (int holodiskLimit = holodisk->description + 500; holodiskTextId < holodiskLimit; holodiskTextId += 1) {
             const char* line = getmsg(&gPipboyMessageList, &gPipboyMessageListItem, holodiskTextId);
             if (strcmp(line, "**END-DISK**") == 0) {
                 debugPrint("\nPIPBOY: Premature page end in holodisk page search!\n");
@@ -1534,7 +1544,9 @@ static void pipboyRenderHolodiskText()
         }
 
         if (strcmp(text, "**END-PAR**") == 0) {
-            gPipboyCurrentLine += 1;
+            if (gPipboyCurrentLine < gPipboyLinesCount) {
+                gPipboyCurrentLine += 1;
+            }
         } else {
             pipboyDrawText(text, PIPBOY_TEXT_NO_INDENT, _colorTable[992]);
         }
@@ -1867,7 +1879,9 @@ static int _PrintAMList(int selectedLocation)
                 }
             }
 
-            if (locationExistsIndex == count) {
+            if (locationExistsIndex == count && count < 24) {
+                // SFALL: Fix I2-M28 — bound check against _sortlist[24].
+                // wmMapMaxCount() can exceed 24 with modded maps.txt.
                 _sortlist[count].name = mapGetCityName(map);
                 _sortlist[count].field_4 = map;
                 count++;

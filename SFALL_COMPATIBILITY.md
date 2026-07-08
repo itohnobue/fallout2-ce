@@ -69,7 +69,7 @@ See [`https://sfall-team.github.io/sfall/`](https://sfall-team.github.io/sfall/)
 | Skills | get/set_critter_skill_points<br>get/set_available_skill_points<br>set_skill_max<br>set_critter_skill_mod<br>set_base_skill_mod<br>mod_skill_points_per_level | ✅ | set_skill_max wired into skill.cc. mod_skill_points_per_level stored; consumed by characterEditorUpdateLevel() (character_editor.cc:5758). get_critter_skill_points, get_available_skill_points registered and implemented (sfall_opcodes.cc). set_critter_skill_mod (0x81C7) and set_base_skill_mod (0x81C8): fully integrated — consumed in skillGetValue() at skill.cc:252,267,270 via sfallGetBaseSkillMod() / sfallGetCritterSkillMod(). |
 | Graphics | graphics_funcs_available<br>force_graphics_refresh<br>get_screen_width<br>get_screen_height<br>set_palette | ✅ | get_screen_width, get_screen_height fully implemented. set_palette (0x81F2) registered as safe no-op (SDL2 rendering does not support palette overrides). graphics_funcs_available, shader ops not implemented. |
 | Shaders | load_shader<br>free_shader<br>activate_shader<br>deactivate_shader<br>set/get_shader_* | 🚫 | likely will not implement direct compatibility
-| Perks and traits | set_perk_image<br>set_perk_*<br>set_pyromaniac_mod<br>apply_heaveho_fix<br>set_swiftlearner_mod<br>has/set_fake_perk<br>has/set_fake_trait<br>set_selectable_perk<br>set_perkbox_title<br>show/hide_real_perks<br>perk_add_mode<br>clear_selectable_perks<br>add/remove_trait<br>seq_perk_freq<br>set_perk_name<br>set_perk_desc<br>set_hp_per_level_mod | ✅ | set_perk_freq is fully integrated (gPerkFrequencyOverride wired into character_editor.cc). set_perk_level override fully integrated via perkSetMinLevel (perk.cc:588). set_pyromaniac_mod consumed at combat.cc:4858. set_swiftlearner_mod consumed at stat.cc:822. set_hp_per_level_mod consumed at stat.cc:859,912. set_critter_skill_mod and set_base_skill_mod consumed at skill.cc:252,267,270. perk_add_mode, clear_selectable_perks, hide_real_perks integrated via sfallGet* accessors at character_editor.cc. add_trait/remove_trait fully implemented (sfall_metarules.cc:2984) with 1-arg and 3-arg forms; display integrated via gAddedTraits at character_editor.cc:2164. set_perk_name, set_perk_desc stored in perk override arrays and consumed in perk.cc via sfallGetPerk*Override() accessors. set_perk_image, apply_heaveho_fix, seq_perk_freq not yet implemented. |
+| Perks and traits | set_perk_image<br>set_perk_*<br>set_pyromaniac_mod<br>apply_heaveho_fix<br>set_swiftlearner_mod<br>has/set_fake_perk<br>has/set_fake_trait<br>set_selectable_perk<br>set_perkbox_title<br>show/hide_real_perks<br>perk_add_mode<br>clear_selectable_perks<br>add/remove_trait<br>set_perk_name<br>set_perk_desc<br>set_hp_per_level_mod | ✅ | set_perk_freq is fully integrated (gPerkFrequencyOverride wired into character_editor.cc). set_perk_level override fully integrated via perkSetMinLevel (perk.cc:588). set_pyromaniac_mod consumed at combat.cc:4858. set_swiftlearner_mod consumed at stat.cc:822. set_hp_per_level_mod consumed at stat.cc:859,912. set_critter_skill_mod and set_base_skill_mod consumed at skill.cc:252,267,270. perk_add_mode, clear_selectable_perks, hide_real_perks integrated via sfallGet* accessors at character_editor.cc. add_trait/remove_trait fully implemented (sfall_metarules.cc:2984) with 1-arg and 3-arg forms; display integrated via gAddedTraits at character_editor.cc:2164. set_perk_name, set_perk_desc stored in perk override arrays and consumed in perk.cc via sfallGetPerk*Override() accessors. set_perk_image fully implemented (sfall_opcodes.cc:3632-3643, consumed at perk.cc:626). apply_heaveho_fix registered as safe no-op (handled via engine config, sfall_opcodes.cc:4289-4292). seq_perk_freq is not present in CE (no sfall equivalent opcode exists in this engine). |
 | Virtual file system | fs_create<br>fs_copy<br>fs_find<br>fs_read/write_*<br>fs_delete<br>fs_size<br>fs_pos<br>fs_seek<br>fs_resize | ✅ | All 18 fs_* opcodes are registered and implemented (see `sfall_opcodes.cc:2892-2927`). |
 | Combat / Knockback | set_weapon_knockback<br>set_target_knockback<br>set_attacker_knockback<br>remove_weapon_knockback<br>remove_target_knockback<br>remove_attacker_knockback | ✅ | All 6 knockback opcodes registered. Knockback modifiers consumed in _compute_dmg_damage at combat.cc:4837-4857 for all 3 types (weapon, target, attacker) with absolute (type=1) and additive (type=2) modes. |
 | Maps and encounters | in_world_map<br>force_encounter{_with_flags}<br>set_map_time_multi<br>get/set_map_enter_position<br>exec_map_update_scripts<br>get/set_terrain_name<br>set_town_title<br>get/set_can_rest_on_map<br>set_rest_heal_time<br>set_rest_mode<br>set_worldmap_heal_time | implemented: in_world_map, force_encounter, force_encounter_with_flags, set_map_time_multi, exec_map_update_scripts, get/set_can_rest_on_map, get/set_terrain_name, get/set_town_title, set_rest_heal_time, set_worldmap_heal_time, set_rest_mode | - |
@@ -152,8 +152,8 @@ See [`https://sfall-team.github.io/sfall/`](https://sfall-team.github.io/sfall/)
 | SetLighting | `HOOK_SETLIGHTING` | ✅ | Fires on objectSetLight for per-object lighting changes |
 | Sneak | `HOOK_SNEAK` | ✅ | Fires after each sneak check (via sneakEventProcess). arg0=result (1 success, 0 failure), arg1=duration in ticks, arg2=critter. ret0 overrides result, ret1 overrides duration. |
 | TargetObject | `HOOK_TARGETOBJECT` | ✅ | Fires at the start of `_combat_attack`, when attack execution begins (after target selection by AI, before hit computation). arg0=attacker, arg1=defender, arg2=hitMode, arg3=hitLocation. |
-| Dialog | `HOOK_DIALOG` | ✅ | Fires on dialog start (arg0=speaker, arg1=headFid, arg2=reaction) and exit (arg1=-1, arg2=-1, arg0=speaker). |
-| DialogReaction | `HOOK_DIALOGREACTION` | ✅ | Fires when a dialog reaction is triggered (`_talk_to_critter_reacts`). arg0=speaker, arg1=reaction (-2, -1, or 0). |
+| Dialog | `HOOK_DIALOG` (49) | ✅ [CE] | CE-specific. Fires on dialog start (arg0=speaker, arg1=headFid, arg2=reaction) and exit (arg1=-1, arg2=-1, arg0=speaker). |
+| DialogReaction | `HOOK_DIALOGREACTION` (50) | ✅ [CE] | CE-specific. Fires when a dialog reaction is triggered (`_talk_to_critter_reacts`). arg0=speaker, arg1=reaction (-2, -1, or 0). |
 | Encounter | `HOOK_ENCOUNTER` | ✅ | - |
 | AdjustPoison | `HOOK_ADJUSTPOISON` | 🚫 | (maybe) |
 | AdjustRads | `HOOK_ADJUSTRADS` | 🚫 | (maybe) |
@@ -161,9 +161,9 @@ See [`https://sfall-team.github.io/sfall/`](https://sfall-team.github.io/sfall/)
 | BestWeapon | `HOOK_BESTWEAPON` | 🚫 | Deliberately absent: _ai_best_weapon() has 10+ return points with complex comparison logic. Object lifetime concerns with return value override. |
 | CanUseWeapon | `HOOK_CANUSEWEAPON` | ✅ | - |
 | BuildSfxWeapon | `HOOK_BUILDSFXWEAPON` | 🚫 | Deliberately absent: sfxBuildWeaponName() returns char* to static buffer (_sfx_file_name). String return from scripts requires buffer management and lifetime semantics. |
-| StatLevelUp | `HOOK_STATLEVELUP` | ✅ | Fires in stat.cc pcAddExperienceWithOptions() and character_editor.cc characterEditorUpdateLevel() |
-| Barter | `HOOK_BARTER` | ✅ | Fires in game_dialog.cc gameDialogBarter() |
-| Message | `HOOK_MESSAGE` | ✅ | Fires in display_monitor.cc displayMonitorAddMessage() |
+| StatLevelUp | `HOOK_STATLEVELUP` (51) | ✅ [CE] | CE-specific. Fires in stat.cc pcAddExperienceWithOptions() and character_editor.cc characterEditorUpdateLevel() |
+| Barter | `HOOK_BARTER` (52) | ✅ [CE] | CE-specific. Fires in game_dialog.cc gameDialogBarter() |
+| Message | `HOOK_MESSAGE` (53) | ✅ [CE] | CE-specific. Fires in display_monitor.cc displayMonitorAddMessage() |
 
 ### VK → SDL Keycode Mapping
 
@@ -195,6 +195,56 @@ CE uses SDL2 rendering and input, not DirectInput. `HOOK_KEYPRESS` and `key_pres
 1. **Use SDL_Keycode values directly** — for mod scripts targeting CE, use SDL_ constants (e.g., `SDLK_a` = 97 instead of `VK_A` = 65).
 2. **Use `key_pressed()` / `tap_key()` with SDL codes** — these functions pass the argument directly to `sfall_kb_is_key_pressed()` which expects SDL codes.
 3. **In `HOOK_KEYPRESS` handlers** — the third argument (`args[2]`) is always the SDL_Keycode. If a `key_pressed()` trampoline is needed, pass the hook's arg[2] directly — no conversion required.
-4. **RPU/Et Tu compatibility** — sfall scripts using VK_ constants will receive incorrect key detection. To bridge this, CE's `sfall_kb_helpers.cc` provides partial VK→SDL mapping for common keys. For unmapped keys, scripts must use SDL codes directly.
+4. **RPU/Et Tu compatibility** — sfall scripts using VK_ constants will receive incorrect key detection. To bridge this, CE's `sfall_kb_helpers.cc` provides partial DIK→SDL mapping (DirectInput Key constants → SDL scancodes) for common keys. VK (Virtual Key) codes with the `0x80000000` flag are **not supported** and always return `SDL_SCANCODE_UNKNOWN`. For unmapped DIK codes and all VK codes, scripts must use SDL codes directly.
+
+### DIK→SDL Mapping Scope
+
+CE's `sfall_kb_helpers.cc` (`kDiks[]` array) maps 256 DIK (DirectInput Key) entries to SDL scancodes. The following describes which DIK ranges are mapped and which are not:
+
+**Mapped (common keys):**
+- DIK 1-13: Escape, digits 1-0, minus, equals, backspace (`SDL_SCANCODE_ESCAPE` through `SDL_SCANCODE_BACKSPACE`)
+- DIK 14: Tab (`SDL_SCANCODE_TAB`)
+- DIK 15-27: Q through right bracket (`SDL_SCANCODE_Q` through `SDL_SCANCODE_RIGHTBRACKET`)
+- DIK 28: Return (`SDL_SCANCODE_RETURN`)
+- DIK 29: Left Ctrl (`SDL_SCANCODE_LCTRL`)
+- DIK 30-43: A through backslash (`SDL_SCANCODE_A` through `SDL_SCANCODE_BACKSLASH`)
+- DIK 44-53: Z through slash (`SDL_SCANCODE_Z` through `SDL_SCANCODE_SLASH`)
+- DIK 54: Right Shift (`SDL_SCANCODE_RSHIFT`)
+- DIK 55: Numpad `*` (`SDL_SCANCODE_KP_MULTIPLY`)
+- DIK 56: Left Alt (`SDL_SCANCODE_LALT`)
+- DIK 57: Space (`SDL_SCANCODE_SPACE`)
+- DIK 58: Caps Lock (`SDL_SCANCODE_CAPSLOCK`)
+- DIK 59-68: F1-F10 (`SDL_SCANCODE_F1` through `SDL_SCANCODE_F10`)
+- DIK 69: Num Lock (`SDL_SCANCODE_NUMLOCKCLEAR`)
+- DIK 70: Scroll Lock (`SDL_SCANCODE_SCROLLLOCK`)
+- DIK 71-83: Numpad 7-0, minus/plus/period (`SDL_SCANCODE_KP_7` through `SDL_SCANCODE_KP_PERIOD`)
+- DIK 87-88: F11-F12 (`SDL_SCANCODE_F11` through `SDL_SCANCODE_F12`)
+- DIK 141: Numpad `=` (`SDL_SCANCODE_KP_EQUALS`)
+- DIK 156: Numpad Enter (`SDL_SCANCODE_KP_ENTER`)
+- DIK 157: Right Ctrl (`SDL_SCANCODE_RCTRL`)
+- DIK 179: Numpad `,` (`SDL_SCANCODE_KP_COMMA`)
+- DIK 181: Numpad `/` (`SDL_SCANCODE_KP_DIVIDE`)
+- DIK 183: SysRq (`SDL_SCANCODE_SYSREQ`)
+- DIK 184: Right Alt (`SDL_SCANCODE_RALT`)
+- DIK 199: Home (`SDL_SCANCODE_HOME`)
+- DIK 200: Up arrow (`SDL_SCANCODE_UP`)
+- DIK 201: Page Up (`SDL_SCANCODE_PAGEUP`)
+- DIK 203: Left arrow (`SDL_SCANCODE_LEFT`)
+- DIK 205: Right arrow (`SDL_SCANCODE_RIGHT`)
+- DIK 207: End (`SDL_SCANCODE_END`)
+- DIK 208: Down arrow (`SDL_SCANCODE_DOWN`)
+- DIK 209: Page Down (`SDL_SCANCODE_PAGEDOWN`)
+- DIK 210: Insert (`SDL_SCANCODE_INSERT`)
+- DIK 211: Delete (`SDL_SCANCODE_DELETE`)
+- DIK 219-221: Left Win, Right Win, Apps (`SDL_SCANCODE_LGUI`, `SDL_SCANCODE_RGUI`, `SDL_SCANCODE_APPLICATION`)
+
+**Not mapped (return `SDL_SCANCODE_UNKNOWN`):**
+- DIK 0: Reserved (no DIK_0 constant)
+- DIK 84-86: Reserved/unused (gap between F10 and F11)
+- DIK 89-140, 142-155: Unassigned DIK range — includes OEM-specific keys (DIK_AT, DIK_COLON, DIK_UNDERLINE, DIK_KANA, DIK_CONVERT, DIK_NOCONVERT, DIK_YEN, DIK_KANJI, DIK_PREVTRACK, DIK_STOP, DIK_AX, DIK_UNLABELED, DIK_OEM_102) and unassigned slots. All return `SDL_SCANCODE_UNKNOWN`.
+- DIK 158-178, 180: Unassigned (gap between RCtrl and NumpadComma, plus unmapped slot at 180)
+- DIK 185-198, 212-218, 222-255: Unassigned gaps and reserved ranges
+
+**VK (Virtual Key) codes:** Any value with the `0x80000000` flag set is treated as a VK code and always returns `SDL_SCANCODE_UNKNOWN` — VK→SDL translation is **not implemented** (`sfall_kb_helpers.cc:286-296`). Scripts relying on VK_ constant detection (common in sfall mods) will silently fail on CE.
 
 **Additional hook notes:** Registering a hook type that has no engine fire site (HOOK_DEATHANIM1, HOOK_REMOVEINVENOBJ, HOOK_SUBCOMBATDAMAGE, HOOK_ADJUSTPOISON, HOOK_ADJUSTRADS, HOOK_ROLLCHECK, HOOK_BESTWEAPON, HOOK_BUILDSFXWEAPON, and the obsolete HEX*BLOCKING hooks) will now emit a `debugPrint` warning. The hooks table above marks these as 🚫 with explanations.

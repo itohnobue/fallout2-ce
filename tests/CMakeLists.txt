@@ -31,6 +31,7 @@ add_library(test_sources STATIC
 )
 target_include_directories(test_sources PUBLIC "${CMAKE_SOURCE_DIR}/src")
 target_include_directories(test_sources PUBLIC ${ZLIB_INCLUDE_DIRS})
+target_compile_definitions(test_sources PUBLIC TEST_ACCESSORS_ENABLED)
 target_link_libraries(test_sources PUBLIC test_stubs ${SDL2_LIBRARIES})
 
 # ---- Test: config.cc ----
@@ -222,9 +223,11 @@ add_test(NAME test_scripts COMMAND test_scripts)
 
 # ---- Test: skill.cc (data structures, table integrity, skill max cap) ----
 # Self-contained — uses test-local stubs only.
+# Needs src/ include for skill_defs.h (Skill enum, SKILL_COUNT constant).
 add_executable(test_skill
     test_skill.cc
 )
+target_include_directories(test_skill PRIVATE "${CMAKE_SOURCE_DIR}/src")
 target_link_libraries(test_skill PRIVATE doctest)
 add_test(NAME test_skill COMMAND test_skill)
 
@@ -318,17 +321,22 @@ add_test(NAME test_dialog COMMAND test_dialog)
 
 # ---- Test: worldmap (self-contained data structure tests) ----
 # Self-contained test — does not link worldmap.cc (45+ engine deps).
+# Needs src/ include for worldmap.h (static_assert cross-checks against
+# CAR_FUEL_MAX, ENCOUNTER_FLAG_*, and CityState constants).
 add_executable(test_worldmap
     test_worldmap.cc
 )
+target_include_directories(test_worldmap PRIVATE "${CMAKE_SOURCE_DIR}/src")
 target_link_libraries(test_worldmap PRIVATE doctest)
 add_test(NAME test_worldmap COMMAND test_worldmap)
 
 # ---- Test: character_editor.cc (pure logic mirrors) ----
 # Self-contained test — does not link character_editor.cc (40+ engine deps).
+# Needs src/ include for stat_defs.h (STAT_MAX / stat constants).
 add_executable(test_character_editor
     test_character_editor.cc
 )
+target_include_directories(test_character_editor PRIVATE "${CMAKE_SOURCE_DIR}/src")
 target_link_libraries(test_character_editor PRIVATE doctest)
 add_test(NAME test_character_editor COMMAND test_character_editor)
 

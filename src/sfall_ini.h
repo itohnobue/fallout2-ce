@@ -35,6 +35,19 @@ void mf_get_ini_config(OpcodeContext& ctx);
 void op_get_ini_setting(Program* program);
 void op_get_ini_string(Program* program);
 
+// ============================================================
+// TEST-ONLY: Config injection for sfall_ini cache (I2-M68, I2-M75).
+// Injects a Config under the given fileName into the internal
+// ini cache so tests can exercise strtol overflow, LP64 branches,
+// and end-to-end config lookup without needing real file I/O.
+// Returns the Config* for further population via configSetString etc.
+// The cache takes ownership; the pointer stays valid until cache_clear.
+// Guarded behind TEST_ACCESSORS_ENABLED — test define before include.
+// ============================================================
+#if defined(TEST_ACCESSORS_ENABLED)
+Config* sfall_ini_inject_config_for_test(const char* fileName);
+#endif
+
 } // namespace fallout
 
 #endif /* FALLOUT_SFALL_INI_H_ */

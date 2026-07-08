@@ -6870,7 +6870,7 @@ static int perkDialogDrawTraits(int a1)
     if (a1 != 0) {
         int count = 0;
         for (int trait = 0; trait < TRAIT_COUNT; trait++) {
-            if (trait != gCharacterEditorOptionalTraitsBackup[0] && trait != gCharacterEditorOptionalTraitsBackup[1]) {
+            if (trait != gCharacterEditorOptionalTraitsBackup[0] && trait != gCharacterEditorOptionalTraitsBackup[1] && trait != gCharacterEditorOptionalTraitsBackup[2]) {
                 gPerkDialogOptionList[count].value = trait;
                 gPerkDialogOptionList[count].name = traitGetName(trait);
                 count++;

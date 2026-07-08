@@ -1062,19 +1062,38 @@ static void stub_combat_delete_critter_old_buggy(int deleteIndex)
     stub_combat_list[deleteIndex].cid = -1;
 }
 
-// Fixed: uses foundIndex saved before the compaction loop
+// Fixed: uses foundIndex saved before the compaction loop.
+// Also models the production sentinel pattern: the removed object is stored
+// at the end of the array and marked with cid = -1 (I2-M48 fix).
 static void stub_combat_delete_critter_fixed(int deleteIndex)
 {
     if (deleteIndex >= stub_list_total) return;
 
     int foundIndex = deleteIndex;
+
+    // Production sentinel pattern (combat.cc:6145):
+    //   _combat_list[_list_total] = obj;  // store at end of array
+    //   obj->cid = -1;                     // mark as removed
+    // The stub saves the removed entry, then after compaction stores it
+    // at the new end (position stub_list_total, post-decrement).
+    TestCombatObject removedObj = stub_combat_list[foundIndex];
+
     int i;
     for (i = foundIndex; i < stub_list_total - 1; i++) {
         stub_combat_list[i] = stub_combat_list[i + 1];
         stub_combat_list[i].cid = i;
     }
 
+    // After compaction, store sentinel at end-of-array position.
+    // In production: _combat_list[_list_total] stores a copy of the
+    // removed object at the array boundary. The object's cid is set to -1
+    // so iteration loops that check cid == -1 can detect array end.
+    //
+    // Pre-decrement total was the old count; post-decrement the sentinel
+    // sits at the new total position (one past the active range).
     stub_list_total--;
+    stub_combat_list[stub_list_total] = removedObj;
+    stub_combat_list[stub_list_total].cid = -1; // production sentinel marker
 
     if (foundIndex >= stub_list_com) {
         if (foundIndex < (stub_list_noncom + stub_list_com)) {
@@ -1083,14 +1102,6 @@ static void stub_combat_delete_critter_fixed(int deleteIndex)
     } else {
         stub_list_com--;
     }
-
-    // NOTE: Production sets obj->cid = -1 on the original object being removed
-    // (combat.cc:6145), not on the array slot. The array slot has already been
-    // overwritten by compaction at this point, so applying cid=-1 to the slot
-    // would corrupt the cid sequence for the remaining entries.
-    // In production, _combat_list[_list_total] = obj stores the removed object
-    // at the end of the array (outside the active range), then obj->cid = -1.
-    // The stub does not model end-of-array storage, so we skip the cid=-1.
 }
 
 TEST_CASE("M-006: cid renumbering after combat list compaction")
@@ -1187,6 +1198,39 @@ TEST_CASE("M-006: obj->cid = -1 sentinel after removal")
 
     // Verify total decreased
     CHECK(stub_list_total == 2);
+}
+
+TEST_CASE("I2-M48: Sentinel — removed object stored at end of array with cid=-1")
+{
+    // The production pattern (combat.cc:6145) stores the removed object at
+    // _combat_list[_list_total] (end of active range) and sets cid = -1.
+    // Iteration loops check cid == -1 to detect the sentinel boundary.
+    // This test verifies the stub correctly models this behavior.
+
+    int ids[] = {200, 201, 202, 203};
+    int cids[] = {0, 1, 2, 3};
+    stub_combat_list_init(ids, cids, 4, 2);
+
+    int preTotal = stub_list_total;
+    CHECK(preTotal == 4);
+
+    // Delete index 1 (second element, id=201, cid=1)
+    stub_combat_delete_critter_fixed(1);
+
+    // After deletion: total decreased by 1
+    CHECK(stub_list_total == 3);
+
+    // The sentinel at position [stub_list_total] should be the removed object
+    // with cid = -1. Post-compaction, the removedObj (id=201) is stored at
+    // the new end-of-array position and marked with the sentinel cid.
+    int sentinelIdx = stub_list_total; // = 3
+    CHECK(stub_combat_list[sentinelIdx].id == 201); // removed object's ID
+    CHECK(stub_combat_list[sentinelIdx].cid == -1);  // sentinel marker
+
+    // Active range [0, total) should NOT have cid = -1
+    for (int i = 0; i < stub_list_total; i++) {
+        CHECK(stub_combat_list[i].cid >= 0);
+    }
 }
 
 // =============================================================
@@ -1351,5 +1395,195 @@ TEST_CASE("M-007: Unarmed hit descriptions for advanced unarmed hit modes")
         CHECK(hm >= 0);
         CHECK(hm < HIT_MODE_COUNT);
         CHECK(test_isUnarmedHitMode(hm));
+    }
+}
+
+// ============================================================
+// F-M54: Combat coverage — hit-roll, damage, and AI stubs
+// ============================================================
+// The test_combat.cc file had coverage gaps in hit-roll probability,
+// damage calculation, and AI decision-making. These stubs exercise
+// simplified behavioral models without linking the full combat engine.
+//
+// R8-016 (MEDIUM): Combat stubs are simplified models, NOT production mirrors.
+//   Production attackDetermineToHit is 227 lines (weapons, perks, distance,
+//   light, sfall hooks, armor class). Stub testToHitChance is ~10 lines:
+//   skill + modifiers - AC, clamp 1-95. Covers ~2-5% of production logic.
+//   Production AI target selection is 218 lines (disposition system, pathfinding,
+//   perception, team sorting). Stub testAiSelectTarget is ~30 lines with simple
+//   weighted scoring. Production damage involves DT/DR, critical tables, ammo
+//   modifiers. Stub testCalculateDamage uses (min+max)/2 + bonus.
+//   Passing these tests provides ZERO confidence about production combat correctness.
+//   TODO: Replace stubs with integration tests linking the full combat engine, or
+//   add explicit commentary that these are design-intent sanity checks only.
+//   LINKAGE PATH: Production combat.cc/combat_ai.cc requires full engine linking
+//   (Object, proto, perks, traits, skill system, attack tables, etc.).
+
+// ---- Hit-roll probability stub ----
+// SIMPLIFIED MODEL (R8-016): Not a production mirror. Tests arithmetic only.
+// TODO: Link production attackDetermineToHit for integration-level validation.
+// Chance to hit = skill + modifiers - target AC + random(1,20) vs threshold.
+static int testToHitChance(int attackSkill, int targetAC, int modifiers)
+{
+    // Base chance = skill + modifiers - target AC
+    int baseChance = attackSkill + modifiers - targetAC;
+
+    // Clamp to [1, 95] — always 5% miss and 5% hit chance
+    if (baseChance < 1) baseChance = 1;
+    if (baseChance > 95) baseChance = 95;
+
+    return baseChance;
+}
+
+// ---- Damage calculation stub ----
+// SIMPLIFIED MODEL (R8-016): Not a production mirror. Tests arithmetic only.
+// TODO: Link production damage calculation for integration-level validation.
+// Mirrors the damage roll from combat.cc.
+// Damage = (weaponMin + weaponMax) / 2 + random bonus.
+static int testCalculateDamage(int weaponMinDmg, int weaponMaxDmg, int bonusDamage)
+{
+    // Average base damage
+    int base = (weaponMinDmg + weaponMaxDmg) / 2;
+
+    // Add bonus damage (e.g., from critical hit, perks, or strength bonus)
+    int total = base + bonusDamage;
+
+    // Minimum 1 damage per hit
+    if (total < 1) total = 1;
+
+    return total;
+}
+
+// ---- AI target prioritization stub ----
+// SIMPLIFIED MODEL (R8-016): Not a production mirror. Tests arithmetic only.
+// TODO: Link production AI target selection for integration-level validation.
+// AI selects target based on: distance, threat level, HP remaining.
+struct TestAiTarget {
+    int id;
+    int distance;       // hex-distance from AI
+    int threatLevel;    // 0-10 threat rating
+    int hpRemaining;    // current HP
+    int hpMax;
+};
+
+// Returns the index of the best target or -1 if none.
+static int testAiSelectTarget(const TestAiTarget targets[], int count,
+                              int aiHpRemaining, int aiHpMax)
+{
+    if (count <= 0) return -1;
+
+    int bestIndex = -1;
+    int bestScore = -1;
+
+    // Decision factors:
+    // - Prefer low-HP targets (finish kills)
+    // - Prefer high-threat targets
+    // - Penalize distance
+    // - When AI is low HP (< 25%), flee — select no target
+    if (aiHpRemaining < aiHpMax / 4) {
+        return -1; // low HP — flee
+    }
+
+    for (int i = 0; i < count; i++) {
+        int hpRatio = (100 * targets[i].hpRemaining) / targets[i].hpMax;
+        int score = targets[i].threatLevel * 10      // threat priority
+                  + (100 - hpRatio)                     // prefer wounded
+                  - targets[i].distance * 2;            // distance penalty
+        if (score > bestScore) {
+            bestScore = score;
+            bestIndex = i;
+        }
+    }
+
+    return bestIndex;
+}
+
+TEST_CASE("F-M54: Hit-roll — base chance formula")
+{
+    SUBCASE("Equal skill and AC gives base chance 0, clamped to 1")
+    {
+        // skill=50, AC=50 → base=0, clamped to 1 (always 5% to hit)
+        CHECK(testToHitChance(50, 50, 0) == 1);
+    }
+
+    SUBCASE("High skill vs low AC results in near-certain hit")
+    {
+        // skill=150, AC=20 → base=130, clamped to 95
+        CHECK(testToHitChance(150, 20, 0) == 95);
+    }
+
+    SUBCASE("Modifiers shift the chance")
+    {
+        // skill=30, AC=25, +10 aim → base=15
+        CHECK(testToHitChance(30, 25, 10) == 15);
+    }
+
+    SUBCASE("Upper cap at 95")
+    {
+        CHECK(testToHitChance(200, 10, 50) == 95);
+    }
+
+    SUBCASE("Lower cap at 1")
+    {
+        CHECK(testToHitChance(10, 100, -50) == 1);
+    }
+}
+
+TEST_CASE("F-M54: Damage — basic damage roll")
+{
+    SUBCASE("Average of weapon range")
+    {
+        // 10-20 weapon → avg 15
+        CHECK(testCalculateDamage(10, 20, 0) == 15);
+    }
+
+    SUBCASE("Bonus damage from strength/critical")
+    {
+        // 5-10 weapon + 5 bonus → avg 7 + 5 = 12
+        CHECK(testCalculateDamage(5, 10, 5) == 12);
+    }
+
+    SUBCASE("Minimum 1 damage")
+    {
+        // 1-1 weapon with -10 penalty → clamped to 1
+        CHECK(testCalculateDamage(1, 1, -10) == 1);
+    }
+
+    SUBCASE("High-damage weapon")
+    {
+        // 40-60 weapon + 20 bonus → avg 50 + 20 = 70
+        CHECK(testCalculateDamage(40, 60, 20) == 70);
+    }
+}
+
+TEST_CASE("F-M54: AI — target selection priority")
+{
+    TestAiTarget targets[4] = {
+        { 101, 3, 8, 50, 100 },   // close, high threat, half HP
+        { 102, 10, 2, 90, 100 },  // far, low threat, full HP
+        { 103, 2, 5, 20, 100 },   // very close, medium threat, low HP
+        { 104, 5, 10, 10, 100 },  // medium distance, max threat, very low HP
+    };
+
+    SUBCASE("AI at full HP prioritizes high-threat wounded close targets")
+    {
+        int best = testAiSelectTarget(targets, 4, 100, 100);
+        // target 104: threat=10*10=100, hpRatio=10, wounded=90, dist=-10 → score=180
+        // target 103: threat=5*10=50, hpRatio=20, wounded=80, dist=-4 → score=126
+        // target 101: threat=8*10=80, hpRatio=50, wounded=50, dist=-6 → score=124
+        CHECK(best == 3); // target 104: score=180, highest score
+        (void)best;
+    }
+
+    SUBCASE("AI at <25% HP flees — returns no target")
+    {
+        int best = testAiSelectTarget(targets, 4, 10, 100); // 10/100 = 10%
+        CHECK(best == -1);
+    }
+
+    SUBCASE("Empty target list returns no target")
+    {
+        int best = testAiSelectTarget(targets, 0, 100, 100);
+        CHECK(best == -1);
     }
 }

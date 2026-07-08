@@ -643,6 +643,12 @@ static void op_abs(Program* program)
     ProgramValue programValue = programStackPopValue(program);
 
     if (programValue.isInt()) {
+        // Guard against abs(INT_MIN) which is undefined behavior per C++ standard.
+        // INT_MIN has no positive representation in two's complement.
+        if (programValue.integerValue == INT_MIN) {
+            programStackPushInteger(program, 0);
+            return;
+        }
         programStackPushInteger(program, abs(programValue.integerValue));
     } else {
         programStackPushFloat(program, abs(programValue.asFloat()));
@@ -1042,6 +1048,12 @@ static void op_set_weapon_ammo_count(Program* program)
     // CE: Implementation is different.
     if (obj != nullptr) {
         if (PID_TYPE(obj->pid) == OBJ_TYPE_ITEM) {
+            // Guard: negative charges/ammo don't make sense. ammoSetQuantity()
+            // handles it for ammo/weapons; miscItemSetCharges() only guards the
+            // upper bound — clamp negative here for the MISC path.
+            if (ammoQuantityOrCharges < 0) {
+                ammoQuantityOrCharges = 0;
+            }
             switch (itemGetType(obj)) {
             case ITEM_TYPE_AMMO:
             case ITEM_TYPE_WEAPON:
@@ -3334,6 +3346,11 @@ static void op_set_perk_freq(Program* program)
     if (value < 0) {
         value = 0;
     }
+    // Guard: unreasonably large perk frequency would block all future perk
+    // gains. 50 levels is the practical upper bound (max 99 player level / 2).
+    if (value > 50) {
+        value = 50;
+    }
     gPerkFrequencyOverride = value;
     sfall_gl_vars_store("SFPerkFr", value);
 }
@@ -3376,6 +3393,12 @@ static void op_set_skill_max(Program* program)
     if (value < 0) {
         value = 300;
     }
+    // Guard: unreasonably large skill cap would cause integer overflow in skill
+    // increment paths or display artifacts. 999 allows mod extensibility while
+    // preventing pathological values from being serialized.
+    if (value > 999) {
+        value = 999;
+    }
     gSkillMaxCap = value;
     sfall_gl_vars_store("SFSkillM", value);
 }
@@ -3385,7 +3408,22 @@ static void op_set_skill_max(Program* program)
 // Modify stat description limits in gStatDescriptions[] via accessors
 // in stat.cc. critterGetStat() and related functions automatically
 // respect the modified limits.
-// ============================================================
+//
+// ARCHITECTURE NOTE (I2-M03): CE uses a SINGLE global gStatDescriptions[]
+// table shared across all entities (PC, NPCs, critters). The engine does
+// NOT provide per-entity stat limit storage. Consequently, all six opcodes
+// below (set_stat_max, set_stat_min, set_pc_stat_max, set_pc_stat_min,
+// set_npc_stat_max, set_npc_stat_min) write to the SAME shared table via
+// statSetMaxValue()/statSetMinValue(). The PC/NPC variants are registered
+// for script compatibility (ET Tu uses them) but are functionally identical
+// to their unqualified counterparts — the LAST call to any variant wins.
+//
+// Per-entity stat caps would require a separate storage layer
+// (per-Object maps indexed by Object::id, persisted in save/load) and
+// a consumer-side lookup that checks per-entity overrides before falling
+// back to gStatDescriptions[]. This cannot be achieved by the setters
+// alone — it would be a full-stack change across stat.cc consumers.
+// ================================================================
 
 // set_stat_max(int stat, int value) — 0x81B4
 static void op_set_stat_max(Program* program)
@@ -4281,7 +4319,11 @@ static void op_clear_selectable_perks(Program* program)
 
 static void op_set_pyromaniac_mod(Program* program)
 {
-    sfallPyromaniacMod = programStackPopInteger(program);
+    int val = programStackPopInteger(program);
+    // Guard against unreasonable values — fire damage modifier clamped to [-100, 100].
+    if (val < -100) val = -100;
+    if (val > 100) val = 100;
+    sfallPyromaniacMod = val;
 }
 
 // apply_heaveho_fix: stubbed — the Heave Ho! perk fix is handled
@@ -4294,12 +4336,20 @@ static void op_apply_heaveho_fix(Program* program)
 
 static void op_set_swiftlearner_mod(Program* program)
 {
-    sfallSwiftLearnerMod = programStackPopInteger(program);
+    int val = programStackPopInteger(program);
+    // Guard against unreasonable values — XP modifier clamped to [-100, 100].
+    if (val < -100) val = -100;
+    if (val > 100) val = 100;
+    sfallSwiftLearnerMod = val;
 }
 
 static void op_set_hp_per_level_mod(Program* program)
 {
-    sfallHpPerLevelMod = programStackPopInteger(program);
+    int val = programStackPopInteger(program);
+    // Guard against unreasonable values — HP/level modifier clamped to [-50, 50].
+    if (val < -50) val = -50;
+    if (val > 50) val = 50;
+    sfallHpPerLevelMod = val;
 }
 
 // ============================================================
@@ -4469,7 +4519,12 @@ static int sfallPerkLevelMod = 0;
 
 static void op_set_perk_level_mod(Program* program)
 {
-    sfallPerkLevelMod = programStackPopInteger(program);
+    int val = programStackPopInteger(program);
+    // Guard against unreasonable values — perk level modifier (subtracted from
+    // perk frequency) clamped to [-10, 10] to prevent blocking all perk gains.
+    if (val < -10) val = -10;
+    if (val > 10) val = 10;
+    sfallPerkLevelMod = val;
 }
 
 // Skill mod globals (0x81C7, 0x81C8).
@@ -4947,7 +5002,15 @@ static void op_get_perk_owed(Program* program)
 
 static void op_set_perk_owed(Program* program)
 {
-    gSfallPerkOwed = programStackPopInteger(program);
+    int value = programStackPopInteger(program);
+    // Guard: perk-owed is a counter of missed perks, linearly decremented.
+    // Negative or unreasonably large values are bogus script input.
+    if (value < 0) {
+        value = 0;
+    } else if (value > 255) {
+        value = 255;
+    }
+    sfallSetPerkOwed(value);
 }
 
 // ============================================================
@@ -5183,7 +5246,90 @@ int sfallGetDisableAimedShotsMapCount()
 {
     return static_cast<int>(gDisableAimedShotsMap.size());
 }
+
+// I2-M74: TEST-ONLY accessors for PerkboxTitle and KillCounters.
+// These file-static variables were previously inaccessible from unit tests.
+const char* sfallGetPerkboxTitleForTest()
+{
+    return sfallPerkboxTitle;
+}
+
+int sfallGetKillCounterCountForTest()
+{
+    return static_cast<int>(gSfallKillCounters.size());
+}
+
+int sfallGetKillCounterValueForTest(int critterType)
+{
+    auto it = gSfallKillCounters.find(critterType);
+    return (it != gSfallKillCounters.end()) ? it->second : -1;
+}
+
+void sfallSetKillCounterForTest(int critterType, int count)
+{
+    gSfallKillCounters[critterType] = count;
+}
 #endif
+
+// ============================================================
+// Save/load key constants (F-M03) — shared between
+// sfallOpcodeStateSave() and sfallOpcodeStateLoad() to prevent
+// typo-induced data loss from independently-duplicated string literals.
+// When adding a new key: define the constexpr here, use in both functions.
+// Generated keys (sprintf pattern) use format-key constants instead.
+// ============================================================
+static constexpr const char kGlVarXpMod[] = "SFXpMod%";
+static constexpr const char kGlVarSkillMax[] = "SFSkillM";
+static constexpr const char kGlVarPerkFreq[] = "SFPerkFr";
+static constexpr const char kGlVarSkillPts[] = "SFSkillP";
+static constexpr const char kGlVarHitChMod[] = "SFHCMod ";
+static constexpr const char kGlVarHitChMax[] = "SFHCMax ";
+static constexpr const char kGlVarWpnKnTyp[] = "SFWKnTyp";
+static constexpr const char kGlVarWpnKnVal[] = "SFWKnVl ";
+static constexpr const char kGlVarTgtKnTyp[] = "SFTKnTyp";
+static constexpr const char kGlVarTgtKnVal[] = "SFTKnVl ";
+static constexpr const char kGlVarAtkKnTyp[] = "SFAKnTyp";
+static constexpr const char kGlVarAtkKnVal[] = "SFAKnVl ";
+static constexpr const char kGlVarPipboy[] = "SFPipboy";
+static constexpr const char kGlVarPerkAddMode[] = "SFPerkAM";
+static constexpr const char kGlVarPerkClrSel[] = "SFPerkCS";
+static constexpr const char kGlVarPyroMod[] = "SFPyroMd";
+static constexpr const char kGlVarSwiftMod[] = "SFSwiftM";
+static constexpr const char kGlVarHpPMod[] = "SFHpPMd ";
+static constexpr const char kGlVarStatCnt[] = "SFStMCnt";
+static constexpr const char kGlVarPkpMax[] = "SFPkpMax";
+static constexpr const char kGlVarCrtPMax[] = "SFCrtPMx";
+static constexpr const char kGlVarBasePMax[] = "SFBasePx";
+static constexpr const char kGlVarCrtPMod[] = "SFCrtPMn";
+static constexpr const char kGlVarBasePMod[] = "SFBasePn";
+static constexpr const char kGlVarPerkLvlMod[] = "SFPerkLM";
+static constexpr const char kGlVarUnApBn[] = "SFUnApBn";
+static constexpr const char kGlVarUnApPk[] = "SFUnApPk";
+static constexpr const char kGlVarPerkMLCnt[] = "SFPMLCt";
+static constexpr const char kGlVarBaseSkCnt[] = "SFBSMcnt";
+static constexpr const char kGlVarGlobCt[] = "SFGCnt  ";
+static constexpr const char kGlVarCrtSkCnt[] = "SFCrtSc";
+static constexpr const char kGlVarPerkOwed[] = "SFPerkOw";
+static constexpr const char kGlVarHideRP[] = "SFHideRP";
+static constexpr const char kGlVarPerkImgCnt[] = "SFPicnt ";
+static constexpr const char kGlVarPerkRankCnt[] = "SFPRcnt ";
+static constexpr const char kGlVarPerkStatCnt[] = "SFPscnt ";
+static constexpr const char kGlVarPerkMagCnt[] = "SFPmcnt ";
+static constexpr const char kGlVarPerkSk1Cnt[] = "SFs1cnt ";
+static constexpr const char kGlVarPerk1MagCnt[] = "SF1Mcnt ";
+static constexpr const char kGlVarPerkSk2Cnt[] = "SFs2cnt ";
+static constexpr const char kGlVarPerk2MagCnt[] = "SF2Mcnt ";
+static constexpr const char kGlVarPerkTypeCnt[] = "SFPtcnt ";
+static constexpr const char kGlVarPerkSpecCnt[] = "SFSacnt ";
+static constexpr const char kGlVarKillCtrCnt[] = "SFKCcnt ";
+static constexpr const char kGlVarHitChCtrCnt[] = "SFHCcnt ";
+static constexpr const char kGlVarCrtPMapCnt[] = "SFCPMcnt";
+static constexpr const char kGlVarFakePkCnt[] = "SFFPkcnt";
+static constexpr const char kGlVarFakeTrCnt[] = "SFFTkcnt";
+static constexpr const char kGlVarFASMapCnt[] = "SFFAScnt";
+static constexpr const char kGlVarDASMapCnt[] = "SFDAScnt";
+static constexpr const char kGlVarDMaleModel[] = "SFDMale ";
+static constexpr const char kGlVarDFemaleModel[] = "SFDFmale";
 
 // Persist all opcode-related global state into the sfall global vars map
 // before sfall_gl_vars_save() writes to sfallgv.sav.
@@ -5191,32 +5337,32 @@ int sfallGetDisableAimedShotsMapCount()
 void sfallOpcodeStateSave()
 {
     // Core opcode globals (already persisted before F-001 fix).
-    sfall_gl_vars_store("SFXpMod%", gXpModPercentage);
-    sfall_gl_vars_store("SFSkillM", gSkillMaxCap);
-    sfall_gl_vars_store("SFPerkFr", gPerkFrequencyOverride);
-    sfall_gl_vars_store("SFSkillP", gSkillPointsPerLevelMod);
+    sfall_gl_vars_store(kGlVarXpMod, gXpModPercentage);
+    sfall_gl_vars_store(kGlVarSkillMax, gSkillMaxCap);
+    sfall_gl_vars_store(kGlVarPerkFreq, gPerkFrequencyOverride);
+    sfall_gl_vars_store(kGlVarSkillPts, gSkillPointsPerLevelMod);
 
     // Hit chance globals (extern in header, owned here).
-    sfall_gl_vars_store("SFHCMod ", sfallHitChanceMod);
-    sfall_gl_vars_store("SFHCMax ", sfallHitChanceMax);
+    sfall_gl_vars_store(kGlVarHitChMod, sfallHitChanceMod);
+    sfall_gl_vars_store(kGlVarHitChMax, sfallHitChanceMax);
 
     // Knockback globals (extern in header, owned here).
-    sfall_gl_vars_store("SFWKnTyp", sfallWeaponKnockbackType);
-    sfall_gl_vars_store_float("SFWKnVl ", sfallWeaponKnockbackValue);
-    sfall_gl_vars_store("SFTKnTyp", sfallTargetKnockbackType);
-    sfall_gl_vars_store_float("SFTKnVl ", sfallTargetKnockbackValue);
-    sfall_gl_vars_store("SFAKnTyp", sfallAttackerKnockbackType);
-    sfall_gl_vars_store_float("SFAKnVl ", sfallAttackerKnockbackValue);
+    sfall_gl_vars_store(kGlVarWpnKnTyp, sfallWeaponKnockbackType);
+    sfall_gl_vars_store_float(kGlVarWpnKnVal, sfallWeaponKnockbackValue);
+    sfall_gl_vars_store(kGlVarTgtKnTyp, sfallTargetKnockbackType);
+    sfall_gl_vars_store_float(kGlVarTgtKnVal, sfallTargetKnockbackValue);
+    sfall_gl_vars_store(kGlVarAtkKnTyp, sfallAttackerKnockbackType);
+    sfall_gl_vars_store_float(kGlVarAtkKnVal, sfallAttackerKnockbackValue);
 
     // Pipboy availability override.
-    sfall_gl_vars_store("SFPipboy", gPipboyAvailableOverride);
+    sfall_gl_vars_store(kGlVarPipboy, gPipboyAvailableOverride);
 
     // Perk/trait modifier opcodes — storage-only globals.
-    sfall_gl_vars_store("SFPerkAM", sfallPerkAddMode);
-    sfall_gl_vars_store("SFPerkCS", sfallClearSelectablePerks ? 1 : 0);
-    sfall_gl_vars_store("SFPyroMd", sfallPyromaniacMod);
-    sfall_gl_vars_store("SFSwiftM", sfallSwiftLearnerMod);
-    sfall_gl_vars_store("SFHpPMd ", sfallHpPerLevelMod);
+    sfall_gl_vars_store(kGlVarPerkAddMode, sfallPerkAddMode);
+    sfall_gl_vars_store(kGlVarPerkClrSel, sfallClearSelectablePerks ? 1 : 0);
+    sfall_gl_vars_store(kGlVarPyroMod, sfallPyromaniacMod);
+    sfall_gl_vars_store(kGlVarSwiftMod, sfallSwiftLearnerMod);
+    sfall_gl_vars_store(kGlVarHpPMod, sfallHpPerLevelMod);
 
     // F-016: sfallPerkboxTitle (set via set_perkbox_title opcode) is NOT
     // serialized here. The global vars system only supports int/float values;
@@ -5232,7 +5378,7 @@ void sfallOpcodeStateSave()
     // set_stat_min (0x81B5), and their PC/NPC variants. These modify
     // gStatDescriptions[] limits in stat.cc and must survive save/load.
     {
-        sfall_gl_vars_store("SFStMCnt", STAT_COUNT);
+        sfall_gl_vars_store(kGlVarStatCnt, STAT_COUNT);
         for (int stat = 0; stat < STAT_COUNT; stat++) {
             char key[16] = {};
             sprintf(key, "SFStMn%02d", stat);
@@ -5252,20 +5398,20 @@ void sfallOpcodeStateSave()
     // or per-base maxima. To fully wire these, skill.cc must be updated
     // to consult sfallGetCritterPickpocketMax()/sfallGetBasePickpocketMax()
     // when computing the steal cap.
-    sfall_gl_vars_store("SFPkpMax", sfallPickpocketMax);
-    sfall_gl_vars_store("SFCrtPMx", sfallCritterPickpocketMax);
-    sfall_gl_vars_store("SFBasePx", sfallBasePickpocketMax);
-    sfall_gl_vars_store("SFCrtPMn", sfallCritterPickpocketMod);
-    sfall_gl_vars_store("SFBasePn", sfallBasePickpocketMod);
+    sfall_gl_vars_store(kGlVarPkpMax, sfallPickpocketMax);
+    sfall_gl_vars_store(kGlVarCrtPMax, sfallCritterPickpocketMax);
+    sfall_gl_vars_store(kGlVarBasePMax, sfallBasePickpocketMax);
+    sfall_gl_vars_store(kGlVarCrtPMod, sfallCritterPickpocketMod);
+    sfall_gl_vars_store(kGlVarBasePMod, sfallBasePickpocketMod);
 
     // Perk level modifier.
-    sfall_gl_vars_store("SFPerkLM", sfallPerkLevelMod);
+    sfall_gl_vars_store(kGlVarPerkLvlMod, sfallPerkLevelMod);
 
     // F-015: Save unspent AP bonuses (set via set_unspent_ap_bonus /
     // set_unspent_ap_perk_bonus opcodes). Stored in stat.cc static ints;
     // must be serialized or they reset to default (4) on game load.
-    sfall_gl_vars_store("SFUnApBn", statGetUnspentApBonus());
-    sfall_gl_vars_store("SFUnApPk", statGetUnspentApPerkBonus());
+    sfall_gl_vars_store(kGlVarUnApBn, statGetUnspentApBonus());
+    sfall_gl_vars_store(kGlVarUnApPk, statGetUnspentApPerkBonus());
 
     // F-008: Save perk min level overrides set by set_perk_level (0x817A).
     // Store count + per-index (perk ID, current override value) pairs.
@@ -5276,7 +5422,7 @@ void sfallOpcodeStateSave()
                 savedCount++;
             }
         }
-        sfall_gl_vars_store("SFPMLCt", savedCount);
+        sfall_gl_vars_store(kGlVarPerkMLCnt, savedCount);
         int idx = 0;
         for (int i = 0; i < PERK_COUNT; i++) {
             if (sfallPerkMinLevelOriginal[i] != -1) {
@@ -5295,7 +5441,7 @@ void sfallOpcodeStateSave()
     // gBaseSkillModMap: skill → mod for set_base_skill_mod.
     {
         int skCount = static_cast<int>(gBaseSkillModMap.size());
-        sfall_gl_vars_store("SFBSMcnt", skCount);
+        sfall_gl_vars_store(kGlVarBaseSkCnt, skCount);
         int idx = 0;
         for (const auto& [skill, mod] : gBaseSkillModMap) {
             char skKey[16] = {};
@@ -5312,7 +5458,7 @@ void sfallOpcodeStateSave()
     // to avoid collision with the per-critter gCritterSkillModMap.
     {
         int gcCount = static_cast<int>(gGlobalCritterSkillModMap.size());
-        sfall_gl_vars_store("SFGCnt  ", gcCount);
+        sfall_gl_vars_store(kGlVarGlobCt, gcCount);
         int idx = 0;
         for (const auto& [skill, mod] : gGlobalCritterSkillModMap) {
             char skKey[16] = {};
@@ -5327,7 +5473,7 @@ void sfallOpcodeStateSave()
     // gCritterSkillModMap: pid → (skill → mod) for set_critter_skill_mod.
     {
         int crtCount = static_cast<int>(gCritterSkillModMap.size());
-        sfall_gl_vars_store("SFCrtSc", crtCount);
+        sfall_gl_vars_store(kGlVarCrtSkCnt, crtCount);
         int idx = 0;
         for (const auto& [pid, skillMap] : gCritterSkillModMap) {
             char pidKey[16] = {};
@@ -5352,68 +5498,68 @@ void sfallOpcodeStateSave()
     }
 
     // Perk owed counter.
-    sfall_gl_vars_store("SFPerkOw", gSfallPerkOwed);
+    sfall_gl_vars_store(kGlVarPerkOwed, gSfallPerkOwed);
 
     // Hide real perks flag.
-    sfall_gl_vars_store("SFHideRP", sfallHideRealPerks ? 1 : 0);
+    sfall_gl_vars_store(kGlVarHideRP, sfallHideRealPerks ? 1 : 0);
 
     // Perk property override arrays — persisted as indexed key/value pairs.
     // Each array stores its count (always PERK_COUNT) followed by per-index entries.
-    sfall_gl_vars_store("SFPicnt ", PERK_COUNT);
+    sfall_gl_vars_store(kGlVarPerkImgCnt, PERK_COUNT);
     for (int i = 0; i < PERK_COUNT; i++) {
         char key[16] = {};
         sprintf(key, "SFPi%03d", i);
         sfall_gl_vars_store(key, sfallPerkImageOverrides[i]);
     }
-    sfall_gl_vars_store("SFPRcnt ", PERK_COUNT);
+    sfall_gl_vars_store(kGlVarPerkRankCnt, PERK_COUNT);
     for (int i = 0; i < PERK_COUNT; i++) {
         char key[16] = {};
         sprintf(key, "SFPr%03d", i);
         sfall_gl_vars_store(key, sfallPerkRanksOverrides[i]);
     }
-    sfall_gl_vars_store("SFPscnt ", PERK_COUNT);
+    sfall_gl_vars_store(kGlVarPerkStatCnt, PERK_COUNT);
     for (int i = 0; i < PERK_COUNT; i++) {
         char key[16] = {};
         sprintf(key, "SFPs%03d", i);
         sfall_gl_vars_store(key, sfallPerkStatOverrides[i]);
     }
-    sfall_gl_vars_store("SFPmcnt ", PERK_COUNT);
+    sfall_gl_vars_store(kGlVarPerkMagCnt, PERK_COUNT);
     for (int i = 0; i < PERK_COUNT; i++) {
         char key[16] = {};
         sprintf(key, "SFPm%03d", i);
         sfall_gl_vars_store(key, sfallPerkStatMagOverrides[i]);
     }
-    sfall_gl_vars_store("SFs1cnt ", PERK_COUNT);
+    sfall_gl_vars_store(kGlVarPerkSk1Cnt, PERK_COUNT);
     for (int i = 0; i < PERK_COUNT; i++) {
         char key[16] = {};
         sprintf(key, "SFs1%03d", i);
         sfall_gl_vars_store(key, sfallPerkSkill1Overrides[i]);
     }
-    sfall_gl_vars_store("SF1Mcnt ", PERK_COUNT);
+    sfall_gl_vars_store(kGlVarPerk1MagCnt, PERK_COUNT);
     for (int i = 0; i < PERK_COUNT; i++) {
         char key[16] = {};
         sprintf(key, "SF1M%03d", i);
         sfall_gl_vars_store(key, sfallPerkSkill1MagOverrides[i]);
     }
-    sfall_gl_vars_store("SFs2cnt ", PERK_COUNT);
+    sfall_gl_vars_store(kGlVarPerkSk2Cnt, PERK_COUNT);
     for (int i = 0; i < PERK_COUNT; i++) {
         char key[16] = {};
         sprintf(key, "SFs2%03d", i);
         sfall_gl_vars_store(key, sfallPerkSkill2Overrides[i]);
     }
-    sfall_gl_vars_store("SF2Mcnt ", PERK_COUNT);
+    sfall_gl_vars_store(kGlVarPerk2MagCnt, PERK_COUNT);
     for (int i = 0; i < PERK_COUNT; i++) {
         char key[16] = {};
         sprintf(key, "SF2M%03d", i);
         sfall_gl_vars_store(key, sfallPerkSkill2MagOverrides[i]);
     }
-    sfall_gl_vars_store("SFPtcnt ", PERK_COUNT);
+    sfall_gl_vars_store(kGlVarPerkTypeCnt, PERK_COUNT);
     for (int i = 0; i < PERK_COUNT; i++) {
         char key[16] = {};
         sprintf(key, "SFPt%03d", i);
         sfall_gl_vars_store(key, sfallPerkTypeOverrides[i]);
     }
-    sfall_gl_vars_store("SFSacnt ", PERK_COUNT);
+    sfall_gl_vars_store(kGlVarPerkSpecCnt, PERK_COUNT);
     for (int i = 0; i < PERK_COUNT; i++) {
         for (int s = 0; s < PRIMARY_STAT_COUNT; s++) {
             char key[16] = {};
@@ -5423,10 +5569,10 @@ void sfallOpcodeStateSave()
     }
 
     // Kill counters — persisted as indexed key/value pairs.
-    // Format: "SFKCcnt" stores entry count, "SFKCkNNN" stores key (critter type),
+    // Format: kGlVarKillCtrCnt stores entry count, "SFKCkNNN" stores key (critter type),
     // "SFKCvNNN" stores value (count) for entry index NNN.
     int kcCount = static_cast<int>(gSfallKillCounters.size());
-    sfall_gl_vars_store("SFKCcnt ", kcCount);
+    sfall_gl_vars_store(kGlVarKillCtrCnt, kcCount);
     int idx = 0;
     for (const auto& entry : gSfallKillCounters) {
         char key[16] = {};
@@ -5439,7 +5585,7 @@ void sfallOpcodeStateSave()
 
     // Per-critter hit chance overrides.
     int hcCount = static_cast<int>(gCritterHitChanceOverrides.size());
-    sfall_gl_vars_store("SFHCcnt ", hcCount);
+    sfall_gl_vars_store(kGlVarHitChCtrCnt, hcCount);
     idx = 0;
     for (const auto& entry : gCritterHitChanceOverrides) {
         char key[16] = {};
@@ -5454,7 +5600,7 @@ void sfallOpcodeStateSave()
 
     // F-001: Per-critter pickpocket mod map.
     int cpmCount = static_cast<int>(gCritterPickpocketModMap.size());
-    sfall_gl_vars_store("SFCPMcnt", cpmCount);
+    sfall_gl_vars_store(kGlVarCrtPMapCnt, cpmCount);
     idx = 0;
     for (const auto& entry : gCritterPickpocketModMap) {
         char key[16] = {};
@@ -5473,7 +5619,7 @@ void sfallOpcodeStateSave()
     // populated by mod scripts on game load via set_fake_perk /
     // set_fake_trait / set_selectable_perk opcodes.
     // Format: count per type, then indexed {level, image, active}.
-    sfall_gl_vars_store("SFFPkcnt", sfallFakePerkCount);
+    sfall_gl_vars_store(kGlVarFakePkCnt, sfallFakePerkCount);
     for (int i = 0; i < sfallFakePerkCount && i < kMaxFakePerks; i++) {
         char key[16] = {};
         sprintf(key, "SFFPL%03d", i);
@@ -5483,7 +5629,7 @@ void sfallOpcodeStateSave()
         sprintf(key, "SFFPA%03d", i);
         sfall_gl_vars_store(key, sfallFakePerks[i].active ? 1 : 0);
     }
-    sfall_gl_vars_store("SFFTkcnt", sfallFakeTraitCount);
+    sfall_gl_vars_store(kGlVarFakeTrCnt, sfallFakeTraitCount);
     for (int i = 0; i < sfallFakeTraitCount && i < kMaxFakeTraits; i++) {
         char key[16] = {};
         sprintf(key, "SFFTA%03d", i);
@@ -5494,14 +5640,13 @@ void sfallOpcodeStateSave()
 
     // Custom death model globals — set via set_dm_model / set_df_model (0x81FF/0x8200).
     // These are simple int values used in op_refresh_pc_art to override the hero proto FID.
-    sfall_gl_vars_store("SFDMale ", gCustomMaleHeroModelNum);
-    sfall_gl_vars_store("SFDFmale", gCustomFemaleHeroModelNum);
+    sfall_gl_vars_store(kGlVarDMaleModel, gCustomMaleHeroModelNum);
+    sfall_gl_vars_store(kGlVarDFemaleModel, gCustomFemaleHeroModelNum);
 
     // Per-critter aimed-shot override maps (F-016).
-    // Format: "SFFAScnt" stores entry count, "SFFASkNNN" stores key (PID),
-    // "SFFASvNNN" stores value (bool as 0/1) for entry index NNN.
+    // Format: entry count + indexed key/value pairs (prefix "SFFAS" / "SFDAS").
     int fasCount = static_cast<int>(gForceAimedShotsMap.size());
-    sfall_gl_vars_store("SFFAScnt", fasCount);
+    sfall_gl_vars_store(kGlVarFASMapCnt, fasCount);
     idx = 0;
     for (const auto& entry : gForceAimedShotsMap) {
         char key[16] = {};
@@ -5514,7 +5659,7 @@ void sfallOpcodeStateSave()
 
     // Disable aimed shots map — same format with "SFDAS" prefix.
     int dasCount = static_cast<int>(gDisableAimedShotsMap.size());
-    sfall_gl_vars_store("SFDAScnt", dasCount);
+    sfall_gl_vars_store(kGlVarDASMapCnt, dasCount);
     idx = 0;
     for (const auto& entry : gDisableAimedShotsMap) {
         char key[16] = {};
@@ -5532,75 +5677,75 @@ void sfallOpcodeStateLoad()
 {
     int val;
     // Core opcode globals.
-    if (sfall_gl_vars_fetch("SFXpMod%", val)) {
+    if (sfall_gl_vars_fetch(kGlVarXpMod, val)) {
         gXpModPercentage = val;
     }
-    if (sfall_gl_vars_fetch("SFSkillM", val)) {
+    if (sfall_gl_vars_fetch(kGlVarSkillMax, val)) {
         gSkillMaxCap = val;
     }
-    if (sfall_gl_vars_fetch("SFPerkFr", val)) {
+    if (sfall_gl_vars_fetch(kGlVarPerkFreq, val)) {
         gPerkFrequencyOverride = val;
     }
-    if (sfall_gl_vars_fetch("SFSkillP", val)) {
+    if (sfall_gl_vars_fetch(kGlVarSkillPts, val)) {
         gSkillPointsPerLevelMod = val;
     }
 
     // Hit chance globals.
-    if (sfall_gl_vars_fetch("SFHCMod ", val)) {
+    if (sfall_gl_vars_fetch(kGlVarHitChMod, val)) {
         sfallHitChanceMod = val;
     }
-    if (sfall_gl_vars_fetch("SFHCMax ", val)) {
+    if (sfall_gl_vars_fetch(kGlVarHitChMax, val)) {
         sfallHitChanceMax = val;
     }
 
     // Knockback globals.
-    if (sfall_gl_vars_fetch("SFWKnTyp", val)) {
+    if (sfall_gl_vars_fetch(kGlVarWpnKnTyp, val)) {
         sfallWeaponKnockbackType = val;
     }
     {
         float fval;
-        if (sfall_gl_vars_fetch_float("SFWKnVl ", fval)) {
+        if (sfall_gl_vars_fetch_float(kGlVarWpnKnVal, fval)) {
             sfallWeaponKnockbackValue = fval;
         }
     }
-    if (sfall_gl_vars_fetch("SFTKnTyp", val)) {
+    if (sfall_gl_vars_fetch(kGlVarTgtKnTyp, val)) {
         sfallTargetKnockbackType = val;
     }
     {
         float fval;
-        if (sfall_gl_vars_fetch_float("SFTKnVl ", fval)) {
+        if (sfall_gl_vars_fetch_float(kGlVarTgtKnVal, fval)) {
             sfallTargetKnockbackValue = fval;
         }
     }
-    if (sfall_gl_vars_fetch("SFAKnTyp", val)) {
+    if (sfall_gl_vars_fetch(kGlVarAtkKnTyp, val)) {
         sfallAttackerKnockbackType = val;
     }
     {
         float fval;
-        if (sfall_gl_vars_fetch_float("SFAKnVl ", fval)) {
+        if (sfall_gl_vars_fetch_float(kGlVarAtkKnVal, fval)) {
             sfallAttackerKnockbackValue = fval;
         }
     }
 
     // Pipboy availability override.
-    if (sfall_gl_vars_fetch("SFPipboy", val)) {
+    if (sfall_gl_vars_fetch(kGlVarPipboy, val)) {
         gPipboyAvailableOverride = val;
     }
 
     // Perk/trait modifier opcodes.
-    if (sfall_gl_vars_fetch("SFPerkAM", val)) {
+    if (sfall_gl_vars_fetch(kGlVarPerkAddMode, val)) {
         sfallPerkAddMode = val;
     }
-    if (sfall_gl_vars_fetch("SFPerkCS", val)) {
+    if (sfall_gl_vars_fetch(kGlVarPerkClrSel, val)) {
         sfallClearSelectablePerks = (val != 0);
     }
-    if (sfall_gl_vars_fetch("SFPyroMd", val)) {
+    if (sfall_gl_vars_fetch(kGlVarPyroMod, val)) {
         sfallPyromaniacMod = val;
     }
-    if (sfall_gl_vars_fetch("SFSwiftM", val)) {
+    if (sfall_gl_vars_fetch(kGlVarSwiftMod, val)) {
         sfallSwiftLearnerMod = val;
     }
-    if (sfall_gl_vars_fetch("SFHpPMd ", val)) {
+    if (sfall_gl_vars_fetch(kGlVarHpPMod, val)) {
         sfallHpPerLevelMod = val;
     }
 
@@ -5613,7 +5758,7 @@ void sfallOpcodeStateLoad()
     // set_stat_min (0x81B5), and their PC/NPC variants.
     {
         int statCount = 0;
-        if (sfall_gl_vars_fetch("SFStMCnt", statCount)) {
+        if (sfall_gl_vars_fetch(kGlVarStatCnt, statCount)) {
             for (int stat = 0; stat < statCount && stat < STAT_COUNT; stat++) {
                 char key[16] = {};
                 int ival = 0;
@@ -5630,48 +5775,48 @@ void sfallOpcodeStateLoad()
     }
 
     // Pickpocket modifier opcodes.
-    if (sfall_gl_vars_fetch("SFPkpMax", val)) {
+    if (sfall_gl_vars_fetch(kGlVarPkpMax, val)) {
         sfallPickpocketMax = val;
     }
-    if (sfall_gl_vars_fetch("SFCrtPMx", val)) {
+    if (sfall_gl_vars_fetch(kGlVarCrtPMax, val)) {
         sfallCritterPickpocketMax = val;
     }
-    if (sfall_gl_vars_fetch("SFBasePx", val)) {
+    if (sfall_gl_vars_fetch(kGlVarBasePMax, val)) {
         sfallBasePickpocketMax = val;
     }
-    if (sfall_gl_vars_fetch("SFCrtPMn", val)) {
+    if (sfall_gl_vars_fetch(kGlVarCrtPMod, val)) {
         sfallCritterPickpocketMod = val;
     }
-    if (sfall_gl_vars_fetch("SFBasePn", val)) {
+    if (sfall_gl_vars_fetch(kGlVarBasePMod, val)) {
         sfallBasePickpocketMod = val;
     }
 
     // Custom death model globals — set via set_dm_model / set_df_model.
-    if (sfall_gl_vars_fetch("SFDMale ", val)) {
+    if (sfall_gl_vars_fetch(kGlVarDMaleModel, val)) {
         gCustomMaleHeroModelNum = val;
     }
-    if (sfall_gl_vars_fetch("SFDFmale", val)) {
+    if (sfall_gl_vars_fetch(kGlVarDFemaleModel, val)) {
         gCustomFemaleHeroModelNum = val;
     }
 
     // Perk level modifier.
-    if (sfall_gl_vars_fetch("SFPerkLM", val)) {
+    if (sfall_gl_vars_fetch(kGlVarPerkLvlMod, val)) {
         sfallPerkLevelMod = val;
     }
 
     // F-015: Restore unspent AP bonuses set via set_unspent_ap_bonus /
     // set_unspent_ap_perk_bonus opcodes.
-    if (sfall_gl_vars_fetch("SFUnApBn", val)) {
+    if (sfall_gl_vars_fetch(kGlVarUnApBn, val)) {
         statSetUnspentApBonus(val);
     }
-    if (sfall_gl_vars_fetch("SFUnApPk", val)) {
+    if (sfall_gl_vars_fetch(kGlVarUnApPk, val)) {
         statSetUnspentApPerkBonus(val);
     }
 
     // F-008: Restore perk min level overrides set by set_perk_level (0x817A).
     {
         int savedCount = 0;
-        if (sfall_gl_vars_fetch("SFPMLCt", savedCount)) {
+        if (sfall_gl_vars_fetch(kGlVarPerkMLCnt, savedCount)) {
             for (int idx = 0; idx < savedCount; idx++) {
                 char pkKey[16] = {};
                 char pvKey[16] = {};
@@ -5692,7 +5837,7 @@ void sfallOpcodeStateLoad()
     // gBaseSkillModMap: skill → mod for set_base_skill_mod.
     {
         int skCount = 0;
-        if (sfall_gl_vars_fetch("SFBSMcnt", skCount)) {
+        if (sfall_gl_vars_fetch(kGlVarBaseSkCnt, skCount)) {
             for (int idx = 0; idx < skCount; idx++) {
                 char skKey[16] = {};
                 char modKey[16] = {};
@@ -5709,10 +5854,10 @@ void sfallOpcodeStateLoad()
         }
     }
     // gGlobalCritterSkillModMap: skill → mod for set_critter_skill_mod
-    // with no critter (nullptr fallback).  "SFGCnt  " / "SFGCsk%02d" / "SFGCmv%02d".
+    // with no critter (nullptr fallback).
     {
         int gcCount = 0;
-        if (sfall_gl_vars_fetch("SFGCnt  ", gcCount)) {
+        if (sfall_gl_vars_fetch(kGlVarGlobCt, gcCount)) {
             for (int idx = 0; idx < gcCount; idx++) {
                 char skKey[16] = {};
                 char modKey[16] = {};
@@ -5731,7 +5876,7 @@ void sfallOpcodeStateLoad()
     // gCritterSkillModMap: pid → (skill → mod) for set_critter_skill_mod.
     {
         int crtCount = 0;
-        if (sfall_gl_vars_fetch("SFCrtSc", crtCount)) {
+        if (sfall_gl_vars_fetch(kGlVarCrtSkCnt, crtCount)) {
             for (int idx = 0; idx < crtCount; idx++) {
                 char pidKey[16] = {};
                 char skCntKey[16] = {};
@@ -5780,19 +5925,19 @@ void sfallOpcodeStateLoad()
     }
 
     // Perk owed counter.
-    if (sfall_gl_vars_fetch("SFPerkOw", val)) {
+    if (sfall_gl_vars_fetch(kGlVarPerkOwed, val)) {
         gSfallPerkOwed = val;
     }
 
     // Hide real perks flag.
-    if (sfall_gl_vars_fetch("SFHideRP", val)) {
+    if (sfall_gl_vars_fetch(kGlVarHideRP, val)) {
         sfallHideRealPerks = (val != 0);
     }
 
     // Perk property override arrays — restore from indexed key/value pairs.
     {
         int count = 0;
-        if (sfall_gl_vars_fetch("SFPicnt ", count) && count == PERK_COUNT) {
+        if (sfall_gl_vars_fetch(kGlVarPerkImgCnt, count) && count == PERK_COUNT) {
             for (int i = 0; i < count; i++) {
                 char key[16] = {};
                 sprintf(key, "SFPi%03d", i);
@@ -5802,7 +5947,7 @@ void sfallOpcodeStateLoad()
     }
     {
         int count = 0;
-        if (sfall_gl_vars_fetch("SFPRcnt ", count) && count == PERK_COUNT) {
+        if (sfall_gl_vars_fetch(kGlVarPerkRankCnt, count) && count == PERK_COUNT) {
             for (int i = 0; i < count; i++) {
                 char key[16] = {};
                 sprintf(key, "SFPr%03d", i);
@@ -5812,7 +5957,7 @@ void sfallOpcodeStateLoad()
     }
     {
         int count = 0;
-        if (sfall_gl_vars_fetch("SFPscnt ", count) && count == PERK_COUNT) {
+        if (sfall_gl_vars_fetch(kGlVarPerkStatCnt, count) && count == PERK_COUNT) {
             for (int i = 0; i < count; i++) {
                 char key[16] = {};
                 sprintf(key, "SFPs%03d", i);
@@ -5822,7 +5967,7 @@ void sfallOpcodeStateLoad()
     }
     {
         int count = 0;
-        if (sfall_gl_vars_fetch("SFPmcnt ", count) && count == PERK_COUNT) {
+        if (sfall_gl_vars_fetch(kGlVarPerkMagCnt, count) && count == PERK_COUNT) {
             for (int i = 0; i < count; i++) {
                 char key[16] = {};
                 sprintf(key, "SFPm%03d", i);
@@ -5832,7 +5977,7 @@ void sfallOpcodeStateLoad()
     }
     {
         int count = 0;
-        if (sfall_gl_vars_fetch("SFs1cnt ", count) && count == PERK_COUNT) {
+        if (sfall_gl_vars_fetch(kGlVarPerkSk1Cnt, count) && count == PERK_COUNT) {
             for (int i = 0; i < count; i++) {
                 char key[16] = {};
                 sprintf(key, "SFs1%03d", i);
@@ -5842,7 +5987,7 @@ void sfallOpcodeStateLoad()
     }
     {
         int count = 0;
-        if (sfall_gl_vars_fetch("SF1Mcnt ", count) && count == PERK_COUNT) {
+        if (sfall_gl_vars_fetch(kGlVarPerk1MagCnt, count) && count == PERK_COUNT) {
             for (int i = 0; i < count; i++) {
                 char key[16] = {};
                 sprintf(key, "SF1M%03d", i);
@@ -5852,7 +5997,7 @@ void sfallOpcodeStateLoad()
     }
     {
         int count = 0;
-        if (sfall_gl_vars_fetch("SFs2cnt ", count) && count == PERK_COUNT) {
+        if (sfall_gl_vars_fetch(kGlVarPerkSk2Cnt, count) && count == PERK_COUNT) {
             for (int i = 0; i < count; i++) {
                 char key[16] = {};
                 sprintf(key, "SFs2%03d", i);
@@ -5862,7 +6007,7 @@ void sfallOpcodeStateLoad()
     }
     {
         int count = 0;
-        if (sfall_gl_vars_fetch("SF2Mcnt ", count) && count == PERK_COUNT) {
+        if (sfall_gl_vars_fetch(kGlVarPerk2MagCnt, count) && count == PERK_COUNT) {
             for (int i = 0; i < count; i++) {
                 char key[16] = {};
                 sprintf(key, "SF2M%03d", i);
@@ -5872,7 +6017,7 @@ void sfallOpcodeStateLoad()
     }
     {
         int count = 0;
-        if (sfall_gl_vars_fetch("SFPtcnt ", count) && count == PERK_COUNT) {
+        if (sfall_gl_vars_fetch(kGlVarPerkTypeCnt, count) && count == PERK_COUNT) {
             for (int i = 0; i < count; i++) {
                 char key[16] = {};
                 sprintf(key, "SFPt%03d", i);
@@ -5882,7 +6027,7 @@ void sfallOpcodeStateLoad()
     }
     {
         int count = 0;
-        if (sfall_gl_vars_fetch("SFSacnt ", count) && count == PERK_COUNT) {
+        if (sfall_gl_vars_fetch(kGlVarPerkSpecCnt, count) && count == PERK_COUNT) {
             for (int i = 0; i < count; i++) {
                 for (int s = 0; s < PRIMARY_STAT_COUNT; s++) {
                     char key[16] = {};
@@ -5900,7 +6045,7 @@ void sfallOpcodeStateLoad()
     // Kill counters — restore from indexed key/value pairs.
     {
         int kcCount = 0;
-        if (sfall_gl_vars_fetch("SFKCcnt ", kcCount)) {
+        if (sfall_gl_vars_fetch(kGlVarKillCtrCnt, kcCount)) {
             gSfallKillCounters.clear();
             for (int idx2 = 0; idx2 < kcCount; idx2++) {
                 char key[16] = {};
@@ -5919,7 +6064,7 @@ void sfallOpcodeStateLoad()
     // Per-critter hit chance overrides.
     {
         int hcCount = 0;
-        if (sfall_gl_vars_fetch("SFHCcnt ", hcCount)) {
+        if (sfall_gl_vars_fetch(kGlVarHitChCtrCnt, hcCount)) {
             gCritterHitChanceOverrides.clear();
             for (int idx2 = 0; idx2 < hcCount; idx2++) {
                 char key[16] = {};
@@ -5944,7 +6089,7 @@ void sfallOpcodeStateLoad()
     // F-001: Per-critter pickpocket mod map.
     {
         int cpmCount = 0;
-        if (sfall_gl_vars_fetch("SFCPMcnt", cpmCount)) {
+        if (sfall_gl_vars_fetch(kGlVarCrtPMapCnt, cpmCount)) {
             gCritterPickpocketModMap.clear();
             for (int idx2 = 0; idx2 < cpmCount; idx2++) {
                 char key[16] = {};
@@ -5974,7 +6119,7 @@ void sfallOpcodeStateLoad()
     // intact so the entries are in a consistent state when scripts repopulate.
     {
         int fpCount = 0;
-        if (sfall_gl_vars_fetch("SFFPkcnt", fpCount) && fpCount > 0 && fpCount <= kMaxFakePerks) {
+        if (sfall_gl_vars_fetch(kGlVarFakePkCnt, fpCount) && fpCount > 0 && fpCount <= kMaxFakePerks) {
             sfallFakePerkCount = fpCount;
             for (int i = 0; i < fpCount; i++) {
                 char key[16] = {};
@@ -5994,7 +6139,7 @@ void sfallOpcodeStateLoad()
             }
         }
         int ftCount = 0;
-        if (sfall_gl_vars_fetch("SFFTkcnt", ftCount) && ftCount > 0 && ftCount <= kMaxFakeTraits) {
+        if (sfall_gl_vars_fetch(kGlVarFakeTrCnt, ftCount) && ftCount > 0 && ftCount <= kMaxFakeTraits) {
             sfallFakeTraitCount = ftCount;
             for (int i = 0; i < ftCount; i++) {
                 char key[16] = {};
@@ -6014,7 +6159,7 @@ void sfallOpcodeStateLoad()
     // Per-critter aimed-shot override maps (F-016).
     {
         int fasCount = 0;
-        if (sfall_gl_vars_fetch("SFFAScnt", fasCount)) {
+        if (sfall_gl_vars_fetch(kGlVarFASMapCnt, fasCount)) {
             gForceAimedShotsMap.clear();
             for (int idx2 = 0; idx2 < fasCount; idx2++) {
                 char key[16] = {};
@@ -6029,7 +6174,7 @@ void sfallOpcodeStateLoad()
             }
         }
         int dasCount = 0;
-        if (sfall_gl_vars_fetch("SFDAScnt", dasCount)) {
+        if (sfall_gl_vars_fetch(kGlVarDASMapCnt, dasCount)) {
             gDisableAimedShotsMap.clear();
             for (int idx2 = 0; idx2 < dasCount; idx2++) {
                 char key[16] = {};

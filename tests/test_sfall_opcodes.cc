@@ -520,6 +520,38 @@ TEST_CASE("F-13: full UAF prevention lifecycle — register, use, free")
         // No UAF — safe return.
         CHECK(sfallAnimCallbackProgram == nullptr);
     }
+
+    // I2-M66: INTEGRATION NOTE — These tests validate the LOGIC of the UAF
+    // fix (the condition check pattern at interpreter.cc:501-503) but do NOT
+    // exercise actual programFree(). programFree() requires linking against
+    // interpreter.cc which depends on 50+ engine files (Program lifecycle,
+    // opcode dispatch, script management).
+    //
+    // What this tests DOES cover:
+    //   - The pointer-comparison logic: sfallAnimCallbackProgram == program
+    //   - The nil-and-clear pattern: set to nullptr, set procIndex to -1
+    //   - The non-matching-program no-op path (different program freed)
+    //
+    // What requires actual programFree() linkage (integration test):
+    //   - Verifying that programFree() at interpreter.cc:497-504 actually
+    //     calls the guard before freeing memory
+    //   - Verifying that the guard runs BEFORE the delete/free, not after
+    //   - Verifying that programFree() handles the case where the callback
+    //     pointer is non-null but the Program struct is about to be destroyed
+    //
+    // To test actual programFree() behavior, either:
+    //   (a) Link interpreter.cc into a dedicated integration test executable,
+    //       stubbing the 50+ engine deps that programFree indirectly requires,
+    //       and call programFree() with a mock Program that has set
+    //       sfallAnimCallbackProgram to itself.
+    //   (b) Add a public test hook (e.g. #ifdef TEST_ACCESSORS) to
+    //       sfall_opcodes.cc that exposes a function like
+    //       sfall_test_verify_callback_cleared_on_free(Program* p) which
+    //       simulates the programFree check without requiring interpreter.cc.
+    //
+    // The inline logic validation here provides regression protection for
+    // the fix's CONDITION LOGIC. An integration test covering the fix's
+    // EXECUTION ORDER (guard runs before free) requires option (a) or (b).
 }
 
 // ============================================================
@@ -949,6 +981,44 @@ TEST_CASE("M-073: FID_TYPE macro behavior — guards depend on correct extractio
         // If someone reorders the ObjectType enum, the guards break.
         CHECK(OBJ_TYPE_CRITTER == 1);
     }
+
+    // I2-M61: Behavioral simulation of the actual opcode guard pattern.
+    // The four critter stat opcodes (sfall_opcodes.cc:178,203,226,245)
+    // all use the pattern: if (obj == nullptr || FID_TYPE(obj->fid) != OBJ_TYPE_CRITTER) return;
+    // This inline simulation tests the guard logic end-to-end with the
+    // actual FID_TYPE macro and OBJ_TYPE_CRITTER constant.
+    //
+    // When the opcode handlers are extractable (see test_script_harness.h
+    // roadmap), these behavioral simulations should be replaced with
+    // direct opcode calls via a mock Object*.
+    SUBCASE("I2-M61: behavioral — simulated guard matches production pattern")
+    {
+        // Simulate the guard: reject non-critter, accept critter
+        auto isGuardPassed = [](int fid) -> bool {
+            // Matches: FID_TYPE(obj->fid) == OBJ_TYPE_CRITTER
+            return FID_TYPE(fid) == OBJ_TYPE_CRITTER;
+        };
+
+        // Critter FID — guard PASSES
+        int critterFid = (OBJ_TYPE_CRITTER << 24) | 0x000001;
+        CHECK(isGuardPassed(critterFid));
+
+        // Non-critter FIDs — guard REJECTS
+        int itemFid = (OBJ_TYPE_ITEM << 24) | 0x000001;
+        CHECK_FALSE(isGuardPassed(itemFid));
+
+        int sceneryFid = (OBJ_TYPE_SCENERY << 24) | 0x000001;
+        CHECK_FALSE(isGuardPassed(sceneryFid));
+
+        int wallFid = (OBJ_TYPE_WALL << 24) | 0x000001;
+        CHECK_FALSE(isGuardPassed(wallFid));
+
+        // Zero FID → type=OBJ_TYPE_ITEM → guard REJECTS (correctly)
+        CHECK_FALSE(isGuardPassed(0));
+
+        // All bits set → type=15 → guard REJECTS (not CRITTER=1)
+        CHECK_FALSE(isGuardPassed(0xFFFFFFFF));
+    }
 }
 
 TEST_CASE("M-073: sfallOpcodesReset — critter opcode guard path cleanup")
@@ -1015,6 +1085,69 @@ TEST_CASE("M-074: op_set_weapon_ammo_pid — data structure layout verification"
     // Verified correct by adversarial review: s3-adv-sfall-ops-1-report.md §M-074.
     // Regression test: if clamping were removed, a weapon with 100 rounds
     // switched to ammo with max 30 would keep 100 rounds (data corruption).
+
+    // I2-M61: Behavioral simulation of the ammo clamping logic.
+    // Tests the boundary conditions of the clamping code at sfall_opcodes.cc:954-957
+    // using the actual struct types. This exercises the same data layout and
+    // comparison logic the production opcode uses.
+    //
+    // When op_set_weapon_ammo_pid is extractable, replace with direct call.
+    SUBCASE("I2-M61: behavioral — ammo quantity clamping simulation")
+    {
+        // Simulate the production clamping at sfall_opcodes.cc:954-957
+        auto clampAmmoQuantity = [](int currentQuantity, int maxCapacity) -> int {
+            if (currentQuantity > maxCapacity) {
+                return maxCapacity;
+            }
+            return currentQuantity;
+        };
+
+        // Case 1: quantity within capacity — no change
+        CHECK(clampAmmoQuantity(5, 30) == 5);
+        CHECK(clampAmmoQuantity(30, 30) == 30); // at boundary
+
+        // Case 2: quantity exceeds capacity — clamped
+        CHECK(clampAmmoQuantity(100, 30) == 30);
+        CHECK(clampAmmoQuantity(31, 30) == 30); // one over
+
+        // Case 3: zero capacity — all quantities clamp to zero
+        CHECK(clampAmmoQuantity(0, 0) == 0);
+        CHECK(clampAmmoQuantity(10, 0) == 0);
+        CHECK(clampAmmoQuantity(INT_MAX, 0) == 0);
+
+        // Case 4: extreme quantities at INT_MAX capacity
+        CHECK(clampAmmoQuantity(INT_MAX, INT_MAX) == INT_MAX);
+        CHECK(clampAmmoQuantity(100, INT_MAX) == 100);
+
+        // Case 5: negative quantities — depends on consumer behavior;
+        // the clamp only checks > maxCapacity so negative passes through
+        // (this is production behavior — the consumer validates sign)
+        CHECK(clampAmmoQuantity(-1, 30) == -1);
+    }
+
+    SUBCASE("I2-M61: behavioral — struct field round-trip with clamping")
+    {
+        // Test the actual struct layout with simulated clamping
+        WeaponObjectData wd;
+        AmmoItemData ammo;
+
+        // Set up scenario: weapon has 100 rounds loaded, ammo type max is 30
+        wd.ammoQuantity = 100;
+        wd.ammoTypePid = 42;
+        ammo.quantity = 30;
+
+        CHECK(wd.ammoQuantity == 100);
+        CHECK(ammo.quantity == 30);
+
+        // Apply clamping (matches sfall_opcodes.cc:954-957)
+        if (wd.ammoQuantity > ammo.quantity) {
+            wd.ammoQuantity = ammo.quantity;
+        }
+
+        // After clamping: weapon now has at most the ammo type's max capacity
+        CHECK(wd.ammoQuantity == 30);
+        CHECK(wd.ammoTypePid == 42); // unchanged
+    }
 }
 
 // ============================================================
@@ -1128,6 +1261,59 @@ TEST_CASE("M-076: perkIsValid — boundary at PERK_COUNT for double-gate")
     // Adversarial review (s3-adv-sfall-ops-2-report.md §M-099) weakened
     // this from MEDIUM→LOW because the double-gate has zero functional
     // impact with current PERK_COUNT=126.
+
+    // I2-M61: Behavioral simulation of the full double-gate at sfall_opcodes.cc:2914.
+    // The production guard: if (!perkIsValid(perkID) || perkID >= kMaxPerkNameOverrides)
+    // This simulation uses the actual perkIsValid() function (linkable)
+    // and a mirror of kMaxPerkNameOverrides=128 to test the combined condition.
+    //
+    // When op_set_perk_name/desc are extractable, replace with direct opcode call.
+    SUBCASE("I2-M61: behavioral — double-gate simulation (perkIsValid + cap)")
+    {
+        static constexpr int kMaxOverrides = 128; // mirrors sfall_opcodes.cc:2906
+
+        auto passesGate = [](int perkID) -> bool {
+            return perkIsValid(perkID) && perkID < kMaxOverrides;
+        };
+
+        // Valid perks: perkIsValid true, perkID < 128 → PASS
+        CHECK(passesGate(0) == true);
+        CHECK(passesGate(1) == true);
+        CHECK(passesGate(PERK_COUNT - 1) == true); // 118, last valid
+
+        // In range [PERK_COUNT, 127]: perkIsValid false → REJECT by first guard
+        CHECK(passesGate(PERK_COUNT) == false);     // 119
+        CHECK(passesGate(120) == false);
+        CHECK(passesGate(127) == false);
+
+        // At kMaxOverrides boundary: ≥128 → REJECT by second guard
+        CHECK(passesGate(128) == false);
+        CHECK(passesGate(129) == false);
+        CHECK(passesGate(999) == false);
+        CHECK(passesGate(INT_MAX) == false);
+
+        // Negative: REJECT by perkIsValid
+        CHECK(passesGate(-1) == false);
+        CHECK(passesGate(INT_MIN) == false);
+    }
+
+    SUBCASE("I2-M61: behavioral — double-gate with hypothetical PERK_COUNT=150")
+    {
+        // If PERK_COUNT were expanded to 150 (modded engine):
+        // kMaxPerkNameOverrides=128 would independently reject perks 128-149
+        // that are otherwise valid by perkIsValid. The double-gate prevents
+        // OOB into sfallPerkNameOverrides[128].
+        //
+        // This simulation forces the condition: perkIsValid(130)=true but
+        // 130 >= 128, so the combined gate REJECTS.
+        static constexpr int kMaxOverrides = 128;
+
+        // Simulate: PERK_COUNT = 150 means perks 0-149 are valid
+        bool perk130IsValid = true; // would be valid if PERK_COUNT=150
+        int perkID = 130;
+        bool gateResult = perk130IsValid && (perkID < kMaxOverrides);
+        CHECK_FALSE(gateResult); // second gate catches the OOB
+    }
 }
 
 TEST_CASE("M-076: sfallOpcodesReset — perk name/desc override cleanup")

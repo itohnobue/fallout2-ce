@@ -616,4 +616,25 @@ void sfall_ini_cache_clear()
     iniConfigArrayCacheDat.clear();
 }
 
+// ============================================================
+// TEST-ONLY: Config injection for the sfall_ini internal cache.
+// Enables tests to exercise strtol ERANGE/LP64 overflow paths,
+// end-to-end config lookup, and negative cache behavior without
+// needing real file I/O (which requires compat_fopen, game data).
+//
+// Finding references: F-M69, I2-M68, I2-M75
+// ============================================================
+#if defined(TEST_ACCESSORS_ENABLED)
+Config* sfall_ini_inject_config_for_test(const char* fileName)
+{
+    CachedConfigPtr config(new Config());
+    if (!configInit(config.get())) {
+        return nullptr;
+    }
+    Config* raw = config.get();
+    iniConfigCache.emplace(fileName, std::move(config));
+    return raw;
+}
+#endif
+
 } // namespace fallout

@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.18)
+cmake_minimum_required(VERSION 3.21)
 
 set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
 
@@ -28,6 +28,15 @@ set(CMAKE_CXX_EXTENSIONS NO)
 
 if(MSVC)
     add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/EHsc>)
+endif()
+
+# Warning flags — enable standard compiler warnings.
+# GCC/Clang: -Wall -Wextra covers most common issues.
+# MSVC: /W4 provides similar coverage to -Wall -Wextra.
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    add_compile_options(-Wall -Wextra)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
+    add_compile_options(/W4)
 endif()
 
 option(FALLOUT_VENDORED "Use vendored third-party libraries" ON)
@@ -330,6 +339,8 @@ target_sources(${EXECUTABLE_NAME} PUBLIC
 
 target_sources(${EXECUTABLE_NAME} PUBLIC ${FALLOUT_PLATFORM_SOURCES})
 
+# lodepng v20250506 — vendored PNG encoder/decoder.
+# Version pinned at source; no FetchContent/GIT_TAG (flat copy, not git checkout).
 target_include_directories(${EXECUTABLE_NAME} PUBLIC "third_party/lodepng")
 
 set(FALLOUT_HAVE_STB_VORBIS OFF)
@@ -483,8 +494,12 @@ else()
     set( CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -g")
     set( CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g")
 
-    set( CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O1")
-    set( CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O1")
+    # Emscripten defaults to -O3 for Release builds. Override to -O2 for
+    # a balance of optimization, compilation time, and binary size.
+    # -O1 (previously used) produces significantly slower/larger WASM;
+    # -O3 can cause excessive inlining and code-size issues.
+    set( CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O2")
+    set( CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O2")
 
     if(OPTION_WASM_64)
         target_link_options( ${EXECUTABLE_NAME} PRIVATE "-sMEMORY64" )
@@ -704,8 +719,14 @@ if((NOT ANDROID) AND (NOT IOS) AND (NOT CMAKE_SYSTEM_NAME MATCHES "Emscripten"))
 endif()
 
 # ---- Unit Testing ----
-enable_testing()
-add_subdirectory(tests)
+# Emscripten cannot run native test executables; skip test target generation.
+# NOTE: CI (ci-build.yml) currently only runs tests with Debug configuration
+# on Linux and macOS. RelWithDebInfo test coverage is not yet automated.
+# See .github/workflows/ci-build.yml for the CI test matrix.
+if(NOT CMAKE_SYSTEM_NAME MATCHES "Emscripten")
+    enable_testing()
+    add_subdirectory(tests)
+endif()
 
 if(APPLE)
     if(IOS)

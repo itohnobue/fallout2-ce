@@ -1053,3 +1053,237 @@ TEST_CASE("Save/Load: full cycle — header + handlers") {
         }
     }
 }
+
+// =============================================================================
+// I2-M71: Corruption scenario tests — saveload integrity
+// =============================================================================
+// Production loadsave.cc:2068-2095 has zero CRC/checksum on handler chunk data.
+// These tests verify that bit-flip, partial read, version mismatch, and
+// out-of-order handler dispatch are detectable in the test mirror.
+// The production code would silently accept corrupted handler data — these
+// tests document the expected resilience boundaries of the mirror implementation.
+
+TEST_CASE("I2-M71: Save/load corruption detection — bit-flip")
+{
+    resetHandlerData();
+
+    SUBCASE("bit-flip in handler data is detectable")
+    {
+        TestFileStream stream;
+        stream.isOpen = true;
+
+        // Save all 27 handlers
+        mirrorSaveFullCycle(&stream);
+        size_t streamSize = stream.buffer.size();
+        CHECK(streamSize > 0);
+
+        // Flip a byte in the middle of the buffer (handler 13's data)
+        size_t flipOffset = streamSize / 2;
+        stream.buffer[flipOffset] ^= 0xFF;
+
+        // Load — handler 13 should see corrupted marker
+        stream.readPos = 0;
+        mirrorLoadFullCycle(&stream);
+
+        // Verify: most handlers should round-trip, but the corrupted
+        // handler's data will differ from what was saved.
+        int mismatchCount = 0;
+        for (int i = 0; i < kHandlerCount; i++) {
+            if (gLoadedData[i].marker != gSavedData[i].marker
+                || gLoadedData[i].value1 != gSavedData[i].value1
+                || gLoadedData[i].value2 != gSavedData[i].value2) {
+                mismatchCount++;
+            }
+        }
+        // At least one handler should be affected by the flip
+        CHECK(mismatchCount >= 1);
+    }
+
+    SUBCASE("bit-flip in first byte of handler 0 data")
+    {
+        TestFileStream stream;
+        stream.isOpen = true;
+
+        mirrorSaveFullCycle(&stream);
+
+        // Flip the very first data byte (handler 0's marker, first byte)
+        stream.buffer[0] ^= 0x01;
+
+        stream.readPos = 0;
+        mirrorLoadFullCycle(&stream);
+
+        CHECK(gLoadedData[0].marker != gSavedData[0].marker);
+    }
+
+    SUBCASE("bit-flip in last byte of stream")
+    {
+        TestFileStream stream;
+        stream.isOpen = true;
+
+        mirrorSaveFullCycle(&stream);
+        size_t sz = stream.buffer.size();
+
+        // Flip the last byte (handler 26's value2, last byte)
+        stream.buffer[sz - 1] ^= 0x80;
+
+        stream.readPos = 0;
+        mirrorLoadFullCycle(&stream);
+
+        CHECK(gLoadedData[26].value2 != gSavedData[26].value2);
+    }
+}
+
+TEST_CASE("I2-M71: Save/load corruption detection — partial read")
+{
+    resetHandlerData();
+
+    SUBCASE("mid-entry truncation: stream ends in the middle of handler 10")
+    {
+        TestFileStream stream;
+        stream.isOpen = true;
+
+        mirrorSaveFullCycle(&stream);
+
+        // Each handler writes 3 int32_t = 12 bytes.
+        // Truncate after handler 10's marker (4 bytes) but before val1/val2.
+        // Handler 0-9: 10 * 12 = 120 bytes
+        // Handler 10 marker: +4 = 124 bytes → truncate here
+        stream.buffer.resize(124);
+
+        stream.readPos = 0;
+        // mirrorLoadFullCycle will fail when handler 10 tries to read val1
+        int result = mirrorLoadFullCycle(&stream);
+        CHECK(result == -1); // partial read → load failure
+    }
+
+    SUBCASE("stream truncated to zero bytes — load fails immediately")
+    {
+        TestFileStream stream;
+        stream.isOpen = true;
+        // No data written
+
+        stream.readPos = 0;
+        int result = mirrorLoadFullCycle(&stream);
+        CHECK(result == -1);
+    }
+
+    SUBCASE("count mismatch: fewer handlers than expected")
+    {
+        TestFileStream stream;
+        stream.isOpen = true;
+
+        // Save only 10 of 27 handlers
+        for (int i = 0; i < 10; i++) {
+            mirrorSaveHandler(&stream, i);
+        }
+
+        stream.readPos = 0;
+        // Load expects 27 handlers but only 10 were written
+        int result = mirrorLoadFullCycle(&stream);
+        CHECK(result == -1); // stream ends before handler 10
+    }
+
+    SUBCASE("count overflow: more handlers than expected")
+    {
+        TestFileStream stream;
+        stream.isOpen = true;
+
+        // Save all 27 + extra garbage data at end
+        mirrorSaveFullCycle(&stream);
+
+        // Append extra data (simulating attacker-injected trailing data)
+        uint32_t extraData[] = { 0xDEADBEEF, 0xCAFEBABE, 0xBAADF00D };
+        stream.write(extraData, sizeof(int32_t), 3);
+
+        // Load — all 27 handler reads should succeed (garbage is after)
+        stream.readPos = 0;
+        int result = mirrorLoadFullCycle(&stream);
+        CHECK(result == 0);
+
+        // All 27 handlers should still round-trip
+        for (int i = 0; i < kHandlerCount; i++) {
+            INFO("Handler " << i);
+            CHECK(gLoadedData[i].marker == gSavedData[i].marker);
+        }
+    }
+}
+
+TEST_CASE("I2-M71: Save/load corruption detection — version mismatch")
+{
+    SUBCASE("incompatible save version rejected")
+    {
+        SaveSlotHeader h;
+        initHeader(h);
+        h.versionMinor = 99;  // unknown version
+        h.versionMajor = 99;
+
+        TestFileStream stream;
+        stream.isOpen = true;
+        mirrorSaveHeader(&stream, h);
+
+        stream.readPos = 0;
+        SaveSlotHeader loaded;
+        int result = mirrorLoadHeader(&stream, loaded);
+        CHECK(result == -1); // version check at loadsave.cc:2279-style guard
+    }
+
+    SUBCASE("signature + version swapped in header — rejected")
+    {
+        // Swap the first 8 bytes: version (2 shorts) + first 4 bytes of sig
+        SaveSlotHeader h;
+        initHeader(h);
+
+        TestFileStream stream;
+        stream.isOpen = true;
+        mirrorSaveHeader(&stream, h);
+
+        // Swap bytes 0-1 (minor version) with bytes 22-23 (end of signature)
+        uint8_t tmp = stream.buffer[0];
+        stream.buffer[0] = stream.buffer[22];
+        stream.buffer[22] = tmp;
+
+        stream.readPos = 0;
+        SaveSlotHeader loaded;
+        int result = mirrorLoadHeader(&stream, loaded);
+        CHECK(result == -1); // corrupted signature
+    }
+
+    SUBCASE("all-zero save data rejected")
+    {
+        TestFileStream stream;
+        stream.isOpen = true;
+
+        // Write 24 zero bytes (invalid signature)
+        uint8_t zeros[24] = {};
+        stream.write(zeros, 1, 24);
+
+        stream.readPos = 0;
+        SaveSlotHeader loaded;
+        int result = mirrorLoadHeader(&stream, loaded);
+        CHECK(result == -1);
+    }
+}
+
+TEST_CASE("I2-M71: Save/load corruption detection — out-of-order handlers")
+{
+    resetHandlerData();
+
+    SUBCASE("handler data written in wrong order corrupts load")
+    {
+        TestFileStream stream;
+        stream.isOpen = true;
+
+        // Write handlers in reverse order (26→0)
+        for (int i = kHandlerCount - 1; i >= 0; i--) {
+            mirrorSaveHandler(&stream, i);
+        }
+
+        // Load expects normal order (0→26) — handlers will read wrong data
+        stream.readPos = 0;
+        mirrorLoadFullCycle(&stream);
+
+        // Handler 0 loads handler 26's data, handler 26 loads handler 0's
+        CHECK(gLoadedData[0].marker == gSavedData[26].marker);
+        CHECK(gLoadedData[26].marker == gSavedData[0].marker);
+    }
+}

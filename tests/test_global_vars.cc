@@ -15,9 +15,11 @@
 #include "doctest.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -392,13 +394,108 @@ TEST_CASE("sfall_gl_vars_store_float / sfall_gl_vars_fetch_float — M-050 (sfal
         CHECK(floatVal == doctest::Approx(3.14f));
     }
 
-    SUBCASE("float precision: store 3.14159265f, fetch ≈3.1415927f")
+    SUBCASE("float precision: store/fetch is bit-exact round-trip (F-M70)")
     {
-        // IEEE 754 single-precision: ~7 decimal digits of precision.
-        CHECK(sfall_gl_vars_store_float(1, 3.14159265f));
+        // I2F-038 / F-M70: Tighten epsilon to 0.0f — bit-exact round-trip.
+        // The float value is stored directly in the unordered_map via the
+        // binary FloatVarEntry type; there is no arithmetic transformation
+        // between store and fetch. Any epsilon > 0 would mask a real bug
+        // (e.g., truncation, reinterpret_cast mismatch, byte-swap error).
+        float original = 3.14159265f;
+        CHECK(sfall_gl_vars_store_float(1, original));
         float val = 0.0f;
         CHECK(sfall_gl_vars_fetch_float(1, val));
-        CHECK(val == doctest::Approx(3.1415927f).epsilon(1e-6f));
+        // Bit-exact comparison: the same float bits go in and come out.
+        CHECK(val == original);
+    }
+
+    SUBCASE("float edge: negative zero (-0.0f) round-trip")
+    {
+        // IEEE 754: -0.0f has sign bit set, 0.0f does not.
+        // Both compare equal via == but are distinct bit patterns.
+        // Verify the bit pattern survives round-trip unchanged.
+        float original = -0.0f;
+        CHECK(sfall_gl_vars_store_float(100, original));
+        float val = 1.0f;
+        CHECK(sfall_gl_vars_fetch_float(100, val));
+        // memcmp ensures sign bit is preserved
+        CHECK(memcmp(&val, &original, sizeof(float)) == 0);
+    }
+
+    SUBCASE("float edge: positive infinity (+Inf) round-trip")
+    {
+        float original = std::numeric_limits<float>::infinity();
+        CHECK(sfall_gl_vars_store_float(101, original));
+        float val = 0.0f;
+        CHECK(sfall_gl_vars_fetch_float(101, val));
+        CHECK(std::isinf(val));
+        CHECK(val > 0.0f);
+        CHECK(memcmp(&val, &original, sizeof(float)) == 0);
+    }
+
+    SUBCASE("float edge: negative infinity (-Inf) round-trip")
+    {
+        float original = -std::numeric_limits<float>::infinity();
+        CHECK(sfall_gl_vars_store_float(102, original));
+        float val = 0.0f;
+        CHECK(sfall_gl_vars_fetch_float(102, val));
+        CHECK(std::isinf(val));
+        CHECK(val < 0.0f);
+        CHECK(memcmp(&val, &original, sizeof(float)) == 0);
+    }
+
+    SUBCASE("float edge: NaN round-trip")
+    {
+        // quiet NaN — bit pattern must survive unchanged
+        float original = std::numeric_limits<float>::quiet_NaN();
+        CHECK(sfall_gl_vars_store_float(103, original));
+        float val = 0.0f;
+        CHECK(sfall_gl_vars_fetch_float(103, val));
+        CHECK(std::isnan(val));
+        CHECK(memcmp(&val, &original, sizeof(float)) == 0);
+    }
+
+    SUBCASE("float edge: signalling NaN round-trip")
+    {
+        // Signalling NaN: exponent=255, fraction nonzero with MSB=0.
+        // Must survive round-trip as a bit pattern even though arithmetic
+        // operations on it would trap (no arithmetic is done — just store/fetch).
+        uint32_t snanBits = 0x7F800001; // signalling NaN: exp=255, fraction bit 0 set
+        float original;
+        memcpy(&original, &snanBits, sizeof(float));
+        CHECK(sfall_gl_vars_store_float(104, original));
+        float val = 0.0f;
+        CHECK(sfall_gl_vars_fetch_float(104, val));
+        CHECK(memcmp(&val, &original, sizeof(float)) == 0);
+    }
+
+    SUBCASE("float edge: subnormal (denormal) smallest positive")
+    {
+        // FLT_TRUE_MIN = smallest positive subnormal (~1.4e-45)
+        float original = std::numeric_limits<float>::denorm_min();
+        CHECK(sfall_gl_vars_store_float(105, original));
+        float val = 0.0f;
+        CHECK(sfall_gl_vars_fetch_float(105, val));
+        CHECK(val > 0.0f);
+        CHECK(memcmp(&val, &original, sizeof(float)) == 0);
+    }
+
+    SUBCASE("float edge: FLT_MAX round-trip")
+    {
+        float original = std::numeric_limits<float>::max();
+        CHECK(sfall_gl_vars_store_float(106, original));
+        float val = 0.0f;
+        CHECK(sfall_gl_vars_fetch_float(106, val));
+        CHECK(val == original);
+    }
+
+    SUBCASE("float edge: FLT_MIN (smallest normalized positive)")
+    {
+        float original = std::numeric_limits<float>::min();
+        CHECK(sfall_gl_vars_store_float(107, original));
+        float val = 0.0f;
+        CHECK(sfall_gl_vars_fetch_float(107, val));
+        CHECK(val == original);
     }
 
     sfall_gl_vars_exit();

@@ -346,6 +346,16 @@ public:
     // the free function scriptHooks_GameModeChange().
     static bool _gameModeChangeInProgress;
 
+    // I2-M17: Set to true when a hook call is rejected due to depth cap.
+    // Mod scripts can query this to detect silent rejection.
+    static bool _lastCallRejected;
+
+    // I2-M16/I2-M35: Drain stale call-stack entries left by longjmp'd
+    // ScriptHookCall frames.  Uses address-based staleness detection:
+    // entries with addresses below currentStackAddr are from unwound
+    // frames.  Called from call() and scriptHooks_GameModeChange().
+    static void drainStaleEntries(uintptr_t currentStackAddr);
+
 private:
     static std::vector<ScriptHookCall*> _callStack;
 

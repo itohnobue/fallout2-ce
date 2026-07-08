@@ -8,6 +8,29 @@
 // F2-002: scriptHooksUnregisterProgram behavioral test
 // F2-008: Replace mirror-based hook type isolation test
 //
+// F-063 (MEDIUM): Hook fire via local mirrors — limitation and linkage path.
+//   All hook fire functions (call(), drain, dispatch) in this file and across
+//   the test suite exercise LOCAL MIRRORS of the production ScriptHookCall
+//   class, never the production sfall_script_hooks.cc implementation. The
+//   mirrors correctly model the production logic patterns but cannot detect:
+//     - Production-only regressions (e.g., stack memory UB at line 127)
+//     - RAII guard failures (e.g., GameModeChangeGuard destructor skipped)
+//     - Performance changes in real dispatch paths
+//     - Stack-address-based stale detection (F-025 drain uses flag-based
+//       staleness instead of address comparison — the test mirror cannot
+//       replicate stack-address comparison because DrainFrame objects are
+//       not stack-allocated ScriptHookCall instances; see F-025 section)
+//   LINKAGE PATH: Production sfall_script_hooks.cc requires 150+ engine source
+//   files (Program, interpreter, game objects, script manager). Incremental
+//   extraction plan (see test_script_harness.h roadmap):
+//     1. Extract ScriptHookCall into standalone compilation unit with
+//        TEST_ACCESSORS guard (hook type registry, call stack, dispatch)
+//     2. Link it against minimal engine stubs (Program, game_*.h interfaces)
+//     3. Replace mirror-based dispatch tests with production-link tests
+//   Until extraction is complete, the mirror tests serve as behavioral
+//   regression guards but MUST be validated against production when
+//   sfall_script_hooks.cc is modified.
+//
 // Self-contained header-only test — does NOT link sfall_script_hooks.cc.
 // Uses local mirrors following the pattern established by existing tests.
 
@@ -242,149 +265,255 @@ TEST_CASE("F-023: StdProcedure — SCRIPT_PROC_DESCRIPTION can be cancelled")
 // F-025: Call stack drain mechanism test
 // =================================================================
 // Finding F-025 (MEDIUM): Call stack drain mechanism completely untested.
-// Production logic at sfall_script_hooks.cc:115-131:
-//   - When _callStack reaches MAX_HOOK_CALL_DEPTH (8), drain inactive entries
-//   - Inactive entries are those where longjmp skipped pop_back (detected via _active flag)
-//   - Fallback: if all entries are active, evict oldest
+//
+// I2-M16 production behavior (sfall_script_hooks.cc:117-161):
+//   1. PROACTIVE drain: drainStaleEntries() is called on EVERY call() entry,
+//      not just when _callStack reaches MAX_HOOK_CALL_DEPTH.
+//   2. DRAIN ALL: drainStaleEntries() removes ALL stale entries (not just
+//      enough to get below threshold). The loop condition is simply
+//      `i < _callStack.size()` — no early-exit when threshold is reached.
+//   3. ADDRESS-BASED staleness: stale detection uses stack-address comparison
+//      (entryAddr < currentStackAddr), not an `_active` flag. This avoids UB
+//      from reading freed stack memory of longjmp'd frames.
+//   4. After drain: if _callStack.size() >= MAX_HOOK_CALL_DEPTH → REJECT.
+//      There is no separate "all active" check — if drain found nothing and
+//      the size is still at cap, rejection is the same simple size check.
+//
+// F-063 (MEDIUM): Stack-address stale detection cannot be faithfully replicated
+//   in this test mirror. Production drainStaleEntries(uintptr_t) compares
+//   ScriptHookCall* stack addresses against a local anchor variable to
+//   determine which entries belong to unwound (longjmp'd) frames. This test
+//   mirror CANNOT replicate address-based detection because:
+//     (1) Test DrainFrame objects are heap/stack-local structs, not stack-
+//         allocated ScriptHookCall instances with meaningful addresses.
+//     (2) Stack growth direction and layout are platform-specific; address
+//         comparison in test context is meaningless.
+//     (3) The production `_callStack` holds real ScriptHookCall* pointers
+//         whose addresses encode call depth — the test mirror's vector of
+//         DrainFrame structs has no analogous spatial relationship.
+//   Instead, this mirror uses an `active` flag to model staleness:
+//   `active=false` ≈ "stale" (analogous to a longjmp'd frame). This
+//   approximates the staleness CLASSIFICATION but does NOT protect against
+//   the address-comparison-specific UB patterns (freed stack memory reads)
+//   that motivated the I2-M16 rewrite. Full drain verification requires
+//   production-link testing via the incremental extraction roadmap
+//   (see test_script_harness.h).
+//
+// F-065 (MEDIUM): Drain mirror now matches I2-M16 production behavioral
+//   contracts: proactive drain on every call(), drain ALL stale entries,
+//   rejection based on size >= MAX after drain. Only the staleness DETECTION
+//   mechanism differs (flag-based vs. address-based — see F-063 above).
 
 namespace {
-    // Mirror the drain logic from sfall_script_hooks.cc:115-131
+    // Mirror the drain logic from sfall_script_hooks.cc:117-161 (I2-M16).
     struct DrainFrame {
-        bool active = false;
+        bool active = false;     // false = stale (analogous to longjmp'd frame in production)
     };
 
     static constexpr size_t DRAIN_MAX_DEPTH = 8;
 
-    static int mirrorDrainInactive(std::vector<DrainFrame>& stack)
+    // Mirror of production drainStaleEntries(uintptr_t).
+    // Production drains ALL stale entries; test drains all with active==false.
+    // F-063: Uses flag-based staleness instead of address comparison —
+    // address-based detection cannot be replicated in test (see F-063 above).
+    static int mirrorDrainStale(std::vector<DrainFrame>& stack)
     {
-        if (stack.size() < DRAIN_MAX_DEPTH) {
-            return 0; // no drain needed
-        }
-
         int drained = 0;
-        // Drain ALL inactive frames (not just until below depth)
-        for (size_t i = 0; i < stack.size(); ++i) {
+        for (size_t i = 0; i < stack.size();) {
             if (!stack[i].active) {
                 stack.erase(stack.begin() + i);
-                --i;
                 ++drained;
+                // Do NOT increment i — erase shifts subsequent elements into position i
+            } else {
+                ++i;
             }
         }
+        return drained;
+    }
 
-        // Fallback: evict oldest if all active and still >= MAX_DEPTH
-        if (drained == 0 && stack.size() >= DRAIN_MAX_DEPTH) {
-            stack.erase(stack.begin());
-            drained = 1;
+    // Result of a call() attempt after proactive drain.
+    enum class DrainCallResult { ACCEPTED, REJECTED };
+
+    // Mirror of production call() entry sequence (lines 132-161):
+    //   1. PROACTIVE drain on every entry (not just at depth cap)
+    //   2. After drain: size >= MAX_HOOK_CALL_DEPTH → REJECTED
+    //   3. Otherwise: ACCEPTED (production pushes `this` and dispatches)
+    static DrainCallResult mirrorCallWithDrain(std::vector<DrainFrame>& stack)
+    {
+        // I2-M16: Proactive drain — runs on every call() unconditionally.
+        mirrorDrainStale(stack);
+
+        // Depth-cap check after stale entries have been removed.
+        if (stack.size() >= DRAIN_MAX_DEPTH) {
+            return DrainCallResult::REJECTED;
         }
 
-        return drained;
+        return DrainCallResult::ACCEPTED;
     }
 }
 
-TEST_CASE("F-025: Call stack drain — below depth limit, no drain occurs")
+TEST_CASE("F-025: Call stack drain — below depth limit, proactive drain runs but finds no stale entries")
 {
+    // I2-M16: drain runs on EVERY call() entry, not just at depth cap.
+    // Below the cap, all frames are active → drain finds nothing → call accepted.
     std::vector<DrainFrame> stack;
-    // Add 4 frames
     for (size_t i = 0; i < 4; i++) {
         stack.push_back({ true });
     }
 
-    int drained = mirrorDrainInactive(stack);
-    CHECK(drained == 0);
-    CHECK(stack.size() == 4); // unchanged
+    DrainCallResult result = mirrorCallWithDrain(stack);
+    CHECK(result == DrainCallResult::ACCEPTED);
+    CHECK(stack.size() == 4); // unchanged — all active, nothing drained
 }
 
-TEST_CASE("F-025: Call stack drain — at depth limit with all active, eviction occurs")
+TEST_CASE("F-025: Call stack drain — at depth limit with all active, REJECTION (I2-M16)")
 {
+    // I2-M16: drain runs, finds no stale entries (all active).
+    // After drain: size == MAX_DEPTH → REJECTED (no eviction of active frames).
     std::vector<DrainFrame> stack;
-    // Fill to exactly MAX_DEPTH with all active frames
     for (size_t i = 0; i < DRAIN_MAX_DEPTH; i++) {
         stack.push_back({ true });
     }
 
-    int drained = mirrorDrainInactive(stack);
-    CHECK(drained == 1); // fallback eviction
-    CHECK(stack.size() == DRAIN_MAX_DEPTH - 1); // one evicted
+    DrainCallResult result = mirrorCallWithDrain(stack);
+    CHECK(result == DrainCallResult::REJECTED); // I2-M16: size >= MAX after drain → reject
+    CHECK(stack.size() == DRAIN_MAX_DEPTH); // all frames preserved (no eviction of active frames)
 }
 
-TEST_CASE("F-025: Call stack drain — inactive entries are drained")
+TEST_CASE("F-025: Call stack drain — ALL inactive entries drained (I2-M16 drain-ALL)")
 {
+    // I2-M16: drainStaleEntries() drains ALL stale entries, not just enough
+    // to drop below threshold. Both inactive frames are removed.
     std::vector<DrainFrame> stack;
-    // Mix of active and inactive frames, total >= MAX_DEPTH
     stack.push_back({ true });   // index 0: active
-    stack.push_back({ false });  // index 1: inactive (longjmp'd)
+    stack.push_back({ false });  // index 1: inactive (stale)
     stack.push_back({ true });   // index 2: active
-    stack.push_back({ false });  // index 3: inactive (longjmp'd)
+    stack.push_back({ false });  // index 3: inactive (stale)
     stack.push_back({ true });   // index 4: active
     stack.push_back({ true });   // index 5: active
     stack.push_back({ true });   // index 6: active
     stack.push_back({ true });   // index 7: active
-    // 8 frames total, 2 inactive
+    // 8 frames total, 2 inactive (stale)
 
-    int drained = mirrorDrainInactive(stack);
-    CHECK(drained == 2); // both inactive frames drained
-    CHECK(stack.size() == 6); // 8 - 2 = 6, now below MAX_DEPTH
+    int drained = mirrorDrainStale(stack);
+    // I2-M16: ALL stale entries are drained — both inactive frames removed.
+    CHECK(drained == 2); // both inactive entries drained
+    CHECK(stack.size() == 6); // 8 - 2 = 6 remaining (all active)
 }
 
-TEST_CASE("F-025: Call stack drain — only inactive entries are drained, active ones survive")
+TEST_CASE("F-025: Call stack drain — ALL inactive drained, active ones survive (I2-M16)")
 {
+    // I2-M16: drainStaleEntries() drains ALL stale entries regardless of
+    // threshold. All 3 inactive frames are removed; all 7 active survive.
     std::vector<DrainFrame> stack;
-    stack.push_back({ false });  // index 0: inactive
-    stack.push_back({ true });   // index 1: active
+    // 10 frames total (above MAX_DEPTH=8), with 3 inactive scattered among 7 active
+    stack.push_back({ true });   // index 0: active
+    stack.push_back({ false });  // index 1: inactive
     stack.push_back({ true });   // index 2: active
-    stack.push_back({ false });  // index 3: inactive
-    stack.push_back({ true });   // index 4: active
+    stack.push_back({ true });   // index 3: active
+    stack.push_back({ false });  // index 4: inactive
     stack.push_back({ true });   // index 5: active
     stack.push_back({ true });   // index 6: active
-    stack.push_back({ false });  // index 7: inactive
-    // 8 frames, 3 inactive
+    stack.push_back({ true });   // index 7: active
+    stack.push_back({ false });  // index 8: inactive
+    stack.push_back({ true });   // index 9: active
+    // 10 frames, 3 inactive (7 active)
 
-    int drained = mirrorDrainInactive(stack);
-    CHECK(drained == 3);
-    CHECK(stack.size() == 5); // only active frames survive
+    int drained = mirrorDrainStale(stack);
+    // I2-M16: ALL stale entries are drained — all 3 inactive removed.
+    CHECK(drained == 3); // all three inactive entries drained
+    CHECK(stack.size() == 7); // 10 - 3 = 7, all remaining are active
     // Verify all remaining frames are active
-    for (const auto& f : stack) {
-        CHECK(f.active == true);
+    for (const auto& frame : stack) {
+        CHECK(frame.active == true);
     }
 }
 
-TEST_CASE("F-025: Call stack drain — all inactive, all drained")
+TEST_CASE("F-025: Call stack drain — all inactive, ALL drained (I2-M16 drain-ALL)")
 {
+    // I2-M16: drainStaleEntries() drains ALL stale entries. When all 8
+    // frames are inactive (stale), all 8 are removed → empty stack.
     std::vector<DrainFrame> stack;
     for (size_t i = 0; i < DRAIN_MAX_DEPTH; i++) {
         stack.push_back({ false });
     }
 
-    int drained = mirrorDrainInactive(stack);
-    CHECK(drained == 8); // all 8 inactive frames drained
-    CHECK(stack.size() == 0); // completely empty
+    int drained = mirrorDrainStale(stack);
+    // I2-M16: ALL stale entries drained — all 8 removed.
+    CHECK(drained == 8); // all 8 inactive entries drained
+    CHECK(stack.size() == 0); // empty — all stale entries removed
 }
 
-TEST_CASE("F-025: Call stack drain — above depth limit, multiple inactive entries")
+TEST_CASE("F-025: Call stack drain — above depth limit, ALL inactive drained (I2-M16)")
 {
+    // I2-M16: drainStaleEntries() drains ALL stale entries. All 4 inactive
+    // frames are removed; 8 active remain at exactly MAX_DEPTH.
     std::vector<DrainFrame> stack;
-    // 12 frames total, well above MAX_DEPTH=8
     for (size_t i = 0; i < 10; i++) {
         stack.push_back({ true });
     }
-    // Insert 4 inactive entries scattered throughout
+    stack.push_back({ true });
+    stack.push_back({ true });
+    // Mark 4 entries scattered throughout as inactive
     stack[2].active = false;
     stack[5].active = false;
     stack[7].active = false;
     stack[9].active = false;
 
-    int drained = mirrorDrainInactive(stack);
-    // Should drain at least the inactive entries
-    CHECK(drained >= 4);
-    CHECK(stack.size() < 10); // must be below original size
+    int drained = mirrorDrainStale(stack);
+    // I2-M16: ALL 4 inactive entries drained.
+    CHECK(drained == 4); // all four inactive entries drained
+    CHECK(stack.size() == 8); // 12 - 4 = 8, exactly at MAX_DEPTH
+    // All remaining 8 frames are active
+    for (const auto& frame : stack) {
+        CHECK(frame.active == true);
+    }
+
+    // After drain: size == MAX_DEPTH → mirrorCallWithDrain would REJECT.
+    // Verify the full call-sequence behavior:
+    std::vector<DrainFrame> stack2;
+    for (size_t i = 0; i < DRAIN_MAX_DEPTH; i++) {
+        stack2.push_back({ true });
+    }
+    DrainCallResult result = mirrorCallWithDrain(stack2);
+    CHECK(result == DrainCallResult::REJECTED); // at cap after drain → rejected
 }
 
-TEST_CASE("F-025: Call stack drain — empty stack, nothing to drain")
+TEST_CASE("F-025: Call stack drain — empty stack, nothing to drain (call accepted)")
 {
+    // I2-M16: drain runs proactively even on empty stack, finds nothing.
     std::vector<DrainFrame> stack;
-    int drained = mirrorDrainInactive(stack);
+
+    int drained = mirrorDrainStale(stack);
     CHECK(drained == 0);
     CHECK(stack.size() == 0);
+
+    // Full call sequence: drain + rejection check
+    DrainCallResult result = mirrorCallWithDrain(stack);
+    CHECK(result == DrainCallResult::ACCEPTED); // empty stack, below cap → accepted
+}
+
+TEST_CASE("F-025: Call stack drain — proactive drain on every call(), not just at depth cap")
+{
+    // I2-M16: drainStaleEntries() is called unconditionally on every call()
+    // entry — proactively cleaning stale entries before they accumulate to
+    // the depth cap. This is the key behavioral change from pre-I2-M16:
+    // a single stale entry is cleaned up immediately rather than waiting
+    // until 8 entries accumulate.
+    std::vector<DrainFrame> stack;
+    // 2 active frames + 1 stale frame — well below depth cap
+    stack.push_back({ true });
+    stack.push_back({ false }); // stale
+    stack.push_back({ true });
+
+    // Proactive drain on call(): removes the stale entry even though
+    // we're far below MAX_DEPTH (pre-I2-M16 would have skipped drain).
+    DrainCallResult result = mirrorCallWithDrain(stack);
+    CHECK(result == DrainCallResult::ACCEPTED); // below cap → accepted
+    CHECK(stack.size() == 2); // stale entry removed; 2 active remain
+    for (const auto& frame : stack) {
+        CHECK(frame.active == true);
+    }
 }
 
 // =================================================================
@@ -912,6 +1041,12 @@ TEST_CASE("F2-002: scriptHooksUnregisterProgram — registers in 5 hook types, u
 // which would require linking sfall_script_hooks.cc. Cross-reference validation
 // (see F2-008 test below) verifies that the mirror key set matches production
 // HOOK_COUNT, ensuring the test reflects the current hook type count.
+// I2-M60: REGRESSION PATH — the static_assert(HOOK_COUNT == 62) at line 1153
+// and the 62-array fill test at line 960 together form a compile-time and
+// runtime cross-check. When HOOK_COUNT changes, the static_assert fails at
+// compile time; when new hook types are added without corresponding isolation
+// tests, the 62-array fill test will flag the gap. See sfall_script_hooks.h
+// for the authoritative HOOK_COUNT definition.
 
 TEST_CASE("F2-008: Hook type isolation — only correct type dispatches (populated arrays)")
 {

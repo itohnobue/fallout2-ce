@@ -16,6 +16,13 @@
 // Mirrors data structures and implements test stubs following the
 // test_criticals.cc pattern. All type names use a "Test" prefix.
 //
+// F-M53: This file intentionally mirrors production rather than linking
+// against worldmap.cc. Production headers with heavy dependency chains
+// (worldmap.h → db.h → xfile.h → zlib.h) are avoided for self-containment.
+// Compile-time cross-checks via static_assert verify key constants match.
+// All mirror types are prefixed "Test" to avoid collisions with the real
+// types when including worldmap.h for static_assert.
+//
 // Coverage targets: F-01 (wmGameTimeIncrement tick fix), F-02 (wmForceEncounter
 // locking), F-03 (save/load bounds inconsistency), F-04 (load warning behavior).
 
@@ -23,6 +30,8 @@
 #include "doctest.h"
 
 #include <cstring>
+
+#include "worldmap.h"
 
 // ============================================================
 // Test-local type definitions mirroring worldmap.cc and worldmap.h.
@@ -32,6 +41,8 @@ namespace fallout {
 
 // worldmap.h constants
 constexpr int TEST_CAR_FUEL_MAX = 80000;
+static_assert(TEST_CAR_FUEL_MAX == CAR_FUEL_MAX,
+    "TEST_CAR_FUEL_MAX must match production CAR_FUEL_MAX");
 constexpr int TEST_ENTRANCE_LIST_CAPACITY = 10;
 
 // ENCOUNTER_FLAG_* defines from worldmap.h:232-236
@@ -40,6 +51,16 @@ constexpr unsigned int TEST_ENCOUNTER_FLAG_LOCK = 0x2;
 constexpr unsigned int TEST_ENCOUNTER_FLAG_NO_ICON = 0x4;
 constexpr unsigned int TEST_ENCOUNTER_FLAG_ICON_SP = 0x8;
 constexpr unsigned int TEST_ENCOUNTER_FLAG_FADEOUT = 0x10;
+static_assert(TEST_ENCOUNTER_FLAG_NO_CAR == ENCOUNTER_FLAG_NO_CAR,
+    "TEST_ENCOUNTER_FLAG_NO_CAR must match production");
+static_assert(TEST_ENCOUNTER_FLAG_LOCK == ENCOUNTER_FLAG_LOCK,
+    "TEST_ENCOUNTER_FLAG_LOCK must match production");
+static_assert(TEST_ENCOUNTER_FLAG_NO_ICON == ENCOUNTER_FLAG_NO_ICON,
+    "TEST_ENCOUNTER_FLAG_NO_ICON must match production");
+static_assert(TEST_ENCOUNTER_FLAG_ICON_SP == ENCOUNTER_FLAG_ICON_SP,
+    "TEST_ENCOUNTER_FLAG_ICON_SP must match production");
+static_assert(TEST_ENCOUNTER_FLAG_FADEOUT == ENCOUNTER_FLAG_FADEOUT,
+    "TEST_ENCOUNTER_FLAG_FADEOUT must match production");
 
 // Bit 31 internal flag (used by wmForceEncounter)
 constexpr unsigned int TEST_ENCOUNTER_INTERNAL_LOCK_BIT = (1u << 31);

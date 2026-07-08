@@ -86,9 +86,9 @@ check_prerequisites() {
     xcode-select -p &>/dev/null || die "Xcode Command Line Tools not found. Run: xcode-select --install"
 
     # 4. cmake available
-    command -v cmake &>/dev/null || die "cmake not found. Install CMake >= 3.21."
+    command -v cmake &>/dev/null || die "cmake not found. Install CMake >= 3.20 (3.21+ recommended)."
 
-    # 5. cmake version >= 3.21
+    # 5. cmake version >= 3.20 (cmake --build --preset requires 3.20+; 3.21+ used as conservative floor)
     local cmake_ver major minor
     cmake_ver=$(cmake --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || true)
     if [[ -z "$cmake_ver" ]]; then
@@ -97,8 +97,8 @@ check_prerequisites() {
     major=${cmake_ver%%.*}
     minor=${cmake_ver#*.}
     minor=${minor%%.*}
-    if [[ "$major" -lt 3 ]] || { [[ "$major" -eq 3 ]] && [[ "$minor" -lt 21 ]]; }; then
-        die "CMake >= 3.21 required. Found: $cmake_ver"
+    if [[ "$major" -lt 3 ]] || { [[ "$major" -eq 3 ]] && [[ "$minor" -lt 20 ]]; }; then
+        die "CMake >= 3.20 required (3.21 recommended). Found: $cmake_ver"
     fi
 
     # 6. security (keychain tool)

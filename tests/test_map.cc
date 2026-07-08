@@ -217,13 +217,31 @@ TEST_CASE("pixelToTileCoord — non-negative for valid pixel ranges")
 
 TEST_CASE("tileToPixelOffset roundtrip — selected tiles")
 {
-    // tileToPixelOffset → pixelToTileCoord should be lossy but produce consistent outputs.
+    // tileToPixelOffset and pixelToTileCoord are complementary functions
+    // in the engine's coordinate system. tileToPixelOffset converts a
+    // flat tile index to pixel coordinates, and pixelToTileCoord converts
+    // pixel coordinates to hex-grid tile coordinates (used for mouse-to-
+    // tile mapping).
+    //
+    // Note: pixelToTileCoord does NOT reconstruct the original flat tile
+    // index — it returns hex-grid-space coordinates that may differ from
+    // the flat index due to hex tiling and the y &= ~1 lossy rounding
+    // in tileToPixelOffset. This test verifies that basic coordinate
+    // validity holds (no negative values, no crashes).
+    //
+    // The production algorithm at map_edge.cc:38-71.
     int tiles[] = { 0, 1, 100, 199, 200, 399, 5000, 10000, 20000, 39999 };
-    for (int tile : tiles) {
+    for (int origTile : tiles) {
         int px, py;
-        testTileToPixelOffset(tile, px, py);
-        testPixelToTileCoord(px, py);
-        // px/py are now tile-space coordinates; they should be >= 0
+        testTileToPixelOffset(origTile, px, py);
+        int tileX = px, tileY = py;
+        testPixelToTileCoord(tileX, tileY);
+
+        // Sanity: tile coordinates should be within valid range
+        CHECK(tileX >= 0);
+        CHECK(tileY >= 0);
+
+        // Forward transform sanity: pixel offsets should be non-negative
         CHECK(px >= 0);
         CHECK(py >= 0);
     }

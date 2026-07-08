@@ -18,6 +18,8 @@
 
 #include <cstring>
 
+#include "skill_defs.h"
+
 // =============================================================
 // Test-local types mirroring skill_defs.h
 // =============================================================
@@ -48,6 +50,10 @@ enum TestSkill {
 // Mirror of skill_defs.h:6-9
 constexpr int TEST_NUM_TAGGED_SKILLS = 4;
 constexpr int TEST_DEFAULT_TAGGED_SKILLS = 3;
+static_assert(TEST_NUM_TAGGED_SKILLS == NUM_TAGGED_SKILLS,
+    "TEST_NUM_TAGGED_SKILLS must match production NUM_TAGGED_SKILLS");
+static_assert(TEST_DEFAULT_TAGGED_SKILLS == DEFAULT_TAGGED_SKILLS,
+    "TEST_DEFAULT_TAGGED_SKILLS must match production DEFAULT_TAGGED_SKILLS");
 
 // Mirror of STAT_INVALID (used in gSkillDescriptions for stat2)
 constexpr int TEST_STAT_INVALID = -1;
@@ -178,7 +184,9 @@ static int testSkillCapValue(int rawValue)
 
 TEST_CASE("SKILL_COUNT constant")
 {
-    // Fallout 2 has 18 skills
+    // Fallout 2 has 18 skills — compile-time verified against production
+    static_assert(TEST_SKILL_COUNT == fallout::SKILL_COUNT,
+        "TEST_SKILL_COUNT must match production SKILL_COUNT");
     CHECK(TEST_SKILL_COUNT == 18);
 }
 

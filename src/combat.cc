@@ -3625,32 +3625,39 @@ int _combat_attack(Object* attacker, Object* defender, int hitMode, int hitLocat
         hitLocation = HIT_LOCATION_HEAD;
     }
 
-    attackInit(&_main_ctd, attacker, defender, hitMode, hitLocation);
+    // SFALL: Fix I2-M23 — Was using file-static _main_ctd which could be
+    // overwritten by recursive attackComputeAttack calls (e.g., when a
+    // COMBATDAMAGE hook script triggered during _action_attack calls back
+    // into _combat). Using a stack-local prevents nested overwrites of
+    // in-progress attack computation (same pattern as shoot_ctd M-29 and
+    // _explosion_ctd I2-28 fixes).
+    Attack main_ctd;
+    attackInit(&main_ctd, attacker, defender, hitMode, hitLocation);
     debugPrint("computing attack...\n");
 
-    if (attackCompute(&_main_ctd) == -1) {
+    if (attackCompute(&main_ctd) == -1) {
         return -1;
     }
 
     if (_gcsd != nullptr) {
-        _main_ctd.defenderDamage += _gcsd->damageBonus;
+        main_ctd.defenderDamage += _gcsd->damageBonus;
 
-        if (_main_ctd.defenderDamage < _gcsd->minDamage) {
-            _main_ctd.defenderDamage = _gcsd->minDamage;
+        if (main_ctd.defenderDamage < _gcsd->minDamage) {
+            main_ctd.defenderDamage = _gcsd->minDamage;
         }
 
-        if (_main_ctd.defenderDamage > _gcsd->maxDamage) {
-            _main_ctd.defenderDamage = _gcsd->maxDamage;
+        if (main_ctd.defenderDamage > _gcsd->maxDamage) {
+            main_ctd.defenderDamage = _gcsd->maxDamage;
         }
 
         if (_gcsd->overrideAttackResults) {
-            _main_ctd.attackerFlags = _gcsd->attackerResults;
-            _main_ctd.defenderFlags = _gcsd->targetResults;
+            main_ctd.attackerFlags = _gcsd->attackerResults;
+            main_ctd.defenderFlags = _gcsd->targetResults;
         }
     }
 
     bool aiming;
-    if (_main_ctd.defenderHitLocation == HIT_LOCATION_TORSO || _main_ctd.defenderHitLocation == HIT_LOCATION_UNCALLED) {
+    if (main_ctd.defenderHitLocation == HIT_LOCATION_TORSO || main_ctd.defenderHitLocation == HIT_LOCATION_UNCALLED) {
         if (attacker == gDude) {
             interfaceGetCurrentHitMode(&hitMode, &aiming);
         } else {
@@ -3660,12 +3667,17 @@ int _combat_attack(Object* attacker, Object* defender, int hitMode, int hitLocat
         aiming = true;
     }
 
-    int actionPoints = weaponGetActionPointCost(attacker, _main_ctd.hitMode, aiming);
+    int actionPoints = weaponGetActionPointCost(attacker, main_ctd.hitMode, aiming);
     debugPrint("sequencing attack...\n");
 
-    if (_action_attack(&_main_ctd) == -1) {
+    if (_action_attack(&main_ctd) == -1) {
         return -1;
     }
+
+    // SFALL: Copy stack-local result to file-static for animation
+    // callbacks (_combat_anim_begin, _combat_anim_finished) which read
+    // _main_ctd after _action_attack returns.
+    _main_ctd = main_ctd;
 
     if (actionPoints > attacker->data.critter.combat.ap) {
         attacker->data.critter.combat.ap = 0;

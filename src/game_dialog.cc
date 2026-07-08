@@ -2156,14 +2156,13 @@ int gameDialogProcessUI()
                 if (getTicksBetween(now, tick) >= 10000 || keyCode == KEY_SPACE) {
                     pageCount++;
                     pageIndex++;
-                    // F2-029: Bounds check before writing to pageOffsets.
-                    // pageCount can grow unbounded with enough formatted text.
-                    if (pageCount < GAME_DIALOG_REPLY_MAX_PAGES) {
-                        pageOffsets[pageCount] = gDialogReplyTextOffset;
-                    } else {
-                        pageCount = GAME_DIALOG_REPLY_MAX_PAGES - 1;
-                        pageIndex = std::min(pageIndex, GAME_DIALOG_REPLY_MAX_PAGES - 1);
-                    }
+                    // F-M31: Circular buffer — pageCount/pageIndex are
+                    // linear counters that never wrap.  pageOffsets[] is
+                    // indexed modulo GAME_DIALOG_REPLY_MAX_PAGES, so when
+                    // the page count exceeds the buffer size the oldest
+                    // pages are overwritten but forward/backward paging
+                    // continues cycling through all available content.
+                    pageOffsets[pageCount % GAME_DIALOG_REPLY_MAX_PAGES] = gDialogReplyTextOffset;
                     gameDialogRenderReply();
                     tick = now;
                     if (!gDialogReplyTextOffset) {
@@ -2173,16 +2172,22 @@ int gameDialogProcessUI()
             }
 
             if (keyCode == KEY_ARROW_UP) {
-                if (pageIndex > 0) {
+                // F-M31: Backward paging is limited to the last
+                // GAME_DIALOG_REPLY_MAX_PAGES entries in the circular
+                // buffer.  Older pages have been overwritten.
+                int earliestPage = (pageCount >= GAME_DIALOG_REPLY_MAX_PAGES)
+                    ? pageCount - GAME_DIALOG_REPLY_MAX_PAGES + 1
+                    : 0;
+                if (pageIndex > earliestPage) {
                     pageIndex--;
-                    gDialogReplyTextOffset = pageOffsets[pageIndex];
+                    gDialogReplyTextOffset = pageOffsets[pageIndex % GAME_DIALOG_REPLY_MAX_PAGES];
                     autoAdvance = false;
                     gameDialogRenderReply();
                 }
             } else if (keyCode == KEY_ARROW_DOWN) {
                 if (pageIndex < pageCount) {
                     pageIndex++;
-                    gDialogReplyTextOffset = pageOffsets[pageIndex];
+                    gDialogReplyTextOffset = pageOffsets[pageIndex % GAME_DIALOG_REPLY_MAX_PAGES];
                     autoAdvance = false;
                     gameDialogRenderReply();
                 } else {
@@ -2190,13 +2195,7 @@ int gameDialogProcessUI()
                         tick = now;
                         pageIndex++;
                         pageCount++;
-                        // F2-029: Bounds check before writing to pageOffsets.
-                        if (pageCount < GAME_DIALOG_REPLY_MAX_PAGES) {
-                            pageOffsets[pageCount] = gDialogReplyTextOffset;
-                        } else {
-                            pageCount = GAME_DIALOG_REPLY_MAX_PAGES - 1;
-                            pageIndex = std::min(pageIndex, GAME_DIALOG_REPLY_MAX_PAGES - 1);
-                        }
+                        pageOffsets[pageCount % GAME_DIALOG_REPLY_MAX_PAGES] = gDialogReplyTextOffset;
                         autoAdvance = false;
                         gameDialogRenderReply();
                     }
@@ -3139,12 +3138,17 @@ void _talk_to_critter_reacts(int reaction)
     int reactionIndex = reaction + 1;
 
     debugPrint("Dialogue Reaction: ");
-    if (reactionIndex < 3) {
+    if (reactionIndex >= 0 && reactionIndex < 3) {
         debugPrint("%s\n", _react_strs[reactionIndex]);
     }
 
     // SFALL: Fire HOOK_DIALOGREACTION when a dialog reaction is triggered.
-    ScriptHookCall(HOOK_DIALOGREACTION, 0, { gGameDialogSpeaker, reaction }).call();
+    // I2-M34: Guard against nullptr speaker — opEndGameDialog nulls
+    // gGameDialogSpeaker, and a subsequent opGameDialogReaction call
+    // would pass nullptr to the hook handlers, which may dereference it.
+    if (gGameDialogSpeaker != nullptr) {
+        ScriptHookCall(HOOK_DIALOGREACTION, 0, { gGameDialogSpeaker, reaction }).call();
+    }
 
     int reactionCode = reaction + 50;
     _dialogue_seconds_since_last_input = 0;

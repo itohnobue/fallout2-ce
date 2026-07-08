@@ -311,6 +311,14 @@ const char* sfallGetMoviePathOverride(int movieId);
 int sfallGetCritterHitChanceOverrideCount();
 int sfallGetForceAimedShotsMapCount();
 int sfallGetDisableAimedShotsMapCount();
+// TEST-ONLY accessors for file-static PerkboxTitle and KillCounters (I2-M74).
+// sfallPerkboxTitle and gSfallKillCounters were structurally inaccessible from
+// unit tests (file-static, no public getter/setter). These accessors allow
+// verifying that sfallOpcodesReset() correctly clears both.
+const char* sfallGetPerkboxTitleForTest();
+int sfallGetKillCounterCountForTest();
+int sfallGetKillCounterValueForTest(int critterType);
+void sfallSetKillCounterForTest(int critterType, int count);
 #endif
 
 } // namespace fallout

@@ -20,6 +20,57 @@
 //      global variable store/fetch — the only opcode subsystem that is
 //      currently linkable without linking sfall_opcodes.cc itself.
 //
+// I2-M67: INCREMENTAL EXTRACTION ROADMAP
+// ---------------------------------------
+// The current harness relies on local simulators (opcode logic reimplemented
+// inline) because ~185 file-static opcode handlers cannot be called directly.
+// This is a structural limitation, not immutable. The following phased plan
+// provides a forward path for incremental test integration:
+//
+// PHASE 1 — TEST_ACCESSORS Guard (near-term, ~20 opcodes)
+//   Add a compile-time guard to sfall_opcodes.cc:
+//     #ifdef TEST_ACCESSORS
+//     OpcodeFunc sfall_test_get_opcode_handler(int opcodeNum);
+//     #endif
+//   Expose the ~20 opcodes that have ZERO engine dependencies (math ops:
+//   op_ceil, op_round, op_power, op_abs, op_clamp; string ops: op_strlen,
+//   op_substr; misc: op_sprintf opcode entry but Program* still needed).
+//   These would be callable directly from test files without the simulator
+//   indirection, providing genuine production-code coverage.
+//
+// PHASE 2 — Per-Domain Compilation Units (medium-term, ~60 opcodes)
+//   Split sfall_opcodes.cc into linkable domains:
+//     sfall_opcodes_globals.cc     — extern globals + reset/init (DONE: already linkable)
+//     sfall_opcodes_vfs.cc         — VFS handlers (requires file I/O stubs)
+//     sfall_opcodes_perk.cc        — perk/trait handlers (requires perk.cc stubs)
+//     sfall_opcodes_combat.cc      — combat stat handlers (requires combat.cc stubs)
+//     sfall_opcodes_critter.cc     — critter stat handlers (requires critter.cc stubs)
+//   Each compilation unit exports its op_* functions under a test-namespace
+//   when TEST_ACCESSORS is defined, and keeps them file-static otherwise.
+//   This preserves production encapsulation while enabling per-domain
+//   testing with domain-specific stubs.
+//
+// PHASE 3 — Full Engine Linkage (long-term)
+//   When the 50+ engine dependencies are shimmed (Object mock, Proto mock,
+//   Combat mock, etc.), link sfall_opcodes.cc directly into test executables.
+//   This replaces ALL simulators with genuine opcode dispatch through the
+//   production interpreter loop or a thin test-wrapper calling op_* directly.
+//
+// Current coverage: 7/267 (2.6%) opcodes linkable through sfall_gl_vars.
+// Phase 1 would add ~20 opcodes (math/string), raising to ~10%.
+// Phase 2 would add ~60 opcodes, raising to ~33%.
+// Phase 3 would reach ~90%+ (remaining ~10% require full game loop).
+//
+// Known mirror-production semantic divergences (I2-M62):
+//   - getReturnValueAt OOB: mirrors return 0 safely; production assert-fails
+//     (debug) or accesses UB (release). This divergence means mirror tests
+//     validate different behavior than production. Documented here so that
+//     any test using getReturnValueAt via a mirror is aware of the gap.
+//     Resolution: either add the production assert pattern to mirrors
+//     (runtime assert parity) or document this as intentional test-safety
+//     divergence with a dedicated test that verifies the production assert
+//     fires when the function is linkable (Phase 3).
+//
 // The 7 INTEGRATION-level opcodes documented in test_sfall_opcodes.cc:20-22
 // that need Program* mock:
 //   op_set_sfall_global, op_get_sfall_global_int, op_get_sfall_global_float,
@@ -30,6 +81,39 @@
 // partially tested via the sfall_gl_vars subsystem (sfall_global_vars.cc is
 // in test_sources). The others require sfall_global_scripts.cc linkage
 // (50+ engine deps) and remain INTEGRATION-only.
+//
+// F-064 (MEDIUM): Harness provides local simulators, not production wrappers.
+//   Only 7 of ~267 opcode handlers (2.6%) are testable through this harness.
+//   The remaining ~260 handlers are file-static in sfall_opcodes.cc and
+//   require linking 150+ engine source files (Program, interpreter, script
+//   manager, game objects, map, combat, AI). The structural blocker is that
+//   sfall_opcodes.cc has no TEST_ACCESSORS or public accessor separation.
+//
+//   INCREMENTAL EXTRACTION ROADMAP (proposed):
+//   Phase 1 — Separable globals (~15, low effort):
+//     Move extern globals (knockback types, perk globals, XP modifiers,
+//     hit chance mods) into a dedicated sfall_opcodes_state.cc/.h pair.
+//     These already have extern declarations in sfall_opcodes.h and stubs
+//     in test_common_stubs.cc. Creating a separate compilation unit adds
+//     zero new engine dependencies and makes state directly testable.
+//   Phase 2 — Modifier maps (~8, medium effort):
+//     Extract skill/pickpocket/perk property modifier maps into
+//     sfall_opcodes_modifiers.cc/.h. These are std::unordered_map<>
+//     containers with file-static helper functions — no engine deps
+//     beyond critter.h (which is already in test_sources).
+//   Phase 3 — Lifecycle functions (~5, low effort):
+//     sfallOpcodesReset/Exit, sfallVfsCloseAll, sfallAnimCallbackReset
+//     are already declared in sfall_opcodes.h and stubbed. Moving them
+//     to a separate unit with minimal engine deps makes integration
+//     testing of state transitions possible.
+//   Phase 4 — Per-opcode extraction (per-domain, ongoing):
+//     Group opcode handlers by subsystem (perk ops, skill ops, inventory
+//     ops, etc.) into per-domain compilation units behind TEST_ACCESSORS
+//     guards. Each unit links only its specific engine dependencies.
+//
+//   This roadmap prioritizes low-hanging fruit (Phase 1: ~2 days effort)
+//   over full extraction (Phase 4: weeks, requires engine modularization).
+//   TODO markers in test_opcodes_core_ext.cc track Phase 1 readiness.
 
 #ifndef TEST_SCRIPT_HARNESS_H_
 #define TEST_SCRIPT_HARNESS_H_
@@ -130,6 +214,14 @@ private:
 // These functions mirror the internal logic of opcode handlers.
 // Call them with a TestProgram to simulate what the static opcode
 // handler would do with the current stack state.
+//
+// TODO (I2-M67): Replace simulators with direct opcode calls per the
+// incremental extraction roadmap (see header comment, Phase 1-3).
+// Each simulator has a corresponding target opcode:
+//   simOpCeil        → op_ceil        (Phase 1: math op, zero engine deps)
+//   simOpRound       → op_round       (Phase 1: math op, zero engine deps)
+//   simOpGameLoaded  → op_game_loaded (Phase 2: needs script engine stubs)
+//   simOpSet*/Get*   → op_set/get_sfall_global (Phase 1: sfall_gl_vars linkable)
 //
 // When the actual opcode handlers are made linkable (by moving them
 // from file-static to a test-exported compilation unit), these

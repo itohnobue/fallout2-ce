@@ -26,6 +26,11 @@
 #include <cstdio>
 #include <cstring>
 
+// I2-M68, I2-M75: Enable TEST_ACCESSORS for Config injection into ini cache.
+// Must be defined BEFORE including sfall_ini.h so the header declares
+// sfall_ini_inject_config_for_test().
+#define TEST_ACCESSORS_ENABLED
+
 #include "config.h"
 #include "interpreter.h"
 #include "sfall_arrays.h"
@@ -454,6 +459,240 @@ TEST_CASE("sfall_ini_get_int — triplet parsing and error handling") {
         // False because key not found, but shouldn't crash
         CHECK_FALSE(result);
     }
+
+    resetIniState();
+}
+
+// =============================================================
+// F-M69 / I2-M68: ERANGE/strtol overflow path (sfall_ini.cc:276-284)
+// I2-M75: LP64-only branches (l > INT_MAX / l < INT_MIN)
+// =============================================================
+// With the test-only sfall_ini_inject_config_for_test(), we can
+// populate a Config in the ini cache with known values and exercise
+// the strtol path that was previously unreachable under stubbed I/O.
+//
+// The ERANGE/strtol path at sfall_ini.cc:276-284 handles:
+//   - Non-numeric input (end == stringValue → value = 0)
+//   - Overflow (errno == ERANGE → clamp to INT_MAX/INT_MIN)
+//   - LP64-only overflow (l > INT_MAX / l < INT_MIN)
+//
+// On LP32 (Windows x86): long == int, so l > INT_MAX is dead code.
+// On LP64 (Linux/macOS): long is 64-bit, so values like 3 billion
+// fit in long but exceed int range — these hit the l > INT_MAX check.
+
+TEST_CASE("F-M69/I2-M68: sfall_ini_get_int — strtol overflow paths")
+{
+    resetIniState();
+
+    SUBCASE("non-numeric string yields value 0 and returns OK")
+    {
+        Config* cfg = sfall_ini_inject_config_for_test("overflow.ini");
+        REQUIRE(cfg != nullptr);
+        configSetString(cfg, "Misc", "BadValue", "not_a_number");
+
+        int val = -1;
+        bool result = sfall_ini_get_int("overflow.ini|Misc|BadValue", &val);
+        // Triplet parses, config found, key found → OK status
+        // strtol("not_a_number") → end == stringValue → value = 0
+        CHECK(result == true);
+        CHECK(val == 0);
+    }
+
+    SUBCASE("empty string value yields 0")
+    {
+        Config* cfg = sfall_ini_inject_config_for_test("overflow.ini");
+        REQUIRE(cfg != nullptr);
+        configSetString(cfg, "Misc", "EmptyVal", "");
+
+        int val = -1;
+        bool result = sfall_ini_get_int("overflow.ini|Misc|EmptyVal", &val);
+        CHECK(result == true);
+        CHECK(val == 0);
+    }
+
+    SUBCASE("overflow > INT_MAX clamps to INT_MAX")
+    {
+        Config* cfg = sfall_ini_inject_config_for_test("overflow.ini");
+        REQUIRE(cfg != nullptr);
+        // Value far exceeds 32-bit signed int range
+        configSetString(cfg, "Misc", "BigVal", "99999999999999999999");
+
+        int val = 0;
+        bool result = sfall_ini_get_int("overflow.ini|Misc|BigVal", &val);
+        CHECK(result == true);
+        // strtol sets errno=ERANGE or l > INT_MAX → clamped to INT_MAX
+        CHECK(val == INT_MAX);
+    }
+
+    SUBCASE("underflow < INT_MIN clamps to INT_MIN")
+    {
+        Config* cfg = sfall_ini_inject_config_for_test("overflow.ini");
+        REQUIRE(cfg != nullptr);
+        configSetString(cfg, "Misc", "SmallVal", "-99999999999999999999");
+
+        int val = 0;
+        bool result = sfall_ini_get_int("overflow.ini|Misc|SmallVal", &val);
+        CHECK(result == true);
+        // strtol sets errno=ERANGE or l < INT_MIN → clamped to INT_MIN
+        CHECK(val == INT_MIN);
+    }
+
+    SUBCASE("valid number within range returns correct value")
+    {
+        Config* cfg = sfall_ini_inject_config_for_test("overflow.ini");
+        REQUIRE(cfg != nullptr);
+        configSetString(cfg, "Misc", "NormalVal", "42");
+
+        int val = 0;
+        bool result = sfall_ini_get_int("overflow.ini|Misc|NormalVal", &val);
+        CHECK(result == true);
+        CHECK(val == 42);
+    }
+
+    SUBCASE("negative number within range returns correct value")
+    {
+        Config* cfg = sfall_ini_inject_config_for_test("overflow.ini");
+        REQUIRE(cfg != nullptr);
+        configSetString(cfg, "Misc", "NegVal", "-12345");
+
+        int val = 0;
+        bool result = sfall_ini_get_int("overflow.ini|Misc|NegVal", &val);
+        CHECK(result == true);
+        CHECK(val == -12345);
+    }
+
+    SUBCASE("zero value returns 0")
+    {
+        Config* cfg = sfall_ini_inject_config_for_test("overflow.ini");
+        REQUIRE(cfg != nullptr);
+        configSetString(cfg, "Misc", "ZeroVal", "0");
+
+        int val = -1;
+        bool result = sfall_ini_get_int("overflow.ini|Misc|ZeroVal", &val);
+        CHECK(result == true);
+        CHECK(val == 0);
+    }
+
+    SUBCASE("config injection works — key not found returns false")
+    {
+        Config* cfg = sfall_ini_inject_config_for_test("overflow.ini");
+        REQUIRE(cfg != nullptr);
+        // Key "MissingKey" was never set — sfall_ini_get_int returns false
+
+        int val = 42;
+        bool result = sfall_ini_get_int("overflow.ini|Misc|MissingKey", &val);
+        // sfall_ini_get_int_detailed returns SFALL_INI_KEY_NOT_FOUND
+        CHECK_FALSE(result);
+        // Value is NOT modified when key not found in detailed path
+        // Actually: detailed path sets *value=0 before returning, but sfall_ini_get_int
+        // only checks == SFALL_INI_OK, so false means value was set to strtol result
+        // (which would be 0 from the empty-string path, or from the default).
+        // The key-not-found path in detailed: *value is set when end==stringValue→0
+        // Wait: Key not found means configGetString returns false → SFALL_INI_KEY_NOT_FOUND.
+        // But detailed ALWAYS sets *value (even on error) because of the flow:
+        //   if (!configGetString(...)) return SFALL_INI_KEY_NOT_FOUND;
+        // This returns BEFORE the strtol block — so *value is NOT set.
+        // The caller sfall_ini_get_int checks != SFALL_INI_OK → returns false.
+        // val stays 42.
+        CHECK(val == 42);
+    }
+
+    resetIniState();
+}
+
+// I2-M75: LP64-only overflow branches (sfall_ini.cc:279-280)
+// On LP64 (Linux/macOS): long is 64-bit, so strtol can return values
+// between INT_MAX+1 and LONG_MAX without setting errno=ERANGE.
+// The explicit `l > INT_MAX` check catches these.
+//
+// On LP32 (Windows x86): long == int, so l > INT_MAX is dead code
+// (strtol can never return a long greater than INT_MAX on LP32).
+// The ERANGE check alone suffices.
+//
+// This test uses `#if` to verify the platform-specific behavior:
+//   - LP64: test values > INT_MAX but < LONG_MAX (ERANGE not set)
+//   - LP32: verify same values hit ERANGE path via strtol overflow
+
+TEST_CASE("I2-M75: LP64-specific overflow branches")
+{
+    resetIniState();
+
+    SUBCASE("value exactly INT_MAX returns INT_MAX")
+    {
+        Config* cfg = sfall_ini_inject_config_for_test("lp64.ini");
+        REQUIRE(cfg != nullptr);
+        char buf[32];
+        snprintf(buf, sizeof(buf), "%d", INT_MAX);
+        configSetString(cfg, "Misc", "MaxInt", buf);
+
+        int val = 0;
+        bool result = sfall_ini_get_int("lp64.ini|Misc|MaxInt", &val);
+        CHECK(result == true);
+        CHECK(val == INT_MAX);
+    }
+
+    SUBCASE("value exactly INT_MIN returns INT_MIN")
+    {
+        Config* cfg = sfall_ini_inject_config_for_test("lp64.ini");
+        REQUIRE(cfg != nullptr);
+        char buf[32];
+        snprintf(buf, sizeof(buf), "%d", INT_MIN);
+        configSetString(cfg, "Misc", "MinInt", buf);
+
+        int val = 0;
+        bool result = sfall_ini_get_int("lp64.ini|Misc|MinInt", &val);
+        CHECK(result == true);
+        CHECK(val == INT_MIN);
+    }
+
+#if defined(__LP64__) || defined(_LP64) || (ULONG_MAX > UINT_MAX)
+    // LP64-only: strtol can return a 64-bit long > INT_MAX without ERANGE.
+    // Example: "3000000000" fits in long (64-bit) but exceeds int (32-bit).
+    // The explicit l > INT_MAX check at sfall_ini.cc:279 catches this.
+    SUBCASE("LP64: value > INT_MAX but < LONG_MAX clamps to INT_MAX")
+    {
+        Config* cfg = sfall_ini_inject_config_for_test("lp64.ini");
+        REQUIRE(cfg != nullptr);
+        // 3 billion: fits in 64-bit long, exceeds 32-bit int
+        // On LP64, strtol won't set errno=ERANGE for this value
+        configSetString(cfg, "Misc", "Lp64Overflow", "3000000000");
+
+        int val = 0;
+        bool result = sfall_ini_get_int("lp64.ini|Misc|Lp64Overflow", &val);
+        CHECK(result == true);
+        CHECK(val == INT_MAX);
+    }
+
+    SUBCASE("LP64: value < INT_MIN but > LONG_MIN clamps to INT_MIN")
+    {
+        Config* cfg = sfall_ini_inject_config_for_test("lp64.ini");
+        REQUIRE(cfg != nullptr);
+        // -3 billion: fits in 64-bit long, below 32-bit int min
+        configSetString(cfg, "Misc", "Lp64Underflow", "-3000000000");
+
+        int val = 0;
+        bool result = sfall_ini_get_int("lp64.ini|Misc|Lp64Underflow", &val);
+        CHECK(result == true);
+        CHECK(val == INT_MIN);
+    }
+#else
+    // LP32: Document that l > INT_MAX / l < INT_MIN are dead code.
+    // On LP32, long == int, so strtol can never return a long that
+    // exceeds INT_MAX or falls below INT_MIN without setting errno=ERANGE.
+    // The ERANGE path alone provides full coverage.
+    // These SUBCASEs document the LP32 constraint.
+    SUBCASE("LP32: l > INT_MAX / l < INT_MIN are dead code — ERANGE path covers all overflow")
+    {
+        // On LP32 (Windows x86): long is 32-bit, same as int.
+        // strtol(LONG_MAX_STR) → LONG_MAX == INT_MAX, no ERANGE, no l > INT_MAX.
+        // strtol overflow → LONG_MAX/INT_MAX with ERANGE set.
+        // strtol underflow → LONG_MIN/INT_MIN with ERANGE set.
+        //
+        // The production guards at sfall_ini.cc:279 are redundant on LP32
+        // but remain as defensive cross-platform code.
+        CHECK(true); // documented: LP32 has no l > INT_MAX reachable path
+    }
+#endif
 
     resetIniState();
 }

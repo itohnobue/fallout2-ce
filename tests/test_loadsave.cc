@@ -725,6 +725,8 @@ TEST_CASE("F2-003: Wire format — truncated file detection")
     // for any field, the loader returns false.
     //
     // This test models a truncated file: header written but body missing.
+    // Unlike the prior test (which was a mathematical tautology: 16 < 16+16),
+    // this test simulates an actual partial-read from a truncated buffer.
 
     // Full save format: magic(4) + version(4) + count(4) + floatCount(4)
     //                   + entries(count * 16) + float entries(floatCount * 12)
@@ -740,19 +742,76 @@ TEST_CASE("F2-003: Wire format — truncated file detection")
     std::memcpy(header + 8, &count, 4);
     std::memcpy(header + 12, &floatCount, 4);
 
-    // The file is truncated after the header — no entries follow.
-    // A reader attempting to read entries will get EOF (0 bytes).
-    size_t fileSize = kHeaderSize; // only header, no entries
+    // --- I2-M53: Simulate a truncated file as a ByteStream ---
+    // Production fileRead(void* buf, size_t size, size_t count, File* stream)
+    // reads up to (size * count) bytes. When the stream is truncated, it
+    // returns fewer than requested bytes.
 
-    // Production: fileRead for first entry returns 0 < sizeof(entry)
-    // result: load returns false
-    size_t entrySize = 16; // or sizeof(Entry) depending on platform
-    bool truncationDetected = (fileSize < kHeaderSize + entrySize);
-    CHECK(truncationDetected); // truncated file detected
+    struct TestByteStream {
+        const uint8_t* data;
+        size_t pos;
+        size_t totalSize;
+    };
 
-    // For any count > 0, the file must have header + count*entrySize bytes
-    size_t requiredSize = kHeaderSize + (count * entrySize);
-    CHECK(fileSize < requiredSize); // insufficient data
+    TestByteStream stream;
+    stream.data = header;
+    stream.pos = 0;
+    stream.totalSize = kHeaderSize; // only header bytes available
+
+    // Simulated fileRead: reads size*count bytes, returns bytes actually read
+    auto simFileRead = [](void* buf, size_t size, size_t count,
+                           TestByteStream* s) -> size_t
+    {
+        size_t requested = size * count;
+        size_t available = s->totalSize - s->pos;
+        if (requested > available) {
+            requested = available;  // truncation — return fewer bytes
+        }
+        std::memcpy(buf, s->data + s->pos, requested);
+        s->pos += requested;
+        return requested;
+    };
+
+    // Step 1: Read magic (4 bytes) — succeeds (pos 0..3)
+    uint32_t readMagic;
+    size_t bytesRead = simFileRead(&readMagic, 4, 1, &stream);
+    CHECK(bytesRead == 4);
+    CHECK(readMagic == magic);
+
+    // Step 2: Read version (4 bytes) — succeeds (pos 4..7)
+    int32_t readVersion;
+    bytesRead = simFileRead(&readVersion, 4, 1, &stream);
+    CHECK(bytesRead == 4);
+    CHECK(readVersion == version);
+
+    // Step 3: Read count (4 bytes) — succeeds (pos 8..11)
+    int32_t readCount;
+    bytesRead = simFileRead(&readCount, 4, 1, &stream);
+    CHECK(bytesRead == 4);
+    CHECK(readCount == 10);  // header claims 10 entries
+
+    // Step 4: Read floatCount (4 bytes) — succeeds (pos 12..15)
+    int32_t readFloatCount;
+    bytesRead = simFileRead(&readFloatCount, 4, 1, &stream);
+    CHECK(bytesRead == 4);
+    CHECK(readFloatCount == 0);
+
+    // Step 5: Try to read first entry (16 bytes) — truncated!
+    // The stream is at pos=16, totalSize=16, so available=0.
+    uint8_t entryBuf[16];
+    bytesRead = simFileRead(entryBuf, 1, 16, &stream);
+    CHECK(bytesRead == 0);  // EOF — truncation detected
+
+    // The production code checks:
+    //   if (fileRead(&entry, sizeof(entry), 1, file) < sizeof(entry))
+    //       return false; // truncated — load fails
+    bool truncated = (bytesRead < sizeof(entryBuf));
+    CHECK(truncated); // truncation correctly detected
+
+    // For any count > 0, the file must have header + count*entrySize bytes.
+    // With only header bytes, the reader gets 0 bytes per entry.
+    size_t requiredSize = kHeaderSize + (count * static_cast<size_t>(16));
+    CHECK(stream.totalSize < requiredSize); // file is too short
 }
 
 TEST_CASE("F2-003: Wire format — backward compatibility with old format")

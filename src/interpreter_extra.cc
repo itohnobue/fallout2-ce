@@ -2015,6 +2015,19 @@ static void opGameDialogReaction(Program* program)
 {
     int value = programStackPopInteger(program);
 
+    // B-02-c: Validate the reaction value before passing to
+    // _talk_to_critter_reacts.  Unvalidated script stack values can
+    // cause OOB reads in _react_strs[] (I2-M21) and propagate junk
+    // values into the dialog state machine.  The valid reaction domain
+    // is [-1, 0, 1] (bad/neutral/good).  Clamp outliers to preserve
+    // the existing FIXME behavior for the legacy 50→bad mapping at
+    // game_dialog.cc:3132.
+    if (value < -1) {
+        value = -1;
+    } else if (value > 1) {
+        value = 1;
+    }
+
     gGameDialogReactionOrFidget = value;
     _talk_to_critter_reacts(value);
 }

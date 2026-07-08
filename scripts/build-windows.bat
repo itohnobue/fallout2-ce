@@ -12,7 +12,8 @@ if "%CONFIG%"=="" set CONFIG=Debug
 REM Determine build preset name from configure preset + config.
 REM The build preset naming convention is: {configure-preset}-{config-lower}
 set BUILD_CONFIG=%CONFIG%
-if /i "%CONFIG%"=="Debug"       set BUILD_CONFIG=debug
+if /i "%CONFIG%"=="Debug"          set BUILD_CONFIG=debug
+if /i "%CONFIG%"=="Release"        set BUILD_CONFIG=release
 if /i "%CONFIG%"=="RelWithDebInfo" set BUILD_CONFIG=release
 
 set BUILD_PRESET=%PRESET%-%BUILD_CONFIG%
@@ -24,11 +25,11 @@ echo [build-windows] Build preset     : %BUILD_PRESET%
 REM Check for CMake
 where cmake >nul 2>&1
 if %ERRORLEVEL% neq 0 (
-    echo [build-windows] ERROR: cmake not found. Install CMake >= 3.21.
+    echo [build-windows] ERROR: cmake not found. Install CMake >= 3.20 (3.21 recommended).
     exit /b 1
 )
 
-REM Check cmake version >= 3.21 (required for cmake --build --preset)
+REM Check cmake version >= 3.20 (cmake --build --preset requires 3.20; 3.21 for conservative floor)
 for /f "tokens=3" %%v in ('cmake --version 2^>nul ^| findstr /i "cmake version"') do set CMAKE_VER=%%v
 if not defined CMAKE_VER (
     echo [build-windows] ERROR: Could not determine cmake version.
@@ -39,10 +40,10 @@ for /f "tokens=1-3 delims=." %%a in ("%CMAKE_VER%") do (
     set CMAKE_MAJOR=%%a
     set CMAKE_MINOR=%%b
 )
-:: Use arithmetic to compare versions: major*1000 + minor vs 3021 threshold
-set /A VER_OK=(%CMAKE_MAJOR%*1000+%CMAKE_MINOR%)-3021 2>nul
+:: Use arithmetic to compare versions: major*1000 + minor vs 3020 threshold
+set /A VER_OK=(%CMAKE_MAJOR%*1000+%CMAKE_MINOR%)-3020 2>nul
 if %VER_OK% LSS 0 (
-    echo [build-windows] ERROR: CMake >= 3.21 required. Found: %CMAKE_VER%
+    echo [build-windows] ERROR: CMake >= 3.20 required (3.21 recommended). Found: %CMAKE_VER%
     exit /b 1
 )
 

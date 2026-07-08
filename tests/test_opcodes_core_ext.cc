@@ -123,6 +123,33 @@ static void testCleanupPerkNames()
 static constexpr int kTestMaxFakePerks = 64;
 static constexpr int kTestMaxFakeTraits = 16;
 
+// I2-M59: Compile-time coupling of mirror constants to production.
+// Mirror constants whose production equivalents are file-static in
+// sfall_opcodes.cc (not exported in headers). These static_asserts
+// verify the mirrors are at least large enough for current PERK_COUNT (119).
+// If PERK_COUNT grows beyond the mirror capacity, compilation fails,
+// forcing the developer to update the mirror constants.
+//
+// Production source for each mirror:
+//   kTestMaxFakePerks=64       ← kMaxFakePerks      at sfall_opcodes.cc:4000
+//     Note: kMaxFakePerks (64) is a SEPARATE capacity for fake perks,
+//     not the total perk count. It cannot be coupled to PERK_COUNT.
+//     Coupling: overflow boundary tests in F-079 provide runtime guard.
+//   kTestMaxFakeTraits=16      ← kMaxFakeTraits     at sfall_opcodes.cc:4004
+//     Note: kMaxFakeTraits (16) is a SEPARATE capacity for fake traits,
+//     not coupled to any production header constant.
+//   kTestMaxPerkNameOverrides=128 ← kMaxPerkNameOverrides at sfall_opcodes.cc:3494
+//     Note: kMaxPerkNameOverrides (128) IS the total name override capacity
+//     for all perks. It MUST be >= PERK_COUNT to avoid OOB writes.
+//
+// Only kTestMaxPerkNameOverrides can be meaningfully coupled to PERK_COUNT.
+static_assert(kTestMaxPerkNameOverrides >= PERK_COUNT,
+    "I2-M59: kTestMaxPerkNameOverrides mirror must be >= PERK_COUNT — check sfall_opcodes.cc:3494");
+//
+// kTestMaxFakePerks and kTestMaxFakeTraits have no production header
+// equivalents for compile-time coupling. Their overflow tests (F-079)
+// provide runtime guard against mirror/production drift.
+
 struct TestFakePerkEntry {
     std::string name;
     int level;
@@ -183,6 +210,10 @@ static void testResetAllFakeEntries()
 // NOTE: Neither path checks .active — unlike op_has_fake_perk which checks
 // .active in both conditions (sfall_opcodes.cc:4156,4165). The has_fake_trait
 // behavior differs from its comment "Mirrors op_has_fake_perk's dual-mode".
+// I2-M60: This is a production behavioral gap, not a test mirror gap. The
+// mirror correctly reproduces production's .active-ignoring behavior. If
+// production ever adds .active checking to has_fake_trait, the mirror below
+// must be updated. CROSS-CHECK: Perk .active check at sfall_opcodes.cc:4156.
 static int testHasFakeTrait(int extraTraitID)
 {
     // Integer lookup path (sfall_opcodes.cc:4190-4195):
@@ -339,6 +370,36 @@ TEST_CASE("F-065: File-static opcode handler inventory")
     //    sfallOpcodesReset(), sfallOpcodesExit(), sfallVfsCloseAll(),
     //    sfallAnimCallbackReset(), sfallOpcodeStateSave/Load()
     //    (declared in sfall_opcodes.h; stubs in test_common_stubs.cc)
+    //
+    // I2-M58 (MEDIUM): Incremental extraction roadmap for ~185 untestable handlers.
+    //   TODO(Phase 1 — Immediate): Extract extern globals (~15) → sfall_opcodes_state.cc
+    //     - knockback types (sfallWeaponKnockbackType, etc.) — already extern in sfall_opcodes.h
+    //     - XP mod globals (gXpModPercentage, etc.)
+    //     - hit chance globals (sfallHitChanceMod, sfallHitChanceMax)
+    //     - gPipboyAvailableOverride, gSkillPointsPerLevelMod, gSkillMaxCap
+    //     EFFORT: ~2 days. BENEFIT: ~15 opcodes' state becomes directly testable.
+    //   TODO(Phase 2 — Short-term): Extract modifier maps (~8) → sfall_opcodes_modifiers.cc
+    //     - Perk property override maps (perk name, desc, image, level, freq)
+    //     - Skill/pickpocket modifier maps (std::unordered_map containers)
+    //     - These have zero engine deps beyond critter.h (already in test_sources)
+    //     EFFORT: ~3 days. BENEFIT: ~30 opcodes testable.
+    //   TODO(Phase 3 — Medium-term): Extract lifecycle functions → dedicated unit
+    //     - sfallOpcodesReset/Exit (already declared in sfall_opcodes.h)
+    //     - sfallVfsCloseAll, sfallAnimCallbackReset
+    //     EFFORT: ~1 day. BENEFIT: State transition testing.
+    //   TODO(Phase 4 — Long-term): Per-domain opcode extraction
+    //     - Group by subsystem: perk_ops.cc, skill_ops.cc, inventory_ops.cc, etc.
+    //     - Each unit behind TEST_ACCESSORS guard with minimal engine deps
+    //     - Target: incrementally test each domain as extraction completes
+    //     EFFORT: Weeks, requires engine modularization. BENEFIT: Full coverage.
+    //   See also: test_script_harness.h Phase 1-4 roadmap (mirrors this plan).
+    //
+    // COMPILE-TIME CROSS-CHECK (I2-M59): Verify mirror constants match production.
+    //   kMaxFakePerks=64 and kMaxPerkNameOverrides=128 are file-static in
+    //   sfall_opcodes.cc and cannot be static_assert'd against production.
+    //   These CHECKs serve as the next-best compile-time guard: if production
+    //   changes these constants, test behavior tests will fail on overflow
+    //   boundary tests (F-079), alerting the developer to update the mirrors.
 
     SUBCASE("extern knockback globals are accessible from tests")
     {
@@ -1128,10 +1189,14 @@ TEST_CASE("F-087: Pyromaniac/SwiftLearner/HP-per-level — value acceptance")
         CHECK(testGetHpPerLevelMod() == 33);
     }
 
-    // NOTE: Production sfallOpcodesReset() at line 5104-5107 resets
-    // these to 0. This is not directly testable without linking
-    // sfall_opcodes.cc — the stubs in test_common_stubs.cc do not
-    // include these globals. The mirror reset is validated above.
+    // I2-M60: Production sfallOpcodesReset() at line 5104-5107 resets
+    // these globals to 0. This is not directly testable without linking
+    // sfall_opcodes.cc — the stubs in test_common_stubs.cc only reset
+    // knockback globals. The mirror reset above validates the expected
+    // behavior. REGRESSION PATH: The sfallOpcodesReset extern (line 341)
+    // is stubbed and resets knockback globals; if sfallOpcodesReset is
+    // ever linked directly, add CHECKs for perk mod globals being 0.
+    // CROSS-CHECK: Production reset at sfall_opcodes.cc:5104-5107.
 }
 
 // ============================================================

@@ -24,6 +24,7 @@
 #include <climits>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -145,7 +146,7 @@ TEST_CASE("F-084 Boundary: knockback type — INT_MIN to INT_MAX sweep")
         CHECK(sfallWeaponKnockbackType == INT_MAX);
     }
 
-    SUBCASE("float knockback values: NaN-like and extreme")
+    SUBCASE("float knockback values: extreme magnitudes")
     {
         // Production stores: value.asFloat() or static_cast<float>(value.integerValue)
         sfallWeaponKnockbackValue = 0.0f;
@@ -156,6 +157,87 @@ TEST_CASE("F-084 Boundary: knockback type — INT_MIN to INT_MAX sweep")
 
         sfallWeaponKnockbackValue = -1.0e10f;
         CHECK(sfallWeaponKnockbackValue == doctest::Approx(-1.0e10f));
+    }
+
+    // I2-M63: Float NaN, Inf, subnormal, and denormal edge-case tests.
+    // Production knockback handlers (sfall_opcodes.cc:3910-3920) store
+    // float values directly from script stack without validation.
+    // op_set_sfall_global_float (line 487) also stores floats directly.
+    // These edge cases verify the storage layer correctly preserves
+    // special float bit patterns — critical because knockback/global
+    // values propagate unchecked into the physics and stat systems.
+    SUBCASE("I2-M63: float knockback — NaN detection and propagation")
+    {
+        float nanVal = std::nanf("");
+        sfallWeaponKnockbackValue = nanVal;
+        // NaN stored must compare bit-identical to NaN (NaN != NaN by IEEE 754,
+        // so we use isnan for detection rather than Approx equality)
+        CHECK(std::isnan(sfallWeaponKnockbackValue));
+        // NaN should NOT compare equal to itself (IEEE 754 compliance)
+        CHECK_FALSE(sfallWeaponKnockbackValue == sfallWeaponKnockbackValue);
+
+        // Quiet NaN vs signaling NaN — both preserved as NaN bit pattern
+        float qnan = std::numeric_limits<float>::quiet_NaN();
+        sfallTargetKnockbackValue = qnan;
+        CHECK(std::isnan(sfallTargetKnockbackValue));
+    }
+
+    SUBCASE("I2-M63: float knockback — positive and negative infinity")
+    {
+        float posInf = std::numeric_limits<float>::infinity();
+        sfallWeaponKnockbackValue = posInf;
+        CHECK(std::isinf(sfallWeaponKnockbackValue));
+        CHECK(sfallWeaponKnockbackValue > 0.0f); // is +inf
+
+        float negInf = -std::numeric_limits<float>::infinity();
+        sfallAttackerKnockbackValue = negInf;
+        CHECK(std::isinf(sfallAttackerKnockbackValue));
+        CHECK(sfallAttackerKnockbackValue < 0.0f); // is -inf
+    }
+
+    SUBCASE("I2-M63: float knockback — subnormal / denormal values")
+    {
+        // Smallest positive subnormal: ~1.4e-45f (FLT_TRUE_MIN)
+        float denormMin = std::numeric_limits<float>::denorm_min();
+        sfallWeaponKnockbackValue = denormMin;
+        CHECK(sfallWeaponKnockbackValue > 0.0f);
+        CHECK(sfallWeaponKnockbackValue < std::numeric_limits<float>::min());
+        CHECK_FALSE(std::isnormal(sfallWeaponKnockbackValue));
+
+        // Negative subnormal
+        float negDenorm = -std::numeric_limits<float>::denorm_min();
+        sfallTargetKnockbackValue = negDenorm;
+        CHECK(sfallTargetKnockbackValue < 0.0f);
+        CHECK_FALSE(std::isnormal(sfallTargetKnockbackValue));
+    }
+
+    SUBCASE("I2-M63: float knockback — negative zero vs positive zero")
+    {
+        // IEEE 754 distinguishes +0.0 and -0.0 as separate bit patterns.
+        // Production stores these via static_cast<float>(intValue) where
+        // intValue=0 → +0.0f, but script could directly push -0.0f.
+        sfallWeaponKnockbackValue = 0.0f;
+        CHECK(sfallWeaponKnockbackValue == doctest::Approx(0.0f));
+        // -0.0f == 0.0f in IEEE 754 comparison (sign ignored)
+        sfallWeaponKnockbackValue = -0.0f;
+        CHECK(sfallWeaponKnockbackValue == doctest::Approx(0.0f));
+        // Both are zero but bit patterns differ — production comparison
+        // uses == which treats them as equal per IEEE 754.
+    }
+
+    SUBCASE("I2-M63: float knockback — max finite and min normal")
+    {
+        // FLT_MAX: largest representable finite float (~3.4e38f)
+        float maxFinite = std::numeric_limits<float>::max();
+        sfallWeaponKnockbackValue = maxFinite;
+        CHECK(std::isfinite(sfallWeaponKnockbackValue));
+        CHECK(sfallWeaponKnockbackValue == doctest::Approx(maxFinite));
+
+        // FLT_MIN: smallest positive normalized float (~1.17e-38f)
+        float minNormal = std::numeric_limits<float>::min();
+        sfallTargetKnockbackValue = minNormal;
+        CHECK(std::isnormal(sfallTargetKnockbackValue));
+        CHECK(sfallTargetKnockbackValue > 0.0f);
     }
 
     SUBCASE("all six knockback globals are independently addressable")

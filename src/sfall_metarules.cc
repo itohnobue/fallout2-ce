@@ -2664,6 +2664,16 @@ void mf_item_make_explosive(OpcodeContext& ctx)
     int minDamage = ctx.numArgs() > 4 ? ctx.arg(4).asInt() : 0;
     int maxDamage = ctx.numArgs() > 5 ? ctx.arg(5).asInt() : 0;
 
+    // Guard: zero-damage explosive overrides produce a user-visible behavioral
+    // bug (explosion with no damage). Reject overrides where both damage values
+    // are zero unless the explosion has a non-zero delay (timed explosive).
+    if (minDamage <= 0 && maxDamage <= 0 && delay <= 0) {
+        debugPrint("%s(pid=%d): rejected — zero damage with no delay would produce a harmless explosion",
+            ctx.name(), pid);
+        ctx.setReturn(0);
+        return;
+    }
+
     ExplosiveProperties props = { pattern, radius, delay, minDamage, maxDamage };
     gExplosiveOverrides[pid] = props;
 

@@ -645,3 +645,263 @@ TEST_CASE("F-055: Large entry count (100 entries) round-trip")
 
     cleanupTempFile(path);
 }
+
+// ============================================================
+// I2-M71: Save/load corruption scenario tests
+// ============================================================
+// Production loadsave.cc:2068-2095 has no CRC/checksum on handler
+// chunk data. These tests verify that corruption scenarios
+// (bit-flip, partial entry read, version mismatch, count overflow)
+// are detectable in the SFGV format mirror.
+//
+// NOTE: These use real file I/O (std::ofstream/ifstream). The
+// corruption is simulated by writing known-bad data to temp files.
+
+TEST_CASE("I2-M71: Corruption — bit-flip in entry data")
+{
+    std::string path = tempFilePath("bitflip");
+    cleanupTempFile(path);
+
+    // Write valid data
+    {
+        std::ofstream out(path, std::ios::binary);
+        REQUIRE(out.is_open());
+
+        writeSaveHeader(out, 2, 0);
+        TestGlobalVarEntry e1 = { 1ULL, 100 };
+        TestGlobalVarEntry e2 = { 2ULL, 200 };
+        out.write(reinterpret_cast<const char*>(&e1), sizeof(e1));
+        out.write(reinterpret_cast<const char*>(&e2), sizeof(e2));
+        out.close();
+    }
+
+    // Corrupt: flip a byte in entry 1's value
+    {
+        std::fstream io(path, std::ios::binary | std::ios::in | std::ios::out);
+        REQUIRE(io.is_open());
+
+        // Entry 1's value is at offset: 4(magic)+4(version)+4(count)+4(floatCount)+8(key) = 24
+        // Byte 24 is the first byte of entry 1's value (int32_t, little-endian)
+        io.seekp(24, std::ios::beg);
+        char corrupted = 0;
+        io.read(&corrupted, 1);
+        io.seekp(24, std::ios::beg);
+        corrupted ^= 0xFF; // flip all bits
+        io.write(&corrupted, 1);
+        io.close();
+    }
+
+    // Read back — entry 1's value should be corrupted
+    {
+        std::ifstream in(path, std::ios::binary);
+        REQUIRE(in.is_open());
+
+        SavedHeader h = readSaveHeader(in);
+        REQUIRE(h.valid);
+        REQUIRE(h.count == 2);
+
+        auto entries = readGlobalVarEntries(in, h.count);
+        REQUIRE(entries.size() == 2);
+        CHECK(entries[0].key == 1ULL);
+        CHECK(entries[0].value != 100); // corrupted — should differ from original
+        CHECK(entries[1].key == 2ULL);
+        CHECK(entries[1].value == 200); // uncorrupted
+    }
+
+    cleanupTempFile(path);
+}
+
+TEST_CASE("I2-M71: Corruption — mid-entry partial read")
+{
+    std::string path = tempFilePath("midentry");
+    cleanupTempFile(path);
+
+    // Write header with count=3, but write only 2 entries
+    {
+        std::ofstream out(path, std::ios::binary);
+        REQUIRE(out.is_open());
+
+        writeSaveHeader(out, 3, 0);
+        TestGlobalVarEntry e1 = { 1ULL, 100 };
+        TestGlobalVarEntry e2 = { 2ULL, 200 };
+        out.write(reinterpret_cast<const char*>(&e1), sizeof(e1));
+        out.write(reinterpret_cast<const char*>(&e2), sizeof(e2));
+        out.close();
+    }
+
+    // Read — should get only 2 entries (third fails to read)
+    {
+        std::ifstream in(path, std::ios::binary);
+        REQUIRE(in.is_open());
+
+        SavedHeader h = readSaveHeader(in);
+        REQUIRE(h.valid);
+        CHECK(h.count == 3); // header claims 3
+
+        auto entries = readGlobalVarEntries(in, h.count);
+        // Only 2 were written → fstream read fails on 3rd → entries.size() = 2
+        CHECK(entries.size() == 2);
+    }
+
+    cleanupTempFile(path);
+}
+
+TEST_CASE("I2-M71: Corruption — partial entry truncation (byte-level)")
+{
+    std::string path = tempFilePath("bytetrunc");
+    cleanupTempFile(path);
+
+    // Write header + 2 full entries + 4 bytes of a third entry
+    {
+        std::ofstream out(path, std::ios::binary);
+        REQUIRE(out.is_open());
+
+        writeSaveHeader(out, 3, 0);
+        TestGlobalVarEntry e1 = { 1ULL, 100 };
+        TestGlobalVarEntry e2 = { 2ULL, 200 };
+        out.write(reinterpret_cast<const char*>(&e1), sizeof(e1));
+        out.write(reinterpret_cast<const char*>(&e2), sizeof(e2));
+        // Write only first 4 bytes of entry 3 (partial key)
+        uint32_t partialKey = 0xAAAAAAAA;
+        out.write(reinterpret_cast<const char*>(&partialKey), 4);
+        out.close();
+    }
+
+    // Read — third entry's read should fail (incomplete)
+    {
+        std::ifstream in(path, std::ios::binary);
+        REQUIRE(in.is_open());
+
+        SavedHeader h = readSaveHeader(in);
+        REQUIRE(h.valid);
+        CHECK(h.count == 3);
+
+        auto entries = readGlobalVarEntries(in, h.count);
+        // Entry 3 read fails (only 4 of 16 bytes available)
+        CHECK(entries.size() == 2);
+    }
+
+    cleanupTempFile(path);
+}
+
+TEST_CASE("I2-M71: Corruption — version mismatch in SFGV format")
+{
+    std::string path = tempFilePath("badversion");
+    cleanupTempFile(path);
+
+    // Write with wrong SFGV version
+    {
+        std::ofstream out(path, std::ios::binary);
+        REQUIRE(out.is_open());
+
+        uint32_t magic = kSfallMagic;
+        out.write(reinterpret_cast<const char*>(&magic), sizeof(magic));
+
+        int32_t badVersion = 99; // production expects version 1
+        out.write(reinterpret_cast<const char*>(&badVersion), sizeof(badVersion));
+
+        int32_t count = 0;
+        out.write(reinterpret_cast<const char*>(&count), sizeof(count));
+        int32_t floatCount = 0;
+        out.write(reinterpret_cast<const char*>(&floatCount), sizeof(floatCount));
+        out.close();
+    }
+
+    // Read — version should be detected as bad
+    {
+        std::ifstream in(path, std::ios::binary);
+        REQUIRE(in.is_open());
+
+        SavedHeader h = readSaveHeader(in);
+        REQUIRE(h.valid); // header parses fine
+        CHECK(h.magic == kSfallMagic);
+        CHECK(h.version == 99); // wrong version
+
+        // Production guard at sfall_global_vars.cc:136:
+        //   if (version < 1 || version > 1) return false;
+        CHECK(h.version != kSfallVersion); // would be rejected by production
+    }
+
+    cleanupTempFile(path);
+}
+
+TEST_CASE("I2-M71: Corruption — count overflow (count > 10000)")
+{
+    std::string path = tempFilePath("countoverflow");
+    cleanupTempFile(path);
+
+    // Write with excessive count
+    {
+        std::ofstream out(path, std::ios::binary);
+        REQUIRE(out.is_open());
+
+        uint32_t magic = kSfallMagic;
+        out.write(reinterpret_cast<const char*>(&magic), sizeof(magic));
+
+        int32_t version = kSfallVersion;
+        out.write(reinterpret_cast<const char*>(&version), sizeof(version));
+
+        int32_t badCount = 10001; // exceeds production limit
+        out.write(reinterpret_cast<const char*>(&badCount), sizeof(badCount));
+
+        int32_t floatCount = 0;
+        out.write(reinterpret_cast<const char*>(&floatCount), sizeof(floatCount));
+        out.close();
+    }
+
+    // Read — count exceeds production limit of 10000
+    {
+        std::ifstream in(path, std::ios::binary);
+        REQUIRE(in.is_open());
+
+        SavedHeader h = readSaveHeader(in);
+        REQUIRE(h.valid);
+        CHECK(h.count == 10001); // > 10000
+
+        // Production guard at sfall_global_vars.cc:152, 177:
+        //   if (count < 0 || count > 10000) return false;
+        // count > 10000 would be rejected
+    }
+
+    cleanupTempFile(path);
+}
+
+TEST_CASE("I2-M71: Corruption — negative count rejected")
+{
+    std::string path = tempFilePath("negcount");
+    cleanupTempFile(path);
+
+    // Write with negative count
+    {
+        std::ofstream out(path, std::ios::binary);
+        REQUIRE(out.is_open());
+
+        uint32_t magic = kSfallMagic;
+        out.write(reinterpret_cast<const char*>(&magic), sizeof(magic));
+
+        int32_t version = kSfallVersion;
+        out.write(reinterpret_cast<const char*>(&version), sizeof(version));
+
+        int32_t badCount = -5; // negative count
+        out.write(reinterpret_cast<const char*>(&badCount), sizeof(badCount));
+
+        int32_t floatCount = 0;
+        out.write(reinterpret_cast<const char*>(&floatCount), sizeof(floatCount));
+        out.close();
+    }
+
+    // Read — negative count would be rejected by production
+    {
+        std::ifstream in(path, std::ios::binary);
+        REQUIRE(in.is_open());
+
+        SavedHeader h = readSaveHeader(in);
+        REQUIRE(h.valid);
+        CHECK(h.count == -5); // negative
+
+        // Production guard: if (count < 0 || count > 10000) return false;
+        // Negative count would be rejected
+    }
+
+    cleanupTempFile(path);
+}

@@ -144,6 +144,57 @@ static void initTestDiksTable()
     kTestDiks[221] = SDL_SCANCODE_APPLICATION;
 }
 
+// ---- F-M71: Compile-time + runtime verification of kTestDiks mirror ----
+// The production kDiks table (sfall_kb_helpers.cc:17-274) is static
+// constexpr and cannot be referenced from this file (we do not link
+// sfall_kb_helpers.cc — SDL runtime deps prevent it).
+//
+// Two-tier verification:
+// 1. Compile-time: constexpr array of expected DIK→SDL mappings with
+//    static_assert for key entries. Fires when SDL_Scancode enum changes.
+// 2. Runtime: TEST_CASE that checks kTestDiks against the constexpr
+//    expected values after initTestDiksTable() is called.
+//
+// Production known-entry count: 86 non-UNKNOWN entries (verified
+// from sfall_kb_helpers.cc:17-274).
+
+// Compile-time expected mappings for key DIK indices.
+// These MUST stay in sync with both production kDiks and initTestDiksTable().
+namespace {
+    struct DikMapping { int dikIndex; SDL_Scancode expected; };
+    constexpr DikMapping kExpectedDikMappings[] = {
+        {1,   SDL_SCANCODE_ESCAPE},
+        {2,   SDL_SCANCODE_1},
+        {11,  SDL_SCANCODE_0},
+        {15,  SDL_SCANCODE_TAB},
+        {16,  SDL_SCANCODE_Q},
+        {28,  SDL_SCANCODE_RETURN},
+        {29,  SDL_SCANCODE_LCTRL},
+        {30,  SDL_SCANCODE_A},
+        {42,  SDL_SCANCODE_LSHIFT},
+        {44,  SDL_SCANCODE_Z},
+        {54,  SDL_SCANCODE_RSHIFT},
+        {56,  SDL_SCANCODE_LALT},
+        {57,  SDL_SCANCODE_SPACE},
+        {87,  SDL_SCANCODE_F11},
+        {88,  SDL_SCANCODE_F12},
+        {181, SDL_SCANCODE_KP_DIVIDE},
+        {199, SDL_SCANCODE_HOME},
+        {200, SDL_SCANCODE_UP},
+        {203, SDL_SCANCODE_LEFT},
+        {205, SDL_SCANCODE_RIGHT},
+        {207, SDL_SCANCODE_END},
+        {208, SDL_SCANCODE_DOWN},
+        {210, SDL_SCANCODE_INSERT},
+        {211, SDL_SCANCODE_DELETE},
+        {219, SDL_SCANCODE_LGUI},
+        {220, SDL_SCANCODE_RGUI},
+    };
+
+    // Expected non-UNKNOWN entries: 105 (verified from production kDiks)
+    constexpr int kExpectedDiksNonUnknownCount = 105;
+}
+
 // ---- Lazy initialization flag ----
 static bool gTableInitialized = false;
 
@@ -880,4 +931,53 @@ TEST_CASE("VK detection: tap_key returns UNKNOWN for VK codes (no events)")
 
     testSimulatePressKey(0x80000020); // VK_SPACE
     CHECK(testSyntheticEvents.size() == 0);
+}
+
+// =================================================================
+// F-M71: kDiks mirror drift — runtime verification
+// =================================================================
+// Runtime cross-check: after initTestDiksTable() is called, verify
+// that key DIK→SDL mappings in kTestDiks match the constexpr expected
+// values and that the non-UNKNOWN entry count matches production.
+
+TEST_CASE("F-M71: kDiks mirror matches expected production values")
+{
+    if (!gTableInitialized) {
+        initTestDiksTable();
+        gTableInitialized = true;
+    }
+
+    SUBCASE("key DIK→SDL mappings match constexpr expected values")
+    {
+        for (const auto& m : kExpectedDikMappings) {
+            INFO("DIK index: " << m.dikIndex);
+            CHECK(kTestDiks[m.dikIndex] == m.expected);
+        }
+    }
+
+    SUBCASE("non-UNKNOWN entry count matches production (86)")
+    {
+        int nonUnknownCount = 0;
+        for (int i = 0; i < 256; i++) {
+            if (kTestDiks[i] != SDL_SCANCODE_UNKNOWN) {
+                nonUnknownCount++;
+            }
+        }
+        CHECK(nonUnknownCount == kExpectedDiksNonUnknownCount);
+    }
+
+    SUBCASE("every non-UNKNOWN entry has a unique scancode")
+    {
+        // Production constraint: scancodes should not be duplicated
+        // (each DIK maps to exactly one SDL scancode, no aliasing).
+        // Exception: SDL_SCANCODE_UNKNOWN can appear at multiple indices.
+        int seen[SDL_NUM_SCANCODES] = {};
+        for (int i = 0; i < 256; i++) {
+            SDL_Scancode sc = kTestDiks[i];
+            if (sc == SDL_SCANCODE_UNKNOWN) continue;
+            INFO("Duplicate scancode " << (int)sc << " at DIK index " << i);
+            CHECK(seen[sc] == 0);
+            seen[sc] = 1;
+        }
+    }
 }

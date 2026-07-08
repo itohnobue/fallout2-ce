@@ -41,9 +41,10 @@ static std::vector<ScriptHook> scriptHooks[HOOK_COUNT];
 constexpr size_t MAX_HOOK_CALL_DEPTH = 8;
 
 // RAII scope guard for the _gameModeChangeInProgress reentrancy flag.
-// Sets the flag on construction, clears it on destruction.  This guarantees
-// cleanup even when programFatalError longjmps out of a hook call, preventing
-// the flag from staying stuck at true and permanently disabling HOOK_GAMEMODECHANGE.
+// Sets the flag on construction, clears it on destruction.  The destructor
+// may be skipped by longjmp (I2-M35); recovery from a stuck flag is handled
+// in scriptHooks_GameModeChange() using I2-M16's proactive stale-drain as
+// a liveness signal (current()==nullptr after drain = flag is stuck).
 struct GameModeChangeGuard {
     GameModeChangeGuard() { ScriptHookCall::_gameModeChangeInProgress = true; }
     ~GameModeChangeGuard() { ScriptHookCall::_gameModeChangeInProgress = false; }
@@ -51,6 +52,7 @@ struct GameModeChangeGuard {
 
 std::vector<ScriptHookCall*> ScriptHookCall::_callStack;
 bool ScriptHookCall::_gameModeChangeInProgress = false;
+bool ScriptHookCall::_lastCallRejected = false;
 
 ScriptHookCall* ScriptHookCall::current()
 {
@@ -112,37 +114,53 @@ int ScriptHookCall::maxReturnValues() const { return _maxRetVals; }
 int ScriptHookCall::numReturnValues() const { return _numRetVals; }
 int ScriptHookCall::numScriptReturnValues() const { return _scriptRetVals; }
 
-void ScriptHookCall::call()
+void ScriptHookCall::drainStaleEntries(uintptr_t currentStackAddr)
 {
-    // programFatalError uses longjmp to abort script execution, which
-    // skips _callStack.pop_back() and leaves stale entries permanently.
-    // We drain entries where the ScriptHookCall object is no longer alive
-    // (detected via the _active flag — a live frame has _active=true set
-    // before push_back and only cleared after pop_back).  A longjmp'd
-    // call never clears _active; once the stack frame is reused the flag
-    // value changes, allowing the drain to recognise it as stale.
-    if (_callStack.size() >= MAX_HOOK_CALL_DEPTH) {
-        size_t drained = 0;
-        for (size_t i = 0; i < _callStack.size() && _callStack.size() - drained >= MAX_HOOK_CALL_DEPTH; ++i) {
-            if (!_callStack[i]->_active) {
-                _callStack.erase(_callStack.begin() + i);
-                --i;
-                ++drained;
-            }
-        }
-        // If all entries are active (deep recursive nesting with no
-        // longjmp'd entries), the drain loop is a no-op.  Evicting an
-        // active frame would make _callStack.back() != this when the
-        // evicted frame's call() returns, causing an assertion failure
-        // (debug) or UB from pop_back on wrong entry (release).
-        // Reject the call instead — hook scripts with deeper recursion
-        // than MAX_HOOK_CALL_DEPTH are not supported.
-        if (drained == 0 && _callStack.size() >= MAX_HOOK_CALL_DEPTH) {
-            debugPrint("HOOK_DRAIN: all %zu entries active, rejecting call to enforce depth cap\n", _callStack.size());
-            return;
+    for (size_t i = 0; i < _callStack.size();) {
+        uintptr_t entryAddr = reinterpret_cast<uintptr_t>(_callStack[i]);
+        if (entryAddr < currentStackAddr) {
+            // Entry is from a deeper (unwound) frame: stale.
+            // Erasing shifts subsequent elements, so do NOT
+            // increment i — the next element moves into position i.
+            _callStack.erase(_callStack.begin() + i);
+        } else {
+            ++i;
         }
     }
+}
 
+void ScriptHookCall::call()
+{
+    // I2-M16: Drain stale entries left by longjmp'd ScriptHookCall frames.
+    //
+    // programFatalError uses longjmp to abort script execution, which
+    // skips _callStack.pop_back() and leaves stale entries permanently.
+    // The old code tried to detect staleness by reading _callStack[i]->_active,
+    // which is UB when the ScriptHookCall object has been destroyed
+    // (freed stack memory).  This replacement uses lifetime-safe address
+    // comparison: stale entries from unwound frames have stack addresses
+    // below the current call frame (stack grows downward on all target
+    // platforms: x86, ARM64, and WASM/Emscripten).
+    //
+    // This runs PROACTIVELY on every call() entry — not just at the depth
+    // cap — so a single stale entry is cleaned up immediately rather than
+    // accumulating until MAX_HOOK_CALL_DEPTH is reached.
+    {
+        int stackAnchor = 0;
+        drainStaleEntries(reinterpret_cast<uintptr_t>(&stackAnchor));
+    }
+
+    // Depth-cap check (after drain — stale entries have been removed).
+    if (_callStack.size() >= MAX_HOOK_CALL_DEPTH) {
+        // Genuine deep recursion beyond the cap (no stale entries to drain).
+        // Reject the call — hook scripts with deeper recursion than
+        // MAX_HOOK_CALL_DEPTH are not supported.
+        debugPrint("HOOK_DRAIN: %zu entries at depth cap, rejecting call\n", _callStack.size());
+        _lastCallRejected = true;
+        return;
+    }
+
+    _lastCallRejected = false;
     _active = true;
     _callStack.push_back(this);
 
@@ -325,14 +343,41 @@ void scriptHooks_GameModeChange(int exit, int previousGameMode)
         return;
     }
 
-    // I2-52: Reentrancy guard — prevent mode-change hooks from
-    // triggering nested mode changes that observe intermediate
-    // GameMode::currentGameMode state.  Without this guard a hook
-    // script calling, e.g., a pip-boy display that toggles GameMode
-    // flags would re-enter this function with a modified currentGameMode,
-    // potentially causing infinite recursion or broken state.
+    // I2-M35: Drain stale entries from _callStack BEFORE the
+    // reentrancy check.  A longjmp from programFatalError during
+    // a previous HOOK_GAMEMODECHANGE dispatch leaves stale entries
+    // that make current() return a non-null stale pointer.  Without
+    // proactive draining here, the reentrancy check below would see
+    // the stale pointer and incorrectly block as "reentrancy."
+    //
+    // The drain uses the same address-based detection as
+    // ScriptHookCall::call() (I2-M16): stale entries from unwound
+    // frames have stack addresses below the current frame.
+    {
+        int stackAnchor = 0;
+        ScriptHookCall::drainStaleEntries(reinterpret_cast<uintptr_t>(&stackAnchor));
+    }
+
+    // I2-M35/I2-52: Reentrancy guard with longjmp recovery.
+    //
+    // A longjmp from programFatalError during a HOOK_GAMEMODECHANGE
+    // dispatch skips the GameModeChangeGuard destructor, permanently
+    // disabling the hook (the flag stays true forever).
+    //
+    // Recovery: the stale-drain above removes stale entries from
+    // _callStack, so current() returns nullptr when no hook is truly
+    // dispatching.  We can therefore distinguish stuck-from-longjmp
+    // (flag=true, current()=nullptr) from legitimate reentrancy
+    // (flag=true, current()=non-null).
     if (ScriptHookCall::_gameModeChangeInProgress) {
-        return;
+        if (ScriptHookCall::current() != nullptr) {
+            // Legitimate reentrancy: a GAMEMODECHANGE hook dispatch
+            // is actively in progress.  Block recursive mode change.
+            return;
+        }
+        // Flag is stuck from a previous longjmp (I2-M35).
+        // No hook is currently dispatching — reset and proceed.
+        ScriptHookCall::_gameModeChangeInProgress = false;
     }
 
     if (scriptHooks[HOOK_GAMEMODECHANGE].empty()) {

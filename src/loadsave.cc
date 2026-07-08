@@ -2078,6 +2078,17 @@ static int lsgLoadGameInSlot(int slot)
 
     debugPrint("LOADSAVE: Load file header size read: %d bytes.\n", fileTell(_flptr) - pos);
 
+    // SFALL: Note I2-M31 — The save file has no CRC/checksum on handler
+    // chunk data. The header is validated (signature + version), but the
+    // LOAD_SAVE_HANDLER_COUNT handler chunks below have zero integrity
+    // checks. This is an intentional design trade-off: (1) adding a CRC
+    // would change the save file format and break backward compatibility
+    // with existing saves; (2) the game engine is single-threaded and
+    // save files are only loaded from local disk — network corruption is
+    // not a threat model; (3) disk-level corruption is rare and would
+    // likely manifest as a header validation failure or a read error
+    // before reaching chunk data. A future version could add opt-in CRC
+    // with a new save format version marker.
     for (int index = 0; index < LOAD_SAVE_HANDLER_COUNT; index += 1) {
         long pos = fileTell(_flptr);
         LoadGameHandler* handler = _master_load_list[index];

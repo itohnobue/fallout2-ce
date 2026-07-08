@@ -887,13 +887,20 @@ TEST_CASE("M-024: HOOK_SNEAK integration — hook overrides sneak result")
 
     SUBCASE("Hook overrides time duration")
     {
+        // F-M56: Reset hook state to prevent leakage from prior SUBCASE.
+        // testSneakHookActive, testSneakHookResult, and testSneakHookTime
+        // are file-static and persist across SUBCASEs. The prior SUBCASE
+        // ("Hook overrides sneak result from success to failure") set
+        // hook time to 400. Explicit cleanup prevents cross-subcase isolation leaks.
+        testSneakHookActive = false;
+        testSneakHookResult = 0;
+        testSneakHookTime = 0;
+
         int result = 0;
         int time = 0;
-        // NOTE: testSneakHookActive persists from the previous subcase
-        // ("Hook overrides sneak result from success to failure") which set
-        // hook time to 400. The first process call here inherits that state.
+        // Without hook override, defaults should apply
         testSneakEventProcess(120, &result, &time);
-        CHECK(time == 400);
+        CHECK(time == 600);  // default time for working sneak (not leaked 400)
 
         // Reset hook for this subcase: time to 1200 (very long sneak interval)
         testHookOverrideSneak(1, 1200);
