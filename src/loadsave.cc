@@ -2025,6 +2025,15 @@ static int lsgPerformSaveGame()
                 fileSeek(_flptr, chunkStart, SEEK_SET);
                 fileWriteUInt32(_flptr, crc);
                 fileSeek(_flptr, dataEnd, SEEK_SET);
+            } else {
+                debugPrint("\nLOADSAVE: ** Error allocating CRC buffer for save function #%d! **\n", index);
+                fileClose(_flptr);
+                _RestoreSave();
+                snprintf(_gmpath, sizeof(_gmpath), "%s\\%s%.2d\\", "SAVEGAME", "SLOT", _slot_cursor + 1);
+                MapDirErase(_gmpath, "BAK");
+                _partyMemberUnPrepSave();
+                backgroundSoundResume();
+                return -1;
             }
         }
 
@@ -2213,6 +2222,10 @@ static int lsgLoadGameInSlot(int slot)
                 debugPrint("\nLOADSAVE: ** CRC mismatch for load function #%d! (stored=%08x, computed=%08x) **\n",
                     index, storedCrc, dataSize == 0 ? 0u : computedCrc);
                 displayMonitorAddMessage("Save data integrity check failed!");
+                fileClose(_flptr);
+                gameReset();
+                _loadingGame = false;
+                return -1;
             }
         }
 

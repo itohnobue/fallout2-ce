@@ -348,13 +348,16 @@ int mouseManagerSetFrame(char* fileName, int a2)
     // NOTE: Uninline.
     char* sep = strchr(string, ' ');
     if (sep == nullptr) {
-        // FIXME: Leaks stream.
+        fileClose(stream);
         return false;
     }
 
-    int v3;
-    float v4;
-    sscanf(sep + 1, "%d %f", &v3, &v4);
+    int v3 = 0;
+    float v4 = 0.0f;
+    if (sscanf(sep + 1, "%d %f", &v3, &v4) != 2) {
+        fileClose(stream);
+        return false;
+    }
 
     MouseManagerAnimatedData* animatedData = (MouseManagerAnimatedData*)internal_malloc_safe(sizeof(*animatedData), __FILE__, __LINE__); // "..\\int\\MOUSEMGR.C", 359
     animatedData->field_0 = (unsigned char**)internal_malloc_safe(sizeof(*animatedData->field_0) * v3, __FILE__, __LINE__); // "..\\int\\MOUSEMGR.C", 360
@@ -386,7 +389,7 @@ int mouseManagerSetFrame(char* fileName, int a2)
         char* sep = strchr(string, ' ');
         if (sep == nullptr) {
             debugPrint("Bad line %s in %s\n", string, fileName);
-            // FIXME: Leaking stream.
+            fileClose(stream);
             return false;
         }
 

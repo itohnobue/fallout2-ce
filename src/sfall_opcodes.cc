@@ -1293,6 +1293,7 @@ static void op_get_attack_type(Program* program)
 }
 
 static bool sfallVfsPathContainsTraversal(const char* path);
+static bool sfallVfsResolvePath(const char* rawPath, char* outBuf, size_t outBufSize);
 
 static void op_play_sfall_sound(Program* program)
 {
@@ -1321,7 +1322,19 @@ static void op_play_sfall_sound(Program* program)
         return;
     }
 
-    programStackPushInteger(program, scriptSoundPlay(path, mode));
+    // F2-06: Resolve path against VFS sandbox root. Every other VFS opcode
+    // (fs_create, fs_copy, fs_find) calls sfallVfsResolvePath to prepend the
+    // configured sandbox root. play_sfall_sound was the only VFS opcode that
+    // did not, causing audio paths to resolve relative to the game CWD while
+    // file paths resolved relative to the sandbox root.
+    char resolvedPath[COMPAT_MAX_PATH];
+    if (!sfallVfsResolvePath(path, resolvedPath, sizeof(resolvedPath))) {
+        programPrintError("play_sfall_sound: path rejected by sandbox '%s'", path);
+        programStackPushInteger(program, -1);
+        return;
+    }
+
+    programStackPushInteger(program, scriptSoundPlay(resolvedPath, mode));
 }
 
 static void op_stop_sfall_sound(Program* program)
@@ -2126,7 +2139,15 @@ static void op_fs_create(Program* program)
     }
 
     // Allocate the requested size (simple approach: seek + write)
-    fseek(file, static_cast<long>(size) - 1, SEEK_SET);
+    // F-48: Check fseek return value matching the pattern used by
+    // fs_size (lines 2517, 2528) and fs_seek (line 2582).
+    if (fseek(file, static_cast<long>(size) - 1, SEEK_SET) != 0) {
+        programPrintError("fs_create: fseek failed for '%s'", resolvedPath);
+        fclose(file);
+        sfallVfsFileOpen[handle] = false;
+        programStackPushInteger(program, -1);
+        return;
+    }
     if (fputc(0, file) == EOF) {
         programPrintError("fs_create: fputc failed for '%s'", resolvedPath);
         fclose(file);
@@ -2627,7 +2648,12 @@ static void op_fs_resize(Program* program)
         sfallVfsFileMode[id] = 2; // now read-write
     }
 
-    fseek(sfallVfsFiles[id], static_cast<long>(size) - 1, SEEK_SET);
+    // F-48: Check fseek return value matching the pattern used by
+    // fs_size (lines 2517, 2528) and fs_seek (line 2582).
+    if (fseek(sfallVfsFiles[id], static_cast<long>(size) - 1, SEEK_SET) != 0) {
+        programPrintError("fs_resize: fseek failed on handle %d", id);
+        return;
+    }
     // F2-064: check fputc return value.
     if (fputc(0, sfallVfsFiles[id]) == EOF) {
         programPrintError("fs_resize: fputc failed on handle %d", id);
@@ -4522,6 +4548,16 @@ static void op_set_critter_hit_chance_mod(Program* program)
     Object* critter = static_cast<Object*>(programStackPopPointer(program));
 
     if (critter == nullptr) {
+        return;
+    }
+
+    // F-38: Validate FID_TYPE — all 6 sibling op_set_critter_* handlers
+    // (op_set_critter_base_stat, op_set_critter_extra_stat,
+    // op_set_critter_current_ap, op_set_critter_burst_disable,
+    // op_set_critter_skill_mod, op_set_critter_pickpocket_mod) validate
+    // that the object is actually a critter before operating on it.
+    if (FID_TYPE(critter->fid) != OBJ_TYPE_CRITTER) {
+        programPrintError("set_critter_hit_chance_mod: object is not a critter");
         return;
     }
 

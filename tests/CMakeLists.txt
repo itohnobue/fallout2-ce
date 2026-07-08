@@ -711,3 +711,40 @@ target_include_directories(test_sfall_lists PRIVATE "${CMAKE_SOURCE_DIR}/src")
 target_include_directories(test_sfall_lists PRIVATE ${ZLIB_INCLUDE_DIRS})
 target_link_libraries(test_sfall_lists PRIVATE test_sources test_stubs doctest ${SDL2_LIBRARIES})
 add_test(NAME test_sfall_lists COMMAND test_sfall_lists)
+
+# ---- Test: interpreter fixes (F-07, F-22, F-29, F2-13, F2-15) ----
+# Self-contained test — does not link interpreter.cc or interpreter_extra.cc.
+# Validates result init, stack balance, null/type checks, heap bounds, and
+# wait duration clamping via local mirrors.
+add_executable(test_interpreter_fixes
+    test_interpreter_fixes.cc
+)
+target_link_libraries(test_interpreter_fixes PRIVATE doctest)
+add_test(NAME test_interpreter_fixes COMMAND test_interpreter_fixes)
+
+# ============================================================
+# Stage 6 Implementation — Sfall Hook Fix Validation Tests
+# F-01, F-27, F-48, F2-06, F-38
+# ============================================================
+
+# ---- Test: sfall fixes (F-01, F-27, F-48, F2-06, F-38) ----
+# Self-contained header-level test — does not link sfall_script_hooks.cc
+# or sfall_opcodes.cc. Validates clamping logic, fseek error checking,
+# VFS sandbox resolution, and FID_TYPE validation via local mirrors.
+# Needs src/ include for combat_defs.h, obj_types.h, sfall_script_hooks.h.
+add_executable(test_sfall_fixes
+    test_sfall_fixes.cc
+)
+target_include_directories(test_sfall_fixes PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_include_directories(test_sfall_fixes PRIVATE ${ZLIB_INCLUDE_DIRS})
+target_link_libraries(test_sfall_fixes PRIVATE doctest ${SDL2_LIBRARIES})
+add_test(NAME test_sfall_fixes COMMAND test_sfall_fixes)
+
+# ---- Test: validation fixes (F-04, F-46, F-23, F2-11, F2-12, F-37) ----
+# Self-contained header-level test — validates sscanf checks, bounds checks,
+# CRC handling, and null guards via local mirrors.
+add_executable(test_validation_fixes
+    test_validation_fixes.cc
+)
+target_link_libraries(test_validation_fixes PRIVATE doctest)
+add_test(NAME test_validation_fixes COMMAND test_validation_fixes)

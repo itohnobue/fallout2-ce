@@ -1931,17 +1931,19 @@ static Object* _ai_danger_source(Object* a1)
         }
     }
 
-    ScriptHookCall hook(HOOK_FINDTARGET, 1, { a1, result });
-    hook.call();
-    if (hook.numReturnValues() > 0) {
-        Object* hookCandidate = hook.getReturnValueAt(0).asObject();
-        if (hookCandidate != nullptr && PID_TYPE(hookCandidate->pid) == OBJ_TYPE_CRITTER) {
-            result = hookCandidate;
-        } else if (hookCandidate != nullptr) {
-            debugPrint("HOOK_FINDTARGET: script returned non-critter object (pid=%d), ignoring override",
-                hookCandidate->pid);
+    if (result != nullptr) {
+        ScriptHookCall hook(HOOK_FINDTARGET, 1, { a1, result });
+        hook.call();
+        if (hook.numReturnValues() > 0) {
+            Object* hookCandidate = hook.getReturnValueAt(0).asObject();
+            if (hookCandidate != nullptr && PID_TYPE(hookCandidate->pid) == OBJ_TYPE_CRITTER) {
+                result = hookCandidate;
+            } else if (hookCandidate != nullptr) {
+                debugPrint("HOOK_FINDTARGET: script returned non-critter object (pid=%d), ignoring override",
+                    hookCandidate->pid);
+            }
+            // nullptr from script = no override (keep engine result, even if nullptr).
         }
-        // nullptr from script = no override (keep engine result, even if nullptr).
     }
 
     return result;

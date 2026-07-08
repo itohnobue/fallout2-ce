@@ -1272,6 +1272,21 @@ void scriptHooks_ComputeDamage(Attack* attack, int numRounds, int baseDmgMult)
 
     hook.call();
 
+    // F-01: Validate and clamp hook return values. Sibling hooks
+    // (HOOK_ITEMDAMAGE, HOOK_TOHIT, HOOK_AFTERHITROLL) all clamp/validate their
+    // return values; HOOK_COMBATDAMAGE was the only hook writing raw script return
+    // values without any bounds checking.
+    constexpr int DAMAGE_FIELDS[] = {0, 1};          // defenderDamage, attackerDamage
+    constexpr int FLAGS_FIELDS[] = {2, 3};           // defenderFlags, attackerFlags
+    constexpr int KNOCKBACK_FIELD = 4;               // defenderKnockback
+    constexpr int COMBAT_DAMAGE_MIN = 0;
+    constexpr int COMBAT_DAMAGE_MAX = 9999;
+    // Mask matching _set_new_results (combat.cc:5192-5199): only these
+    // flags persist into critter->data.critter.combat.results.
+    constexpr int COMBAT_FLAGS_MASK = DAM_KNOCKED_OUT | DAM_KNOCKED_DOWN | DAM_CRIP | DAM_DEAD | DAM_LOSE_TURN;
+    constexpr int COMBAT_KNOCKBACK_MIN = 0;
+    constexpr int COMBAT_KNOCKBACK_MAX = 99;
+
     int* fields[] = {
         &attack->defenderDamage,
         &attack->attackerDamage,
@@ -1282,7 +1297,20 @@ void scriptHooks_ComputeDamage(Attack* attack, int numRounds, int baseDmgMult)
 
     int numRets = hook.numReturnValues();
     for (int i = 0; i < numRets; i++) {
-        *fields[i] = hook.getReturnValueAt(i).asInt();
+        int value = hook.getReturnValueAt(i).asInt();
+        // Clamp damage values.
+        if (i == DAMAGE_FIELDS[0] || i == DAMAGE_FIELDS[1]) {
+            value = std::clamp(value, COMBAT_DAMAGE_MIN, COMBAT_DAMAGE_MAX);
+        }
+        // Mask flag values to valid DAM_* bits.
+        if (i == FLAGS_FIELDS[0] || i == FLAGS_FIELDS[1]) {
+            value &= COMBAT_FLAGS_MASK;
+        }
+        // Clamp knockback value.
+        if (i == KNOCKBACK_FIELD) {
+            value = std::clamp(value, COMBAT_KNOCKBACK_MIN, COMBAT_KNOCKBACK_MAX);
+        }
+        *fields[i] = value;
     }
 }
 
@@ -1327,6 +1355,13 @@ void scriptHooks_BarterPrice(BarterPriceContext* ctx)
 
     hook.call();
 
+    // F-27: Add upper-bound clamping to prevent arbitrarily inflated barter
+    // values. The previous check only rejected negative values, allowing
+    // any non-negative int (including INT_MAX). Matches the DAMAGE_MIN/DAMAGE_MAX
+    // precedent from HOOK_ITEMDAMAGE in the same file.
+    constexpr int BARTER_PRICE_MIN = 0;
+    constexpr int BARTER_PRICE_MAX = 9999999;
+
     int* fields[] = {
         &ctx->value,
         &ctx->offerValue
@@ -1336,7 +1371,7 @@ void scriptHooks_BarterPrice(BarterPriceContext* ctx)
     for (int i = 0; i < numRets; i++) {
         const int valueFromScript = hook.getReturnValueAt(i).asInt();
         if (valueFromScript < 0) continue;
-        *fields[i] = valueFromScript;
+        *fields[i] = std::clamp(valueFromScript, BARTER_PRICE_MIN, BARTER_PRICE_MAX);
     }
 }
 

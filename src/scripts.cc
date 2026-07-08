@@ -2999,6 +2999,10 @@ int scriptSetLocalVar(int sid, int variable, ProgramValue& value)
         return -1;
     }
 
+    if (variable < 0 || variable >= script->localVarsCount) {
+        return -1;
+    }
+
     if (script->localVarsOffset == -1) {
         script->localVarsOffset = mapAllocLocalVars(script->localVarsCount);
     }

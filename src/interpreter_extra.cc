@@ -2048,6 +2048,9 @@ static void opMetarule3(Program* program)
     switch (rule) {
     case METARULE3_CLR_FIXED_TIMED_EVENTS:
         if (1) {
+            if (param1.opcode != VALUE_TYPE_PTR || param1.pointerValue == nullptr) {
+                break;
+            }
             _scrSetQueueTestVals(static_cast<Object*>(param1.pointerValue), param2.integerValue);
             queueClearByEventType(EVENT_TYPE_SCRIPT, _scrQueueRemoveFixed);
         }

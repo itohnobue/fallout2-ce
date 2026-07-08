@@ -634,6 +634,8 @@ static void programMarkHeap(Program* program)
     }
 
     ptr = program->dynamicStrings + 4;
+    int totalLen = *(int*)(program->dynamicStrings);
+    unsigned char* heapEnd = program->dynamicStrings + 4 + totalLen;
     while (*(unsigned short*)ptr != 0x8000) {
         len = *(short*)ptr;
         if (len < 0) {
@@ -658,6 +660,10 @@ static void programMarkHeap(Program* program)
         }
 
         ptr += len + 4;
+        if (ptr >= heapEnd) {
+            debugPrint("programMarkHeap: heap corruption detected, sentinel not found\n");
+            break;
+        }
     }
 }
 
@@ -687,6 +693,8 @@ int programPushString(Program* program, const char* const string)
     if (program->dynamicStrings != nullptr) {
         // TODO: Needs testing, lots of pointer stuff.
         unsigned char* heap = program->dynamicStrings + 4;
+        int totalLen = *(int*)(program->dynamicStrings);
+        unsigned char* heapEnd = program->dynamicStrings + 4 + totalLen;
         while (*(unsigned short*)heap != 0x8000) {
             short blockLength = *(short*)heap;
             if (blockLength >= 0) {
@@ -715,6 +723,10 @@ int programPushString(Program* program, const char* const string)
                 }
             }
             heap += blockLength + 4;
+            if (heap >= heapEnd) {
+                debugPrint("programPushString: heap corruption detected, sentinel not found\n");
+                break;
+            }
         }
     } else {
         program->dynamicStrings = (unsigned char*)internal_malloc_safe(8, __FILE__, __LINE__); // "..\\int\\INTRPRET.C", 631
@@ -882,6 +894,11 @@ static void opWait(Program* program)
         data = 0;
     }
 
+    if (data > 3600000) {
+        debugPrint("\nScript Error: %s: op_wait: excessive wait duration %d ms, clamping to 3600000 ms\n", program->name, data);
+        data = 3600000;
+    }
+
     program->waitStart = getInterpreterTime();
     program->waitEnd = program->waitStart + data;
     program->checkWaitFunc = checkWait;
@@ -995,7 +1012,7 @@ static void opConditionalOperatorNotEqual(Program* program)
     ProgramValue value[2];
     char stringBuffers[2][80];
     char* strings[2];
-    int result;
+    int result = 0;
 
     for (int arg = 0; arg < 2; arg++) {
         value[arg] = programStackPopValue(program);
@@ -1020,7 +1037,8 @@ static void opConditionalOperatorNotEqual(Program* program)
             strings[0] = stringBuffers[0];
             break;
         default:
-            assert(false && "Should be unreachable");
+            strings[0] = stringBuffers[0];
+            programFatalError("Unexpected value[0].opcode=0x%x in %s", value[0].opcode, __func__);
         }
 
         result = strcmp(strings[1], strings[0]) != 0;
@@ -1041,7 +1059,7 @@ static void opConditionalOperatorNotEqual(Program* program)
             result = value[1].floatValue != (float)value[0].integerValue;
             break;
         default:
-            assert(false && "Should be unreachable");
+            programFatalError("Unexpected value[0].opcode=0x%x in %s", value[0].opcode, __func__);
         }
         break;
     case VALUE_TYPE_INT:
@@ -1063,7 +1081,7 @@ static void opConditionalOperatorNotEqual(Program* program)
             result = (uintptr_t)(value[1].integerValue) != (uintptr_t)(value[0].pointerValue);
             break;
         default:
-            assert(false && "Should be unreachable");
+            programFatalError("Unexpected value[0].opcode=0x%x in %s", value[0].opcode, __func__);
         }
         break;
     case VALUE_TYPE_PTR:
@@ -1075,11 +1093,11 @@ static void opConditionalOperatorNotEqual(Program* program)
             result = value[1].pointerValue != value[0].pointerValue;
             break;
         default:
-            assert(false && "Should be unreachable");
+            programFatalError("Unexpected value[0].opcode=0x%x in %s", value[0].opcode, __func__);
         }
         break;
     default:
-        assert(false && "Should be unreachable");
+        programFatalError("Unexpected value[1].opcode=0x%x in %s", value[1].opcode, __func__);
     }
 
     programStackPushInteger(program, result);
@@ -1091,7 +1109,7 @@ static void opConditionalOperatorEqual(Program* program)
     ProgramValue value[2];
     char stringBuffers[2][80];
     char* strings[2];
-    int result;
+    int result = 0;
 
     for (int arg = 0; arg < 2; arg++) {
         value[arg] = programStackPopValue(program);
@@ -1116,7 +1134,8 @@ static void opConditionalOperatorEqual(Program* program)
             strings[0] = stringBuffers[0];
             break;
         default:
-            assert(false && "Should be unreachable");
+            strings[0] = stringBuffers[0];
+            programFatalError("Unexpected value[0].opcode=0x%x in %s", value[0].opcode, __func__);
         }
 
         result = strcmp(strings[1], strings[0]) == 0;
@@ -1137,7 +1156,7 @@ static void opConditionalOperatorEqual(Program* program)
             result = value[1].floatValue == (float)value[0].integerValue;
             break;
         default:
-            assert(false && "Should be unreachable");
+            programFatalError("Unexpected value[0].opcode=0x%x in %s", value[0].opcode, __func__);
         }
         break;
     case VALUE_TYPE_INT:
@@ -1159,7 +1178,7 @@ static void opConditionalOperatorEqual(Program* program)
             result = (uintptr_t)(value[1].integerValue) == (uintptr_t)(value[0].pointerValue);
             break;
         default:
-            assert(false && "Should be unreachable");
+            programFatalError("Unexpected value[0].opcode=0x%x in %s", value[0].opcode, __func__);
         }
         break;
     case VALUE_TYPE_PTR:
@@ -1171,11 +1190,11 @@ static void opConditionalOperatorEqual(Program* program)
             result = value[1].pointerValue == value[0].pointerValue;
             break;
         default:
-            assert(false && "Should be unreachable");
+            programFatalError("Unexpected value[0].opcode=0x%x in %s", value[0].opcode, __func__);
         }
         break;
     default:
-        assert(false && "Should be unreachable");
+        programFatalError("Unexpected value[1].opcode=0x%x in %s", value[1].opcode, __func__);
     }
 
     programStackPushInteger(program, result);
@@ -1187,7 +1206,7 @@ static void opConditionalOperatorLessThanEquals(Program* program)
     ProgramValue value[2];
     char stringBuffers[2][80];
     char* strings[2];
-    int result;
+    int result = 0;
 
     for (int arg = 0; arg < 2; arg++) {
         value[arg] = programStackPopValue(program);
@@ -1212,7 +1231,8 @@ static void opConditionalOperatorLessThanEquals(Program* program)
             strings[0] = stringBuffers[0];
             break;
         default:
-            assert(false && "Should be unreachable");
+            strings[0] = stringBuffers[0];
+            programFatalError("Unexpected value[0].opcode=0x%x in %s", value[0].opcode, __func__);
         }
 
         result = strcmp(strings[1], strings[0]) <= 0;
@@ -1233,7 +1253,7 @@ static void opConditionalOperatorLessThanEquals(Program* program)
             result = value[1].floatValue <= (float)value[0].integerValue;
             break;
         default:
-            assert(false && "Should be unreachable");
+            programFatalError("Unexpected value[0].opcode=0x%x in %s", value[0].opcode, __func__);
         }
         break;
     case VALUE_TYPE_INT:
@@ -1252,7 +1272,7 @@ static void opConditionalOperatorLessThanEquals(Program* program)
             result = value[1].integerValue <= value[0].integerValue;
             break;
         default:
-            assert(false && "Should be unreachable");
+            programFatalError("Unexpected value[0].opcode=0x%x in %s", value[0].opcode, __func__);
         }
         break;
     // Nevada folks tend to use "object <= 0" to test objects for nulls.
@@ -1267,11 +1287,11 @@ static void opConditionalOperatorLessThanEquals(Program* program)
             }
             break;
         default:
-            assert(false && "Should be unreachable");
+            programFatalError("Unexpected value[0].opcode=0x%x in %s", value[0].opcode, __func__);
         }
         break;
     default:
-        assert(false && "Should be unreachable");
+        programFatalError("Unexpected value[1].opcode=0x%x in %s", value[1].opcode, __func__);
     }
 
     programStackPushInteger(program, result);
@@ -1283,7 +1303,7 @@ static void opConditionalOperatorGreaterThanEquals(Program* program)
     ProgramValue value[2];
     char stringBuffers[2][80];
     char* strings[2];
-    int result;
+    int result = 0;
 
     // NOTE: original code does not use loop
     for (int arg = 0; arg < 2; arg++) {
@@ -1309,7 +1329,8 @@ static void opConditionalOperatorGreaterThanEquals(Program* program)
             strings[0] = stringBuffers[0];
             break;
         default:
-            assert(false && "Should be unreachable");
+            strings[0] = stringBuffers[0];
+            programFatalError("Unexpected value[0].opcode=0x%x in %s", value[0].opcode, __func__);
         }
 
         result = strcmp(strings[1], strings[0]) >= 0;
@@ -1330,7 +1351,7 @@ static void opConditionalOperatorGreaterThanEquals(Program* program)
             result = value[1].floatValue >= (float)value[0].integerValue;
             break;
         default:
-            assert(false && "Should be unreachable");
+            programFatalError("Unexpected value[0].opcode=0x%x in %s", value[0].opcode, __func__);
         }
         break;
     case VALUE_TYPE_INT:
@@ -1352,7 +1373,7 @@ static void opConditionalOperatorGreaterThanEquals(Program* program)
             result = (uintptr_t)(value[1].integerValue) >= (uintptr_t)(value[0].pointerValue);
             break;
         default:
-            assert(false && "Should be unreachable");
+            programFatalError("Unexpected value[0].opcode=0x%x in %s", value[0].opcode, __func__);
         }
         break;
     case VALUE_TYPE_PTR:
@@ -1368,11 +1389,11 @@ static void opConditionalOperatorGreaterThanEquals(Program* program)
             result = value[1].pointerValue >= value[0].pointerValue;
             break;
         default:
-            assert(false && "Should be unreachable");
+            programFatalError("Unexpected value[0].opcode=0x%x in %s", value[0].opcode, __func__);
         }
         break;
     default:
-        assert(false && "Should be unreachable");
+        programFatalError("Unexpected value[1].opcode=0x%x in %s", value[1].opcode, __func__);
     }
 
     programStackPushInteger(program, result);
@@ -1384,7 +1405,7 @@ static void opConditionalOperatorLessThan(Program* program)
     ProgramValue value[2];
     char text[2][80];
     char* str_ptr[2];
-    int result;
+    int result = 0;
 
     for (int arg = 0; arg < 2; arg++) {
         value[arg] = programStackPopValue(program);
@@ -1409,7 +1430,8 @@ static void opConditionalOperatorLessThan(Program* program)
             str_ptr[0] = text[0];
             break;
         default:
-            assert(false && "Should be unreachable");
+            str_ptr[0] = text[0];
+            programFatalError("Unexpected value[0].opcode=0x%x in %s", value[0].opcode, __func__);
         }
 
         result = strcmp(str_ptr[1], str_ptr[0]) < 0;
@@ -1430,7 +1452,7 @@ static void opConditionalOperatorLessThan(Program* program)
             result = value[1].floatValue < (float)value[0].integerValue;
             break;
         default:
-            assert(false && "Should be unreachable");
+            programFatalError("Unexpected value[0].opcode=0x%x in %s", value[0].opcode, __func__);
         }
         break;
     case VALUE_TYPE_INT:
@@ -1452,7 +1474,7 @@ static void opConditionalOperatorLessThan(Program* program)
             result = (uintptr_t)(value[1].integerValue) < (uintptr_t)(value[0].pointerValue);
             break;
         default:
-            assert(false && "Should be unreachable");
+            programFatalError("Unexpected value[0].opcode=0x%x in %s", value[0].opcode, __func__);
         }
         break;
     case VALUE_TYPE_PTR:
@@ -1468,11 +1490,11 @@ static void opConditionalOperatorLessThan(Program* program)
             result = value[1].pointerValue < value[0].pointerValue;
             break;
         default:
-            assert(false && "Should be unreachable");
+            programFatalError("Unexpected value[0].opcode=0x%x in %s", value[0].opcode, __func__);
         }
         break;
     default:
-        assert(false && "Should be unreachable");
+        programFatalError("Unexpected value[1].opcode=0x%x in %s", value[1].opcode, __func__);
     }
 
     programStackPushInteger(program, result);
@@ -1484,7 +1506,7 @@ static void opConditionalOperatorGreaterThan(Program* program)
     ProgramValue value[2];
     char stringBuffers[2][80];
     char* strings[2];
-    int result;
+    int result = 0;
 
     for (int arg = 0; arg < 2; arg++) {
         value[arg] = programStackPopValue(program);
@@ -1509,7 +1531,8 @@ static void opConditionalOperatorGreaterThan(Program* program)
             strings[0] = stringBuffers[0];
             break;
         default:
-            assert(false && "Should be unreachable");
+            strings[0] = stringBuffers[0];
+            programFatalError("Unexpected value[0].opcode=0x%x in %s", value[0].opcode, __func__);
         }
 
         result = strcmp(strings[1], strings[0]) > 0;
@@ -1530,7 +1553,7 @@ static void opConditionalOperatorGreaterThan(Program* program)
             result = value[1].floatValue > (float)value[0].integerValue;
             break;
         default:
-            assert(false && "Should be unreachable");
+            programFatalError("Unexpected value[0].opcode=0x%x in %s", value[0].opcode, __func__);
         }
         break;
     case VALUE_TYPE_INT:
@@ -1549,7 +1572,7 @@ static void opConditionalOperatorGreaterThan(Program* program)
             result = value[1].integerValue > value[0].integerValue;
             break;
         default:
-            assert(false && "Should be unreachable");
+            programFatalError("Unexpected value[0].opcode=0x%x in %s", value[0].opcode, __func__);
         }
         break;
     // Sonora folks tend to use "object > 0" to test objects for nulls.
@@ -1564,11 +1587,11 @@ static void opConditionalOperatorGreaterThan(Program* program)
             }
             break;
         default:
-            assert(false && "Should be unreachable");
+            programFatalError("Unexpected value[0].opcode=0x%x in %s", value[0].opcode, __func__);
         }
         break;
     default:
-        assert(false && "Should be unreachable");
+        programFatalError("Unexpected value[1].opcode=0x%x in %s", value[1].opcode, __func__);
     }
 
     programStackPushInteger(program, result);
@@ -1680,6 +1703,10 @@ static void opAdd(Program* program)
             programStackPushString(program, tempString);
 
             internal_free_safe(tempString, __FILE__, __LINE__);
+            break;
+        default:
+            debugPrint("opAdd: VALUE_TYPE_PTR + unexpected type 0x%x, pushing 0\n", value[0].opcode);
+            programStackPushInteger(program, 0);
             break;
         }
     }
@@ -1854,7 +1881,7 @@ static void opModulo(Program* program)
 static void opLogicalOperatorAnd(Program* program)
 {
     ProgramValue value[2];
-    int result;
+    int result = 0;
 
     for (int arg = 0; arg < 2; arg++) {
         value[arg] = programStackPopValue(program);
@@ -1878,7 +1905,7 @@ static void opLogicalOperatorAnd(Program* program)
             result = value[0].pointerValue != nullptr;
             break;
         default:
-            assert(false && "Should be unreachable");
+            programFatalError("Unexpected value[0].opcode=0x%x in %s", value[0].opcode, __func__);
         }
         break;
     case VALUE_TYPE_FLOAT:
@@ -1897,7 +1924,7 @@ static void opLogicalOperatorAnd(Program* program)
             result = (value[1].integerValue & 0x7FFFFFFF) && (value[0].pointerValue != nullptr);
             break;
         default:
-            assert(false && "Should be unreachable");
+            programFatalError("Unexpected value[0].opcode=0x%x in %s", value[0].opcode, __func__);
         }
         break;
     case VALUE_TYPE_INT:
@@ -1916,7 +1943,7 @@ static void opLogicalOperatorAnd(Program* program)
             result = (value[1].integerValue != 0) && (value[0].pointerValue != nullptr);
             break;
         default:
-            assert(false && "Should be unreachable");
+            programFatalError("Unexpected value[0].opcode=0x%x in %s", value[0].opcode, __func__);
         }
         break;
     case VALUE_TYPE_PTR:
@@ -1935,11 +1962,11 @@ static void opLogicalOperatorAnd(Program* program)
             result = (value[1].pointerValue != nullptr) && (value[0].pointerValue != nullptr);
             break;
         default:
-            assert(false && "Should be unreachable");
+            programFatalError("Unexpected value[0].opcode=0x%x in %s", value[0].opcode, __func__);
         }
         break;
     default:
-        assert(false && "Should be unreachable");
+        programFatalError("Unexpected value[1].opcode=0x%x in %s", value[1].opcode, __func__);
     }
 
     programStackPushInteger(program, result);
@@ -1949,7 +1976,7 @@ static void opLogicalOperatorAnd(Program* program)
 static void opLogicalOperatorOr(Program* program)
 {
     ProgramValue value[2];
-    int result;
+    int result = 0;
 
     for (int arg = 0; arg < 2; arg++) {
         value[arg] = programStackPopValue(program);
@@ -1967,7 +1994,7 @@ static void opLogicalOperatorOr(Program* program)
             result = 1;
             break;
         default:
-            assert(false && "Should be unreachable");
+            programFatalError("Unexpected value[0].opcode=0x%x in %s", value[0].opcode, __func__);
         }
         break;
     case VALUE_TYPE_FLOAT:
@@ -1986,7 +2013,7 @@ static void opLogicalOperatorOr(Program* program)
             result = (value[1].integerValue & 0x7FFFFFFF) || (value[0].pointerValue != nullptr);
             break;
         default:
-            assert(false && "Should be unreachable");
+            programFatalError("Unexpected value[0].opcode=0x%x in %s", value[0].opcode, __func__);
         }
         break;
     case VALUE_TYPE_INT:
@@ -2005,7 +2032,7 @@ static void opLogicalOperatorOr(Program* program)
             result = (value[1].integerValue != 0) || (value[0].pointerValue != nullptr);
             break;
         default:
-            assert(false && "Should be unreachable");
+            programFatalError("Unexpected value[0].opcode=0x%x in %s", value[0].opcode, __func__);
         }
         break;
     case VALUE_TYPE_PTR:
@@ -2024,11 +2051,11 @@ static void opLogicalOperatorOr(Program* program)
             result = (value[1].pointerValue != nullptr) || (value[0].pointerValue != nullptr);
             break;
         default:
-            assert(false && "Should be unreachable");
+            programFatalError("Unexpected value[0].opcode=0x%x in %s", value[0].opcode, __func__);
         }
         break;
     default:
-        assert(false && "Should be unreachable");
+        programFatalError("Unexpected value[1].opcode=0x%x in %s", value[1].opcode, __func__);
     }
 
     programStackPushInteger(program, result);
@@ -3370,6 +3397,8 @@ static void interpreterPrintStats()
                 debugPrint("Program %s\n", program->name);
 
                 unsigned char* heap = program->dynamicStrings + sizeof(int);
+                int totalLen = *(int*)(program->dynamicStrings);
+                unsigned char* heapEnd = program->dynamicStrings + sizeof(int) + totalLen;
                 while (*(unsigned short*)heap != 0x8000) {
                     int size = *(short*)heap;
                     if (size >= 0) {
@@ -3382,6 +3411,10 @@ static void interpreterPrintStats()
                     // TODO: Not sure about total, probably calculated wrong, check.
                     heap += sizeof(short) + sizeof(short) + size;
                     total += sizeof(short) + sizeof(short) + size;
+                    if (heap >= heapEnd) {
+                        debugPrint("interpreterPrintStats: heap corruption detected, sentinel not found\n");
+                        break;
+                    }
                 }
 
                 debugPrint("Total length of heap %d, stored length %d\n", total, *(int*)(program->dynamicStrings));

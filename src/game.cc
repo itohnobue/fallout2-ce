@@ -1131,6 +1131,7 @@ int globalVarsRead(const char* path, const char* section, int* variablesListLeng
 
         char* equals = strchr(string, '=');
         if (equals != nullptr) {
+            (*variablesListPtr)[*variablesListLengthPtr - 1] = 0;
             sscanf(equals + 1, "%d", *variablesListPtr + *variablesListLengthPtr - 1);
         } else {
             (*variablesListPtr)[*variablesListLengthPtr - 1] = 0;
