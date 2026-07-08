@@ -2062,7 +2062,16 @@ static void opMetarule3(Program* program)
         result.integerValue = killsGetByType(param1.integerValue);
         break;
     case METARULE3_MARK_MAP_ENTRANCE:
-        result.integerValue = wmMapMarkMapEntranceState(param1.integerValue, param2.integerValue, param3.integerValue);
+        // F-21: RPU's 2-arg form mark_map_entrance_state(map, state) passes -1
+        // as param3 (see define.h: mark_map_entrance_state(MAPIDX,STATE) expands
+        // to metarule3(104, MAPIDX, STATE, -1)). Detect the sentinel value: -1
+        // means 2-arg form (param2 = state, elevation defaults to 0). Otherwise
+        // param2 = elevation and param3 = state (3-arg form).
+        if (param3.integerValue == -1) {
+            result.integerValue = wmMapMarkMapEntranceState(param1.integerValue, 0, param2.integerValue);
+        } else {
+            result.integerValue = wmMapMarkMapEntranceState(param1.integerValue, param2.integerValue, param3.integerValue);
+        }
         break;
     case METARULE3_WM_SUBTILE_STATE:
         if (1) {
@@ -2213,6 +2222,12 @@ static void opMetarule3(Program* program)
         // party members follow the player's attack orders — they will
         // automatically target whatever the player is attacking.
         // mode=1 enables, mode=0 disables.
+        //
+        // F-22: NOTE — gPartyCooperativeCombat is stored but cooperative
+        // combat integration in the AI/combat system is not yet implemented.
+        // The variable is written by metarule3(999) but has zero consumers.
+        // When cooperative combat is implemented, wire this flag into the
+        // combat target-selection logic (combat_ai.cc / party_member.cc).
         gPartyCooperativeCombat = (param1.integerValue != 0);
         break;
     default:
@@ -3427,7 +3442,9 @@ static void opMetarule(Program* program)
         result = 0;
         break;
     case METARULE_PARTY_COUNT:
-        result = _getPartyMemberCount();
+        // F-25: Pass the filter flag from the metarule argument.
+        // filter 0 = all members, 1 = exclude robots, 2 = exclude dogs.
+        result = _getPartyMemberCount(param.integerValue);
         break;
     case METARULE_AREA_KNOWN:
         result = wmAreaVisitedState(param.integerValue);

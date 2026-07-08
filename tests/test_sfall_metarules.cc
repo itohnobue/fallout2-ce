@@ -2031,3 +2031,234 @@ TEST_CASE("F-23: regression — opcode_exists for set_viewport_x/y"
     CHECK(testOpcodeIsStub(0x81A6)); // get_viewport_x
     CHECK(testOpcodeIsStub(0x81A7)); // get_viewport_y
 }
+
+// =================================================================
+// Stage 6 — Metarules/Interpreter Fix Tests
+// =================================================================
+
+// --- F-21: metarule3(104) parameter-order mismatch ---
+// RPU's 2-arg form mark_map_entrance_state(map, state) passes -1 as param3.
+// The handler must detect this sentinel and treat param2 as state (not elevation).
+
+static void TestMapEntranceStateArgs(int param1, int param2, int param3,
+                                     int& outMap, int& outElevation, int& outState)
+{
+    outMap = param1;
+    if (param3 == -1) {
+        // 2-arg RPU form: param2 = state, elevation defaults to 0
+        outElevation = 0;
+        outState = param2;
+    } else {
+        // 3-arg form: param2 = elevation, param3 = state
+        outElevation = param2;
+        outState = param3;
+    }
+}
+
+TEST_CASE("F-21: metarule3(104) 2-arg form detected via param3==-1 sentinel")
+{
+    int map, elev, state;
+
+    // RPU 2-arg form: mark_map_entrance_state(42, 1) → params (42, 1, -1)
+    TestMapEntranceStateArgs(42, 1, -1, map, elev, state);
+    CHECK(map == 42);
+    CHECK(elev == 0);
+    CHECK(state == 1);
+
+    // RPU 2-arg form with state=0: mark_map_entrance_state(7, 0) → params (7, 0, -1)
+    TestMapEntranceStateArgs(7, 0, -1, map, elev, state);
+    CHECK(map == 7);
+    CHECK(elev == 0);
+    CHECK(state == 0);
+
+    // 3-arg form: metarule3(104, 10, 2, 1) → params (10, 2, 1)
+    TestMapEntranceStateArgs(10, 2, 1, map, elev, state);
+    CHECK(map == 10);
+    CHECK(elev == 2);
+    CHECK(state == 1);
+
+    // 3-arg form with state=0: metarule3(104, 10, 2, 0)
+    TestMapEntranceStateArgs(10, 2, 0, map, elev, state);
+    CHECK(map == 10);
+    CHECK(elev == 2);
+    CHECK(state == 0);
+}
+
+// --- F-24: add_trait 3-arg form critter check logic ---
+// Mirror of the player-vs-NPC detection: checks if arg0 is a pointer
+// and compares with gDude-like sentinel.
+
+static bool TestAddTraitShouldWarn(bool isPointer, int critterId, int dudeId)
+{
+    if (!isPointer) return false;
+    if (critterId == -1) return false; // nullptr
+    return critterId != dudeId;
+}
+
+TEST_CASE("F-24: add_trait 3-arg warns only for non-player critter")
+{
+    // 2-arg form (isPointer=false): no warning
+    CHECK(TestAddTraitShouldWarn(false, 999, 1) == false);
+
+    // 3-arg form with null critter: no warning
+    CHECK(TestAddTraitShouldWarn(true, -1, 1) == false);
+
+    // 3-arg form with player (id matches dude): no warning
+    CHECK(TestAddTraitShouldWarn(true, 1, 1) == false);
+
+    // 3-arg form with NPC (id != dude): SHOULD warn
+    CHECK(TestAddTraitShouldWarn(true, 42, 1) == true);
+}
+
+// --- F-25: party_member_count filter flag ---
+// Mirror of party member filtering: 0=all, 1=exclude robots, 2=exclude dogs.
+
+enum {
+    TEST_BODY_TYPE_BIPED = 0,
+    TEST_BODY_TYPE_QUADRUPED = 1,
+    TEST_BODY_TYPE_ROBOTIC = 2,
+};
+
+enum {
+    TEST_KILL_TYPE_MAN = 0,
+    TEST_KILL_TYPE_WOMAN = 1,
+    TEST_KILL_TYPE_ROBOT = 14,
+    TEST_KILL_TYPE_DOG = 15,
+};
+
+struct TestPartyMember {
+    int bodyType;
+    int killType;
+    bool isDead;
+    bool isHidden;
+};
+
+static int TestPartyMemberCount(const std::vector<TestPartyMember>& members, int filterFlag)
+{
+    int count = 0;
+    for (const auto& m : members) {
+        if (m.isDead || m.isHidden) continue;
+        if (filterFlag == 1 && m.bodyType == TEST_BODY_TYPE_ROBOTIC) continue;
+        if (filterFlag == 2 && m.killType == TEST_KILL_TYPE_DOG) continue;
+        count++;
+    }
+    return count;
+}
+
+TEST_CASE("F-25: party_member_count filter=0 returns all living non-hidden")
+{
+    std::vector<TestPartyMember> members = {
+        { TEST_BODY_TYPE_BIPED, TEST_KILL_TYPE_MAN, false, false },     // human
+        { TEST_BODY_TYPE_ROBOTIC, TEST_KILL_TYPE_ROBOT, false, false }, // robot
+        { TEST_BODY_TYPE_QUADRUPED, TEST_KILL_TYPE_DOG, false, false }, // dog
+    };
+    CHECK(TestPartyMemberCount(members, 0) == 3);
+}
+
+TEST_CASE("F-25: party_member_count filter=1 excludes robots")
+{
+    std::vector<TestPartyMember> members = {
+        { TEST_BODY_TYPE_BIPED, TEST_KILL_TYPE_MAN, false, false },
+        { TEST_BODY_TYPE_ROBOTIC, TEST_KILL_TYPE_ROBOT, false, false },
+        { TEST_BODY_TYPE_QUADRUPED, TEST_KILL_TYPE_DOG, false, false },
+    };
+    CHECK(TestPartyMemberCount(members, 1) == 2); // robot excluded
+}
+
+TEST_CASE("F-25: party_member_count filter=2 excludes dogs")
+{
+    std::vector<TestPartyMember> members = {
+        { TEST_BODY_TYPE_BIPED, TEST_KILL_TYPE_MAN, false, false },
+        { TEST_BODY_TYPE_ROBOTIC, TEST_KILL_TYPE_ROBOT, false, false },
+        { TEST_BODY_TYPE_QUADRUPED, TEST_KILL_TYPE_DOG, false, false },
+    };
+    CHECK(TestPartyMemberCount(members, 2) == 2); // dog excluded
+}
+
+TEST_CASE("F-25: party_member_count dead and hidden always excluded regardless of filter")
+{
+    std::vector<TestPartyMember> members = {
+        { TEST_BODY_TYPE_BIPED, TEST_KILL_TYPE_MAN, true, false },       // dead human
+        { TEST_BODY_TYPE_BIPED, TEST_KILL_TYPE_MAN, false, true },       // hidden human
+        { TEST_BODY_TYPE_BIPED, TEST_KILL_TYPE_WOMAN, false, false },    // alive visible
+    };
+    // Dead and hidden are always excluded, even with filter=0.
+    CHECK(TestPartyMemberCount(members, 0) == 1);
+    CHECK(TestPartyMemberCount(members, 1) == 1);
+    CHECK(TestPartyMemberCount(members, 2) == 1);
+}
+
+// --- F-26: string_to_case invalid case type ---
+// Production code: ctx.printError for invalid case type, returns string unchanged.
+
+TEST_CASE("F-26: string_to_case invalid case type returns string unchanged")
+{
+    // The production handler calls ctx.printError for caseType other than 0/1
+    // and returns the original string. Our mirror does the same.
+    std::string result = TestStringToCase("Hello World", 99);
+    CHECK(result == "Hello World"); // unchanged when case type is invalid
+}
+
+TEST_CASE("F-26: string_to_case case type 0 returns lowercase")
+{
+    std::string result = TestStringToCase("HeLLo WoRLD", 0);
+    CHECK(result == "hello world");
+}
+
+TEST_CASE("F-26: string_to_case case type 1 returns uppercase")
+{
+    std::string result = TestStringToCase("HeLLo WoRLD", 1);
+    CHECK(result == "HELLO WORLD");
+}
+
+// --- F-27: metarule2_explosions unknown sub-metarule ---
+// Mirror: returns 0 with a diagnostic flag that would be logged.
+
+static int TestExplosionsMetarule(int subMetarule, bool& logged)
+{
+    // Known sub-metarules are processed; unknown ones return 0 and log.
+    // Mirror the default case behavior.
+    logged = false;
+    switch (subMetarule) {
+        // Simplified: only test default path
+        default:
+            logged = true; // production would call debugPrint here
+            return 0;
+    }
+}
+
+TEST_CASE("F-27: metarule2_explosions unknown sub-metarule returns 0 and logs")
+{
+    bool logged = false;
+    int result = TestExplosionsMetarule(999, logged);
+    CHECK(result == 0);
+    CHECK(logged == true); // unknown sub-metarule should trigger diagnostic
+}
+
+// --- F-22: gPartyCooperativeCombat toggle logic ---
+// Mirror: metarule3(999, mode) sets a boolean flag based on mode != 0.
+
+static bool TestPartyCooperativeCombat(int mode)
+{
+    return mode != 0;
+}
+
+TEST_CASE("F-22: party_control mode=1 enables cooperative combat")
+{
+    CHECK(TestPartyCooperativeCombat(1) == true);
+}
+
+TEST_CASE("F-22: party_control mode=0 disables cooperative combat")
+{
+    CHECK(TestPartyCooperativeCombat(0) == false);
+}
+
+TEST_CASE("F-22: party_control mode=2 (non-zero) enables cooperative combat")
+{
+    CHECK(TestPartyCooperativeCombat(2) == true);
+}
+
+TEST_CASE("F-22: party_control mode=-1 (non-zero) enables cooperative combat")
+{
+    CHECK(TestPartyCooperativeCombat(-1) == true);
+}

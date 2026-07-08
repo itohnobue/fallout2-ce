@@ -981,6 +981,44 @@ int _getPartyMemberCount()
     return count;
 }
 
+// F-25: sfall-compatible party_member_count(filterFlag) with filtering.
+// filterFlag values: 0 = all, 1 = exclude robots, 2 = exclude dogs.
+// DONT_LIST_HIDDEN_MEMBERS (RPU constant, value 0) maps to filter 0.
+int _getPartyMemberCount(int filterFlag)
+{
+    int count = 0;
+
+    for (int index = 1; index < gPartyMembersLength; index++) {
+        Object* object = gPartyMembers[index].object;
+
+        if (PID_TYPE(object->pid) != OBJ_TYPE_CRITTER || critterIsDead(object) || (object->flags & OBJECT_HIDDEN) != 0) {
+            continue;
+        }
+
+        // Apply filter based on proto data.
+        if (filterFlag != 0) {
+            Proto* proto;
+            if (protoGetProto(object->pid, &proto) == 0) {
+                int bodyType = proto->critter.data.bodyType;
+                int killType = proto->critter.data.killType;
+
+                // Filter 1: exclude robots (body type ROBOTIC).
+                if (filterFlag == 1 && bodyType == BODY_TYPE_ROBOTIC) {
+                    continue;
+                }
+                // Filter 2: exclude dogs (kill type DOG).
+                if (filterFlag == 2 && killType == KILL_TYPE_DOG) {
+                    continue;
+                }
+            }
+        }
+
+        count++;
+    }
+
+    return count;
+}
+
 // 0x495070 partyMemberNewObjID
 static int _partyMemberNewObjID()
 {

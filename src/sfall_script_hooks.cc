@@ -427,9 +427,18 @@ int ret0 - pass 1 to interrupt the resting, pass 0 to continue the rest if it wa
 */
 bool scriptHooks_RestTimer(unsigned int gameTime, RestEventType eventType, int hours, int minutes)
 {
-    assert(eventType == REST_EVENT_TYPE_CANCEL || eventType == REST_EVENT_TYPE_PROGRESS || eventType == REST_EVENT_TYPE_COMPLETE);
-    assert(hours >= 0);
-    assert(minutes >= 0 && minutes < 60);
+    if (eventType != REST_EVENT_TYPE_CANCEL && eventType != REST_EVENT_TYPE_PROGRESS && eventType != REST_EVENT_TYPE_COMPLETE) {
+        debugPrint("HOOK_RESTTIMER: invalid eventType %d, returning false\n", eventType);
+        return false;
+    }
+    if (hours < 0) {
+        debugPrint("HOOK_RESTTIMER: invalid hours %d, returning false\n", hours);
+        return false;
+    }
+    if (minutes < 0 || minutes >= 60) {
+        debugPrint("HOOK_RESTTIMER: invalid minutes %d, returning false\n", minutes);
+        return false;
+    }
 
     if (scriptHooks[HOOK_RESTTIMER].empty()) {
         return eventType == REST_EVENT_TYPE_CANCEL;
@@ -472,9 +481,18 @@ int     ret1 - The new result: 0/1 - failure, 2/3 - success. Other values use en
 */
 int scriptHooks_ExplosiveTimer(Object* explosive, int delay, int eventType)
 {
-    assert(explosive != nullptr);
-    assert(delay >= 0);
-    assert(eventType == EVENT_TYPE_EXPLOSION || eventType == EVENT_TYPE_EXPLOSION_FAILURE);
+    if (explosive == nullptr) {
+        debugPrint("HOOK_EXPLOSIVETIMER: explosive is null, returning -1\n");
+        return -1;
+    }
+    if (delay < 0) {
+        debugPrint("HOOK_EXPLOSIVETIMER: invalid delay %d, returning -1\n", delay);
+        return -1;
+    }
+    if (eventType != EVENT_TYPE_EXPLOSION && eventType != EVENT_TYPE_EXPLOSION_FAILURE) {
+        debugPrint("HOOK_EXPLOSIVETIMER: invalid eventType %d, returning -1\n", eventType);
+        return -1;
+    }
 
     if (scriptHooks[HOOK_EXPLOSIVETIMER].empty()) {
         return -1;
@@ -655,24 +673,23 @@ void scriptHooks_OnDeath(Object* critter)
 Runs whenever a random encounter occurs (except the Horrigan meeting and scripted encounters), or when the player enters a local map from the world map.
 You can override the map for loading or the encounter.
 
-CE EXTENDED ARG LAYOUT (5 args):
+CE ARGUMENT LAYOUT (5 args):
 int     arg0 - event type: 0 - when a random encounter occurs, 1 - when the player enters from the world map
 int     arg1 - the map ID that the encounter will load
 int     arg2 - 1 when the encounter is a special encounter, 0 otherwise
 int     arg3 - encounter table number, or -1 if not an encounter
 int     arg4 - encounter index in the table, or -1 if not an encounter
 
-SFALL 4.x ORIGINAL LAYOUT (3 args — for reference, NOT used by CE):
-int     arg0 - encounter type (0=random, 1=special, 0x100=forced)
-int     arg1 - the tile number on the world map
-int     arg2 - 1 when the encounter is forced, 0 otherwise
-
-CE extended this hook with a LocalMapEnter event type (arg0=1) and extra
-context (tableId, entryId).  Mod scripts written for the sfall 3-arg layout
-will receive different values in arg0..arg2 than they expect.  If compat with
-sfall-only mods is needed, a shim script could translate the 5-arg CE layout
-back to the 3-arg sfall layout by mapping eventType+isSpecial back to the
-original encounter type encoding.
+CE's first 3 arguments (eventType, mapId, isSpecial) match sfall's 3-argument
+HOOK_ENCOUNTER contract.  Per sfall documentation, the standard layout is:
+  arg0 - event type (0=random encounter, 1=special encounter, 0x100=forced)
+  arg1 - the map ID being entered
+  arg2 - 1 when special/forced, 0 otherwise
+CE preserves this compatibility and extends the hook with 2 additional
+arguments (tableId, entryId) to provide enhanced encounter context that
+is not available in sfall's original 3-argument interface.  Scripts written
+for sfall's 3-argument layout receive the expected values in arg0..arg2;
+scripts can optionally read arg3..arg4 for the extended information.
 
 int     ret0 - overrides the map ID, or pass -1 for event type 0 to cancel the encounter and continue traveling
 int     ret1 - pass 1 to cancel the encounter and load the specified map from the ret0 (only for event type 0)
@@ -1044,6 +1061,11 @@ int     ret0 - The death anim id to override with
 */
 void scriptHooks_DeathAnim(Object* attacker, Object* defender, Object* weapon, int damage, int* anim)
 {
+    if (anim == nullptr) {
+        debugPrint("HOOK_DEATHANIM2: anim pointer is null, cannot override\n");
+        return;
+    }
+
     if (scriptHooks[HOOK_DEATHANIM2].empty()) {
         return;
     }
@@ -1156,7 +1178,11 @@ int scriptHooks_UseSkill(Object* user, Object* target, int skill, int skillBonus
     }
 
     int overrideResult = hook.getReturnValueAt(0).asInt();
-    return overrideResult != -1 ? overrideResult : -1;
+    // F-07: Validate return value — must be -1 (no override) or a valid skill ID
+    if (overrideResult == -1) return -1;
+    if (overrideResult >= 0 && overrideResult < SKILL_COUNT) return overrideResult;
+    debugPrint("HOOK_USESKILL: ignoring invalid return value %d (expected -1 or 0..%d)\n", overrideResult, SKILL_COUNT - 1);
+    return -1;
 }
 
 /*
@@ -1186,7 +1212,14 @@ int scriptHooks_UseItem(Object* user, Object* objUsed)
     if (hook.numReturnValues() <= 0)
         return -1;
 
-    return hook.getReturnValueAt(0).asInt();
+    int overrideResult = hook.getReturnValueAt(0).asInt();
+    // F-07: Validate return value — valid codes are -1 (engine handler),
+    // 0 (place back), 1 (remove), or 2 (drop).
+    if (overrideResult >= -1 && overrideResult <= 2) {
+        return overrideResult;
+    }
+    debugPrint("HOOK_USEOBJ: ignoring invalid return value %d (expected -1..2)\n", overrideResult);
+    return -1;
 }
 
 /*
@@ -1217,7 +1250,14 @@ int scriptHooks_UseItemOn(Object* user, Object* target, Object* objUsed)
     if (hook.numReturnValues() <= 0)
         return -1;
 
-    return hook.getReturnValueAt(0).asInt();
+    int overrideResult = hook.getReturnValueAt(0).asInt();
+    // F-07: Validate return value — valid codes are -1 (engine handler),
+    // 0 (place back), 1 (remove), or 2 (drop).
+    if (overrideResult >= -1 && overrideResult <= 2) {
+        return overrideResult;
+    }
+    debugPrint("HOOK_USEOBJON: ignoring invalid return value %d (expected -1..2)\n", overrideResult);
+    return -1;
 }
 
 /*
@@ -1401,7 +1441,16 @@ int scriptHooks_AdjustFid(int vanillaFid, int modifiedFid)
     hook.call();
 
     if (hook.numReturnValues() > 0) {
-        return hook.getReturnValueAt(0).asInt();
+        int overrideFid = hook.getReturnValueAt(0).asInt();
+        // F-07: Validate the return FID — must be a critter FID
+        // (OBJ_TYPE_CRITTER type bits) since this hook is for character
+        // FID display in UI (inventory, barter).
+        if (FID_TYPE(overrideFid) == OBJ_TYPE_CRITTER) {
+            return overrideFid;
+        }
+        debugPrint("HOOK_ADJUSTFID: ignoring invalid FID 0x%x (type=%d, expected OBJ_TYPE_CRITTER=%d)\n",
+                   overrideFid, FID_TYPE(overrideFid), OBJ_TYPE_CRITTER);
+        return modifiedFid;
     }
 
     return modifiedFid;
@@ -1631,7 +1680,15 @@ int scriptHooks_SetGlobalVar(int varIndex, int value)
         return value;
     }
 
-    return hook.getReturnValueAt(0).asInt();
+    int overrideValue = hook.getReturnValueAt(0).asInt();
+    // F-07: Log when a script overrides a global var value, for
+    // diagnostics.  Global vars are unbounded in practice, so no
+    // strict clamping is applied, but extreme values are noted.
+    if (overrideValue != value) {
+        debugPrint("HOOK_SETGLOBALVAR: script overriding global[%d] from %d to %d\n",
+                   varIndex, value, overrideValue);
+    }
+    return overrideValue;
 }
 
 /*
@@ -1648,6 +1705,11 @@ int     ret1 - overrides the duration time for the current result
 */
 void scriptHooks_Sneak(int* resultPtr, int* durationPtr, Object* critter)
 {
+    if (resultPtr == nullptr || durationPtr == nullptr) {
+        debugPrint("HOOK_SNEAK: resultPtr or durationPtr is null, cannot override\n");
+        return;
+    }
+
     if (scriptHooks[HOOK_SNEAK].empty()) {
         return;
     }

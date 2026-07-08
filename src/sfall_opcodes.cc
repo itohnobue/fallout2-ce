@@ -21,6 +21,7 @@
 #include "debug.h"
 #include "game.h"
 #include "game_dialog.h"
+#include "game_movie.h"
 #include "input.h"
 #include "interface.h"
 #include "interpreter.h"
@@ -441,6 +442,9 @@ static void op_get_unspent_ap_perk_bonus(Program* program)
 static void op_set_inven_ap_cost(Program* program)
 {
     int cost = programStackPopInteger(program);
+    if (cost < 0 || cost > 100) {
+        programPrintError("set_inven_ap_cost: value %d clamped to range [0, 100]", cost);
+    }
     cost = std::clamp(cost, 0, 100);
     inventorySetInvenApCost(cost);
 }
@@ -2795,9 +2799,9 @@ static void op_div(Program* program)
     // For integer values, compare the raw integerValue.
     if ((divisorValue.isFloat() && divisorValue.asFloat() == 0.0f)
         || divisorValue.integerValue == 0) {
-        debugPrint("Division by zero");
+        programPrintError("Division by zero");
 
-        // TODO: Looks like execution is not halted in Sfall's div, check.
+        // Execution is not halted, matching sfall behavior — push 0 and continue.
         programStackPushInteger(program, 0);
         return;
     }
@@ -3243,13 +3247,16 @@ static constexpr int kMaxSkillPointsPerLevelMod = 10000;
 
 static void op_mod_skill_points_per_level(Program* program)
 {
-    gSkillPointsPerLevelMod = programStackPopInteger(program);
-    if (gSkillPointsPerLevelMod < 0) {
-        gSkillPointsPerLevelMod = 0;
+    int val = programStackPopInteger(program);
+    if (val < 0) {
+        programPrintError("mod_skill_points_per_level: value %d clamped to range [0, %d]", val, kMaxSkillPointsPerLevelMod);
+        val = 0;
     }
-    if (gSkillPointsPerLevelMod > kMaxSkillPointsPerLevelMod) {
-        gSkillPointsPerLevelMod = kMaxSkillPointsPerLevelMod;
+    if (val > kMaxSkillPointsPerLevelMod) {
+        programPrintError("mod_skill_points_per_level: value %d clamped to range [0, %d]", val, kMaxSkillPointsPerLevelMod);
+        val = kMaxSkillPointsPerLevelMod;
     }
+    gSkillPointsPerLevelMod = val;
     sfall_gl_vars_store("SFSkillP", gSkillPointsPerLevelMod);
 }
 
@@ -3437,11 +3444,13 @@ static void op_set_perk_freq(Program* program)
 {
     int value = programStackPopInteger(program);
     if (value < 0) {
+        programPrintError("set_perk_freq: value %d clamped to range [0, 50]", value);
         value = 0;
     }
     // Guard: unreasonably large perk frequency would block all future perk
     // gains. 50 levels is the practical upper bound (max 99 player level / 2).
     if (value > 50) {
+        programPrintError("set_perk_freq: value %d clamped to range [0, 50]", value);
         value = 50;
     }
     gPerkFrequencyOverride = value;
@@ -4170,13 +4179,16 @@ static constexpr int kMaxXpModPercentage = 10000;
 
 static void op_set_xp_mod(Program* program)
 {
-    gXpModPercentage = programStackPopInteger(program);
-    if (gXpModPercentage < 0) {
-        gXpModPercentage = 0;
+    int val = programStackPopInteger(program);
+    if (val < 0) {
+        programPrintError("set_xp_mod: value %d clamped to range [0, %d]", val, kMaxXpModPercentage);
+        val = 0;
     }
-    if (gXpModPercentage > kMaxXpModPercentage) {
-        gXpModPercentage = kMaxXpModPercentage;
+    if (val > kMaxXpModPercentage) {
+        programPrintError("set_xp_mod: value %d clamped to range [0, %d]", val, kMaxXpModPercentage);
+        val = kMaxXpModPercentage;
     }
+    gXpModPercentage = val;
     sfall_gl_vars_store("SFXpMod%", gXpModPercentage);
 }
 
@@ -4475,35 +4487,52 @@ static void op_clear_selectable_perks(Program* program)
 static void op_set_pyromaniac_mod(Program* program)
 {
     int val = programStackPopInteger(program);
-    // Guard against unreasonable values — fire damage modifier clamped to [-100, 100].
-    if (val < -100) val = -100;
-    if (val > 100) val = 100;
+    if (val < -100) {
+        programPrintError("set_pyromaniac_mod: value %d clamped to range [-100, 100]", val);
+        val = -100;
+    }
+    if (val > 100) {
+        programPrintError("set_pyromaniac_mod: value %d clamped to range [-100, 100]", val);
+        val = 100;
+    }
     sfallPyromaniacMod = val;
 }
 
-// apply_heaveho_fix: stubbed — the Heave Ho! perk fix is handled
-// through CE configuration rather than a script opcode.
+// apply_heaveho_fix: no-op stub — the Heave Ho! perk fix is hardcoded
+// in the item code (item.cc:1677-1685) which caps effectiveStrength at
+// PRIMARY_STAT_MAX after applying Heave Ho bonus. This opcode exists
+// only for script compatibility with original sfall mods.
 static void op_apply_heaveho_fix(Program* program)
 {
     (void)program;
-    debugPrint("apply_heaveho_fix: CE handles Heave Ho! via config; opcode is a no-op");
+    debugPrint("apply_heaveho_fix: fix is hardcoded at item.cc:1677-1685; opcode is a no-op");
 }
 
 static void op_set_swiftlearner_mod(Program* program)
 {
     int val = programStackPopInteger(program);
-    // Guard against unreasonable values — XP modifier clamped to [-100, 100].
-    if (val < -100) val = -100;
-    if (val > 100) val = 100;
+    if (val < -100) {
+        programPrintError("set_swiftlearner_mod: value %d clamped to range [-100, 100]", val);
+        val = -100;
+    }
+    if (val > 100) {
+        programPrintError("set_swiftlearner_mod: value %d clamped to range [-100, 100]", val);
+        val = 100;
+    }
     sfallSwiftLearnerMod = val;
 }
 
 static void op_set_hp_per_level_mod(Program* program)
 {
     int val = programStackPopInteger(program);
-    // Guard against unreasonable values — HP/level modifier clamped to [-50, 50].
-    if (val < -50) val = -50;
-    if (val > 50) val = 50;
+    if (val < -50) {
+        programPrintError("set_hp_per_level_mod: value %d clamped to range [-50, 50]", val);
+        val = -50;
+    }
+    if (val > 50) {
+        programPrintError("set_hp_per_level_mod: value %d clamped to range [-50, 50]", val);
+        val = 50;
+    }
     sfallHpPerLevelMod = val;
 }
 
@@ -4572,6 +4601,7 @@ static void op_set_critter_hit_chance_mod(Program* program)
     Object* critter = static_cast<Object*>(programStackPopPointer(program));
 
     if (critter == nullptr) {
+        programPrintError("set_critter_hit_chance_mod: expected critter object");
         return;
     }
 
@@ -4585,11 +4615,15 @@ static void op_set_critter_hit_chance_mod(Program* program)
         return;
     }
 
+    int origMax = max;
     if (max < 1) {
         max = 1;
     }
     if (max > 100) {
         max = 100;
+    }
+    if (max != origMax) {
+        programPrintError("set_critter_hit_chance_mod: max %d clamped to range [1, 100]", origMax);
     }
 
     CritterHitChanceEntry entry;
@@ -4609,11 +4643,15 @@ static void op_set_critter_hit_chance_mod(Program* program)
 static void op_set_hit_chance_max(Program* program)
 {
     int max = programStackPopInteger(program);
+    int origMax = max;
     if (max < 1) {
         max = 1;
     }
     if (max > 100) {
         max = 100;
+    }
+    if (max != origMax) {
+        programPrintError("set_hit_chance_max: value %d clamped to range [1, 100]", origMax);
     }
     sfallHitChanceMax = max;
 }
@@ -4631,11 +4669,15 @@ static void op_set_base_hit_chance_mod(Program* program)
 {
     int mod = programStackPopInteger(program);
     int max = programStackPopInteger(program);
+    int origMax = max;
     if (max < 1) {
         max = 1;
     }
     if (max > 100) {
         max = 100;
+    }
+    if (max != origMax) {
+        programPrintError("set_base_hit_chance_mod: max %d clamped to range [1, 100]", origMax);
     }
     sfallHitChanceMax = max;
     sfallHitChanceMod = mod;
@@ -4694,9 +4736,11 @@ static void op_set_pickpocket_max(Program* program)
 {
     int percentage = programStackPopInteger(program);
     if (percentage < 0) {
+        programPrintError("set_pickpocket_max: value %d clamped to range [0, 100]", percentage);
         percentage = 0;
     }
     if (percentage > 100) {
+        programPrintError("set_pickpocket_max: value %d clamped to range [0, 100]", percentage);
         percentage = 100;
     }
     sfallPickpocketMax = percentage;
@@ -4709,10 +4753,14 @@ static int sfallPerkLevelMod = 0;
 static void op_set_perk_level_mod(Program* program)
 {
     int val = programStackPopInteger(program);
-    // Guard against unreasonable values — perk level modifier (subtracted from
-    // perk frequency) clamped to [-10, 10] to prevent blocking all perk gains.
-    if (val < -10) val = -10;
-    if (val > 10) val = 10;
+    if (val < -10) {
+        programPrintError("set_perk_level_mod: value %d clamped to range [-10, 10]", val);
+        val = -10;
+    }
+    if (val > 10) {
+        programPrintError("set_perk_level_mod: value %d clamped to range [-10, 10]", val);
+        val = 10;
+    }
     sfallPerkLevelMod = val;
 }
 
@@ -6079,8 +6127,14 @@ void sfallOpcodeStateLoad()
 
     // Perk level modifier.
     if (sfall_gl_vars_fetch(kGlVarPerkLvlMod, val)) {
-        if (val < -10) val = -10;
-        if (val > 10) val = 10;
+        if (val < -10) {
+            debugPrint("set_perk_level_mod: saved value %d clamped to range [-10, 10]", val);
+            val = -10;
+        }
+        if (val > 10) {
+            debugPrint("set_perk_level_mod: saved value %d clamped to range [-10, 10]", val);
+            val = 10;
+        }
         sfallPerkLevelMod = val;
     }
 
@@ -6677,6 +6731,7 @@ static void op_set_movie_path(Program* program)
 // Returns 0 (false) — no hardware shader functions available in CE.
 static void op_graphics_funcs_available(Program* program)
 {
+    debugPrint("op_graphics_funcs_available: shaders not supported in CE SDL2 renderer — returning 0");
     programStackPushInteger(program, 0);
 }
 
@@ -6778,6 +6833,7 @@ static void op_set_shader_texture(Program* program)
 // "no shader support" so scripts can fall back to non-shader paths.
 static void op_get_shader_version(Program* program)
 {
+    debugPrint("op_get_shader_version: shaders not supported in CE SDL2 renderer — returning 0");
     programStackPushInteger(program, 0);
 }
 
@@ -6787,6 +6843,7 @@ static void op_get_shader_version(Program* program)
 static void op_set_shader_mode(Program* program)
 {
     int mode = programStackPopInteger(program);
+    debugPrint("op_set_shader_mode(%d): shaders not supported in CE SDL2 renderer — no-op", mode);
     (void)mode;
 }
 
@@ -6796,6 +6853,7 @@ static void op_set_shader_mode(Program* program)
 static void op_stop_game(Program* program)
 {
     (void)program;
+    debugPrint("stop_game: not implemented in CE (SDL2 port)");
 }
 
 // resume_game() — 0x8223
@@ -6804,6 +6862,7 @@ static void op_stop_game(Program* program)
 static void op_resume_game(Program* program)
 {
     (void)program;
+    debugPrint("resume_game: not implemented in CE (SDL2 port)");
 }
 
 // ============================================================
@@ -6815,23 +6874,27 @@ static void op_resume_game(Program* program)
 // ============================================================
 static void op_get_viewport_x(Program* program)
 {
+    debugPrint("get_viewport_x: returns 0 (SDL2 native viewport, not implemented)");
     programStackPushInteger(program, 0);
 }
 
 static void op_get_viewport_y(Program* program)
 {
+    debugPrint("get_viewport_y: returns 0 (SDL2 native viewport, not implemented)");
     programStackPushInteger(program, 0);
 }
 
 static void op_set_viewport_x(Program* program)
 {
     int viewX = programStackPopInteger(program);
+    debugPrint("set_viewport_x: argument discarded (SDL2 native viewport, not implemented)");
     (void)viewX;
 }
 
 static void op_set_viewport_y(Program* program)
 {
     int viewY = programStackPopInteger(program);
+    debugPrint("set_viewport_y: argument discarded (SDL2 native viewport, not implemented)");
     (void)viewY;
 }
 
@@ -6844,19 +6907,30 @@ static void op_set_viewport_y(Program* program)
 static void op_set_palette(Program* program)
 {
     const char* path = programStackPopString(program);
+    debugPrint("set_palette: palette changes not supported in SDL2 hardware rendering (path=\"%s\")",
+        path != nullptr ? path : "(null)");
     (void)path;
 }
 
 // ============================================================
 // mark_movie_played(int id) — 0x8240
-// Marks a movie as played so it won't play again. CE movie tracking
-// is handled internally; this opcode is a safe no-op for script
-// compatibility (RPU/Et Tu movie tracking scripts).
+// Marks a movie as played so it won't play again. CE engine tracks
+// movies via gGameMoviesSeen[] (game_movie.cc:81, persisted on save).
+// However, the array is file-static and there is no public setter;
+// movies are only marked as seen when gameMoviePlay() completes
+// (game_movie.cc:277). Without a public setter API, this opcode
+// cannot directly write to the seen list. If a script needs to
+// pre-mark a movie as played to suppress it, that capability
+// would require adding a gameMovieMarkSeen() public function.
 // ============================================================
 static void op_mark_movie_played(Program* program)
 {
     int movieId = programStackPopInteger(program);
-    (void)movieId;
+    if (movieId < 0 || movieId >= MOVIE_COUNT) {
+        programPrintError("mark_movie_played: movie ID %d out of range [0, %d)", movieId, MOVIE_COUNT);
+        return;
+    }
+    debugPrint("mark_movie_played: movie %d — gGameMoviesSeen is engine-private (game_movie.cc:81); movies are automatically marked as seen when gameMoviePlay() completes (game_movie.cc:277)", movieId);
 }
 
 // ============================================================

@@ -1688,7 +1688,10 @@ void mf_string_to_case(OpcodeContext& ctx)
         std::transform(s.begin(), s.end(), s.begin(),
             [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     } else {
-        debugPrint("string_to_case: invalid case type %d", caseType);
+        // F-26: Use ctx.printError (visible to scripts) instead of debugPrint
+        // (developer console only) so script code receives a diagnostic for
+        // invalid case types.
+        ctx.printError("string_to_case: invalid case type %d", caseType);
     }
     ctx.setReturn(s.c_str());
 }
@@ -2157,6 +2160,9 @@ void mf_explosions_metarule(OpcodeContext& ctx)
         ctx.setReturn(0);
         break;
     default:
+        // F-27: Log unknown sub-metarule to help developers diagnose
+        // mistyped metarule2_explosions calls. Returns 0 safely.
+        debugPrint("%s(): unknown sub-metarule %d", ctx.name(), metarule);
         ctx.setReturn(0);
         break;
     }
@@ -3171,9 +3177,18 @@ void mf_add_trait(OpcodeContext& ctx)
         if (ctx.numArgs() >= 3) {
             rank = ctx.arg(2).asInt();
         }
-        debugPrint("%s(): 3-arg form used (critter, traitType=%d, rank=%d) — "
-            "per-critter storage not yet implemented; trait applied to player scope\n",
-            ctx.name(), traitType, rank);
+        // F-24: When the 3-arg form is used with a critter that is not the
+        // player (gDude), emit a visible warning so script developers know
+        // per-critter trait storage is not implemented. The trait is still
+        // applied to the player scope.
+        if (ctx.arg(0).isPointer()) {
+            Object* critter = ctx.arg(0).asObject();
+            if (critter != nullptr && critter != gDude) {
+                ctx.printError("%s(): add_trait per-critter storage not implemented; "
+                    "trait %d applied to player scope instead of critter %d",
+                    ctx.name(), traitType, critter->id);
+            }
+        }
     } else {
         // 1-arg form: add_trait(traitType) — adds to player with rank 0
         traitType = ctx.arg(0).asInt();

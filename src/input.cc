@@ -47,7 +47,7 @@ static void screenshotBlitter(unsigned char* src, int src_pitch, int a3, int x, 
 static void buildNormalizedQwertyKeys();
 static void _GNW95_process_key(KeyboardData* data);
 static int inputGetHookMouseButton(int sdlButton);
-static void inputHandleMouseClickHook(int sdlButton, int x, int y);
+static void inputHandleMouseClickHook(int sdlButton, bool pressed);
 
 // 0x51E23C GNW95_repeat_rate
 static int gKeyboardKeyRepeatRate = 80;
@@ -125,18 +125,19 @@ static int inputGetHookMouseButton(int sdlButton)
     }
 }
 
-static void inputHandleMouseClickHook(int sdlButton, int x, int y)
+static void inputHandleMouseClickHook(int sdlButton, bool pressed)
 {
     if (!gGameLoaded) return;
 
     int hookButton = inputGetHookMouseButton(sdlButton);
     if (hookButton == -1) return;
 
-    // F-28: sfall 4.x convention — arg0=button, arg1=x, arg2=y.
-    // Previously only passed pressed state + button (2 args); now
-    // forwards e.button.x/.y from the SDL event so scripts can
-    // inspect the click-time position (not just current mouse x/y).
-    ScriptHookCall(HOOK_MOUSECLICK, 0, { hookButton, x, y }).call();
+    // sfall 4.x convention: arg0=pressed state (1=pressed, 0=released),
+    // arg1=button number (0=left, 1=right, ..., 7).
+    // F-04: Fixed arg contract to match sfall's 2-arg layout.
+    // Previously passed (button, x, y) which broke compatibility with
+    // scripts expecting (pressed, button).
+    ScriptHookCall(HOOK_MOUSECLICK, 0, { pressed ? 1 : 0, hookButton }).call();
 }
 
 // 0x4C8A70
@@ -1006,7 +1007,7 @@ void _GNW95_process_message()
         case SDL_MOUSEBUTTONUP:
         case SDL_MOUSEWHEEL:
             if (e.type == SDL_MOUSEBUTTONDOWN || e.type == SDL_MOUSEBUTTONUP) {
-                inputHandleMouseClickHook(e.button.button, e.button.x, e.button.y);
+                inputHandleMouseClickHook(e.button.button, e.type == SDL_MOUSEBUTTONDOWN);
             }
             handleMouseEvent(&e);
             break;
