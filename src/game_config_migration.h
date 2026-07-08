@@ -15,7 +15,7 @@ void contentConfigTryMigrateFromSfall(const char* contentConfigPath);
 // cover the same set of ddraw.ini keys mapped to content_config sections.
 // When adding new migration entries, update this count and add the
 // corresponding entry to BOTH tables to keep them synchronized.
-inline constexpr size_t kSfallMigrationEntryCount = 58;
+inline constexpr size_t kSfallMigrationEntryCount = 59;
 
 } // namespace fallout
 

@@ -519,7 +519,7 @@ TEST_CASE("F-054: kSfallMigrationEntryCount matches production header")
     // The header declares 58 migration entries. Our mirror tests verify
     // 8 entries (the most commonly used ones). The full table of 58 entries
     // exists in game_config_migration.cc and content_config.cc.
-    CHECK(kSfallMigrationEntryCount == 58);
+    CHECK(kSfallMigrationEntryCount == 59);
     CHECK(kSfallMigrationEntryCount > 0);
 }
 

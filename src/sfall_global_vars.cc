@@ -71,6 +71,15 @@ void sfall_gl_vars_exit()
 
 bool sfall_gl_vars_save(File* stream)
 {
+    // ============================================================
+    // IMPORTANT: This save format supports ONLY int and float values.
+    // String state (perk names, descriptions, perkbox title, and any
+    // other string-based opcode state) is NOT persisted to savegames.
+    // The global vars system provides no string storage API.
+    // Mod scripts MUST re-call all string setter opcodes after every
+    // game load to restore their state.
+    // ============================================================
+
     // Write format header: magic number + version for forward compatibility.
     uint32_t magic = kSfallGlobalVarsMagic;
     if (fileWrite(&magic, sizeof(magic), 1, stream) != 1) {
@@ -118,6 +127,14 @@ bool sfall_gl_vars_save(File* stream)
 
 bool sfall_gl_vars_load(File* stream)
 {
+    // ============================================================
+    // IMPORTANT: Only int and float values are restored from savegames.
+    // String state (perk names, descriptions, perkbox title) must be
+    // re-applied by mod scripts via set_perk_name, set_perk_desc,
+    // set_perkbox_title after every game load — this format has no
+    // mechanism to persist string data.
+    // ============================================================
+
     // Clear existing state so that on any load failure the state
     // is empty rather than partially populated (see E-09).
     sfall_gl_vars_state->vars.clear();

@@ -1606,3 +1606,169 @@ TEST_CASE("I2F-037: sfallArraysLoad — nullptr stream returns false")
     CHECK(loadOk == false);
     sfallArraysExit();
 }
+
+// =================================================================
+// F-12 (MEDIUM, FIXED): create_array(0, 2) now creates a map
+// =================================================================
+//
+// Finding F-12: CreateArray used len < 0 for associative arrays, but
+// sfall 4.x uses len <= 0. This meant create_array(0, 2) created a list
+// instead of a map — breaking et tu's create_array_map macro.
+//
+// Fix at sfall_arrays.cc:672: changed `if (len < 0)` to `if (len <= 0)`.
+
+TEST_CASE("F-12: create_array(0, 2) creates associative array (map)")
+{
+    REQUIRE(sfallArraysInit());
+
+    // len=0 with flags=2 (SFALL_ARRAYFLAG_ASSOC in sfall convention)
+    // should now create an associative array, not a list.
+    ArrayId id = CreateArray(0, 2);
+    CHECK(ArrayExists(id));
+
+    // Verify it's associative — GetArrayKey(id, -1) returns 1 for associative
+    ProgramValue pv = GetArrayKey(id, -1, nullptr);
+    CHECK(pv.asInt() == 1); // 1 = associative
+
+    // Length of an empty associative map should be 0
+    CHECK(LenArray(id) == 0);
+
+    // Should support arbitrary key access (not just sequential indices)
+    SetArray(id, ProgramValue(100), ProgramValue(42), false, nullptr);
+    CHECK(LenArray(id) == 1);
+    CHECK(GetArray(id, ProgramValue(100), nullptr).asInt() == 42);
+
+    sfallArraysExit();
+    REQUIRE(sfallArraysInit());
+}
+
+TEST_CASE("F-12: create_array(0, 0) creates associative array (map, no flags)")
+{
+    REQUIRE(sfallArraysInit());
+
+    // len=0 with flags=0 — no flags set, but len <= 0 triggers ASSOC
+    // per sfall 4.x convention. create_array(0) creates a map.
+    ArrayId id = CreateArray(0, 0);
+    CHECK(ArrayExists(id));
+
+    // Verify it's associative — GetArrayKey(id, -1) returns 1 for associative
+    ProgramValue pv = GetArrayKey(id, -1, nullptr);
+    CHECK(pv.asInt() == 1); // 1 = associative
+
+    CHECK(LenArray(id) == 0);
+
+    sfallArraysExit();
+    REQUIRE(sfallArraysInit());
+}
+
+TEST_CASE("F-12: create_array(-1, 0) still creates associative (backward compat)")
+{
+    REQUIRE(sfallArraysInit());
+
+    // Negative len should still create associative arrays (backward compatible)
+    ArrayId id = CreateArray(-1, 0);
+    CHECK(ArrayExists(id));
+
+    ProgramValue pv = GetArrayKey(id, -1, nullptr);
+    CHECK(pv.asInt() == 1); // associative
+
+    CHECK(LenArray(id) == 0);
+
+    sfallArraysExit();
+    REQUIRE(sfallArraysInit());
+}
+
+// =================================================================
+// F-63 (MEDIUM, FIXED): sfallArraysReset clears expression stack
+// =================================================================
+//
+// Finding F-63: sfallArraysReset() cleared arrays, temporaryArrayIds,
+// savedArrays, and nextArrayId, but did NOT clear arrayExpressionStack
+// or expressionArrayId. After a longjmp/expression abort, stale stack
+// entries could route expression writes to incorrect arrays.
+//
+// Fix at sfall_arrays.cc:653-654: added _state->arrayExpressionStack.clear()
+// and _state->expressionArrayId = 0; to sfallArraysReset().
+
+TEST_CASE("F-63: sfallArraysReset clears expression stack state")
+{
+    REQUIRE(sfallArraysInit());
+
+    // Step 1: Create an array — this sets expressionArrayId as a side effect
+    ArrayId baseId = CreateArray(5, 0);
+    CHECK(ArrayExists(baseId));
+
+    // Step 2: Push to expression stack via SetArrayFromExpression
+    // This adds a new expression array context
+    SetArrayFromExpression(ProgramValue(0), ProgramValue(42), nullptr);
+    // expressionArrayId should now be baseId (the first created array)
+
+    // Step 3: Call sfallArraysReset() — the F-63 fix clears the expression stack
+    sfallArraysReset();
+
+    // Step 4: After reset, the array should no longer exist
+    CHECK_FALSE(ArrayExists(baseId));
+
+    // Step 5: Create a new array — should get a fresh ID (ID counter reset)
+    ArrayId newId = CreateArray(3, 0);
+    CHECK(ArrayExists(newId));
+
+    // Step 6: expressionArrayId should NOT have stale reference
+    // After reset, SetArrayFromExpression should target the new array
+    SetArrayFromExpression(ProgramValue(0), ProgramValue(99), nullptr);
+    // The expression should write to the NEW array, not the old (now-freed) one
+    CHECK(GetArray(newId, ProgramValue(0), nullptr).asInt() == 99);
+
+    sfallArraysExit();
+    REQUIRE(sfallArraysInit());
+}
+
+TEST_CASE("F-63: sfallArraysReset — PopExpressionArray is safe after reset")
+{
+    REQUIRE(sfallArraysInit());
+
+    // Create expression context
+    ArrayId id = CreateArray(3, 0);
+    SetArrayFromExpression(ProgramValue(0), ProgramValue(10), nullptr);
+
+    // Reset clears the expression stack
+    sfallArraysReset();
+
+    // PopExpressionArray on an empty stack should be safe (no crash)
+    PopExpressionArray();
+    CHECK(true); // if we reach here, no crash occurred
+
+    sfallArraysExit();
+    REQUIRE(sfallArraysInit());
+}
+
+TEST_CASE("F-63: sfallArraysReset — regression: arrays gone after reset")
+{
+    REQUIRE(sfallArraysInit());
+
+    // Create arrays with expression context
+    ArrayId id1 = CreateArray(3, 0);
+    SetArrayFromExpression(ProgramValue(0), ProgramValue(10), nullptr);
+    ArrayId id2 = CreateArray(2, 0);
+    SetArrayFromExpression(ProgramValue(0), ProgramValue(20), nullptr);
+
+    // Push expression context (nested expression)
+    {
+        // Simulate: SetArrayFromExpression pushes to stack
+        SetArrayFromExpression(ProgramValue(1), ProgramValue(30), nullptr);
+    }
+
+    sfallArraysReset();
+
+    // All arrays should be gone after reset
+    CHECK_FALSE(ArrayExists(id1));
+    CHECK_FALSE(ArrayExists(id2));
+
+    // ID counter should reset — creating a new array gives the starting ID
+    ArrayId newId = CreateArray(1, 0);
+    CHECK(ArrayExists(newId));
+    CHECK(newId == id1); // ID counter was reset, reuses starting ID
+
+    sfallArraysExit();
+    REQUIRE(sfallArraysInit());
+}

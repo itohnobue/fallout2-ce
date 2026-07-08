@@ -539,7 +539,28 @@ static void op_get_sfall_global_int(Program* program)
     }
 
     if (!found) {
-        // Key not found — push sentinel to distinguish from "found with 0".
+        // Fall back to float storage: if a script stores a float via
+        // set_sfall_global_float and reads it back via get_sfall_global_int,
+        // return the truncated integer value instead of the INT_MIN sentinel.
+        // This mirrors the int→float fallback in op_get_sfall_global_float
+        // and ensures symmetric cross-type read behavior between the two
+        // accessors (both int→float and float→int now work).
+        float floatValue = 0.0f;
+        if ((variable.opcode & VALUE_TYPE_MASK) == VALUE_TYPE_STRING) {
+            const char* key = programGetString(program, variable.opcode, variable.integerValue);
+            if (sfall_gl_vars_fetch_float(key, floatValue)) {
+                programStackPushInteger(program, static_cast<int>(floatValue));
+                return;
+            }
+        } else if (variable.opcode == VALUE_TYPE_INT) {
+            if (sfall_gl_vars_fetch_float(variable.integerValue, floatValue)) {
+                programStackPushInteger(program, static_cast<int>(floatValue));
+                return;
+            }
+        }
+
+        // Key not found in either intVars or floatVars — push sentinel
+        // to distinguish from "found with 0".
         // INT_MIN is chosen because no real script stores INT_MIN as a global
         // variable value; it serves as an unambiguous "not set" indicator.
         // This differs from original sfall 4.x which returns 0 for both
@@ -1553,7 +1574,11 @@ static void op_explosions_metarule(Program* program)
 
     switch (metarule) {
     case EXPL_FORCE_EXPLOSION_PATTERN:
-        if (param1 != 0) {
+        // F-13: Wire param1/param2 as actual explosion rotation parameters.
+        // See sfall_metarules.cc EXPL_MF_FORCE_PATTERN for full explanation.
+        if (param2 != 0) {
+            explosionSetPattern(param1, param2);
+        } else if (param1 != 0) {
             explosionSetPattern(2, 4);
         } else {
             explosionSetPattern(0, 6);
@@ -3314,6 +3339,16 @@ static bool sfallHookHasFireSite(HookType hookId)
     case static_cast<HookType>(45): // HOOK_ADJUSTRADS: requires engine refactor
     case static_cast<HookType>(46): // HOOK_ROLLCHECK: 30+ call sites, lacks context
     case static_cast<HookType>(47): // HOOK_BESTWEAPON: 10+ return points, lifetime issues
+    // F-22 (FIXED): Reserved hooks 54-60 have no fire sites (sfall_script_hooks.h:247-249).
+    // Add them to the exclusion list so registration produces a "has no fire site"
+    // debugPrint instead of silently accepting handlers that will never be called.
+    case static_cast<HookType>(54):
+    case static_cast<HookType>(55):
+    case static_cast<HookType>(56):
+    case static_cast<HookType>(57):
+    case static_cast<HookType>(58):
+    case static_cast<HookType>(59):
+    case static_cast<HookType>(60):
     case static_cast<HookType>(61): // HOOK_BUILDSFXWEAPON: static buffer, lifetime issues
         return false;
     default:
@@ -3367,13 +3402,18 @@ static void op_register_hook_proc(Program* program)
         programPrintError("%s: procedure index %d is out of range [0; %d]", opcodeName, procedureIndex, program->procedureCount());
         return;
     }
-    // Meaning the last script to be registered will be executed first.
-    // There was a special opcode `register_hook_proc_spec` that adds to the end of hook order instead.
-    // In CE we assume that this order shouldn't matter, and giving script a choice like that doesn't solve anything, since several scripts from different mods can use either opcode.
-
-    // Global script order is entirely based off script file name sorting and when user installs scripts from different mods, there's no way to ensure a "proper" order,
-    // without some kind of script-dependency system, which we don't have.
-    // So let's just simply use the direct order.
+    // CE uses reverse iteration (LIFO) for hook dispatch: ScriptHookCall::call()
+    // iterates hooks in reverse order (highest index → lowest index, i.e. last
+    // registered = first executed). register_hook_proc calls push_back() which
+    // adds to the end (highest index) so the most recently registered script
+    // runs first. register_hook_proc_spec calls emplace(begin()) which adds to
+    // the beginning (index 0) so it runs last — effectively an override hook.
+    //
+    // The conscious design rationale: the last handler to register wins (its
+    // return values are what the caller sees), matching sfall's general
+    // convention that specs registered via register_hook_proc_spec serve as
+    // final overrides. See scriptHooksRegister() in sfall_script_hooks.cc and
+    // SFALL_COMPATIBILITY.md for details on ordering semantics.
     if (!scriptHooksRegister(program, static_cast<HookType>(hookId), procedureIndex)) {
         programPrintError("%s(%d, %d): failed", opcodeName, hookId, procedureIndex);
     }
@@ -5744,6 +5784,15 @@ void sfallOpcodesReset()
     sfallAttackerKnockbackType = 0;
     sfallAttackerKnockbackValue = 0.0f;
 
+    // ============================================================
+    // String state (perk names, descriptions, perkbox title) is NOT
+    // persisted to savegames. The sfall global vars system supports
+    // only int/float types — no string storage API exists.
+    // These arrays are cleared here on game reset and are NOT restored
+    // by sfallOpcodeStateLoad(). Mod scripts MUST re-call all string
+    // setter opcodes (set_perk_name, set_perk_desc, set_perkbox_title)
+    // after every game load to restore their state.
+    // ============================================================
     // Free perk name/desc override entries.
     for (int i = 0; i < kMaxPerkNameOverrides; i++) {
         if (sfallPerkNameOverrides[i] != nullptr) {
@@ -6036,14 +6085,9 @@ void sfallOpcodeStateSave()
 
     // Pickpocket modifier opcodes.
     // F-013: sfallCritterPickpocketMax and sfallBasePickpocketMax are
-    // saved/loaded here but are NOT consumed by any pickpocket code path.
-    // The accessor functions sfallGetCritterPickpocketMax() and
-    // sfallGetBasePickpocketMax() exist in the header but skill.cc's
-    // skillDetermineStealResult() only consumes sfallGetPickpocketMax()
-    // (global max from set_pickpocket_max, 0x81A0), not the per-critter
-    // or per-base maxima. To fully wire these, skill.cc must be updated
-    // to consult sfallGetCritterPickpocketMax()/sfallGetBasePickpocketMax()
-    // when computing the steal cap.
+    // saved/loaded here. sfallGetBasePickpocketMax() is now consumed by
+    // skillsPerformStealing()/skillDetermineStealResult() at skill.cc:1142-1162
+    // as part of the F-09 fix (priority: per-critter > base > global > 95 fallback).
     sfall_gl_vars_store(kGlVarPkpMax, sfallPickpocketMax);
     sfall_gl_vars_store(kGlVarCrtPMax, sfallCritterPickpocketMax);
     sfall_gl_vars_store(kGlVarBasePMax, sfallBasePickpocketMax);

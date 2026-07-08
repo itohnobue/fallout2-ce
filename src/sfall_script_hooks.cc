@@ -702,27 +702,30 @@ EncounterHookResult scriptHooks_Encounter(EncounterHookEventType eventType, int*
         return EncounterHookResult::ContinueEncounter;
     }
 
-    const int maxReturnValues = eventType == EncounterHookEventType::RandomEncounter ? 2 : 1;
+    // Random and forced encounters support 2 return values (ret0=map override,
+    // ret1=LoadMapDirectly flag). LocalMapEnter only supports 1 (map override).
+    const int maxReturnValues = (eventType == EncounterHookEventType::LocalMapEnter) ? 1 : 2;
 
-    // F-10 (FIX): Compute sfall-compatible arg0 encoding.
+    // F-10 + F-20 (FIXED): Compute sfall-compatible arg0 encoding.
     // Sfall convention: 0 = normal random encounter, 1 = special encounter,
     // 0x100 (256) = forced encounter. CE-specific: LocalMapEnter uses value 2
     // to avoid collision with sfall's arg0=1 for special encounters.
     // For random encounters, special encounters are flagged with arg0=1.
+    // For ForcedEncounter, the enum value (256) is passed directly to match
+    // sfall's 0x100 convention.
     // For LocalMapEnter, the enum value (2) is passed directly.
-    //
-    // NOTE: Forced encounters (arg0=0x100) are not yet distinguishable from
-    // normal random encounters in this function signature. The worldmap.cc
-    // call site at line 3784 passes RandomEncounter with isSpecial=false for
-    // forced encounters — worldmap.cc must be updated to use a dedicated
-    // EncounterHookEventType::ForcedEncounter value or pass a separate isForced
-    // flag to achieve full sfall compatibility.
     int arg0;
-    if (eventType == EncounterHookEventType::RandomEncounter) {
+    switch (eventType) {
+    case EncounterHookEventType::RandomEncounter:
         arg0 = isSpecial ? 1 : 0;
-    } else {
+        break;
+    case EncounterHookEventType::ForcedEncounter:
+        arg0 = static_cast<int>(EncounterHookEventType::ForcedEncounter); // 256 = 0x100
+        break;
+    default:
         // LocalMapEnter — enum value (2) is already non-conflicting.
         arg0 = static_cast<int>(eventType);
+        break;
     }
 
     ScriptHookCall hook(HOOK_ENCOUNTER, maxReturnValues,

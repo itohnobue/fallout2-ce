@@ -1139,14 +1139,20 @@ SkillStealResult skillsPerformStealing(Object* thief, Object* target, Object* it
 
     int stealChance = stealModifier + skillGetValue(thief, SKILL_STEAL);
 
-    // F-M2/F-003: Use sfall-configurable pickpocket max cap instead of hardcoded 95.
-    // Per-critter override (ppMax) takes precedence when available AND > 0;
-    // otherwise falls back to global sfallGetPickpocketMax(). Final fallback to 95.
+    // F-M2/F-003/F-09: Use sfall-configurable pickpocket max cap instead of hardcoded 95.
+    // Priority: per-critter override (ppMax) > base pickpocket max > global pickpocket max > 95 fallback.
+    // sfallGetBasePickpocketMax() was previously a dead store (setter existed,
+    // accessor declared, serialized, but zero consumers). Now wired into the cap chain.
     int stealCap;
     if (hasPerCritterOverride && ppMax > 0) {
         stealCap = ppMax;
     } else {
-        stealCap = sfallGetPickpocketMax();
+        int baseMax = sfallGetBasePickpocketMax();
+        if (baseMax > 0) {
+            stealCap = baseMax;
+        } else {
+            stealCap = sfallGetPickpocketMax();
+        }
     }
     if (stealCap <= 0) {
         stealCap = 95;

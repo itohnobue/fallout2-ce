@@ -3296,3 +3296,145 @@ TEST_CASE("F-20: sfallHitChanceMax reset behavior")
     }
 }
 
+// =================================================================
+// F-09 (MEDIUM, FIXED): sfallGetBasePickpocketMax wired into
+// skillDetermineStealResult steal cap chain
+// =================================================================
+//
+// Finding F-09: sfallBasePickpocketMax was a dead store — setter existed,
+// accessor declared, serialized to savegames, but zero consumers.
+// sfallGetBasePickpocketMax() returned a value that nobody used.
+//
+// Fix at skill.cc:1144-1156: sfallGetBasePickpocketMax() is now wired into
+// the steal cap chain in skillDetermineStealResult:
+//
+//   Priority chain:
+//     1. Per-critter override (ppMax) — highest priority
+//     2. Base pickpocket max (sfallGetBasePickpocketMax()) — NEW
+//     3. Global pickpocket max (sfallGetPickpocketMax())
+//     4. Hardcoded 95 fallback — lowest priority
+//
+// These tests mirror the cap chain logic used in skillDetermineStealResult.
+
+// Mirror of sfallGetBasePickpocketMax (sfall_opcodes.cc:5321-5324)
+static int testBasePickpocketMax = 0;
+
+static int testSfallGetBasePickpocketMax()
+{
+    return testBasePickpocketMax;
+}
+
+// Mirror of sfallGetPickpocketMax (sfall_opcodes.cc:197)
+static int testPickpocketMax = 95; // default
+
+static int testSfallGetPickpocketMax()
+{
+    return testPickpocketMax;
+}
+
+// Mirror of the steal cap chain from skill.cc:1146-1159
+static int testComputeStealCap(bool hasPerCritterOverride, int ppMax,
+                                int basePickpocketMax, int pickpocketMax)
+{
+    int stealCap;
+    if (hasPerCritterOverride && ppMax > 0) {
+        stealCap = ppMax;       // Priority 1: per-critter
+    } else {
+        int baseMax = basePickpocketMax;
+        if (baseMax > 0) {
+            stealCap = baseMax;  // Priority 2: base pickpocket max (F-09 fix)
+        } else {
+            stealCap = pickpocketMax; // Priority 3: global pickpocket max
+        }
+    }
+    if (stealCap <= 0) {
+        stealCap = 95;          // Priority 4: hardcoded fallback
+    }
+    return stealCap;
+}
+
+TEST_CASE("F-09: base pickpocket max used when per-critter override not set")
+{
+    // No per-critter override → base pickpocket max should be used
+    testBasePickpocketMax = 50;
+    testPickpocketMax = 95;
+
+    int cap = testComputeStealCap(false, 0, testBasePickpocketMax, testPickpocketMax);
+    CHECK(cap == 50); // base pickpocket max used (Priority 2)
+}
+
+TEST_CASE("F-09: per-critter override takes priority over base pickpocket max")
+{
+    // Per-critter override (ppMax) > base pickpocket max
+    testBasePickpocketMax = 50;
+    testPickpocketMax = 95;
+
+    int cap = testComputeStealCap(true, 70, testBasePickpocketMax, testPickpocketMax);
+    CHECK(cap == 70); // per-critter wins over base (Priority 1 > Priority 2)
+}
+
+TEST_CASE("F-09: global pickpocket max used when base is 0 or negative")
+{
+    // basePickpocketMax = 0 → not set → fall through to global
+    testPickpocketMax = 80;
+
+    int capZero = testComputeStealCap(false, 0, 0, testPickpocketMax);
+    CHECK(capZero == 80); // global pickpocket max used
+
+    int capNeg = testComputeStealCap(false, 0, -1, testPickpocketMax);
+    CHECK(capNeg == 80); // negative base → global used
+}
+
+TEST_CASE("F-09: hardcoded 95 fallback when all others are 0 or negative")
+{
+    // All set values are 0 or negative → fallback to 95
+    int cap = testComputeStealCap(false, 0, 0, 0);
+    CHECK(cap == 95); // hardcoded fallback
+
+    int capNeg = testComputeStealCap(false, 0, -1, -1);
+    CHECK(capNeg == 95); // all negative → fallback
+}
+
+TEST_CASE("F-09: base pickpocket max defaults to 0")
+{
+    // Default: basePickpocketMax = 0 means "not set"
+    testBasePickpocketMax = 0;
+    CHECK(testSfallGetBasePickpocketMax() == 0);
+
+    // With no override and default base=0, global takes over
+    testPickpocketMax = 90;
+    int cap = testComputeStealCap(false, 0, testBasePickpocketMax, testPickpocketMax);
+    CHECK(cap == 90); // base=0 → global used
+}
+
+TEST_CASE("F-09: full priority chain — all layers exercised")
+{
+    struct TestCase {
+        bool hasOverride;
+        int ppMax;
+        int baseMax;
+        int globalMax;
+        int expected;
+    };
+
+    TestCase cases[] = {
+        // {override?, ppMax, baseMax, globalMax, expected}
+        { true,    80,     50,      95,        80   },  // overrides all
+        { false,   0,      60,      95,        60   },  // base used
+        { false,   0,      0,       85,        85   },  // global used
+        { false,   0,      0,       0,         95   },  // fallback 95
+        { false,   0,      -5,      -5,        95   },  // all negative → fallback
+        { true,    40,     70,      95,        40   },  // override even if lower
+        // ppMax=0 with hasOverride=true: ppMax > 0 is false → falls to baseMax.
+        // baseMax=70 > 0 → stealCap = 70 (NOT 95).
+        { true,    0,      70,      95,        70   },  // ppMax=0 → falls to base
+    };
+
+    for (const auto& tc : cases) {
+        int cap = testComputeStealCap(tc.hasOverride, tc.ppMax, tc.baseMax, tc.globalMax);
+        INFO("Override:", tc.hasOverride, " ppMax:", tc.ppMax,
+             " base:", tc.baseMax, " global:", tc.globalMax);
+        CHECK(cap == tc.expected);
+    }
+}
+

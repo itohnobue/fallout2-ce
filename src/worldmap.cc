@@ -3781,7 +3781,9 @@ static int wmRndEncounterOccurred(int* mapToLoadPtr)
 
         // SFALL: Fire HOOK_ENCOUNTER so scripts can intercept forced encounters.
         // Pass tableId/entryId = -1 since forced encounters bypass the random table.
-        switch (scriptHooks_Encounter(EncounterHookEventType::RandomEncounter, &wmForceEncounterMapId, false, -1, -1)) {
+        // F-20 (FIXED): Use ForcedEncounter event type (arg0=0x100) so scripts
+        // can distinguish forced encounters from normal random encounters.
+        switch (scriptHooks_Encounter(EncounterHookEventType::ForcedEncounter, &wmForceEncounterMapId, false, -1, -1)) {
         case EncounterHookResult::ContinueTravel: {
             // Hook cancelled the forced encounter — reset state and continue traveling.
             bool didFadeOut = (wmForceEncounterFlags & ENCOUNTER_FLAG_FADEOUT) != 0;

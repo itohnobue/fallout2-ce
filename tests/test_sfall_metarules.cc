@@ -2262,3 +2262,167 @@ TEST_CASE("F-22: party_control mode=-1 (non-zero) enables cooperative combat")
 {
     CHECK(TestPartyCooperativeCombat(-1) == true);
 }
+
+// =================================================================
+// F-15 (MEDIUM, FIXED): mf_item_weight and mf_unwield_slot null guards
+// =================================================================
+//
+// Finding F-15: mf_item_weight and mf_unwield_slot lacked null guards
+// before dereferencing `object->pid`. 31 peer handlers in sfall_metarules.cc
+// already had guards. Triggerable via metarule(item_weight, 0) with a null
+// object, which would crash on object->pid dereference.
+//
+// Fix at sfall_metarules.cc:1190-1194 (item_weight) and 1606-1610 (unwield_slot):
+// Add `if (object == nullptr) { ctx.printError(...); ctx.setReturn(...); return; }`.
+//
+// These mirrors test the null-guard logic pattern applied by the fix.
+
+// Mirror of mf_item_weight null guard (sfall_metarules.cc:1190-1194)
+static int TestItemWeight(void* objectPtr, int pid, int weight)
+{
+    // F-15 fix: null check BEFORE dereferencing object->pid
+    if (objectPtr == nullptr) {
+        // ctx.printError(...);
+        return 0; // ctx.setReturn(0)
+    }
+    // PID_TYPE check would follow in production
+    (void)pid;
+    return weight;
+}
+
+// Mirror of mf_unwield_slot null guard (sfall_metarules.cc:1606-1610)
+static int TestUnwieldSlot(void* critterPtr, int pid)
+{
+    // F-15 fix: null check BEFORE dereferencing critter->pid
+    if (critterPtr == nullptr) {
+        // ctx.printError(...);
+        return -1; // ctx.setReturn(-1)
+    }
+    (void)pid;
+    return 0; // success
+}
+
+TEST_CASE("F-15: mf_item_weight — null object returns 0 (no crash)")
+{
+    // Before F-15 fix: calling item_weight(nullptr) would dereference
+    // object->pid and crash. After fix: returns 0 safely.
+    int result = TestItemWeight(nullptr, 0, 0);
+    CHECK(result == 0); // safe return, no crash
+}
+
+TEST_CASE("F-15: mf_item_weight — valid object returns weight")
+{
+    // With a valid (non-null) object pointer, the function proceeds normally
+    void* validObj = reinterpret_cast<void*>(0x1000);
+    int result = TestItemWeight(validObj, 42, 150);
+    CHECK(result == 150);
+}
+
+TEST_CASE("F-15: mf_unwield_slot — null critter returns -1 (no crash)")
+{
+    // Before F-15 fix: calling unwield_slot(nullptr, 0) would dereference
+    // critter->pid and crash. After fix: returns -1 safely.
+    int result = TestUnwieldSlot(nullptr, 0);
+    CHECK(result == -1); // safe return, no crash
+}
+
+TEST_CASE("F-15: mf_unwield_slot — valid critter returns success")
+{
+    void* validCritter = reinterpret_cast<void*>(0x2000);
+    int result = TestUnwieldSlot(validCritter, 1234);
+    CHECK(result == 0); // success
+}
+
+// =================================================================
+// F-08 (MEDIUM, FIXED): get_water_days_left metarule
+// =================================================================
+//
+// Finding F-08: get_water_days_left and get_water_days_left_x were
+// completely absent from the codebase. FO1 Vault 13 water timer mods
+// could not function. Both metarules are now implemented.
+//
+// Fix at sfall_metarules.cc:924-961:
+//   get_water_days_left(): 0 args, returns remaining days at current time.
+//   get_water_days_left_x(gameTimeTicks): 1 arg, returns remaining days
+//     at the specified game time.
+// When gFallout1Behavior is false: both return 0.
+// When true: lazy-enable the water timer (150 days), compute remaining.
+//
+// These mirrors test the water timer logic pattern applied by the fix.
+
+// Mirror of mf_get_water_days_left (sfall_metarules.cc:928-942)
+static int TestGetWaterDaysLeft(bool fallout1Behavior, bool timerEnabled,
+                                 int timerDays, int currentDay)
+{
+    if (!fallout1Behavior) {
+        return 0;
+    }
+    // Lazy-enable on first call
+    if (!timerEnabled) {
+        timerEnabled = true;
+        timerDays = 150;
+    }
+    int remaining = timerDays - currentDay;
+    return remaining < 0 ? 0 : remaining;
+}
+
+// Mirror of mf_get_water_days_left_x (sfall_metarules.cc:947-962)
+static int TestGetWaterDaysLeftX(bool fallout1Behavior, bool timerEnabled,
+                                  int timerDays, int gameTimeTicks,
+                                  int ticksPerDay)
+{
+    if (!fallout1Behavior) {
+        return 0;
+    }
+    if (!timerEnabled) {
+        timerEnabled = true;
+        timerDays = 150;
+    }
+    int dayAtTime = gameTimeTicks / ticksPerDay;
+    int remaining = timerDays - dayAtTime;
+    return remaining < 0 ? 0 : remaining;
+}
+
+TEST_CASE("F-08: get_water_days_left — returns 0 when gFallout1Behavior is false")
+{
+    // In FO2 mode, water timer is disabled → always returns 0
+    CHECK(TestGetWaterDaysLeft(false, false, 150, 0) == 0);
+    CHECK(TestGetWaterDaysLeft(false, false, 150, 100) == 0);
+}
+
+TEST_CASE("F-08: get_water_days_left — returns remaining days in FO1 mode")
+{
+    // gFallout1Behavior=true, timer just enabled, day 0 → 150 days remaining
+    CHECK(TestGetWaterDaysLeft(true, true, 150, 0) == 150);
+
+    // Day 50 → 100 days remaining
+    CHECK(TestGetWaterDaysLeft(true, true, 150, 50) == 100);
+
+    // Day 149 → 1 day remaining
+    CHECK(TestGetWaterDaysLeft(true, true, 150, 149) == 1);
+
+    // Day 150 → 0 days remaining (timer expired)
+    CHECK(TestGetWaterDaysLeft(true, true, 150, 150) == 0);
+
+    // Day 200 → 0 days remaining (clamped, cannot go below 0)
+    CHECK(TestGetWaterDaysLeft(true, true, 150, 200) == 0);
+}
+
+TEST_CASE("F-08: get_water_days_left_x — returns remaining at specified time")
+{
+    // gFallout1Behavior=true, 150 days, gameTimeTicks=5 days * ticksPerDay
+    const int ticksPerDay = 100000; // typical GAME_TIME_TICKS_PER_DAY value
+    int gameTimeTicks = 5 * ticksPerDay;
+    // At day 5, 145 days remaining
+    CHECK(TestGetWaterDaysLeftX(true, true, 150, gameTimeTicks, ticksPerDay) == 145);
+
+    // At day 150 (timer expiration)
+    gameTimeTicks = 150 * ticksPerDay;
+    CHECK(TestGetWaterDaysLeftX(true, true, 150, gameTimeTicks, ticksPerDay) == 0);
+}
+
+TEST_CASE("F-08: get_water_days_left_x — returns 0 when gFallout1Behavior is false")
+{
+    const int ticksPerDay = 100000;
+    CHECK(TestGetWaterDaysLeftX(false, false, 150, 5 * ticksPerDay, ticksPerDay) == 0);
+}

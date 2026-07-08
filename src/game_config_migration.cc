@@ -183,6 +183,11 @@ namespace {
         { kSfallMisc, "FemaleDefaultModel", CONTENT_CONFIG_START_SECTION, "model_female_default", "hfjmps" },
         { kSfallMisc, "PipBoyAvailableAtGameStart", CONTENT_CONFIG_START_SECTION, "pipboy", "0" },
         { kSfallMisc, "Fallout1Behavior", CONTENT_CONFIG_START_SECTION, "fallout1_behavior", "0" },
+        // F-04: UseFileSystemOverride migration — eliminates first-launch RPU friction.
+        // The feature itself is intentionally unwired in CE (VFS handles it),
+        // but the migration entry prevents RPU scripts from incorrectly detecting
+        // a missing config (they check != 1, and absence returns 0/false).
+        { kSfallMisc, "UseFileSystemOverride", CONTENT_CONFIG_START_SECTION, "use_filesystem_override", "0" },
         // [karma]
         { kSfallMisc, "KarmaFRMs", CONTENT_CONFIG_KARMA_SECTION, "frms" },
         { kSfallMisc, "KarmaPoints", CONTENT_CONFIG_KARMA_SECTION, "points" },

@@ -78,6 +78,9 @@ static void mf_get_outline(OpcodeContext& ctx);
 static void mf_get_sfall_arg_at(OpcodeContext& ctx);
 static void mf_get_text_width(OpcodeContext& ctx);
 static void mf_get_window_attribute(OpcodeContext& ctx);
+// F-08: FO1 water chip timer metarules.
+static void mf_get_water_days_left(OpcodeContext& ctx);
+static void mf_get_water_days_left_x(OpcodeContext& ctx);
 static void mf_hide_window(OpcodeContext& ctx);
 static void mf_interface_art_draw(OpcodeContext& ctx);
 static void mf_intface_redraw(OpcodeContext& ctx);
@@ -281,6 +284,16 @@ static std::map<int, ExplosiveProperties> gExplosiveOverrides;
 // Struct definition in sfall_metarules.h.
 static SpraySettings gSpraySettings;
 
+// F-08: FO1 Vault 13 water chip timer state.
+// When gFallout1Behavior is true and scripts enable the water timer,
+// this stores the initial water chip deadline (150 days). The timer
+// counts down from game start — get_water_days_left returns remaining
+// days. gSfallWaterTimerDays defaults to 150 (FO1 standard).
+// 0 = disabled/no timer (FO2 mode).
+extern bool gFallout1Behavior;
+static bool gSfallWaterTimerEnabled = false;
+static int gSfallWaterTimerDays = 150;
+
 // Maximum number of pending timer events allowed.
 #define MAX_TIMER_EVENTS 256
 
@@ -375,6 +388,11 @@ const MetaruleInfo kMetarules[] = {
     { "get_town_title", mf_get_town_title, 1, 1, 0, { ARG_INT } },
     { "get_unjam_locks_time", mf_get_unjam_locks_time, 0, 0 },
     { "get_window_attribute", mf_get_window_attribute, 1, 2, -1, { ARG_INT, ARG_INT } },
+    // F-08: FO1 Vault 13 water chip timer. Returns remaining water days.
+    // get_water_days_left: 0 args, returns remaining days at current game time.
+    // get_water_days_left_x: 1 arg (gameTime ticks), returns remaining days at given time.
+    { "get_water_days_left", mf_get_water_days_left, 0, 0 },
+    { "get_water_days_left_x", mf_get_water_days_left_x, 1, 1, 0, { ARG_INT } },
     { "has_fake_perk_npc", mf_has_fake_perk_npc, 2, 2, 0, { ARG_OBJECT, ARG_STRING } },
     { "has_fake_trait_npc", mf_has_fake_trait_npc, 2, 2, 0, { ARG_OBJECT, ARG_STRING } },
     { "get_fake_perk_npc", mf_get_fake_perk_npc, 2, 2, 0, { ARG_OBJECT, ARG_STRING } },
@@ -903,6 +921,46 @@ void mf_get_window_attribute(OpcodeContext& ctx)
     }
 }
 
+// F-08: get_water_days_left() — returns remaining Vault 13 water chip timer days.
+// Only active when gFallout1Behavior is true (FO1/et tu mode). The water timer
+// counts down from 150 days at game start. Scripts can use this to check if the
+// vault is about to run out of water.
+void mf_get_water_days_left(OpcodeContext& ctx)
+{
+    if (!gFallout1Behavior) {
+        ctx.setReturn(0);
+        return;
+    }
+    // Lazy-enable on first call — default to 150 days from game start.
+    if (!gSfallWaterTimerEnabled) {
+        gSfallWaterTimerEnabled = true;
+        gSfallWaterTimerDays = 150;
+    }
+    int currentDay = static_cast<int>(gameTimeGetTime() / GAME_TIME_TICKS_PER_DAY);
+    int remaining = gSfallWaterTimerDays - currentDay;
+    ctx.setReturn(remaining < 0 ? 0 : remaining);
+}
+
+// F-08: get_water_days_left_x(gameTimeTicks) — returns remaining water days
+// at the specified game time. Used by scripts to predict water timer state
+// at a future point in time (e.g., after resting for N hours).
+void mf_get_water_days_left_x(OpcodeContext& ctx)
+{
+    if (!gFallout1Behavior) {
+        ctx.setReturn(0);
+        return;
+    }
+    // Lazy-enable on first call.
+    if (!gSfallWaterTimerEnabled) {
+        gSfallWaterTimerEnabled = true;
+        gSfallWaterTimerDays = 150;
+    }
+    int gameTimeTicks = ctx.numArgs() > 0 ? ctx.arg(0).asInt() : 0;
+    int dayAtTime = gameTimeTicks / GAME_TIME_TICKS_PER_DAY;
+    int remaining = gSfallWaterTimerDays - dayAtTime;
+    ctx.setReturn(remaining < 0 ? 0 : remaining);
+}
+
 static bool loadSfallArtImage(OpcodeContext& ctx, int artArg, int frame, int direction, FrmImage& image, int& fid)
 {
     if (ctx.arg(artArg).isInt() && ctx.arg(artArg).asInt() == -1) {
@@ -1129,6 +1187,11 @@ void mf_inventory_redraw(OpcodeContext& ctx)
 void mf_item_weight(OpcodeContext& ctx)
 {
     Object* object = ctx.arg(0).asObject();
+    if (object == nullptr) {
+        ctx.printError("%s() - null object argument.", ctx.name());
+        ctx.setReturn(0);
+        return;
+    }
     if (PID_TYPE(object->pid) != OBJ_TYPE_ITEM) {
         ctx.printError("%s() - expected item object.", ctx.name());
         ctx.setReturn(0);
@@ -1540,6 +1603,11 @@ void mf_tile_refresh_display(OpcodeContext& ctx)
 void mf_unwield_slot(OpcodeContext& ctx)
 {
     Object* critter = ctx.arg(0).asObject();
+    if (critter == nullptr) {
+        ctx.printError("%s() - null critter argument.", ctx.name());
+        ctx.setReturn(-1);
+        return;
+    }
     int slot = ctx.arg(1).asInt();
 
     if (slot < static_cast<int>(InvenSlot::Armor) || slot > static_cast<int>(InvenSlot::LeftHand)) {
@@ -2126,7 +2194,13 @@ void mf_explosions_metarule(OpcodeContext& ctx)
 
     switch (metarule) {
     case EXPL_MF_FORCE_PATTERN:
-        if (param1 != 0) {
+        // F-13: Wire param1/param2 as actual explosion rotation parameters.
+        // param1 = start rotation, param2 = end rotation.
+        // When param2 is 0 (legacy single-param call), preserve backward compat:
+        // param1 != 0 → (2,4), param1 == 0 → (0,6) — matching sfall 4.x defaults.
+        if (param2 != 0) {
+            explosionSetPattern(param1, param2);
+        } else if (param1 != 0) {
             explosionSetPattern(2, 4);
         } else {
             explosionSetPattern(0, 6);
@@ -3229,7 +3303,7 @@ void mf_remove_trait(OpcodeContext& ctx)
 
 // set_spray_settings(int flags, int pid, int radius, int count): configures
 // burst fire spray pattern parameters. Stored for script-level tracking;
-// TODO: integrate with combat burst system (src/combat.cc:burstSpread).
+// Consumer: combat burst system (src/combat.cc _compute_spray).
 void mf_set_spray_settings(OpcodeContext& ctx)
 {
     gSpraySettings.flags = ctx.arg(0).asInt();
@@ -3525,6 +3599,9 @@ void sfall_metarules_reset()
     gMapEnterElevation = -1;
     gUnjamLocksTimeHours = -1;
     gSpraySettings = {};
+    // F-08: Reset water timer — disabled by default, re-enabled when FO1 mode activates.
+    gSfallWaterTimerEnabled = false;
+    gSfallWaterTimerDays = 150;
     gPendingTimerEvents.clear();
     gNextTimerId = 1;
     gDrugDataOverrides.clear();
@@ -4184,6 +4261,28 @@ int sfallGetMapEnterElevation()
 const char* sfallGetScriptNameOverride()
 {
     return gScriptNameOverride.empty() ? nullptr : gScriptNameOverride.c_str();
+}
+
+// F-11: NPC fake perk/trait/selectable-perk accessors.
+// Returns pointer to the NPC fake entries map for the given critter CID,
+// or nullptr if no entries exist. The returned pointer references the
+// static map and remains valid until the next modification.
+const std::unordered_map<std::string, FakePerkNpcEntry>* sfallGetFakePerksNpc(int cid)
+{
+    auto it = gFakePerksNpc.find(cid);
+    return (it != gFakePerksNpc.end()) ? &it->second : nullptr;
+}
+
+const std::unordered_map<std::string, FakePerkNpcEntry>* sfallGetFakeTraitsNpc(int cid)
+{
+    auto it = gFakeTraitsNpc.find(cid);
+    return (it != gFakeTraitsNpc.end()) ? &it->second : nullptr;
+}
+
+const std::unordered_map<std::string, FakePerkNpcEntry>* sfallGetFakeSelectablePerksNpc(int cid)
+{
+    auto it = gFakeSelectablePerksNpc.find(cid);
+    return (it != gFakeSelectablePerksNpc.end()) ? &it->second : nullptr;
 }
 
 } // namespace fallout

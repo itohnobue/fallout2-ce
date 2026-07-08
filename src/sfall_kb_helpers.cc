@@ -658,14 +658,20 @@ int sfall_kb_handle_key_pressed(int sdlScanCode, bool pressed, SDL_Keycode keysy
     if (!gGameLoaded) return SDL_SCANCODE_UNKNOWN;
 
     SDL_Scancode scanCode = static_cast<SDL_Scancode>(sdlScanCode);
-    // F-03: sfall convention — arg0 = DIK keyCode, arg1 = pressed state, arg2 = SDL keysym.
+    // F-03 (FIXED): HOOK_KEYPRESS argument order per sfall convention:
+    //   arg0 = pressed state (1=pressed, 0=released)
+    //   arg1 = DIK keyCode
+    //   arg2 = SDL_Keycode keysym
+    // Et tu's TMA handler checks arg0 for pressed/not-pressed and arg1 for
+    // DIK_ESCAPE; the old order (dikCode, pressed) caused every key to
+    // spuriously match DIK_ESCAPE because arg0 was the key code.
     // NOTE (F-016): arg2 is an SDL_Keycode value (not a VK_ or DIK_ code).
     // SDL_Keycode values diverge from VK_ constants (e.g. SDLK_F=102 vs VK_F=70,
     // only '0' aligns at 48). Scripts comparing arg2 against VK_ constants will
-    // silently mismatch. Use DIK_ codes (via arg0) or SDL_Keycode constants per
+    // silently mismatch. Use DIK_ codes (via arg1) or SDL_Keycode constants per
     // SDL_keycode.h for cross-platform key identification.
     int dikCode = get_key_from_scancode(scanCode);
-    ScriptHookCall hook(HOOK_KEYPRESS, 1, { dikCode, pressed ? 1 : 0, static_cast<int>(keysym) });
+    ScriptHookCall hook(HOOK_KEYPRESS, 1, { pressed ? 1 : 0, dikCode, static_cast<int>(keysym) });
     hook.call();
 
     if (hook.numReturnValues() <= 0) {

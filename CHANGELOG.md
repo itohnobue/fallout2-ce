@@ -79,9 +79,9 @@ CE reports **sfall 4.5.1** to scripts (`src/sfall_opcodes.cc:73-79`). Version bu
 **Engine Behavior:**
 - Game reset re-initializes SpeedMulti from `ddraw.ini` (matching sfall behavior)
 - `game_loaded` returns false for non-global scripts (sfall 4.4.5 behavioral fix)
-- Safe no-ops for incompatible opcodes: DMA access (partial), `set_palette`, `block_combat`, `stop/resume_game`, `get/set_viewport_x/y`
+- Safe no-ops for incompatible opcodes: DMA access (partial), `set_palette`, `stop/resume_game`, `get/set_viewport_x/y`
 - 256-entry DIK→SDL scancode mapping table covering all standard keyboard keys
-- VK (Virtual Key) codes with `0x80000000` flag explicitly rejected (not supported)
+- VK (Virtual Key) codes fully supported via `kVkToSdl[256]` table at `sfall_kb_helpers.cc:284-563`
 
 ### Production Audits & Bug Fixes (7 audit passes)
 

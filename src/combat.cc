@@ -3896,7 +3896,12 @@ static int _compute_spray(Attack* attack, int accuracy, int* roundsHitMainTarget
     // per-weapon filtering (pid), and behavioral flags (flags).
     const SpraySettings* spraySettings = sfallGetSpraySettings();
     bool useSpraySettings = spraySettings != nullptr && spraySettings->active;
-    if (useSpraySettings && spraySettings->pid != -1) {
+    // F-10: Wire spray settings flags into PID filter gating.
+    // flags & 1: bypass PID filter — apply spray settings globally to all weapons.
+    // flags & 2: suppress radius override — use engine default spread (0).
+    // When flags=0 (default), behavior is unchanged (PID filter applied + radius used).
+    int sprayFlags = useSpraySettings ? spraySettings->flags : 0;
+    if (useSpraySettings && spraySettings->pid != -1 && (sprayFlags & 1) == 0) {
         useSpraySettings = (spraySettings->pid == attack->weapon->pid);
     }
     int sprayCount = ammoQuantity;
@@ -3905,7 +3910,10 @@ static int _compute_spray(Attack* attack, int accuracy, int* roundsHitMainTarget
         if (spraySettings->count > 0) {
             sprayCount = spraySettings->count;
         }
-        sprayRadius = spraySettings->radius;
+        // flags & 2: suppress radius override, keep sprayRadius at 0 (engine default).
+        if ((sprayFlags & 2) == 0) {
+            sprayRadius = spraySettings->radius;
+        }
     }
 
     // F-E4: Clamp sprayCount to available ammunition to prevent phantom
@@ -5261,7 +5269,13 @@ static void _damage_object(Object* target, int damage, bool animated, int hitUni
             }
         }
 
-        scriptHooks_OnDeath(target);
+        // F-68 (FIXED): HOOK_ONDEATH fire removed — the single canonical fire
+        // site is in critterKill() at critter.cc:917, which fires for ALL death
+        // paths (combat, environmental, script kill, poison, radiation).
+        // The old fire here was a duplicate: critterAdjustHitPoints (line 5227)
+        // calls critterKill when HP ≤ 0, which already fired the hook before
+        // returning. Having both fire sites caused every combat death to fire
+        // HOOK_ONDEATH twice, doubling mutations for state-modifying scripts.
 
         if (target->sid != -1) {
             scriptRemove(target->sid);

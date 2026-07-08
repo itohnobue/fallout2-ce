@@ -420,6 +420,10 @@ enum class EncounterHookEventType {
     // 0x100=forced). Using 2 ensures CE's LocalMapEnter does not collide with
     // sfall's arg0=1 for special encounters.
     LocalMapEnter = 2,
+    // F-20 (FIX): Forced encounters use arg0=0x100 (256) per sfall convention.
+    // Previously forced encounters were indistinguishable from normal random
+    // encounters because both passed RandomEncounter with isSpecial=false.
+    ForcedEncounter = 256,
 };
 
 enum class EncounterHookResult {

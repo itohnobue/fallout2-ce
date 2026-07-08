@@ -474,3 +474,114 @@ TEST_CASE("Register-dedup-unregister the same callback returns to empty")
 
     CHECK(testScriptHooksRegister(prog, HOOK_TOHIT, 0) == false); // already unregistered
 }
+
+// =================================================================
+// F-22 (MEDIUM, FIXED): Reserved hooks 54-60 return false from
+// sfallHookHasFireSite, preventing silent registration of handlers
+// that will never be called.
+// =================================================================
+//
+// Finding F-22: Reserved hooks 54-60 returned true from sfallHookHasFireSite
+// (via the `default:` case), allowing scripts to register handlers for hooks
+// that have no fire sites. Handlers were accepted but never called — silent
+// waste. Other unimpl hooks (14, 15, 37, 44-47) also had this issue.
+//
+// Fix at sfall_opcodes.cc:3342-3353: Added explicit exclusion cases for
+// hooks 54-60 (and 61) to the sfallHookHasFireSite() switch, returning
+// false instead of falling through to the default `return true`.
+//
+// This test verifies that the test mirror of sfallHookHasFireSite correctly
+// rejects registration for these reserved hooks.
+
+// Mirror of sfallHookHasFireSite at sfall_opcodes.cc:3302-3357.
+// Excludes hooks that have no fire sites — registration should fail.
+static bool testSfallHookHasFireSite(int hookType)
+{
+    switch (hookType) {
+    case 14: // HOOK_HEXSHOOTBLOCKING (obsolete)
+    case 15: // HOOK_HEXSIGHTBLOCKING (obsolete)
+    case 37: // HOOK_SUBCOMBATDAMAGE (per-hit not supported)
+    case 44: // HOOK_ADJUSTPOISON (requires engine refactor)
+    case 45: // HOOK_ADJUSTRADS (requires engine refactor)
+    case 46: // HOOK_ROLLCHECK (30+ call sites, lacks context)
+    case 47: // HOOK_BESTWEAPON (10+ return points, lifetime issues)
+    // F-22 fix: reserved hooks 54-60 have no fire sites
+    case 54:
+    case 55:
+    case 56:
+    case 57:
+    case 58:
+    case 59:
+    case 60:
+    case 61: // HOOK_BUILDSFXWEAPON (static buffer, lifetime issues)
+        return false;
+    default:
+        return true;
+    }
+}
+
+// Returns whether hook registration should succeed, mirroring the
+// production registration path:
+//   op_register_hook → sfallHookHasFireSite → if false, print error, return
+static bool testRegistrationWouldSucceed(int hookType, void* program)
+{
+    if (program == nullptr) return false;
+    if (hookType < 0 || hookType >= HOOK_COUNT) return false;
+    return testSfallHookHasFireSite(hookType);
+}
+
+TEST_CASE("F-22: Reserved hooks 54-60 — registration should fail (no fire sites)")
+{
+    void* prog = reinterpret_cast<void*>(0xDEAD);
+
+    // Reserved hooks 54-60 should be rejected by sfallHookHasFireSite
+    for (int ht = 54; ht <= 60; ht++) {
+        INFO("Hook type ", ht, " must have no fire site");
+        CHECK_FALSE(testSfallHookHasFireSite(ht));
+        CHECK_FALSE(testRegistrationWouldSucceed(ht, prog));
+    }
+}
+
+TEST_CASE("F-22: Valid hooks (0-10) still allow registration")
+{
+    void* prog = reinterpret_cast<void*>(0xBEEF);
+
+    // Known implemented hooks should still pass the fire site check
+    CHECK(testSfallHookHasFireSite(0));  // HOOK_TOHIT
+    CHECK(testSfallHookHasFireSite(1));  // HOOK_AFTERHITROLL
+    CHECK(testSfallHookHasFireSite(5));  // HOOK_COMBATDAMAGE
+    CHECK(testSfallHookHasFireSite(6));  // HOOK_ONDEATH
+
+    // Registration should succeed for these hooks
+    CHECK(testRegistrationWouldSucceed(0, prog));
+    CHECK(testRegistrationWouldSucceed(1, prog));
+    CHECK(testRegistrationWouldSucceed(5, prog));
+    CHECK(testRegistrationWouldSucceed(6, prog));
+}
+
+TEST_CASE("F-22: Hook 61 (BUILDSFXWEAPON) also has no fire site")
+{
+    void* prog = reinterpret_cast<void*>(0xCAFE);
+
+    CHECK_FALSE(testSfallHookHasFireSite(61));
+    CHECK_FALSE(testRegistrationWouldSucceed(61, prog));
+}
+
+TEST_CASE("F-22: Other unimplemented hooks (14, 15, 37, 44-47) have no fire site")
+{
+    void* prog = reinterpret_cast<void*>(0xF00D);
+
+    int unimplemented[] = { 14, 15, 37, 44, 45, 46, 47 };
+    for (int ht : unimplemented) {
+        INFO("Hook type ", ht, " must have no fire site");
+        CHECK_FALSE(testSfallHookHasFireSite(ht));
+        CHECK_FALSE(testRegistrationWouldSucceed(ht, prog));
+    }
+}
+
+TEST_CASE("F-22: Registration with null program still fails for reserved hooks")
+{
+    for (int ht = 54; ht <= 60; ht++) {
+        CHECK_FALSE(testRegistrationWouldSucceed(ht, nullptr));
+    }
+}

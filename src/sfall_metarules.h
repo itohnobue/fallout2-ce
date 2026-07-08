@@ -6,6 +6,7 @@
 
 #include <map>
 #include <string>
+#include <unordered_map>
 
 namespace fallout {
 
@@ -134,6 +135,16 @@ bool sfallGetExplosiveOverrideDelay(int pid, int* outDelay);
 // talking_head_mood metarule. -1 = no override (use engine default).
 // Consumer: game_dialog.cc _gdSetupFidget() for FO1 mood animation selection.
 int sfallGetTalkingHeadMood();
+
+// F-11: NPC fake perk/trait/selectable-perk accessors.
+// These expose the file-static gFakePerksNpc, gFakeTraitsNpc, and
+// gFakeSelectablePerksNpc maps for use by character_editor.cc when
+// displaying NPC character sheets. Return nullptr if no entries exist
+// for the given critter CID. The returned pointer is valid until the
+// next call that modifies the corresponding map.
+const std::unordered_map<std::string, FakePerkNpcEntry>* sfallGetFakePerksNpc(int cid);
+const std::unordered_map<std::string, FakePerkNpcEntry>* sfallGetFakeTraitsNpc(int cid);
+const std::unordered_map<std::string, FakePerkNpcEntry>* sfallGetFakeSelectablePerksNpc(int cid);
 
 } // namespace fallout
 

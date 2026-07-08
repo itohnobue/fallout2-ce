@@ -637,3 +637,109 @@ TEST_CASE("F-08: regression — without per-handler reset, stale values persist"
     // numRetVals was 3 before the call (the simulated return values)
     CHECK(numRetValsBeforeCall == 3);
 }
+
+// =================================================================
+// F-03 (HIGH, FIXED): HOOK_KEYPRESS argument order
+// =================================================================
+//
+// Finding F-03: HOOK_KEYPRESS arg order was (dikCode, pressed) in CE
+// but the sfall convention is (pressed, dikCode). This caused Et tu's
+// TMA handler to detect DIK_ESCAPE spuriously on every key press
+// because arg0 (which was the key code) was being checked as a boolean.
+//
+// The fix at sfall_kb_helpers.cc:674 swaps the order:
+//   { pressed ? 1 : 0, dikCode, static_cast<int>(keysym) }
+//
+// These tests verify that the HOOK_KEYPRESS ScriptHookCall is constructed
+// with the correct argument order: arg0 = pressed state, arg1 = dikCode.
+
+TEST_CASE("F-03: HOOK_KEYPRESS arg order — pressed is arg0, dikCode is arg1")
+{
+    resetTestHooksArray();
+    resetHookInvocations();
+
+    void* prog = reinterpret_cast<void*>(0xAA);
+    registerTestHook(prog, HOOK_KEYPRESS, 10);
+
+    // Simulate a key press: pressed=true, dikCode=DIK_ESCAPE (1), keysym=0
+    // This matches the F-03 fix at sfall_kb_helpers.cc:674:
+    //   ScriptHookCall hook(HOOK_KEYPRESS, 1,
+    //       { pressed ? 1 : 0, dikCode, static_cast<int>(keysym) });
+    TestScriptHookCall hook(HOOK_KEYPRESS, 1,
+        { TestProgramValue{1}, TestProgramValue{1}, TestProgramValue{0} });
+
+    hook.call();
+
+    CHECK(gHookInvocations.size() == 1);
+    CHECK(gHookInvocations[0].program == prog);
+    CHECK(gHookInvocations[0].procedureIndex == 10);
+
+    // Verify arg order: arg0 = pressed (1 for key down), arg1 = dikCode (1 = DIK_ESCAPE)
+    // arg2 = keysym (SDL_Keycode, 0 in this simulation)
+    CHECK(hook.numArgs == 3);
+    CHECK(hook.args[0].value == 1);  // arg0 is pressed flag (key press)
+    CHECK(hook.args[1].value == 1);  // arg1 is dikCode (DIK_ESCAPE = 1)
+    CHECK(hook.args[2].value == 0);  // arg2 is keysym
+}
+
+TEST_CASE("F-03: HOOK_KEYPRESS arg order — key release has pressed=0")
+{
+    resetTestHooksArray();
+    resetHookInvocations();
+
+    void* prog = reinterpret_cast<void*>(0xBB);
+    registerTestHook(prog, HOOK_KEYPRESS, 20);
+
+    // Simulate a key release: pressed=false, dikCode=57 (DIK_SPACE), keysym=0
+    TestScriptHookCall hook(HOOK_KEYPRESS, 1,
+        { TestProgramValue{0}, TestProgramValue{57}, TestProgramValue{0} });
+
+    hook.call();
+
+    CHECK(gHookInvocations.size() == 1);
+    // arg0 = 0 (released), not a DIK code
+    // arg1 = 57 (DIK_SPACE)
+    CHECK(hook.numArgs == 3);
+    CHECK(hook.args[0].value == 0);   // arg0 is pressed flag (key release = 0)
+    CHECK(hook.args[1].value == 57);  // arg1 is dikCode (DIK_SPACE = 57)
+    CHECK(hook.args[2].value == 0);   // arg2 is keysym
+}
+
+TEST_CASE("F-03: HOOK_KEYPRESS arg order — regression: arg0 is NOT dikCode")
+{
+    // The old (broken) order was {dikCode, pressed, ...} meaning arg0
+    // was the dikCode. With the fix, arg0 must be the pressed state
+    // (0 or 1). This test verifies that arg0 is a boolean (0 or 1),
+    // not a key code (which would be in range [1, 255] for DIK codes).
+    resetTestHooksArray();
+    resetHookInvocations();
+
+    void* prog = reinterpret_cast<void*>(0xCC);
+    registerTestHook(prog, HOOK_KEYPRESS, 30);
+
+    // Simulate pressing DIK_ESCAPE (dikCode=1).
+    // Old broken order: arg0=1 (dikCode), arg1=1 (pressed) → both 1,
+    // indistinguishable. New correct order: arg0=1 (pressed), arg1=1
+    // (dikCode). A script checking arg0 for truthiness gets the right
+    // answer regardless, but the MEANING is different.
+    //
+    // For non-1 dikCodes, the bug was critical. Simulate pressing
+    // DIK_RETURN (dikCode=28):
+    //   Old broken: arg0=28, arg1=1 → script checks arg0, sees 28
+    //     which is truthy → "key is pressed" — correct by coincidence,
+    //     but arg0 does not mean "pressed".
+    //   New correct: arg0=1, arg1=28 → script checks arg0, sees 1
+    //     → "key is pressed" — correct AND arg0 means "pressed".
+    TestScriptHookCall hook(HOOK_KEYPRESS, 1,
+        { TestProgramValue{1}, TestProgramValue{28}, TestProgramValue{0} });
+
+    hook.call();
+
+    CHECK(gHookInvocations.size() == 1);
+    // With the fix, arg0 is pressed state, not dikCode
+    CHECK(hook.numArgs == 3);
+    CHECK(hook.args[0].value == 1);   // arg0 is pressed flag (key press), NOT dikCode
+    CHECK(hook.args[1].value == 28);  // arg1 is dikCode (DIK_RETURN = 28)
+    CHECK(hook.args[2].value == 0);   // arg2 is keysym
+    CHECK(hook.args[0].value != 28);  // regression: arg0 must NOT be dikCode (would be 28 in old order)
+}

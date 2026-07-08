@@ -1857,3 +1857,121 @@ TEST_CASE("F2-T4: process_simple — proc not ready clamps count to repeat (sfal
     CHECK(scripts[0].executionCount == 0);
     CHECK(scripts[0].count == 3); // clamped to repeat, not reset to 0
 }
+
+// =================================================================
+// F-27 (MEDIUM, FIXED): get_sfall_global_int float→int fallback
+// =================================================================
+//
+// Finding F-27: op_get_sfall_global_int searched intVars only and
+// returned INT_MIN for float-stored globals. op_get_sfall_global_float
+// already fell back to intVars but the reverse was missing — mechanical
+// asymmetry. A script that stored a value via set_sfall_global_float and
+// read it back via get_sfall_global_int would get INT_MIN instead of
+// the truncated integer.
+//
+// Fix at sfall_opcodes.cc:541-560: added floatVars fallback that returns
+// static_cast<int>(floatValue) when the int lookup fails.
+//
+// These tests verify the cross-type read behavior using the sfall_gl_vars
+// functions from test_sources, which production code calls.
+
+TEST_CASE("F-27: float→int fallback — float stored, int fetched via fallback")
+{
+    // Simulate the production fix at sfall_opcodes.cc:548-559:
+    //   float floatValue = 0.0f;
+    //   if (sfall_gl_vars_fetch_float(key, floatValue)) {
+    //       programStackPushInteger(program, static_cast<int>(floatValue));
+    //       return;
+    //   }
+    REQUIRE(sfall_gl_vars_init());
+
+    // Store a float value
+    bool stored = sfall_gl_vars_store_float("f27_test_float", 42.7f);
+    CHECK(stored);
+
+    // Try to fetch as int — should not find it (different storage)
+    int intValue = 0;
+    bool foundInt = sfall_gl_vars_fetch("f27_test_float", intValue);
+    // int lookup fails because key is in floatVars, not intVars
+    CHECK_FALSE(foundInt);
+
+    // Fallback: fetch as float (mirrors the production fallback path)
+    float floatValue = 0.0f;
+    bool foundFloat = sfall_gl_vars_fetch_float("f27_test_float", floatValue);
+    CHECK(foundFloat);
+    CHECK(floatValue == doctest::Approx(42.7f));
+
+    // Truncate to int (production: static_cast<int>(floatValue))
+    int truncatedInt = static_cast<int>(floatValue);
+    CHECK(truncatedInt == 42);
+
+    // Cleanup
+    sfall_gl_vars_remove("f27_test_float");
+    sfall_gl_vars_exit();
+    sfall_gl_vars_init();
+}
+
+TEST_CASE("F-27: float→int fallback — integer key, float stored")
+{
+    REQUIRE(sfall_gl_vars_init());
+
+    // Store a float value with an integer key
+    bool stored = sfall_gl_vars_store_float(999, 3.14f);
+    CHECK(stored);
+
+    // Try to fetch as int — should not find it
+    int intValue = 0;
+    bool foundInt = sfall_gl_vars_fetch(999, intValue);
+    CHECK_FALSE(foundInt);
+
+    // Fallback: fetch as float then truncate
+    float floatValue = 0.0f;
+    bool foundFloat = sfall_gl_vars_fetch_float(999, floatValue);
+    CHECK(foundFloat);
+    CHECK(floatValue == doctest::Approx(3.14f));
+    CHECK(static_cast<int>(floatValue) == 3); // truncated
+
+    sfall_gl_vars_remove(999);
+    sfall_gl_vars_exit();
+    sfall_gl_vars_init();
+}
+
+TEST_CASE("F-27: float→int fallback — no fallback when int exists")
+{
+    REQUIRE(sfall_gl_vars_init());
+
+    // Store int value
+    bool stored = sfall_gl_vars_store("f27_int_only", 123);
+    CHECK(stored);
+
+    // Int fetch should succeed directly (no fallback needed)
+    int intValue = 0;
+    bool foundInt = sfall_gl_vars_fetch("f27_int_only", intValue);
+    CHECK(foundInt);
+    CHECK(intValue == 123);
+
+    // Cleanup
+    sfall_gl_vars_remove("f27_int_only");
+    sfall_gl_vars_exit();
+    sfall_gl_vars_init();
+}
+
+TEST_CASE("F-27: float→int fallback — truncated negative float")
+{
+    REQUIRE(sfall_gl_vars_init());
+
+    // Store a negative float
+    sfall_gl_vars_store_float("f27_neg_float", -55.9f);
+
+    // Fallback: fetch as float → truncate to int
+    float floatValue = 0.0f;
+    bool foundFloat = sfall_gl_vars_fetch_float("f27_neg_float", floatValue);
+    CHECK(foundFloat);
+    CHECK(floatValue == doctest::Approx(-55.9f));
+    // static_cast<int> truncates toward zero: -55.9 → -55
+    CHECK(static_cast<int>(floatValue) == -55);
+
+    sfall_gl_vars_remove("f27_neg_float");
+    sfall_gl_vars_exit();
+    sfall_gl_vars_init();
+}

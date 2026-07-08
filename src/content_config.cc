@@ -62,6 +62,8 @@ static const SfallContentMapping kSfallContentMappings[] = {
     { "Misc", "FemaleDefaultModel", CONTENT_CONFIG_START_SECTION, "model_female_default" },
     { "Misc", "PipBoyAvailableAtGameStart", CONTENT_CONFIG_START_SECTION, "pipboy" },
     { "Misc", "Fallout1Behavior", CONTENT_CONFIG_START_SECTION, "fallout1_behavior" },
+    // F-04: UseFileSystemOverride migration — see game_config_migration.cc for rationale.
+    { "Misc", "UseFileSystemOverride", CONTENT_CONFIG_START_SECTION, "use_filesystem_override" },
     { "Misc", "KarmaFRMs", CONTENT_CONFIG_KARMA_SECTION, "frms" },
     { "Misc", "KarmaPoints", CONTENT_CONFIG_KARMA_SECTION, "points" },
     { "Misc", "DialogueFix", CONTENT_CONFIG_DIALOG_SECTION, "no_exit_hotkey" },

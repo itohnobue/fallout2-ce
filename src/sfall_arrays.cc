@@ -650,6 +650,8 @@ void sfallArraysReset()
         _state->temporaryArrayIds.clear();
         _state->savedArrays.clear();
         _state->nextArrayId = kInitialArrayId;
+        _state->arrayExpressionStack.clear();
+        _state->expressionArrayId = 0;
     }
 }
 
@@ -665,7 +667,9 @@ ArrayId CreateArray(int len, unsigned int flags)
 {
     flags = (flags & ~1); // reset 1 bit
 
-    if (len < 0) {
+    // F-12: len <= 0 creates an associative array (map), matching sfall 4.x
+    // convention. create_array(0, 2) now creates a map, not a list.
+    if (len <= 0) {
         flags |= SFALL_ARRAYFLAG_ASSOC;
     } else if (len > ARRAY_MAX_SIZE) {
         len = ARRAY_MAX_SIZE; // safecheck
@@ -876,44 +880,53 @@ ArrayId ListAsArray(int type)
 ArrayId StringSplit(const char* str, const char* split)
 {
     size_t splitLen = strlen(split);
-
-    ArrayId arrayId = CreateTempArray(0, 0);
-    auto arr = get_array_by_id(arrayId);
+    int count;
 
     if (splitLen == 0) {
-        int count = static_cast<int>(strlen(str));
-
-        arr->ResizeArray(count);
-        for (int i = 0; i < count; i++) {
-            arr->SetArray(ProgramValue { i }, ArrayElement { &str[i], 1 }, false);
-        }
+        count = static_cast<int>(strlen(str));
     } else {
-        int count = 1;
+        count = 1;
         const char* ptr = str;
         while (true) {
             const char* newptr = strstr(ptr, split);
             if (newptr == nullptr) {
                 break;
             }
-
             count++;
             ptr = newptr + splitLen;
         }
-        arr->ResizeArray(count);
+    }
 
-        count = 0;
-        ptr = str;
+    // Use count > 0 to ensure we create a list (non-associative) array.
+    // CreateTempArray(0, 0) creates an associative array per sfall convention,
+    // but StringSplit produces ordered lists indexed by position.
+    ArrayId arrayId = CreateTempArray(count > 0 ? count : 1, 0);
+    auto arr = get_array_by_id(arrayId);
+
+    if (splitLen == 0) {
+        if (count == 0) {
+            arr->ResizeArray(0);
+        }
+        for (int i = 0; i < count; i++) {
+            arr->SetArray(ProgramValue { i }, ArrayElement { &str[i], 1 }, false);
+        }
+    } else {
+        if (count == 0) {
+            arr->ResizeArray(0);
+        }
+        int idx = 0;
+        const char* ptr = str;
         while (true) {
             const char* newptr = strstr(ptr, split);
             size_t len = (newptr != nullptr) ? newptr - ptr : strlen(ptr);
 
-            arr->SetArray(ProgramValue { count }, ArrayElement { ptr, len }, false);
+            arr->SetArray(ProgramValue { idx }, ArrayElement { ptr, len }, false);
 
             if (newptr == nullptr) {
                 break;
             }
 
-            count++;
+            idx++;
             ptr = newptr + splitLen;
         }
     }
@@ -1148,7 +1161,11 @@ bool sfallArraysLoad(File* stream)
             return false;
         }
 
-        ArrayId id = CreateArray(isAssoc ? -1 : 0, safeFlags);
+        // For non-associative arrays, use the actual element count as the
+        // initial size so CreateArray creates a list (not a map). CreateArray
+        // forces ASSOC for len<=0 per sfall convention.
+        int initLen = isAssoc ? -1 : static_cast<int>(elements.size());
+        ArrayId id = CreateArray(initLen, safeFlags);
         SFallArray* arr = get_array_by_id(id);
         if (arr == nullptr) return false;
         arr->loadFlatElements(std::move(elements));
