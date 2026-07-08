@@ -1371,6 +1371,36 @@ int wmWorldMap_load(File* stream)
     if (fileReadInt32(stream, &(wmGenData.encounterMapId)) == -1) return -1;
     if (fileReadInt32(stream, &(wmGenData.encounterTableId)) == -1) return -1;
     if (fileReadInt32(stream, &(wmGenData.encounterEntryId)) == -1) return -1;
+
+    // F2-18: Validate encounter table ID loaded from save — follow the pattern
+    // used for encounter counter indices at lines 1445-1460. Out-of-range values
+    // from a crafted save would cause OOB array access at wmSetupRandomEncounter
+    // (line 4109) and wmRndEncounterPick (line 3998).
+    if (wmGenData.encounterTableId < -1 || wmGenData.encounterTableId >= wmMaxEncounterInfoTables) {
+        wmGenData.encounterTableId = -1;
+    }
+
+    // Validate encounter entry ID against its table. If the table is invalid,
+    // reset both to -1 (no-encounter sentinel, same as wmClearRandomEncounterState).
+    if (wmGenData.encounterTableId >= 0) {
+        EncounterTable* encounterTable = &(wmEncounterTableList[wmGenData.encounterTableId]);
+        if (wmGenData.encounterEntryId < -1 || wmGenData.encounterEntryId >= encounterTable->entriesLength) {
+            wmGenData.encounterEntryId = -1;
+        }
+    } else {
+        wmGenData.encounterEntryId = -1;
+    }
+
+    // If the encounter state was invalidated, also reset encounterMapId to -1
+    // so wmSetupRandomEncounter()'s guard at line 4135 (encounterMapId == -1)
+    // correctly skips encounter setup, preventing OOB access to
+    // entries[encounterEntryId] at line 4140.
+    // R10-F1: Cover both cases — invalid table (encounterTableId == -1) AND
+    // valid table with invalid entry (encounterEntryId == -1 after OOB clamp).
+    if (wmGenData.encounterTableId == -1 || wmGenData.encounterEntryId == -1) {
+        wmGenData.encounterMapId = -1;
+    }
+
     if (fileReadBool(stream, &(wmGenData.isInCar)) == -1) return -1;
     if (fileReadInt32(stream, &(wmGenData.currentCarAreaId)) == -1) return -1;
     if (fileReadInt32(stream, &(wmGenData.carFuel)) == -1) return -1;
@@ -3822,6 +3852,9 @@ static int wmRndEncounterOccurred(int* mapToLoadPtr)
         wmClearRandomEncounterState();
         return 0;
     case EncounterHookResult::LoadMapDirectly:
+        if (encounterTableEntry->counter > 0) {
+            encounterTableEntry->counter--;
+        }
         wmBlinkRndEncounterIcon(specialEncounter);
         *mapToLoadPtr = encounterMapId;
         wmGenData.oldWorldPosX = wmGenData.worldPosX;
@@ -3830,6 +3863,9 @@ static int wmRndEncounterOccurred(int* mapToLoadPtr)
         return 1;
     case EncounterHookResult::ContinueEncounter:
         wmGenData.encounterMapId = encounterMapId;
+        if (encounterTableEntry->counter > 0) {
+            encounterTableEntry->counter--;
+        }
         break;
     }
 
@@ -4077,9 +4113,6 @@ static int wmRndEncounterPick()
     wmGenData.encounterEntryId = candidates[index];
 
     EncounterTableEntry* encounterTableEntry = &(encounterTable->entries[wmGenData.encounterEntryId]);
-    if (encounterTableEntry->counter > 0) {
-        encounterTableEntry->counter--;
-    }
 
     if (encounterTableEntry->map == -1) {
         if (encounterTable->mapsLength <= 0) {

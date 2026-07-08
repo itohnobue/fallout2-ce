@@ -177,6 +177,9 @@ static void mf_get_town_title(OpcodeContext& ctx);
 static void mf_set_unjam_locks_time(OpcodeContext& ctx);
 static void mf_get_unjam_locks_time(OpcodeContext& ctx);
 static void mf_unjam_lock(OpcodeContext& ctx);
+// F2-24: Explosion metarule wrapper — dispatches sub-metarule operations
+// that are currently only reachable via opcode 0x8261.
+static void mf_explosions_metarule(OpcodeContext& ctx);
 
 // Tracks nesting depth of mf_message_box calls.
 // Must be reset across save/load via sfall_metarules_reset() to prevent
@@ -439,6 +442,10 @@ const MetaruleInfo kMetarules[] = {
     { "unwield_slot", mf_unwield_slot, 2, 2, -1, { ARG_OBJECT, ARG_INT } },
     { "win_fill_color", mf_win_fill_color, 0, 5, -1, { ARG_INT, ARG_INT, ARG_INT, ARG_INT, ARG_INT } },
     { "opcode_exists", mf_opcode_exists, 1, 1, 0, { ARG_INT } },
+    // F2-24: Explosion metarule registered as opcode 0x8261 only — invisible to
+    // metarule discovery. Adding this entry makes metarule_exist("metarule2_explosions")
+    // return 1 and get_metarule_table() include it, consistent with opcode_exists(0x8261).
+    { "metarule2_explosions", mf_explosions_metarule, 2, 3, -1, { ARG_INT, ARG_INT, ARG_INT } },
 };
 const std::size_t kMetarulesCount = sizeof(kMetarules) / sizeof(kMetarules[0]);
 
@@ -1672,9 +1679,14 @@ void mf_string_to_case(OpcodeContext& ctx)
     std::string s(buf);
     auto caseType = ctx.arg(1).asInt();
     if (caseType == 1) {
-        std::transform(s.begin(), s.end(), s.begin(), ::toupper);
+        // F2-06: Cast through unsigned char to avoid UB from negative values.
+        // char is signed on x86/x64; bytes 0x80-0xFF sign-extend to negative int,
+        // which is undefined behavior in <ctype.h> per C99 §7.4 ¶1.
+        std::transform(s.begin(), s.end(), s.begin(),
+            [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
     } else if (caseType == 0) {
-        std::transform(s.begin(), s.end(), s.begin(), ::tolower);
+        std::transform(s.begin(), s.end(), s.begin(),
+            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     } else {
         debugPrint("string_to_case: invalid case type %d", caseType);
     }
@@ -1831,7 +1843,10 @@ void mf_string_format(OpcodeContext& ctx)
         if (c == '*') {
             // Read the width/precision integer from formatArgs[], convert to
             // decimal string, and append the digits in place of '*'.
-            int widthVal = (valIdx < numArgs)
+            // F2-05: Guard valIdx < numArgs - 1 — formatArgs has numArgs-1
+            // elements (format string at index 0 is excluded). With maxArgs=8,
+            // numArgs can be 8, giving formatArgs only 7 valid entries (0..6).
+            int widthVal = (valIdx < numArgs - 1)
                 ? formatArgs[valIdx].asInt()
                 : 0;
             // Write the value as decimal digits directly into newFmt[]
@@ -2064,6 +2079,87 @@ void mf_r_write(OpcodeContext& ctx)
 
     debugPrint("r_write(type=%d, addr=0x%08X, value=%d) — no-op in CE engine\n", type, addr, value);
     ctx.setReturn(0);
+}
+
+// F2-24: Explosion metarule wrapper — provides metarule-level access to the
+// 9 explosion sub-operations that are currently only reachable via opcode 0x8261
+// (op_explosions_metarule in sfall_opcodes.cc). Adding this entry makes
+// metarule_exist("metarule2_explosions") return 1 and get_metarule_table()
+// include it, consistent with opcode_exists(0x8261).
+//
+// Sub-metarule constants (mirroring ExplosionMetarule enum in sfall_opcodes.cc):
+enum {
+    EXPL_MF_FORCE_PATTERN     = 1,
+    EXPL_MF_FORCE_ART         = 2,
+    EXPL_MF_FORCE_RADIUS      = 3,
+    EXPL_MF_FORCE_DMGTYPE     = 4,
+    EXPL_MF_STATIC_RADIUS     = 5,
+    EXPL_MF_GET_DAMAGE        = 6,
+    EXPL_MF_SET_DYNAMITE_DMG  = 7,
+    EXPL_MF_SET_PLASTIC_DMG   = 8,
+    EXPL_MF_SET_MAX_TARGET    = 9,
+};
+
+void mf_explosions_metarule(OpcodeContext& ctx)
+{
+    int metarule = ctx.arg(0).asInt();
+    int param1 = ctx.arg(1).asInt();
+    int param2 = ctx.numArgs() > 2 ? ctx.arg(2).asInt() : 0;
+
+    switch (metarule) {
+    case EXPL_MF_FORCE_PATTERN:
+        if (param1 != 0) {
+            explosionSetPattern(2, 4);
+        } else {
+            explosionSetPattern(0, 6);
+        }
+        ctx.setReturn(0);
+        break;
+    case EXPL_MF_FORCE_ART:
+        explosionSetFrm(param1);
+        ctx.setReturn(0);
+        break;
+    case EXPL_MF_FORCE_RADIUS:
+        explosionSetRadius(param1);
+        ctx.setReturn(0);
+        break;
+    case EXPL_MF_FORCE_DMGTYPE:
+        explosionSetDamageType(param1);
+        ctx.setReturn(0);
+        break;
+    case EXPL_MF_STATIC_RADIUS:
+        weaponSetGrenadeExplosionRadius(param1);
+        weaponSetRocketExplosionRadius(param2);
+        ctx.setReturn(0);
+        break;
+    case EXPL_MF_GET_DAMAGE: {
+        int minDamage = 0;
+        int maxDamage = 0;
+        explosiveGetDamage(param1, &minDamage, &maxDamage);
+
+        ArrayId arrayId = CreateTempArray(2, 0);
+        SetArray(arrayId, ProgramValue { 0 }, ProgramValue { minDamage }, false, ctx.program());
+        SetArray(arrayId, ProgramValue { 1 }, ProgramValue { maxDamage }, false, ctx.program());
+
+        ctx.setReturn(ProgramValue(arrayId));
+        break;
+    }
+    case EXPL_MF_SET_DYNAMITE_DMG:
+        explosiveSetDamage(PROTO_ID_DYNAMITE_I, param1, param2);
+        ctx.setReturn(0);
+        break;
+    case EXPL_MF_SET_PLASTIC_DMG:
+        explosiveSetDamage(PROTO_ID_PLASTIC_EXPLOSIVES_I, param1, param2);
+        ctx.setReturn(0);
+        break;
+    case EXPL_MF_SET_MAX_TARGET:
+        explosionSetMaxTargets(param1);
+        ctx.setReturn(0);
+        break;
+    default:
+        ctx.setReturn(0);
+        break;
+    }
 }
 
 // --- New metarule handlers (C-14, H-02 through H-09, M-18) ---
@@ -2569,12 +2665,35 @@ void mf_get_map_enter_position(OpcodeContext& ctx)
 
 // get_metarule_table(): returns an array of all registered metarule names.
 // This is a static list that can be enumerated by scripts.
+// F2-25 + F2-26: get_metarule_table must produce results consistent with
+// metarule_exist(). metarule_exist() returns 0 for "r_write" (stub blacklist)
+// and 1 for "rotators"/"sfall" (hardcoded sentinels). get_metarule_table must
+// match: skip "r_write", include "rotators" and "sfall".
 void mf_get_metarule_table(OpcodeContext& ctx)
 {
-    ArrayId arrayId = CreateTempArray(static_cast<int>(kMetarulesCount), 0);
+    // Count: kMetarules entries minus blacklisted "r_write" + 2 sentinels
+    int totalCount = static_cast<int>(kMetarulesCount) + 2; // +2 for sentinels
+    // Subtract 1 for "r_write" (blacklisted stub in metarule_exist)
+    totalCount -= 1; // "r_write" is always present in kMetarules[]
+
+    ArrayId arrayId = CreateTempArray(totalCount, 0);
+    int arrayIndex = 0;
     for (int i = 0; i < static_cast<int>(kMetarulesCount); i++) {
-        SetArray(arrayId, ProgramValue(i), programMakeString(ctx.program(), kMetarules[i].name), false, ctx.program());
+        // F2-25: Skip "r_write" — metarule_exist returns 0 for this stub for consistency.
+        if (compat_stricmp(kMetarules[i].name, "r_write") == 0) {
+            continue;
+        }
+        SetArray(arrayId, ProgramValue(arrayIndex),
+                 programMakeString(ctx.program(), kMetarules[i].name), false, ctx.program());
+        arrayIndex++;
     }
+    // F2-26: Include "rotators" and "sfall" sentinels — metarule_exist returns 1 for both.
+    SetArray(arrayId, ProgramValue(arrayIndex),
+             programMakeString(ctx.program(), "rotators"), false, ctx.program());
+    arrayIndex++;
+    SetArray(arrayId, ProgramValue(arrayIndex),
+             programMakeString(ctx.program(), "sfall"), false, ctx.program());
+
     ctx.setReturn(ProgramValue(arrayId));
 }
 
@@ -3349,6 +3468,15 @@ void sfall_metarules_reset()
 
 #define METARULES_SAVE_VERSION 6
 
+// F-41: Maximum entries for save/load metarule collections.
+// Prevents infinite loops on corrupt save data with absurd count values.
+// These caps are well above any realistic game data (e.g. 65535 town titles
+// would exceed the address space), but small enough to terminate quickly.
+#define METARULES_MAX_LOAD_COUNT    65535
+#define METARULES_MAX_NPC_COUNT     16384
+#define METARULES_MAX_NPC_ENTRIES   4096
+#define METARULES_MAX_DRUG_COUNT    4096
+
 static bool metarulesSaveStringMap(File* stream, const std::map<int, std::string>& map)
 {
     int count = static_cast<int>(map.size());
@@ -3365,6 +3493,7 @@ static bool metarulesLoadStringMap(File* stream, std::map<int, std::string>& map
 {
     int count;
     if (fileReadInt32(stream, &count) == -1) return false;
+    if (count < 0 || count > METARULES_MAX_LOAD_COUNT) return false;
     map.clear();
     for (int i = 0; i < count; i++) {
         int key;
@@ -3395,6 +3524,7 @@ static bool metarulesLoadCoordMap(File* stream, std::map<std::pair<int, int>, st
 {
     int count;
     if (fileReadInt32(stream, &count) == -1) return false;
+    if (count < 0 || count > METARULES_MAX_LOAD_COUNT) return false;
     map.clear();
     for (int i = 0; i < count; i++) {
         int x, y;
@@ -3424,6 +3554,7 @@ static bool metarulesLoadIntIntMap(File* stream, std::map<int, int>& map)
 {
     int count;
     if (fileReadInt32(stream, &count) == -1) return false;
+    if (count < 0 || count > METARULES_MAX_LOAD_COUNT) return false;
     map.clear();
     for (int i = 0; i < count; i++) {
         int key, val;
@@ -3448,6 +3579,7 @@ static bool metarulesLoadIntSet(File* stream, std::set<int>& s)
 {
     int count;
     if (fileReadInt32(stream, &count) == -1) return false;
+    if (count < 0 || count > METARULES_MAX_LOAD_COUNT) return false;
     s.clear();
     for (int i = 0; i < count; i++) {
         int val;
@@ -3476,6 +3608,7 @@ static bool metarulesLoadExplosiveMap(File* stream, std::map<int, ExplosivePrope
 {
     int count;
     if (fileReadInt32(stream, &count) == -1) return false;
+    if (count < 0 || count > METARULES_MAX_LOAD_COUNT) return false;
     map.clear();
     for (int i = 0; i < count; i++) {
         int pid, pattern, radius, delay, minDamage = 0, maxDamage = 0;
@@ -3510,6 +3643,7 @@ static bool metarulesLoadDrugDataMap(File* stream, std::map<int, DrugData>& map)
 {
     int count;
     if (fileReadInt32(stream, &count) == -1) return false;
+    if (count < 0 || count > METARULES_MAX_DRUG_COUNT) return false;
     map.clear();
     for (int i = 0; i < count; i++) {
         int drugIndex, addictionRate, effectDuration;
@@ -3555,12 +3689,14 @@ static bool metarulesLoadNpcFakeDataV3(File* stream,
 {
     int count;
     if (fileReadInt32(stream, &count) == -1) return false;
+    if (count < 0 || count > METARULES_MAX_NPC_COUNT) return false;
     map.clear();
     for (int i = 0; i < count; i++) {
         int cid;
         if (fileReadInt32(stream, &cid) == -1) return false;
         int nameCount;
         if (fileReadInt32(stream, &nameCount) == -1) return false;
+        if (nameCount < 0 || nameCount > METARULES_MAX_NPC_ENTRIES) return false;
         std::unordered_map<std::string, FakePerkNpcEntry> names;
         for (int j = 0; j < nameCount; j++) {
             char nameBuf[256];
@@ -3589,12 +3725,14 @@ static bool metarulesLoadNpcFakeDataV2(File* stream,
 {
     int count;
     if (fileReadInt32(stream, &count) == -1) return false;
+    if (count < 0 || count > METARULES_MAX_NPC_COUNT) return false;
     map.clear();
     for (int i = 0; i < count; i++) {
         int cid;
         if (fileReadInt32(stream, &cid) == -1) return false;
         int nameCount;
         if (fileReadInt32(stream, &nameCount) == -1) return false;
+        if (nameCount < 0 || nameCount > METARULES_MAX_NPC_ENTRIES) return false;
         std::unordered_map<std::string, FakePerkNpcEntry> names;
         for (int j = 0; j < nameCount; j++) {
             char nameBuf[256];
@@ -3671,27 +3809,27 @@ bool sfall_metarules_save(File* stream)
     return true;
 }
 
-void sfall_metarules_load(File* stream)
+bool sfall_metarules_load(File* stream)
 {
     int version;
-    if (fileReadInt32(stream, &version) == -1) return;
+    if (fileReadInt32(stream, &version) == -1) return false;
     if (version > METARULES_SAVE_VERSION || version < 1) {
         debugPrint("sfall_metarules_load(): unknown save version %d, skipping", version);
-        return;
+        return false;
     }
 
     // Scalars
-    if (fileReadInt32(stream, &sfall_metarules_dialogShowCount) == -1) return;
+    if (fileReadInt32(stream, &sfall_metarules_dialogShowCount) == -1) return false;
     // Reconcile after load: if a save was made while a message box was displayed
     // (dialogShowCount > 0), the engine re-enables scripts during post-load init.
     // Using the saved count would cause the next message_box to decrement to 1
     // instead of 0, permanently disabling scripts. Always reset to 0 on load.
     sfall_metarules_dialogShowCount = 0;
-    if (fileReadInt32(stream, &gNpcEngineLevelUpEnabled) == -1) return;
-    if (fileReadInt32(stream, &gWorldmapHealTime) == -1) return;
-    if (fileReadInt32(stream, &gRestHealTime) == -1) return;
-    if (fileReadInt32(stream, &gCarIntfaceArtFid) == -1) return;
-    if (fileReadInt32(stream, &gRestMode) == -1) return;
+    if (fileReadInt32(stream, &gNpcEngineLevelUpEnabled) == -1) return false;
+    if (fileReadInt32(stream, &gWorldmapHealTime) == -1) return false;
+    if (fileReadInt32(stream, &gRestHealTime) == -1) return false;
+    if (fileReadInt32(stream, &gCarIntfaceArtFid) == -1) return false;
+    if (fileReadInt32(stream, &gRestMode) == -1) return false;
 
     // Replay restored healing/rest values to the worldmap system so that
     // consumers (worldmap.cc:3258, wmMapCanRestHere, wmGetRestMode) see the
@@ -3703,9 +3841,9 @@ void sfall_metarules_load(File* stream)
     if (fileReadInt32(stream, &hiddenState) != -1) {
         sIntfaceHiddenState = (hiddenState != 0);
     }
-    if (fileReadInt32(stream, &gMapEnterX) == -1) return;
-    if (fileReadInt32(stream, &gMapEnterY) == -1) return;
-    if (fileReadInt32(stream, &gMapEnterElevation) == -1) return;
+    if (fileReadInt32(stream, &gMapEnterX) == -1) return false;
+    if (fileReadInt32(stream, &gMapEnterY) == -1) return false;
+    if (fileReadInt32(stream, &gMapEnterElevation) == -1) return false;
 
     // Forward restored map enter position to the worldmap runtime
     // consumer layer for consistency with the replay pattern used by
@@ -3724,33 +3862,33 @@ void sfall_metarules_load(File* stream)
     }
 
     // Maps and sets
-    metarulesLoadCoordMap(stream, gTerrainNameOverrides);
-    metarulesLoadStringMap(stream, gTownTitleOverrides);
-    metarulesLoadIntIntMap(stream, gQuestFailureValues);
+    if (!metarulesLoadCoordMap(stream, gTerrainNameOverrides)) return false;
+    if (!metarulesLoadStringMap(stream, gTownTitleOverrides)) return false;
+    if (!metarulesLoadIntIntMap(stream, gQuestFailureValues)) return false;
     // gAddedTraits: version 5 and earlier stored as a flat set of trait IDs
     // (no rank).  Version 6+ stores trait ID -> rank pairs via IntIntMap.
     if (version >= 6) {
-        metarulesLoadIntIntMap(stream, gAddedTraits);
+        if (!metarulesLoadIntIntMap(stream, gAddedTraits)) return false;
     } else {
         std::set<int> legacyTraits;
-        metarulesLoadIntSet(stream, legacyTraits);
+        if (!metarulesLoadIntSet(stream, legacyTraits)) return false;
         for (int t : legacyTraits) {
             gAddedTraits[t] = 0; // default rank for legacy saves
         }
     }
-    metarulesLoadExplosiveMap(stream, gExplosiveOverrides, version);
+    if (!metarulesLoadExplosiveMap(stream, gExplosiveOverrides, version)) return false;
 
     // NPC-keyed data: keyed by CID (int), no post-load fixup needed.
     // v3+ format includes per-entry metadata (level, image, desc);
     // v1-v2 format stores only names — loaded with default metadata.
     if (version >= 3) {
-        metarulesLoadNpcFakeDataV3(stream, gFakePerksNpc);
-        metarulesLoadNpcFakeDataV3(stream, gFakeTraitsNpc);
-        metarulesLoadNpcFakeDataV3(stream, gFakeSelectablePerksNpc);
+        if (!metarulesLoadNpcFakeDataV3(stream, gFakePerksNpc)) return false;
+        if (!metarulesLoadNpcFakeDataV3(stream, gFakeTraitsNpc)) return false;
+        if (!metarulesLoadNpcFakeDataV3(stream, gFakeSelectablePerksNpc)) return false;
     } else {
-        metarulesLoadNpcFakeDataV2(stream, gFakePerksNpc);
-        metarulesLoadNpcFakeDataV2(stream, gFakeTraitsNpc);
-        metarulesLoadNpcFakeDataV2(stream, gFakeSelectablePerksNpc);
+        if (!metarulesLoadNpcFakeDataV2(stream, gFakePerksNpc)) return false;
+        if (!metarulesLoadNpcFakeDataV2(stream, gFakeTraitsNpc)) return false;
+        if (!metarulesLoadNpcFakeDataV2(stream, gFakeSelectablePerksNpc)) return false;
     }
 
     // gSavedOriginalDude: restore Object* from CID.
@@ -3776,37 +3914,39 @@ void sfall_metarules_load(File* stream)
     // For version 1 saves, these fields are absent — sfall_metarules_reset() has
     // already set defaults, so no explicit fallback is needed.
     if (version >= 2) {
-        if (fileReadInt32(stream, &gSpraySettings.flags) == -1) return;
-        if (fileReadInt32(stream, &gSpraySettings.pid) == -1) return;
-        if (fileReadInt32(stream, &gSpraySettings.radius) == -1) return;
-        if (fileReadInt32(stream, &gSpraySettings.count) == -1) return;
+        if (fileReadInt32(stream, &gSpraySettings.flags) == -1) return false;
+        if (fileReadInt32(stream, &gSpraySettings.pid) == -1) return false;
+        if (fileReadInt32(stream, &gSpraySettings.radius) == -1) return false;
+        if (fileReadInt32(stream, &gSpraySettings.count) == -1) return false;
         int sprayActive;
-        if (fileReadInt32(stream, &sprayActive) == -1) return;
+        if (fileReadInt32(stream, &sprayActive) == -1) return false;
         gSpraySettings.active = (sprayActive != 0);
-        if (!metarulesLoadDrugDataMap(stream, gDrugDataOverrides)) return;
-        if (fileReadInt32(stream, &gInterfaceOverlayState.winType) == -1) return;
-        if (fileReadInt32(stream, &gInterfaceOverlayState.arg1) == -1) return;
-        if (fileReadInt32(stream, &gInterfaceOverlayState.arg2) == -1) return;
-        if (fileReadInt32(stream, &gInterfaceOverlayState.arg3) == -1) return;
-        if (fileReadInt32(stream, &gInterfaceOverlayState.arg4) == -1) return;
-        if (fileReadInt32(stream, &gInterfaceOverlayState.windowHandle) == -1) return;
+        if (!metarulesLoadDrugDataMap(stream, gDrugDataOverrides)) return false;
+        if (fileReadInt32(stream, &gInterfaceOverlayState.winType) == -1) return false;
+        if (fileReadInt32(stream, &gInterfaceOverlayState.arg1) == -1) return false;
+        if (fileReadInt32(stream, &gInterfaceOverlayState.arg2) == -1) return false;
+        if (fileReadInt32(stream, &gInterfaceOverlayState.arg3) == -1) return false;
+        if (fileReadInt32(stream, &gInterfaceOverlayState.arg4) == -1) return false;
+        if (fileReadInt32(stream, &gInterfaceOverlayState.windowHandle) == -1) return false;
         int overlayActive;
-        if (fileReadInt32(stream, &overlayActive) == -1) return;
+        if (fileReadInt32(stream, &overlayActive) == -1) return false;
         gInterfaceOverlayState.active = (overlayActive != 0);
     }
 
     // Version 3 additions: unjam locks time.
     // For version 1-2 saves, sfall_metarules_reset() already sets -1 as default.
     if (version >= 3) {
-        if (fileReadInt32(stream, &gUnjamLocksTimeHours) == -1) return;
+        if (fileReadInt32(stream, &gUnjamLocksTimeHours) == -1) return false;
     }
 
     // Version 5 addition: block combat flag.
     // For version 1-4 saves, combatReset() (called during gameReset()) sets 0
     // as default.
     if (version >= 5) {
-        if (fileReadInt32(stream, &gBlockCombat) == -1) return;
+        if (fileReadInt32(stream, &gBlockCombat) == -1) return false;
     }
+
+    return true;
 }
 
 // Public accessor: returns the override town title for the given area index,

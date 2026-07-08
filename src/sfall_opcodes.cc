@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <limits.h>
@@ -1349,11 +1350,20 @@ static void op_parse_int(Program* program)
     }
 }
 
-// atof
+// atof — converts string to float with NaN/inf rejection.
+// F-009: Invalid float strings (NaN, inf, overflow) are rejected
+// and replaced with 0.0f to prevent poisoning the VM float stack.
 static void op_atof(Program* program)
 {
     const char* string = programStackPopString(program);
-    programStackPushFloat(program, static_cast<float>(atof(string)));
+    char* end = nullptr;
+    errno = 0;
+    float val = strtof(string, &end);
+    if (errno == ERANGE || std::isnan(val) || std::isinf(val)) {
+        programPrintError("op_atof: invalid float value \"%s\" — returning 0.0f", string != nullptr ? string : "(null)");
+        val = 0.0f;
+    }
+    programStackPushFloat(program, val);
 }
 
 // tile_under_cursor
@@ -3227,12 +3237,15 @@ static void op_write_string(Program* program)
 // opcode_exists() return 0 for these so scripts can detect the absence
 // of call_offset at runtime — currently it returns 1 (misleading).
 // ============================================================
+// F2-009: call_offset_v* void stubs are true void functions — the Fallout 2 VM
+// expects void opcodes to leave the stack unchanged after popping their arguments.
+// Pushing an extraneous int 0 shifts all subsequent stack operands by one slot.
+// Fixed by removing programStackPushInteger(program, 0) from all five stubs.
 static void op_call_offset_v0(Program* program)
 {
     int addr = programStackPopInteger(program);
     programPrintError("VOODOO call_offset_v0(0x%08X) — NOT SUPPORTED in CE engine (different address space). "
                        "Use CE-native opcodes or metarules instead.\n", addr);
-    programStackPushInteger(program, 0);
 }
 
 static void op_call_offset_v1(Program* program)
@@ -3241,7 +3254,6 @@ static void op_call_offset_v1(Program* program)
     int addr = programStackPopInteger(program);
     programPrintError("VOODOO call_offset_v1(0x%08X, %d) — NOT SUPPORTED in CE engine (different address space). "
                        "Use CE-native opcodes or metarules instead.\n", addr, arg1);
-    programStackPushInteger(program, 0);
 }
 
 static void op_call_offset_v2(Program* program)
@@ -3251,7 +3263,6 @@ static void op_call_offset_v2(Program* program)
     int addr = programStackPopInteger(program);
     programPrintError("VOODOO call_offset_v2(0x%08X, %d, %d) — NOT SUPPORTED in CE engine (different address space). "
                        "Use CE-native opcodes or metarules instead.\n", addr, arg1, arg2);
-    programStackPushInteger(program, 0);
 }
 
 static void op_call_offset_v3(Program* program)
@@ -3262,7 +3273,6 @@ static void op_call_offset_v3(Program* program)
     int addr = programStackPopInteger(program);
     programPrintError("VOODOO call_offset_v3(0x%08X, %d, %d, %d) — NOT SUPPORTED in CE engine (different address space). "
                        "Use CE-native opcodes or metarules instead.\n", addr, arg1, arg2, arg3);
-    programStackPushInteger(program, 0);
 }
 
 static void op_call_offset_v4(Program* program)
@@ -3274,7 +3284,6 @@ static void op_call_offset_v4(Program* program)
     int addr = programStackPopInteger(program);
     programPrintError("VOODOO call_offset_v4(0x%08X, %d, %d, %d, %d) — NOT SUPPORTED in CE engine (different address space). "
                        "Use CE-native opcodes or metarules instead.\n", addr, arg1, arg2, arg3, arg4);
-    programStackPushInteger(program, 0);
 }
 
 // call_offset_r0-r4: call functions returning int with 0-4 args.
@@ -3425,6 +3434,58 @@ static void op_set_skill_max(Program* program)
 // alone — it would be a full-stack change across stat.cc consumers.
 // ================================================================
 
+// F-044/F-045: Clamp stat boundary values (min/max) to per-category
+// reasonable ranges. Prevents corrupted stat bounds from pathological
+// inputs (e.g., AGE=999999 or STRENGTH=-9999).
+//
+// Stat category bounds:
+//   SPECIAL stats      (0-6):  [0, 100]     — primary attributes
+//   Derived stats      (7-32): [0, 9999]    — HP, AP, AC, DR, etc.
+//   AGE                (33):   [0, 9999]    — age can legitimately be high
+//   GENDER             (34):   [0, 1]       — binary
+//   Current HP/Poison/Rad (35-37): [0, 99999] — runtime pseudostats
+//
+// Logs a warning when clamping occurs so script authors can detect issues.
+static int clampStatBoundaryValue(int stat, int value, const char* opcodeName)
+{
+    // Absolute floor: values below 0 are nonsensical for most stats.
+    // GENDER (34) is already clamped to [0,1] below.
+    int floorValue = 0;
+    int ceilingValue = 9999;
+
+    if (stat < 7) {
+        // SPECIAL stats (STRENGTH through LUCK): primary attributes with
+        // a typical engine range of 1-10. Allow generous bounds [0, 100]
+        // for mod flexibility while preventing overflow/corruption.
+        ceilingValue = 100;
+    } else if (stat == STAT_GENDER) {
+        // Gender is strictly binary (0=male, 1=female).
+        floorValue = 0;
+        ceilingValue = 1;
+    } else if (stat == STAT_AGE) {
+        // Age can legitimately be many years; cap at 9999 for sanity.
+        ceilingValue = 9999;
+    } else if (stat >= STAT_CURRENT_HIT_POINTS) {
+        // Current-value pseudostats (HP, poison, radiation): allow larger
+        // values since some mods inflate HP dramatically.
+        ceilingValue = 99999;
+    } else {
+        // Derived stats (HP max through POISON_RESISTANCE): clamp to
+        // reasonable game-playable range.
+        ceilingValue = 9999;
+    }
+
+    if (value < floorValue) {
+        debugPrint("%s: stat %d value %d clamped to floor %d", opcodeName, stat, value, floorValue);
+        value = floorValue;
+    }
+    if (value > ceilingValue) {
+        debugPrint("%s: stat %d value %d clamped to ceiling %d", opcodeName, stat, value, ceilingValue);
+        value = ceilingValue;
+    }
+    return value;
+}
+
 // set_stat_max(int stat, int value) — 0x81B4
 static void op_set_stat_max(Program* program)
 {
@@ -3436,6 +3497,7 @@ static void op_set_stat_max(Program* program)
         return;
     }
 
+    value = clampStatBoundaryValue(stat, value, "set_stat_max");
     statSetMaxValue(stat, value);
 }
 
@@ -3450,6 +3512,7 @@ static void op_set_stat_min(Program* program)
         return;
     }
 
+    value = clampStatBoundaryValue(stat, value, "set_stat_min");
     statSetMinValue(stat, value);
 }
 
@@ -3470,6 +3533,7 @@ static void op_set_pc_stat_max(Program* program)
         return;
     }
 
+    value = clampStatBoundaryValue(stat, value, "set_pc_stat_max");
     statSetMaxValue(stat, value);
 }
 
@@ -3485,6 +3549,7 @@ static void op_set_pc_stat_min(Program* program)
         return;
     }
 
+    value = clampStatBoundaryValue(stat, value, "set_pc_stat_min");
     statSetMinValue(stat, value);
 }
 
@@ -3500,6 +3565,7 @@ static void op_set_npc_stat_max(Program* program)
         return;
     }
 
+    value = clampStatBoundaryValue(stat, value, "set_npc_stat_max");
     statSetMaxValue(stat, value);
 }
 
@@ -3515,6 +3581,7 @@ static void op_set_npc_stat_min(Program* program)
         return;
     }
 
+    value = clampStatBoundaryValue(stat, value, "set_npc_stat_min");
     statSetMinValue(stat, value);
 }
 
@@ -4541,6 +4608,10 @@ static void op_set_perk_level_mod(Program* program)
 //   set via set_critter_skill_mod (0x81C7) when called with no critter
 //   (nullptr fallback).  Separate from gBaseSkillModMap — skillGetValue()
 //   applies base and critter modifiers independently.
+// F-042: kNoSkillModOverride sentinel (INT_MIN) distinguishes "no override
+// exists" from "explicitly set to 0", allowing per-critter mod=0 to
+// correctly override a non-zero global skill modifier.
+const int kNoSkillModOverride = INT_MIN;
 static std::unordered_map<int, int> gBaseSkillModMap;
 static std::unordered_map<int, int> gGlobalCritterSkillModMap;
 static std::unordered_map<int, std::unordered_map<int, int>> gCritterSkillModMap;
@@ -5677,58 +5748,84 @@ void sfallOpcodeStateLoad()
 {
     int val;
     // Core opcode globals.
+    // F-003: Apply the same range validation on load that the setter opcodes
+    // apply. Prevents crafted saves from injecting out-of-range values that
+    // would bypass the setters' clamping.
     if (sfall_gl_vars_fetch(kGlVarXpMod, val)) {
+        if (val < 0) val = 0;
+        if (val > kMaxXpModPercentage) val = kMaxXpModPercentage;
         gXpModPercentage = val;
     }
     if (sfall_gl_vars_fetch(kGlVarSkillMax, val)) {
+        if (val < 0) val = 300;
+        if (val > 999) val = 999;
         gSkillMaxCap = val;
     }
     if (sfall_gl_vars_fetch(kGlVarPerkFreq, val)) {
+        if (val < 0) val = 0;
+        if (val > 50) val = 50;
         gPerkFrequencyOverride = val;
     }
     if (sfall_gl_vars_fetch(kGlVarSkillPts, val)) {
+        if (val < 0) val = 0;
+        if (val > kMaxSkillPointsPerLevelMod) val = kMaxSkillPointsPerLevelMod;
         gSkillPointsPerLevelMod = val;
     }
 
     // Hit chance globals.
     if (sfall_gl_vars_fetch(kGlVarHitChMod, val)) {
+        // Hit chance modifier — clamp to reasonable [-100, 100] range.
+        if (val < -100) val = -100;
+        if (val > 100) val = 100;
         sfallHitChanceMod = val;
     }
     if (sfall_gl_vars_fetch(kGlVarHitChMax, val)) {
+        if (val < 1) val = 1;
+        if (val > 100) val = 100;
         sfallHitChanceMax = val;
     }
 
     // Knockback globals.
     if (sfall_gl_vars_fetch(kGlVarWpnKnTyp, val)) {
+        // Knockback type enum: values outside [0, 3] are undefined.
+        if (val < 0) val = 0;
         sfallWeaponKnockbackType = val;
     }
     {
         float fval;
         if (sfall_gl_vars_fetch_float(kGlVarWpnKnVal, fval)) {
+            if (std::isnan(fval) || std::isinf(fval)) fval = 0.0f;
             sfallWeaponKnockbackValue = fval;
         }
     }
     if (sfall_gl_vars_fetch(kGlVarTgtKnTyp, val)) {
+        if (val < 0) val = 0;
         sfallTargetKnockbackType = val;
     }
     {
         float fval;
         if (sfall_gl_vars_fetch_float(kGlVarTgtKnVal, fval)) {
+            if (std::isnan(fval) || std::isinf(fval)) fval = 0.0f;
             sfallTargetKnockbackValue = fval;
         }
     }
     if (sfall_gl_vars_fetch(kGlVarAtkKnTyp, val)) {
+        if (val < 0) val = 0;
         sfallAttackerKnockbackType = val;
     }
     {
         float fval;
         if (sfall_gl_vars_fetch_float(kGlVarAtkKnVal, fval)) {
+            if (std::isnan(fval) || std::isinf(fval)) fval = 0.0f;
             sfallAttackerKnockbackValue = fval;
         }
     }
 
-    // Pipboy availability override.
+    // Pipboy availability override — setter stores 0 or 1; default is -1.
+    // Clamp to [-1, 1] on load.
     if (sfall_gl_vars_fetch(kGlVarPipboy, val)) {
+        if (val < -1) val = -1;
+        if (val > 1) val = 1;
         gPipboyAvailableOverride = val;
     }
 
@@ -5740,12 +5837,18 @@ void sfallOpcodeStateLoad()
         sfallClearSelectablePerks = (val != 0);
     }
     if (sfall_gl_vars_fetch(kGlVarPyroMod, val)) {
+        if (val < -100) val = -100;
+        if (val > 100) val = 100;
         sfallPyromaniacMod = val;
     }
     if (sfall_gl_vars_fetch(kGlVarSwiftMod, val)) {
+        if (val < -100) val = -100;
+        if (val > 100) val = 100;
         sfallSwiftLearnerMod = val;
     }
     if (sfall_gl_vars_fetch(kGlVarHpPMod, val)) {
+        if (val < -50) val = -50;
+        if (val > 50) val = 50;
         sfallHpPerLevelMod = val;
     }
 
@@ -5756,6 +5859,8 @@ void sfallOpcodeStateLoad()
 
     // F-002: Restore per-stat min/max bounds set via set_stat_max (0x81B4),
     // set_stat_min (0x81B5), and their PC/NPC variants.
+    // F-003: Apply clampStatBoundaryValue() to loaded stat bounds so crafted
+    // saves cannot inject out-of-range bounds that bypass the setters.
     {
         int statCount = 0;
         if (sfall_gl_vars_fetch(kGlVarStatCnt, statCount)) {
@@ -5764,10 +5869,12 @@ void sfallOpcodeStateLoad()
                 int ival = 0;
                 sprintf(key, "SFStMn%02d", stat);
                 if (sfall_gl_vars_fetch(key, ival)) {
+                    ival = clampStatBoundaryValue(stat, ival, "sfallOpcodeStateLoad");
                     statSetMinValue(stat, ival);
                 }
                 sprintf(key, "SFStMx%02d", stat);
                 if (sfall_gl_vars_fetch(key, ival)) {
+                    ival = clampStatBoundaryValue(stat, ival, "sfallOpcodeStateLoad");
                     statSetMaxValue(stat, ival);
                 }
             }
@@ -5776,12 +5883,18 @@ void sfallOpcodeStateLoad()
 
     // Pickpocket modifier opcodes.
     if (sfall_gl_vars_fetch(kGlVarPkpMax, val)) {
+        if (val < 0) val = 0;
+        if (val > 100) val = 100;
         sfallPickpocketMax = val;
     }
     if (sfall_gl_vars_fetch(kGlVarCrtPMax, val)) {
+        if (val < 1) val = 1;
+        if (val > 100) val = 100;
         sfallCritterPickpocketMax = val;
     }
     if (sfall_gl_vars_fetch(kGlVarBasePMax, val)) {
+        if (val < 1) val = 1;
+        if (val > 100) val = 100;
         sfallBasePickpocketMax = val;
     }
     if (sfall_gl_vars_fetch(kGlVarCrtPMod, val)) {
@@ -5801,6 +5914,8 @@ void sfallOpcodeStateLoad()
 
     // Perk level modifier.
     if (sfall_gl_vars_fetch(kGlVarPerkLvlMod, val)) {
+        if (val < -10) val = -10;
+        if (val > 10) val = 10;
         sfallPerkLevelMod = val;
     }
 
@@ -6238,12 +6353,16 @@ int sfallGetBaseSkillMod(int skill)
 // F-001: Per-critter skill mod accessor.
 // Returns the per-(pid,skill) modifier if one was set via
 // set_critter_skill_mod for this specific critter + skill pair.
-// Returns 0 if no per-critter override exists. The caller should then
-// check sfallGetCritterSkillMod(skill) for the per-skill fallback.
+// Returns kNoSkillModOverride (INT_MIN) if no per-critter override
+// exists. The caller should then check sfallGetCritterSkillMod(skill)
+// for the per-skill fallback.
+// F-042: INT_MIN sentinel allows explicitly-set modifier=0 to override
+// a non-zero global modifier. Previously 0 meant both "no override" and
+// "override with value 0" — indistinguishable.
 int sfallGetCritterSkillModForCritter(Object* critter, int skill)
 {
     if (critter == nullptr) {
-        return 0;
+        return kNoSkillModOverride;
     }
     auto pidIt = gCritterSkillModMap.find(critter->pid);
     if (pidIt != gCritterSkillModMap.end()) {
@@ -6252,7 +6371,7 @@ int sfallGetCritterSkillModForCritter(Object* critter, int skill)
             return skillIt->second;
         }
     }
-    return 0;
+    return kNoSkillModOverride;
 }
 
 // F-035: Perk level modifier (0x81AB).
@@ -6379,6 +6498,113 @@ static void op_set_movie_path(Program* program)
     }
     debugPrint("set_movie_path(movieid=%d, name=\"%s\") - override stored, consumed by game_movie.cc:150-157",
         movieid, name != nullptr ? name : "(null)");
+}
+
+// F2-008: Shader/graphics opcode stubs — previously unregistered (causing
+// programFatalError → script termination). Registered as safe no-ops with
+// debug logging so scripts compiled against original sfall graphics APIs
+// degrade gracefully instead of crashing.
+//
+// CE uses SDL2 rendering without custom shaders; all graphics ops return
+// defaults (0/false) and log warnings via debugPrint.
+//
+// graphics_funcs_available() -> int — 0x8165
+// Returns 0 (false) — no hardware shader functions available in CE.
+static void op_graphics_funcs_available(Program* program)
+{
+    programStackPushInteger(program, 0);
+}
+
+// load_shader(string path) -> int — 0x8166
+// Returns 0 (invalid shader ID) — shader loading not supported.
+static void op_load_shader(Program* program)
+{
+    const char* path = programStackPopString(program);
+    debugPrint("op_load_shader(\"%s\"): shaders not supported in CE — returning 0", path != nullptr ? path : "(null)");
+    programStackPushInteger(program, 0);
+}
+
+// free_shader(int ID) — 0x8167
+static void op_free_shader(Program* program)
+{
+    int id = programStackPopInteger(program);
+    debugPrint("op_free_shader(%d): shaders not supported in CE — no-op", id);
+}
+
+// activate_shader(int ID) — 0x8168
+static void op_activate_shader(Program* program)
+{
+    int id = programStackPopInteger(program);
+    debugPrint("op_activate_shader(%d): shaders not supported in CE — no-op", id);
+}
+
+// deactivate_shader(int ID) — 0x8169
+static void op_deactivate_shader(Program* program)
+{
+    int id = programStackPopInteger(program);
+    debugPrint("op_deactivate_shader(%d): shaders not supported in CE — no-op", id);
+}
+
+// set_shader_int(int ID, string param, int value) — 0x816D
+static void op_set_shader_int(Program* program)
+{
+    int value = programStackPopInteger(program);
+    const char* param = programStackPopString(program);
+    int id = programStackPopInteger(program);
+    debugPrint("op_set_shader_int(%d, \"%s\", %d): shaders not supported in CE — no-op",
+        id, param != nullptr ? param : "(null)", value);
+}
+
+// set_shader_float(int ID, string param, float value) — 0x816E
+static void op_set_shader_float(Program* program)
+{
+    float value = programStackPopValue(program).asFloat();
+    const char* param = programStackPopString(program);
+    int id = programStackPopInteger(program);
+    debugPrint("op_set_shader_float(%d, \"%s\", %f): shaders not supported in CE — no-op",
+        id, param != nullptr ? param : "(null)", static_cast<double>(value));
+}
+
+// set_shader_vector(int ID, string param, float f1, float f2, float f3, float f4) — 0x816F
+static void op_set_shader_vector(Program* program)
+{
+    float f4 = programStackPopValue(program).asFloat();
+    float f3 = programStackPopValue(program).asFloat();
+    float f2 = programStackPopValue(program).asFloat();
+    float f1 = programStackPopValue(program).asFloat();
+    const char* param = programStackPopString(program);
+    int id = programStackPopInteger(program);
+    debugPrint("op_set_shader_vector(%d, \"%s\", %f, %f, %f, %f): shaders not supported in CE — no-op",
+        id, param != nullptr ? param : "(null)",
+        static_cast<double>(f1), static_cast<double>(f2),
+        static_cast<double>(f3), static_cast<double>(f4));
+}
+
+// force_graphics_refresh(bool enabled) — 0x81B0
+static void op_force_graphics_refresh(Program* program)
+{
+    int enabled = programStackPopInteger(program);
+    debugPrint("op_force_graphics_refresh(%d): not applicable in CE SDL2 renderer — no-op", enabled);
+}
+
+// get_shader_texture(int ID, int texture) -> int — 0x81B1
+// Returns 0 — no shader textures available.
+static void op_get_shader_texture(Program* program)
+{
+    int texture = programStackPopInteger(program);
+    int id = programStackPopInteger(program);
+    debugPrint("op_get_shader_texture(%d, %d): shaders not supported in CE — returning 0", id, texture);
+    programStackPushInteger(program, 0);
+}
+
+// set_shader_texture(int ID, string param, int texID) — 0x81B2
+static void op_set_shader_texture(Program* program)
+{
+    int texId = programStackPopInteger(program);
+    const char* param = programStackPopString(program);
+    int id = programStackPopInteger(program);
+    debugPrint("op_set_shader_texture(%d, \"%s\", %d): shaders not supported in CE — no-op",
+        id, param != nullptr ? param : "(null)", texId);
 }
 
 // get_shader_version() -> int — 0x81AD
@@ -6611,21 +6837,36 @@ void sfallOpcodesInit()
     // 0x8164 - bool game_loaded()
     interpreterRegisterOpcode(0x8164, op_game_loaded);
 
+    // F2-008: Register all shader/graphics opcodes as safe no-op stubs.
+    // Previously these 11 opcodes had no registration — nullptr handler →
+    // programFatalError → longjmp → script termination. Now they log warnings
+    // and push safe defaults, matching the pattern of the 22 existing stubs.
     // 0x8165 - bool graphics_funcs_available()
+    interpreterRegisterOpcode(0x8165, op_graphics_funcs_available);
     // 0x8166 - int  load_shader(string path)
+    interpreterRegisterOpcode(0x8166, op_load_shader);
     // 0x8167 - void free_shader(int ID)
+    interpreterRegisterOpcode(0x8167, op_free_shader);
     // 0x8168 - void activate_shader(int ID)
+    interpreterRegisterOpcode(0x8168, op_activate_shader);
     // 0x8169 - void deactivate_shader(int ID)
+    interpreterRegisterOpcode(0x8169, op_deactivate_shader);
     // 0x816d - void set_shader_int(int ID, string param, int value)
+    interpreterRegisterOpcode(0x816D, op_set_shader_int);
     // 0x816e - void set_shader_float(int ID, string param, float value)
+    interpreterRegisterOpcode(0x816E, op_set_shader_float);
     // 0x816f - void set_shader_vector(int ID, string param, float f1, float f2, float f3, float f4)
+    interpreterRegisterOpcode(0x816F, op_set_shader_vector);
     // 0x81ad - int get_shader_version()
     interpreterRegisterOpcode(0x81AD, op_get_shader_version);
     // 0x81ae - void set_shader_mode(int mode)
     interpreterRegisterOpcode(0x81AE, op_set_shader_mode);
     // 0x81b0 - void force_graphics_refresh(bool enabled)
+    interpreterRegisterOpcode(0x81B0, op_force_graphics_refresh);
     // 0x81b1 - int get_shader_texture(int ID, int texture)
+    interpreterRegisterOpcode(0x81B1, op_get_shader_texture);
     // 0x81b2 - void set_shader_texture(int ID, string param, int texID)
+    interpreterRegisterOpcode(0x81B2, op_set_shader_texture);
 
     // 0x816a - void set_global_script_repeat(int frames)
     interpreterRegisterOpcode(0x816A, op_set_global_script_repeat);

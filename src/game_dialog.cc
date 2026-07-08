@@ -838,6 +838,7 @@ void gameDialogEnter(Object* speaker, int mode)
     // The hook should pass the OLD speaker (the one whose dialog is ending),
     // not the new one. Save it here and temporarily restore before the exit call.
     Object* oldSpeaker = gGameDialogSpeaker;
+    bool oldSpeakerIsPartyMember = gGameDialogSpeakerIsPartyMember;
 
     gGameDialogOldCenterTile = gCenterTile;
     gGameDialogBarterModifier = 0;
@@ -880,21 +881,34 @@ void gameDialogEnter(Object* speaker, int mode)
     gameDialogEndLips();
 
     if (_gdialog_state == GAME_DIALOG_ACTIVE) {
-        // TODO: Not sure about these conditions.
-        if (dialogSwitchMode == GAME_DIALOG_MODE_SWITCH_TO_BARTER) {
-            _gdialog_window_destroy();
-        } else if (dialogSwitchMode == GAME_DIALOG_MODE_SWITCH_TO_PARTY_CONTROL) {
-            _gdialog_window_destroy();
-        } else if (dialogSwitchMode == GAME_DIALOG_MODE_SWITCH_TO_PARTY_CUSTOMIZATION) {
-            _gdialog_window_destroy();
-        } else {
-            if (dialogSwitchMode == GAME_DIALOG_MODE_TALK) {
-                gameDialogDestroyBarterWindow();
-            } else if (dialogMode == GAME_DIALOG_MODE_TALK) {
+        // F-020: Temporarily restore old speaker's party-member flag for
+        // the close animation. _gdialog_window_destroy selects dialog art
+        // (frmId 389 for party members, 99 for NPCs) based on
+        // gGameDialogSpeakerIsPartyMember, which was set to the NEW
+        // speaker's party status at line 850. Restore the old speaker's
+        // party status alongside the correct close-frame art.
+        {
+            bool tmpPartyMember = gGameDialogSpeakerIsPartyMember;
+            gGameDialogSpeakerIsPartyMember = oldSpeakerIsPartyMember;
+
+            // TODO: Not sure about these conditions.
+            if (dialogSwitchMode == GAME_DIALOG_MODE_SWITCH_TO_BARTER) {
                 _gdialog_window_destroy();
-            } else if (dialogMode == mode) {
-                gameDialogDestroyBarterWindow();
+            } else if (dialogSwitchMode == GAME_DIALOG_MODE_SWITCH_TO_PARTY_CONTROL) {
+                _gdialog_window_destroy();
+            } else if (dialogSwitchMode == GAME_DIALOG_MODE_SWITCH_TO_PARTY_CUSTOMIZATION) {
+                _gdialog_window_destroy();
+            } else {
+                if (dialogSwitchMode == GAME_DIALOG_MODE_TALK) {
+                    gameDialogDestroyBarterWindow();
+                } else if (dialogMode == GAME_DIALOG_MODE_TALK) {
+                    _gdialog_window_destroy();
+                } else if (dialogMode == mode) {
+                    gameDialogDestroyBarterWindow();
+                }
             }
+
+            gGameDialogSpeakerIsPartyMember = tmpPartyMember;
         }
         // SFALL: Restore old speaker before exit hook (F-020).
         // _gdialogExitFromScript() fires HOOK_DIALOG with gGameDialogSpeaker.
@@ -1066,9 +1080,20 @@ int _gdialogInitFromScript(int headFid, int reaction)
 // 0x445298
 int _gdialogExitFromScript()
 {
-    if (dialogSwitchMode == GAME_DIALOG_MODE_SWITCH_TO_BARTER
+    bool isModeSwitch = (dialogSwitchMode == GAME_DIALOG_MODE_SWITCH_TO_BARTER
         || dialogSwitchMode == GAME_DIALOG_MODE_SWITCH_TO_PARTY_CONTROL
-        || dialogSwitchMode == GAME_DIALOG_MODE_SWITCH_TO_PARTY_CUSTOMIZATION) {
+        || dialogSwitchMode == GAME_DIALOG_MODE_SWITCH_TO_PARTY_CUSTOMIZATION);
+
+    if (isModeSwitch) {
+        // SFALL: Fire HOOK_DIALOG exit even during mode-switch transitions.
+        // The F-020 fix in gameDialogEnter temporarily restores the old
+        // speaker before calling us, so the hook sees the correct speaker.
+        // We still return -1 to prevent opEndGameDialog (interpreter_extra.cc)
+        // from nullifying gGameDialogSpeaker/gGameDialogSid, since the speaker
+        // must be preserved across mode transitions.
+        if (_gdialog_state == GAME_DIALOG_ACTIVE) {
+            ScriptHookCall(HOOK_DIALOG, 0, { gGameDialogSpeaker, -1, -1 }).call();
+        }
         return -1;
     }
 
@@ -1078,13 +1103,21 @@ int _gdialogExitFromScript()
 
     // SFALL: Fire HOOK_DIALOG on dialog exit.
     // headFid = -1 (not applicable), reaction = -1 (not applicable).
+    //
+    // F2-14: Save speaker pid before firing the hook. Hook scripts
+    // can call destroy_object on the speaker (confirmed by developer
+    // warning at gameDialogEnter:854-858). After the hook returns,
+    // gGameDialogSpeaker may dangle — its memory freed but pointer
+    // still non-null. Save the pid beforehand so the type check below
+    // does not dereference a stale pointer.
+    int speakerPid = (gGameDialogSpeaker != nullptr) ? gGameDialogSpeaker->pid : -1;
     ScriptHookCall(HOOK_DIALOG, 0, { gGameDialogSpeaker, -1, -1 }).call();
 
     gameDialogEndLips();
     dialogReviewEntriesClear();
     tickersRemove(gameDialogTicker);
 
-    if (gGameDialogSpeaker != nullptr && PID_TYPE(gGameDialogSpeaker->pid) != OBJ_TYPE_ITEM) {
+    if (gGameDialogSpeaker != nullptr && speakerPid != -1 && PID_TYPE(speakerPid) != OBJ_TYPE_ITEM) {
         gameDialogRestoreCenterTile();
     }
 

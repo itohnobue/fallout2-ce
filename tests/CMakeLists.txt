@@ -355,10 +355,13 @@ add_test(NAME test_loadsave COMMAND test_loadsave)
 
 # ---- Test: sfall_animation.cc (M-057: 8-function module mirrors) ----
 # Self-contained test — does not link sfall_animation.cc (50+ engine deps).
+# SDL2/zlib headers needed for transitive includes from sfall_animation.h.
 add_executable(test_sfall_animation
     test_sfall_animation.cc
 )
-target_link_libraries(test_sfall_animation PRIVATE doctest)
+target_include_directories(test_sfall_animation PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_include_directories(test_sfall_animation PRIVATE ${ZLIB_INCLUDE_DIRS})
+target_link_libraries(test_sfall_animation PRIVATE test_stubs doctest ${SDL2_LIBRARIES})
 add_test(NAME test_sfall_animation COMMAND test_sfall_animation)
 
 # ---- Test: endgame.cc (N2-H-001/N2-044/N2-045/N2-046 fork change mirrors) ----

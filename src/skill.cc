@@ -271,7 +271,11 @@ int skillGetValue(Object* critter, int skill)
     // using skillGetValue for combat, AI, barter, and skill checks.
     {
         int perCritterSkillMod = sfallGetCritterSkillModForCritter(critter, skill);
-        if (perCritterSkillMod != 0) {
+        // F-042: kNoSkillModOverride (INT_MIN) sentinel means "no per-critter
+        // override exists" — fall back to global modifier. This allows an
+        // explicitly-set per-critter modifier of 0 to correctly override a
+        // non-zero global modifier (previously 0 was ambiguous).
+        if (perCritterSkillMod != kNoSkillModOverride) {
             value += perCritterSkillMod;
         } else {
             value += sfallGetCritterSkillMod(skill);

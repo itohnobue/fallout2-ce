@@ -976,8 +976,17 @@ int scriptHooks_AfterHitRoll(Object* attacker, Object** defenderPtr, int* hitLoc
         // Sibling hooks (HOOK_COMBATTURN, HOOK_CANUSEWEAPON) follow
         // the same pattern — null Object* returns from asObject()
         // are treated as "no override."
-        if (overrideDefender != nullptr) {
+        // F-31: Validate that the returned object is a critter before
+        // accepting it as a defender override.  Non-critter objects
+        // (items, scenery, walls, etc.) do not have valid critter
+        // combat data, and dereferencing data.critter.combat on them
+        // is undefined behavior.  Reject the override and log a
+        // diagnostic, consistent with how other invalid return values
+        // are handled in this function.
+        if (overrideDefender != nullptr && PID_TYPE(overrideDefender->pid) == OBJ_TYPE_CRITTER) {
             *defenderPtr = overrideDefender;
+        } else if (overrideDefender != nullptr) {
+            debugPrint("HOOK_AFTERHITROLL: ignoring non-critter defender override (type=%d)", PID_TYPE(overrideDefender->pid));
         }
     }
 

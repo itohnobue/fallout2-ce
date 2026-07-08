@@ -357,7 +357,10 @@ bool sfallLoadGameData(File* stream)
 
     // Read the trailing metarule state section (may not exist in older saves).
     // sfall_metarules_load() gracefully checks its own version marker.
-    sfall_metarules_load(stream);
+    if (!sfall_metarules_load(stream)) {
+        debugPrint("LOADSAVE (SFALL): ** Error loading metarules **\n");
+        return false;
+    }
 
     return true;
 }

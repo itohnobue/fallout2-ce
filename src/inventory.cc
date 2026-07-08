@@ -4825,6 +4825,30 @@ static InventoryMoveResult _move_inventory(Object* item, int slotIndex, Object* 
 
 // TODO: move barter related code to separate file
 
+// Calculates the total cost of items in a table that would pass the
+// HOOK_INVENTORYMOVE hook during barter. Items blocked by the hook
+// stay in the table and should not count toward the offer/request.
+// Mirrors the accumulation logic from objectGetCost (item.cc:904).
+static int barterTableMovableCost(Object* table, Object* target)
+{
+    int cost = 0;
+    Inventory* inventory = &(table->data.inventory);
+    for (int index = 0; index < inventory->length; index++) {
+        InventoryItem* inventoryItem = &(inventory->items[index]);
+        if (scriptHooks_InventoryMove(HOOK_INVENTORYMOVE_BARTER, inventoryItem->item, target)) {
+            if (itemGetType(inventoryItem->item) == ITEM_TYPE_AMMO) {
+                Proto* proto;
+                protoGetProto(inventoryItem->item->pid, &proto);
+                cost += proto->item.cost * (inventoryItem->quantity - 1);
+                cost += itemGetCost(inventoryItem->item);
+            } else {
+                cost += itemGetCost(inventoryItem->item) * inventoryItem->quantity;
+            }
+        }
+    }
+    return cost;
+}
+
 // Calculates value of NPC/barterer (request) and player (offer) tables.
 //
 // 0x474B2C barter_compute_value
@@ -4918,6 +4942,27 @@ static int barterAttemptTransaction(Object* dude, Object* offerTable, Object* np
 
         if (!badOffer) {
             auto [requestValue, offerValue] = barterComputeTablesValue(dude, npc, true);
+
+            // F-032: Account for items blocked by HOOK_INVENTORYMOVE in the
+            // price comparison. Items that will be blocked by the hook during
+            // actual transfer stay in their tables and should not count toward
+            // the offer/request value. Compute effective (movable) costs and
+            // adjust the computed values proportionally. When no hooks are
+            // registered this is a no-op (scriptHooks_InventoryMove returns
+            // true immediately for empty hooks).
+            int movableOfferCost = barterTableMovableCost(offerTable, offerTable);
+            int movableBarterCost = barterTableMovableCost(barterTable, barterTable);
+
+            int totalOfferCost = objectGetCost(offerTable);
+            int totalBarterCost = objectGetCost(barterTable);
+
+            if (totalOfferCost > 0) {
+                offerValue = static_cast<int>(static_cast<double>(offerValue) * movableOfferCost / totalOfferCost);
+            }
+            if (totalBarterCost > 0) {
+                requestValue = static_cast<int>(static_cast<double>(requestValue) * movableBarterCost / totalBarterCost);
+            }
+
             if (requestValue > offerValue) {
                 badOffer = true;
             }

@@ -120,7 +120,7 @@ See [`https://sfall-team.github.io/sfall/`](https://sfall-team.github.io/sfall/)
 | DeathAnim2 | `HOOK_DEATHANIM2` | ✅ | - |
 | CombatDamage | `HOOK_COMBATDAMAGE` | ✅ | - |
 | OnDeath | `HOOK_ONDEATH` | ✅ | - |
-| FindTarget | `HOOK_FINDTARGET` | ✅ | Fires at 3 combat_ai.cc call sites (lines 1679, 1706, 1760) via static_cast<HookType>(7). Hook fully operational (sfall_script_hooks.h:41). |
+| FindTarget | `HOOK_FINDTARGET` | ✅ | **Contract difference from sfall:** CE uses a simplified 2-arg layout: arg0=attacker (Object), arg1=target (Object), 1 return value. sfall uses a 5-arg layout (arg0=attacker, arg1=combat group index, arg2=current target, arg3=previous target, arg4=area attack mode). CE fires at 3 combat_ai.cc call sites (lines 1836, 1874, 1934) — once during area-attack target iteration, once for "who hit me" retaliation, and once as a final post-selection override. Return value: if non-null and a valid critter, overrides the engine-selected target; null means "keep engine choice." Scripts written for sfall's 5-arg layout will receive different values in arg0/arg1 than expected. |
 | UseObjOn | `HOOK_USEOBJON` | ✅ | - |
 | UseObj | `HOOK_USEOBJ` | ✅ | CE notes an sfall-matching inconsistency around return code `2` behavior between interface contexts. |
 | RemoveInvenObj | `HOOK_REMOVEINVENOBJ` | 🚫 | Deliberately absent: requires RMOBJ_* constants and destination object tracking not present in CE's itemRemove. Would require significant refactoring of the item removal code path. |
@@ -154,7 +154,7 @@ See [`https://sfall-team.github.io/sfall/`](https://sfall-team.github.io/sfall/)
 | TargetObject | `HOOK_TARGETOBJECT` | ✅ | Fires at the start of `_combat_attack`, when attack execution begins (after target selection by AI, before hit computation). arg0=attacker, arg1=defender, arg2=hitMode, arg3=hitLocation. |
 | Dialog | `HOOK_DIALOG` (49) | ✅ [CE] | CE-specific. Fires on dialog start (arg0=speaker, arg1=headFid, arg2=reaction) and exit (arg1=-1, arg2=-1, arg0=speaker). |
 | DialogReaction | `HOOK_DIALOGREACTION` (50) | ✅ [CE] | CE-specific. Fires when a dialog reaction is triggered (`_talk_to_critter_reacts`). arg0=speaker, arg1=reaction (-2, -1, or 0). |
-| Encounter | `HOOK_ENCOUNTER` | ✅ | - |
+| Encounter | `HOOK_ENCOUNTER` | ✅ | **Contract difference from sfall:** CE uses an extended 5-arg layout: arg0=eventType (0=random encounter, 1=local-map-enter from worldmap), arg1=mapId, arg2=isSpecial (1 if special encounter), arg3=tableId (encounter table number, -1 if not an encounter), arg4=entryId (entry index in table, -1 if not an encounter). sfall 4.x uses a 3-arg layout: arg0=encounter type (0=random, 1=special, 0x100=forced), arg1=tile number, arg2=forced flag (1 if forced). The arg0 semantics are fundamentally incompatible — CE's 0/1 values refer to event type, while sfall's 0/1/0x100 encode type+mode into a single field. Return values: ret0 overrides mapId (-1 to cancel for eventType=0, or the map to load); ret1 (eventType=0 only) returns 1 to cancel encounter and directly load the map from ret0. Mod scripts written for sfall's 3-arg layout will receive different values and wrong semantics for all arguments. |
 | AdjustPoison | `HOOK_ADJUSTPOISON` | 🚫 | (maybe) |
 | AdjustRads | `HOOK_ADJUSTRADS` | 🚫 | (maybe) |
 | RollCheck | `HOOK_ROLLCHECK` | 🚫 | Deliberately absent: randomRoll() has 30+ call sites with no event_type context. Adding context to every call site is too invasive; pass-through hook on every roll would be too expensive. |

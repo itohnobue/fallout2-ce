@@ -283,7 +283,19 @@ bool configGetIntList(Config* config, const char* sectionKey, const char* key, i
         }
 
         *pch = '\0';
-        *arr++ = atoi(string);
+        // Handle empty string between commas (e.g., "10,,20") — value 0.
+        if (*string == '\0') {
+            *arr++ = 0;
+        } else {
+            // Use strtol with errno+ERANGE to avoid UB on overflow (F-48).
+            char* end;
+            errno = 0;
+            long l = strtol(string, &end, 10);
+            if (end == string || errno == ERANGE || l < INT_MIN || l > INT_MAX) {
+                return false;
+            }
+            *arr++ = static_cast<int>(l);
+        }
         string = pch + 1;
 
         count--;
@@ -301,8 +313,24 @@ bool configGetIntList(Config* config, const char* sectionKey, const char* key, i
     // SFALL: Fix getting last item in a list if the list has less than the
     // requested number of values (for `chem_primary_desire`).
     if (count > 0) {
-        *arr = atoi(string);
-        count--;
+        // Handle empty string (e.g., trailing comma "10,20,") — the
+        // empty element after the final comma represents value 0.
+        if (*string == '\0') {
+            *arr = 0;
+            count--;
+        } else {
+            // Use strtol with errno+ERANGE to avoid UB on overflow (F-48).
+            {
+                char* end;
+                errno = 0;
+                long l = strtol(string, &end, 10);
+                if (end == string || errno == ERANGE || l < INT_MIN || l > INT_MAX) {
+                    return false;
+                }
+                *arr = static_cast<int>(l);
+            }
+            count--;
+        }
     }
 
     return count == 0;

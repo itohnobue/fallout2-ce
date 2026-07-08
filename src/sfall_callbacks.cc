@@ -68,6 +68,16 @@ void sfallOnGameReset()
         int quickPocketsReduction = 2;
         configGetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, "InventoryApCost", &invenApCost);
         configGetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, "QuickPocketsApCostReduction", &quickPocketsReduction);
+        // F-50: Clamp negative/unreasonable values to prevent game-breaking
+        // behavior (negative AP costs would allow free actions or crash).
+        if (invenApCost < 0) {
+            invenApCost = 0;
+        }
+        if (quickPocketsReduction < 0) {
+            quickPocketsReduction = 0;
+        } else if (quickPocketsReduction > invenApCost) {
+            quickPocketsReduction = invenApCost;
+        }
         inventorySetInvenApCost(invenApCost);
         inventorySetQuickPocketsApCostReduction(quickPocketsReduction);
     }

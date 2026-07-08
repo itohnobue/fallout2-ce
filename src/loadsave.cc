@@ -2003,6 +2003,18 @@ static int lsgPerformSaveGame()
                 backgroundSoundResume();
                 return -1;
             }
+        } else {
+            // F2-022: sfallgv.sav temp file open failed (disk full, permissions).
+            // SAVE.DAT has already been written — must roll back to avoid
+            // leaving SAVE.DAT without a corresponding sfallgv.sav.
+            debugPrint("\nLOADSAVE: ** Error opening sfallgv.sav temp file for writing! **\n");
+            fileClose(_flptr);
+            _RestoreSave();
+            snprintf(_gmpath, sizeof(_gmpath), "%s\\%s%.2d\\", "SAVEGAME", "SLOT", _slot_cursor + 1);
+            MapDirErase(_gmpath, "BAK");
+            _partyMemberUnPrepSave();
+            backgroundSoundResume();
+            return -1;
         }
     }
 
@@ -2125,6 +2137,13 @@ static int lsgLoadGameInSlot(int slot)
             _loadingGame = false;
             return -1;
         }
+    } else {
+        // F2-023: sfallgv.sav is missing for this save slot.
+        // gameReset() (called by _PrepLoad handler 0) already cleared
+        // sfall globals to defaults, so the engine will function — but
+        // sfall state (globals, arrays, metarules) from the original save
+        // is lost. Inform the user rather than silently skipping.
+        debugPrint("\nLOADSAVE: ** sfallgv.sav not found — sfall state not loaded (using defaults) **\n");
     }
 
     snprintf(_str, sizeof(_str), "%s\\", "MAPS");

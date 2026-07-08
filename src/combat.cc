@@ -1,5 +1,6 @@
 #include "combat.h"
 
+#include <cmath>
 #include <limits.h>
 #include <stdio.h>
 #include <string.h>
@@ -3518,8 +3519,22 @@ void _combat(CombatStartData* csd)
             _combat_set_move_all();
 
             for (; curIndex < _list_com; curIndex++) {
+                // Snapshot _list_com before hook dispatch so we can detect
+                // if _combat_delete_critter removed entries from the combat
+                // section during hook execution.  When entries at or before
+                // curIndex are removed, the remaining entries shift down
+                // and curIndex would otherwise skip the entry that shifted
+                // into the current slot.  Conservatively decrement curIndex
+                // by the removal count — double-visiting an already-processed
+                // critter (which has 0 AP) is safe; skipping a turn is not.
+                int savedListCom = _list_com;
                 if (combatTurnHooked(_combat_list[curIndex], false) == -1) {
                     break;
+                }
+
+                if (_list_com < savedListCom) {
+                    curIndex -= (savedListCom - _list_com);
+                    if (curIndex < 0) curIndex = 0;
                 }
 
                 if (_combat_ending_guy != nullptr) {
@@ -4778,10 +4793,13 @@ static int attackDetermineToHit(Object* attacker, int tile, Object* defender, in
 }
 
 // SFALL: Fix M-08 — safe float-to-int conversion for knockback values.
-// static_cast<int>(float) is UB for values outside [INT_MIN, INT_MAX].
-// Clamp extreme values before casting. In practice knockback values are
-// small (0-20 hexes), but script-controlled float globals can hold any value.
+// static_cast<int>(float) is UB for values outside [INT_MIN, INT_MAX]
+// AND for NaN/infinity values.  Clamp extreme values and trap NaN/inf
+// before casting. In practice knockback values are small (0-20 hexes),
+// but script-controlled float globals can hold any value.
 static inline int floatToIntSafe(float value) {
+    if (std::isnan(value)) return 0;
+    if (std::isinf(value)) return (value > 0) ? INT_MAX : INT_MIN;
     if (value > static_cast<float>(INT_MAX)) return INT_MAX;
     if (value < static_cast<float>(INT_MIN)) return INT_MIN;
     return static_cast<int>(value);

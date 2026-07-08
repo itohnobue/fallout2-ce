@@ -170,12 +170,15 @@ int sfallGetBaseSkillMod(int skill);
 
 // F-001: Per-critter skill mod accessor. Returns the per-critter skill
 // modifier set via set_critter_skill_mod (0x81C7) for the given critter
-// and skill. Returns 0 if no per-(pid,skill) override exists. The caller
-// should then consult sfallGetCritterSkillMod(skill) for the per-skill
-// fallback.
+// and skill. Returns kNoSkillModOverride if no per-(pid,skill) override
+// exists. The caller should then consult sfallGetCritterSkillMod(skill)
+// for the per-skill fallback.
+// F-042: INT_MIN sentinel instead of 0 so explicitly-set modifier=0
+// correctly overrides a non-zero global modifier.
 // Integration point: skill.cc skillGetValue() should call this with the
 // critter and skill parameters before falling back to
 // sfallGetCritterSkillMod(skill).
+extern const int kNoSkillModOverride;
 int sfallGetCritterSkillModForCritter(Object* critter, int skill);
 
 // ============================================================

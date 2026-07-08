@@ -118,9 +118,10 @@ static bool is_system_file_name(const char* fileName)
 static bool sfall_read_named_ini(const char* iniFileName, Config* config)
 {
     if (basePath[0] != '\0' && !is_system_file_name(iniFileName)) {
-        char path[COMPAT_MAX_PATH];
-        int pathResult = snprintf(path, sizeof(path), "%s\\%s", basePath, iniFileName);
-        if (pathResult >= 0 && pathResult < (int)sizeof(path) && configRead(config, path, false)) {
+        // Use dynamic allocation to avoid path truncation when basePath +
+        // "\\" + iniFileName exceeds COMPAT_MAX_PATH (F-28).
+        std::string path = std::string(basePath) + "\\" + iniFileName;
+        if (configRead(config, path.c_str(), false)) {
             return true;
         }
     }
@@ -423,6 +424,22 @@ void mf_set_ini_setting(OpcodeContext& ctx)
             gExtraSaveSlots = (intVal != 0);
         } else if (compat_stricmp(triplet, "ddraw.ini|Misc|EnableHeroAppearanceMod") == 0) {
             gEnableHeroAppearanceMod = (intVal != 0);
+        }
+
+        // F2-32: Update in-memory gSfallConfig so runtime consumers (e.g.
+        // SpeedMulti, InventoryApCost) see the new value without waiting for
+        // a game reset. Without this, gameReset() re-reads stale values from
+        // gSfallConfig and overwrites script-set values.
+        char cfgFileName[kFileNameMaxSize];
+        char cfgSection[kSectionMaxSize];
+        const char* cfgKey = parse_ini_triplet(triplet, cfgFileName, cfgSection);
+        if (cfgKey != nullptr) {
+            if (value.isString()) {
+                const char* strVal = value.asString(ctx.program());
+                configSetString(&gSfallConfig, cfgSection, cfgKey, strVal);
+            } else {
+                configSetInt(&gSfallConfig, cfgSection, cfgKey, intVal);
+            }
         }
     }
 }

@@ -1201,6 +1201,164 @@ TEST_CASE("I2F-035: contentConfig SfallContentMappings count matches migration e
 }
 
 // =============================================================
+// F2-T8: sfall_gl_vars_remove — direct production function calls
+// =============================================================
+// sfall_global_vars.cc:312-317. Both overloads (const char* and int)
+// were untested. Only 2 comment references existed in tests.
+// Since test_global_vars.cc LINKS sfall_global_vars.cc, we can
+// directly call the production functions.
+
+TEST_CASE("F2-T8: sfall_gl_vars_remove — int key overload (sfall_global_vars.cc:285-288)")
+{
+    CHECK(sfall_gl_vars_init());
+
+    SUBCASE("remove existing int key returns true and erases entry")
+    {
+        CHECK(sfall_gl_vars_store(42, 100));
+        int val = 0;
+        CHECK(sfall_gl_vars_fetch(42, val));
+        CHECK(val == 100);
+
+        // Remove the entry
+        bool removed = sfall_gl_vars_remove(42);
+        CHECK(removed == true);
+
+        // Verify entry is gone
+        CHECK_FALSE(sfall_gl_vars_fetch(42, val));
+    }
+
+    SUBCASE("remove non-existent int key returns false")
+    {
+        // Key 999 was never stored
+        bool removed = sfall_gl_vars_remove(999);
+        CHECK(removed == false);
+    }
+
+    SUBCASE("remove same key twice — second call returns false")
+    {
+        CHECK(sfall_gl_vars_store(1, 10));
+        CHECK(sfall_gl_vars_remove(1) == true);
+        CHECK(sfall_gl_vars_remove(1) == false); // already removed
+    }
+
+    SUBCASE("remove does not affect other keys")
+    {
+        CHECK(sfall_gl_vars_store(1, 10));
+        CHECK(sfall_gl_vars_store(2, 20));
+        CHECK(sfall_gl_vars_store(3, 30));
+
+        // Remove key 2
+        CHECK(sfall_gl_vars_remove(2) == true);
+
+        // Keys 1 and 3 still exist
+        int val = 0;
+        CHECK(sfall_gl_vars_fetch(1, val));
+        CHECK(val == 10);
+        CHECK(sfall_gl_vars_fetch(3, val));
+        CHECK(val == 30);
+
+        // Key 2 is gone
+        CHECK_FALSE(sfall_gl_vars_fetch(2, val));
+    }
+
+    SUBCASE("remove then re-add same int key")
+    {
+        CHECK(sfall_gl_vars_store(42, 100));
+        CHECK(sfall_gl_vars_remove(42) == true);
+        CHECK(sfall_gl_vars_store(42, 200));
+
+        int val = 0;
+        CHECK(sfall_gl_vars_fetch(42, val));
+        CHECK(val == 200);
+    }
+
+    sfall_gl_vars_exit();
+}
+
+TEST_CASE("F2-T8: sfall_gl_vars_remove — string key overload (sfall_global_vars.cc:275-283)")
+{
+    CHECK(sfall_gl_vars_init());
+
+    SUBCASE("remove existing 8-char string key returns true")
+    {
+        CHECK(sfall_gl_vars_store("ABCDEFGH", 100));
+        int val = 0;
+        CHECK(sfall_gl_vars_fetch("ABCDEFGH", val));
+        CHECK(val == 100);
+
+        bool removed = sfall_gl_vars_remove("ABCDEFGH");
+        CHECK(removed == true);
+
+        CHECK_FALSE(sfall_gl_vars_fetch("ABCDEFGH", val));
+    }
+
+    SUBCASE("remove existing short string key (zero-padded)")
+    {
+        CHECK(sfall_gl_vars_store("ABC", 42));
+        bool removed = sfall_gl_vars_remove("ABC");
+        CHECK(removed == true);
+
+        int val = 0;
+        CHECK_FALSE(sfall_gl_vars_fetch("ABC", val));
+    }
+
+    SUBCASE("remove existing long string key (FNV-1a hashed)")
+    {
+        CHECK(sfall_gl_vars_store("ABCDEFGHI", 42));
+        bool removed = sfall_gl_vars_remove("ABCDEFGHI");
+        CHECK(removed == true);
+
+        int val = 0;
+        CHECK_FALSE(sfall_gl_vars_fetch("ABCDEFGHI", val));
+    }
+
+    SUBCASE("remove non-existent string key returns false")
+    {
+        bool removed = sfall_gl_vars_remove("NONEXIST");
+        CHECK(removed == false);
+    }
+
+    SUBCASE("remove empty string key returns false (key_to_uint64 rejects empty)")
+    {
+        // Production: sfall_gl_vars_key_to_uint64 returns ok=false for empty key.
+        bool removed = sfall_gl_vars_remove("");
+        CHECK(removed == false);
+    }
+
+    SUBCASE("remove string key does not affect int-keyed entries")
+    {
+        CHECK(sfall_gl_vars_store("GLOBA001", 100));
+        CHECK(sfall_gl_vars_store(1, 200));
+
+        CHECK(sfall_gl_vars_remove("GLOBA001") == true);
+
+        int val = 0;
+        CHECK_FALSE(sfall_gl_vars_fetch("GLOBA001", val));
+        CHECK(sfall_gl_vars_fetch(1, val));
+        CHECK(val == 200);
+    }
+
+    SUBCASE("remove string key does not affect float entries for same key")
+    {
+        // String "KEYFLOAT" → uint64_t key; int and float entry for same key
+        // are in separate maps (vars vs floatVars). Removing int entry
+        // should not affect the float entry.
+        CHECK(sfall_gl_vars_store("KEYFLOAT", 42));
+        CHECK(sfall_gl_vars_store_float("KEYFLOAT", 3.14f));
+
+        CHECK(sfall_gl_vars_remove("KEYFLOAT") == true);
+
+        int intVal = 0;
+        CHECK_FALSE(sfall_gl_vars_fetch("KEYFLOAT", intVal));
+        float floatVal = 0.0f;
+        CHECK(sfall_gl_vars_fetch_float("KEYFLOAT", floatVal));
+        CHECK(floatVal == doctest::Approx(3.14f));
+    }
+
+    sfall_gl_vars_exit();
+}
+
+// =============================================================
 // I2F-038: sfall_global_scripts runtime tests
 // =============================================================
 // sfall_global_scripts.cc (468 LOC) was added to test_sources in
@@ -1273,4 +1431,429 @@ TEST_CASE("I2F-038: sfall_global_scripts — exec_map_update_scripts with variou
     }
     sfall_gl_scr_exit();
     CHECK(true);
+}
+
+// =============================================================
+// F2-T4: Behavioral mirror tests for sfall_global_scripts execution functions
+// =============================================================
+// sfall_global_scripts.cc (468 LOC) has zero behavioral test coverage
+// for its critical execution functions. These mirrors trace the
+// production logic patterns for:
+//   - sfall_gl_scr_process_main/input/worldmap (lines 388-405)
+//   - sfall_gl_scr_process_simple internal loop (lines 365-386)
+//   - sfall_gl_scr_execute_proc_if_ready (lines 341-350)
+//   - sfall_gl_scr_set_repeat negative guard (lines 417-429)
+//   - sfall_gl_scr_set_type bounds checking (lines 432-441)
+//
+// Production functions require full Program lifecycle and combat
+// state — mirrors provide behavioral coverage for the logic patterns.
+
+namespace {
+
+// Mirror of GlobalScript (sfall_global_scripts.cc:24-31)
+struct F2T4_MirrorGlobalScript {
+    void* program;
+    int repeat = 0;
+    int count = 0;
+    int mode = 0; // 0=timed, 1=input, 2=worldmap, 3=always
+    bool procReady = true; // simulate: proc exists and program not busy
+    bool combatCheckResetCalled = false;
+    int executionCount = 0;
+};
+
+// Mirror of sfall_gl_scr_execute_proc_if_ready (sfall_global_scripts.cc:341-350)
+static bool f2t4_mirrorExecuteProcIfReady(F2T4_MirrorGlobalScript& scr, int proc)
+{
+    // Production: if (proc != -1 && (program->flags & kGlobalScriptBusyFlags) == 0)
+    if (proc != -1 && scr.procReady) {
+        scr.executionCount++;
+        return true;
+    }
+    return false;
+}
+
+// Mirror of sfall_gl_scr_process_simple (sfall_global_scripts.cc:365-386)
+static void f2t4_mirrorProcessSimple(
+    std::vector<F2T4_MirrorGlobalScript>& scripts,
+    int mode1, int mode2,
+    bool resetCombatCheckPerScript)
+{
+    for (auto& scr : scripts) {
+        if (scr.repeat != 0 && (scr.mode == mode1 || scr.mode == mode2)) {
+            if (resetCombatCheckPerScript) {
+                scr.combatCheckResetCalled = true;
+            }
+
+            scr.count++;
+            if (scr.count >= scr.repeat) {
+                if (f2t4_mirrorExecuteProcIfReady(scr, 5 /* SCRIPT_PROC_START */)) {
+                    scr.count = 0;
+                } else {
+                    scr.count = scr.repeat;
+                }
+            }
+        }
+    }
+}
+
+// Mirror of sfall_gl_scr_set_repeat (sfall_global_scripts.cc:417-429)
+static bool f2t4_mirrorSetRepeat(F2T4_MirrorGlobalScript* scr, int frames)
+{
+    if (frames < 0) {
+        return false; // reject negative
+    }
+    if (scr != nullptr) {
+        scr->repeat = frames;
+        return true;
+    }
+    return false;
+}
+
+// Mirror of sfall_gl_scr_set_type (sfall_global_scripts.cc:432-441)
+static bool f2t4_mirrorSetType(F2T4_MirrorGlobalScript* scr, int type)
+{
+    if (type < 0 || type > 3) {
+        return false; // reject out-of-range
+    }
+    if (scr != nullptr) {
+        scr->mode = type;
+        return true;
+    }
+    return false;
+}
+
+} // anonymous namespace
+
+TEST_CASE("F2-T4: sfall_gl_scr_process_simple — count increment and execution (sfall_global_scripts.cc:365-386)")
+{
+    SUBCASE("repeat=0 → script never executes (skipped)")
+    {
+        std::vector<F2T4_MirrorGlobalScript> scripts;
+        F2T4_MirrorGlobalScript scr;
+        scr.program = reinterpret_cast<void*>(0x1000);
+        scr.repeat = 0; // disabled
+        scr.mode = 0;   // timed
+        scripts.push_back(scr);
+
+        f2t4_mirrorProcessSimple(scripts, 0, 3, true);
+
+        CHECK(scripts[0].executionCount == 0); // never executed
+        CHECK(scripts[0].count == 0);          // count never incremented
+    }
+
+    SUBCASE("repeat=1 → executes every frame")
+    {
+        std::vector<F2T4_MirrorGlobalScript> scripts;
+        F2T4_MirrorGlobalScript scr;
+        scr.program = reinterpret_cast<void*>(0x1000);
+        scr.repeat = 1;
+        scr.mode = 0;
+        scripts.push_back(scr);
+
+        // First tick: count 0→1, count>=repeat → execute, count reset to 0
+        f2t4_mirrorProcessSimple(scripts, 0, 3, false);
+        CHECK(scripts[0].executionCount == 1);
+        CHECK(scripts[0].count == 0);
+
+        // Second tick: same pattern
+        f2t4_mirrorProcessSimple(scripts, 0, 3, false);
+        CHECK(scripts[0].executionCount == 2);
+        CHECK(scripts[0].count == 0);
+    }
+
+    SUBCASE("repeat=3 → executes every 3rd frame")
+    {
+        std::vector<F2T4_MirrorGlobalScript> scripts;
+        F2T4_MirrorGlobalScript scr;
+        scr.program = reinterpret_cast<void*>(0x1000);
+        scr.repeat = 3;
+        scr.mode = 0;
+        scripts.push_back(scr);
+
+        // Frame 1: count 0→1, 1 < 3 → no execute
+        f2t4_mirrorProcessSimple(scripts, 0, 3, false);
+        CHECK(scripts[0].executionCount == 0);
+        CHECK(scripts[0].count == 1);
+
+        // Frame 2: count 1→2, 2 < 3 → no execute
+        f2t4_mirrorProcessSimple(scripts, 0, 3, false);
+        CHECK(scripts[0].executionCount == 0);
+        CHECK(scripts[0].count == 2);
+
+        // Frame 3: count 2→3, 3 >= 3 → execute, count→0
+        f2t4_mirrorProcessSimple(scripts, 0, 3, false);
+        CHECK(scripts[0].executionCount == 1);
+        CHECK(scripts[0].count == 0);
+    }
+}
+
+TEST_CASE("F2-T4: sfall_gl_scr_process_simple — mode filtering (sfall_global_scripts.cc:365-368)")
+{
+    SUBCASE("mode 0 (timed) scripts execute via process_main (modes 0,3)")
+    {
+        std::vector<F2T4_MirrorGlobalScript> scripts;
+        F2T4_MirrorGlobalScript scr;
+        scr.program = reinterpret_cast<void*>(0x1000);
+        scr.repeat = 1;
+        scr.mode = 0; // timed
+        scripts.push_back(scr);
+
+        // process_main: modes 0 and 3
+        f2t4_mirrorProcessSimple(scripts, 0, 3, false);
+        CHECK(scripts[0].executionCount == 1);
+    }
+
+    SUBCASE("mode 1 (input) scripts execute via process_input (mode 1 only)")
+    {
+        std::vector<F2T4_MirrorGlobalScript> scripts;
+        F2T4_MirrorGlobalScript scr;
+        scr.program = reinterpret_cast<void*>(0x1000);
+        scr.repeat = 1;
+        scr.mode = 1; // input
+        scripts.push_back(scr);
+
+        // process_input: mode 1 only
+        f2t4_mirrorProcessSimple(scripts, 1, 1, false);
+        CHECK(scripts[0].executionCount == 1);
+
+        // But process_main (modes 0,3) should NOT execute mode 1
+        auto savedCount = scripts[0].executionCount;
+        f2t4_mirrorProcessSimple(scripts, 0, 3, false);
+        CHECK(scripts[0].executionCount == savedCount); // not executed
+    }
+
+    SUBCASE("mode 2 (worldmap) scripts execute via process_worldmap (modes 2,3)")
+    {
+        std::vector<F2T4_MirrorGlobalScript> scripts;
+        F2T4_MirrorGlobalScript scr;
+        scr.program = reinterpret_cast<void*>(0x1000);
+        scr.repeat = 1;
+        scr.mode = 2; // worldmap
+        scripts.push_back(scr);
+
+        f2t4_mirrorProcessSimple(scripts, 2, 3, false);
+        CHECK(scripts[0].executionCount == 1);
+    }
+
+    SUBCASE("mode 3 (always) scripts execute via ALL process functions")
+    {
+        std::vector<F2T4_MirrorGlobalScript> scripts;
+        F2T4_MirrorGlobalScript scr;
+        scr.program = reinterpret_cast<void*>(0x1000);
+        scr.repeat = 1;
+        scr.mode = 3; // always
+        scripts.push_back(scr);
+
+        // process_main calls with modes 0,3 → matches mode 3
+        f2t4_mirrorProcessSimple(scripts, 0, 3, false);
+        CHECK(scripts[0].executionCount == 1);
+
+        // process_input calls with modes 1,1 → does NOT match mode 3
+        // (production: process_input uses modes 1,1; mode 3 runs in process_main + process_worldmap)
+    }
+
+    SUBCASE("mode 1 script NOT executed by process_main (modes 0,3)")
+    {
+        std::vector<F2T4_MirrorGlobalScript> scripts;
+        F2T4_MirrorGlobalScript scr;
+        scr.program = reinterpret_cast<void*>(0x1000);
+        scr.repeat = 1;
+        scr.mode = 1; // input only
+        scripts.push_back(scr);
+
+        // process_main with modes 0,3
+        f2t4_mirrorProcessSimple(scripts, 0, 3, false);
+        CHECK(scripts[0].executionCount == 0); // mode 1 not matched
+    }
+}
+
+TEST_CASE("F2-T4: sfall_gl_scr_execute_proc_if_ready — busy flag guard (sfall_global_scripts.cc:341-350)")
+{
+    SUBCASE("proc ready → executes")
+    {
+        F2T4_MirrorGlobalScript scr;
+        scr.procReady = true;
+        bool ok = f2t4_mirrorExecuteProcIfReady(scr, 5 /* valid proc */);
+        CHECK(ok == true);
+        CHECK(scr.executionCount == 1);
+    }
+
+    SUBCASE("proc is -1 (not present) → does NOT execute")
+    {
+        F2T4_MirrorGlobalScript scr;
+        scr.procReady = true;
+        bool ok = f2t4_mirrorExecuteProcIfReady(scr, -1);
+        CHECK(ok == false);
+        CHECK(scr.executionCount == 0);
+    }
+
+    SUBCASE("program is busy (procReady=false) → does NOT execute")
+    {
+        F2T4_MirrorGlobalScript scr;
+        scr.procReady = false; // simulates PROGRAM_FLAG_FATAL_ERROR etc.
+        bool ok = f2t4_mirrorExecuteProcIfReady(scr, 5);
+        CHECK(ok == false);
+        CHECK(scr.executionCount == 0);
+    }
+}
+
+TEST_CASE("F2-T4: sfall_gl_scr_set_repeat — negative guard (sfall_global_scripts.cc:417-429)")
+{
+    F2T4_MirrorGlobalScript scr;
+    scr.program = reinterpret_cast<void*>(0x1000);
+
+    SUBCASE("set repeat to 60 → accepted")
+    {
+        bool ok = f2t4_mirrorSetRepeat(&scr, 60);
+        CHECK(ok == true);
+        CHECK(scr.repeat == 60);
+    }
+
+    SUBCASE("set repeat to 0 → accepted (disables periodic execution)")
+    {
+        scr.repeat = 30;
+        bool ok = f2t4_mirrorSetRepeat(&scr, 0);
+        CHECK(ok == true);
+        CHECK(scr.repeat == 0);
+    }
+
+    SUBCASE("set repeat to negative → REJECTED")
+    {
+        scr.repeat = 30;
+        bool ok = f2t4_mirrorSetRepeat(&scr, -1);
+        CHECK(ok == false);
+        CHECK(scr.repeat == 30); // unchanged
+    }
+
+    SUBCASE("set repeat to -5 → REJECTED")
+    {
+        bool ok = f2t4_mirrorSetRepeat(&scr, -5);
+        CHECK(ok == false);
+        CHECK(scr.repeat == 0); // unchanged from default
+    }
+
+    SUBCASE("null script pointer → returned false")
+    {
+        bool ok = f2t4_mirrorSetRepeat(nullptr, 60);
+        CHECK(ok == false);
+    }
+}
+
+TEST_CASE("F2-T4: sfall_gl_scr_set_type — bounds checking (sfall_global_scripts.cc:432-441)")
+{
+    F2T4_MirrorGlobalScript scr;
+    scr.program = reinterpret_cast<void*>(0x1000);
+    scr.mode = 0;
+
+    SUBCASE("valid types 0-3 accepted")
+    {
+        for (int type = 0; type <= 3; type++) {
+            bool ok = f2t4_mirrorSetType(&scr, type);
+            CHECK(ok == true);
+            CHECK(scr.mode == type);
+        }
+    }
+
+    SUBCASE("type < 0 → REJECTED")
+    {
+        scr.mode = 2;
+        bool ok = f2t4_mirrorSetType(&scr, -1);
+        CHECK(ok == false);
+        CHECK(scr.mode == 2); // unchanged
+    }
+
+    SUBCASE("type > 3 → REJECTED")
+    {
+        scr.mode = 1;
+        bool ok = f2t4_mirrorSetType(&scr, 4);
+        CHECK(ok == false);
+        CHECK(scr.mode == 1); // unchanged
+    }
+
+    SUBCASE("type=999 → REJECTED")
+    {
+        bool ok = f2t4_mirrorSetType(&scr, 999);
+        CHECK(ok == false);
+    }
+
+    SUBCASE("null script → returned false")
+    {
+        bool ok = f2t4_mirrorSetType(nullptr, 2);
+        CHECK(ok == false);
+    }
+}
+
+TEST_CASE("F2-T4: combat check reset per-script (sfall_global_scripts.cc:371-374)")
+{
+    // Production: animationResetCombatCheck() is called before EACH script
+    // in sfall_gl_scr_process_simple. This prevents a global script setting
+    // reg_anim_combat_check(0) from affecting subsequent scripts in the same tick.
+
+    SUBCASE("combat check is reset for every script in the list")
+    {
+        std::vector<F2T4_MirrorGlobalScript> scripts;
+
+        F2T4_MirrorGlobalScript scr1;
+        scr1.program = reinterpret_cast<void*>(0x1000);
+        scr1.repeat = 1;
+        scr1.mode = 0;
+        scripts.push_back(scr1);
+
+        F2T4_MirrorGlobalScript scr2;
+        scr2.program = reinterpret_cast<void*>(0x2000);
+        scr2.repeat = 1;
+        scr2.mode = 0;
+        scripts.push_back(scr2);
+
+        F2T4_MirrorGlobalScript scr3;
+        scr3.program = reinterpret_cast<void*>(0x3000);
+        scr3.repeat = 1;
+        scr3.mode = 0;
+        scripts.push_back(scr3);
+
+        f2t4_mirrorProcessSimple(scripts, 0, 3, true);
+
+        // ALL scripts should have combat check reset called
+        CHECK(scripts[0].combatCheckResetCalled == true);
+        CHECK(scripts[1].combatCheckResetCalled == true);
+        CHECK(scripts[2].combatCheckResetCalled == true);
+    }
+
+    SUBCASE("scripts with repeat=0 do NOT trigger combat check reset")
+    {
+        // Production: the combat check reset is inside the `if (scr.repeat != 0)` block.
+        // Scripts with repeat=0 are skipped entirely.
+        std::vector<F2T4_MirrorGlobalScript> scripts;
+        F2T4_MirrorGlobalScript scr;
+        scr.program = reinterpret_cast<void*>(0x1000);
+        scr.repeat = 0; // disabled
+        scr.mode = 0;
+        scripts.push_back(scr);
+
+        f2t4_mirrorProcessSimple(scripts, 0, 3, true);
+
+        CHECK(scripts[0].combatCheckResetCalled == false); // never entered the block
+    }
+}
+
+TEST_CASE("F2-T4: process_simple — proc not ready clamps count to repeat (sfall_global_scripts.cc:377-381)")
+{
+    // Production: if execute_proc_if_ready returns false, count is clamped
+    // to repeat (not reset to 0). This prevents immediate re-attempt on
+    // the next frame when the program is busy.
+
+    std::vector<F2T4_MirrorGlobalScript> scripts;
+    F2T4_MirrorGlobalScript scr;
+    scr.program = reinterpret_cast<void*>(0x1000);
+    scr.repeat = 3;
+    scr.mode = 0;
+    scr.procReady = false; // program is busy
+    scr.count = 3; // Simulate count reaching repeat threshold after 3 frames
+    scripts.push_back(scr);
+
+    f2t4_mirrorProcessSimple(scripts, 0, 3, false);
+
+    // execute_proc_if_ready returns false → count stays at repeat (3)
+    CHECK(scripts[0].executionCount == 0);
+    CHECK(scripts[0].count == 3); // clamped to repeat, not reset to 0
 }
