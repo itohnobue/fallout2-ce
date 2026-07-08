@@ -1312,6 +1312,15 @@ static void op_play_sfall_sound(Program* program)
         return;
     }
 
+    // F-M18: Reject absolute paths for consistency with VFS opcodes.
+    // The VFS ops use sfallVfsResolvePath which rejects absolute paths;
+    // play_sfall_sound should follow the same sandbox policy.
+    if (path[0] == '/' || path[0] == '\\') {
+        programPrintError("play_sfall_sound: absolute path rejected '%s'", path);
+        programStackPushInteger(program, -1);
+        return;
+    }
+
     programStackPushInteger(program, scriptSoundPlay(path, mode));
 }
 
@@ -2496,11 +2505,41 @@ static void op_fs_size(Program* program)
         return;
     }
 
+    // I2-M01: Check all ftell/fseek return values. ftell returns -1L on
+    // error; fseek returns non-zero on error. Using a failed ftell result
+    // in a subsequent fseek is UB.
     long pos = ftell(sfallVfsFiles[id]);
-    fseek(sfallVfsFiles[id], 0, SEEK_END);
+    if (pos == -1L) {
+        programPrintError("fs_size: ftell failed on handle %d", id);
+        programStackPushInteger(program, -1);
+        return;
+    }
+    if (fseek(sfallVfsFiles[id], 0, SEEK_END) != 0) {
+        programPrintError("fs_size: fseek to end failed on handle %d", id);
+        programStackPushInteger(program, -1);
+        return;
+    }
     long size = ftell(sfallVfsFiles[id]);
-    fseek(sfallVfsFiles[id], pos, SEEK_SET);
+    if (size == -1L) {
+        programPrintError("fs_size: ftell (size) failed on handle %d", id);
+        programStackPushInteger(program, -1);
+        return;
+    }
+    if (fseek(sfallVfsFiles[id], pos, SEEK_SET) != 0) {
+        programPrintError("fs_size: fseek restore failed on handle %d", id);
+        programStackPushInteger(program, -1);
+        return;
+    }
 
+    // I2-M05: On LP64 platforms long is 64-bit, int is 32-bit.
+    // File sizes > ~2.1 GiB would silently truncate.
+#if defined(__LP64__)
+    if (size > static_cast<long>(INT_MAX)) {
+        programPrintError("fs_size: file size %ld exceeds int range", size);
+        programStackPushInteger(program, -1);
+        return;
+    }
+#endif
     programStackPushInteger(program, static_cast<int>(size));
 }
 
@@ -2515,7 +2554,15 @@ static void op_fs_pos(Program* program)
         return;
     }
 
-    programStackPushInteger(program, static_cast<int>(ftell(sfallVfsFiles[id])));
+    // I2-M02: Check ftell return value — -1L indistinguishable from
+    // valid position without error checking.
+    long pos = ftell(sfallVfsFiles[id]);
+    if (pos == -1L) {
+        programPrintError("fs_pos: ftell failed on handle %d", id);
+        programStackPushInteger(program, -1);
+        return;
+    }
+    programStackPushInteger(program, static_cast<int>(pos));
 }
 
 // fs_seek(id, pos)
@@ -2529,7 +2576,12 @@ static void op_fs_seek(Program* program)
         return;
     }
 
-    fseek(sfallVfsFiles[id], pos, SEEK_SET);
+    // I2-M03: Check fseek return value — script-provided pos could be
+    // any int value (negative, beyond file bounds). Non-zero return
+    // indicates seek failure.
+    if (fseek(sfallVfsFiles[id], pos, SEEK_SET) != 0) {
+        programPrintError("fs_seek: fseek to %d failed on handle %d", pos, id);
+    }
 }
 
 // fs_resize(id, size)
@@ -2563,6 +2615,12 @@ static void op_fs_resize(Program* program)
             // Fallback: reopen as read-only so the handle remains usable
             // for reads even though resize cannot proceed.
             sfallVfsFiles[id] = compat_fopen(path, "rb");
+            if (sfallVfsFiles[id] == nullptr) {
+                // I2-M04: Both reopen attempts failed — the handle slot
+                // is now a zombie (sfallVfsFileOpen still true, FILE*
+                // is nullptr). Free the handle so the slot can be reused.
+                sfallVfsFreeHandle(id);
+            }
             programPrintError("fs_resize: cannot reopen '%s' for writing", path);
             return;
         }
@@ -4290,8 +4348,10 @@ static void op_has_fake_trait(Program* program)
     if (arg.isString()) {
         const char* name = arg.asString(program);
         for (int i = 0; i < sfallFakeTraitCount; i++) {
+            // F-M21: Check .active field — mirror op_has_fake_perk pattern.
             if (sfallFakeTraits[i].name != nullptr
-                && strcmp(sfallFakeTraits[i].name, name) == 0) {
+                && strcmp(sfallFakeTraits[i].name, name) == 0
+                && sfallFakeTraits[i].active) {
                 result = i + 1;
                 break;
             }
@@ -4299,7 +4359,9 @@ static void op_has_fake_trait(Program* program)
     } else {
         int extraTraitID = arg.integerValue;
         // extraTraitID is 1-indexed
-        if (extraTraitID > 0 && extraTraitID <= sfallFakeTraitCount) {
+        // F-M21: Check .active field — mirror op_has_fake_perk pattern.
+        if (extraTraitID > 0 && extraTraitID <= sfallFakeTraitCount
+            && sfallFakeTraits[extraTraitID - 1].active) {
             result = extraTraitID;
         }
     }
@@ -5052,10 +5114,43 @@ static void op_get_kill_counter(Program* program)
     programStackPushInteger(program, count);
 }
 
+static constexpr int kMaxKillCounterEntries = 5000;
+
 static void op_mod_kill_counter(Program* program)
 {
     int amount = programStackPopInteger(program);
     int critterType = programStackPopInteger(program);
+
+    // F-M14: Input validation. critterType is used as a map key; negative
+    // values create meaningless entries. Unreasonably large positive values
+    // (beyond the proto ID namespace) are also suspicious.
+    if (critterType < 0) {
+        debugPrint("mod_kill_counter: negative critterType %d rejected\n", critterType);
+        return;
+    }
+    if (critterType > 0x2000000) {
+        debugPrint("mod_kill_counter: critterType %d exceeds max proto ID range\n", critterType);
+        return;
+    }
+
+    // Clamp amount to prevent signed integer overflow in the += operation.
+    // Range [-1e6, 1e6] is generous for any practical gameplay scenario
+    // while preventing arithmetic UB.
+    if (amount > 1000000) {
+        amount = 1000000;
+    } else if (amount < -1000000) {
+        amount = -1000000;
+    }
+
+    // Guard against unbounded map growth from script bugs. Allow existing
+    // entries to be modified even at capacity; only reject new entries.
+    if (static_cast<int>(gSfallKillCounters.size()) >= kMaxKillCounterEntries
+        && gSfallKillCounters.find(critterType) == gSfallKillCounters.end()) {
+        debugPrint("mod_kill_counter: kill counter map full (%d entries), new entry for critterType %d rejected\n",
+            kMaxKillCounterEntries, critterType);
+        return;
+    }
+
     gSfallKillCounters[critterType] += amount;
 }
 
@@ -7408,6 +7503,20 @@ void sfallOpcodesInit()
     interpreterRegisterOpcode(0x827d, op_register_hook_proc_spec);
     // 0x827e - void reg_anim_callback(procedure proc)
     interpreterRegisterOpcode(0x827e, op_reg_anim_callback);
+
+    // F-C01: Initialize VFS sandbox root from ddraw.ini.
+    // Reads "VfsRootDir" from the [Misc] section. When set to a
+    // non-empty directory path, all VFS operations are sandboxed:
+    // absolute paths and ".." components are rejected, and all paths
+    // are resolved relative to this root. When unset (default), the
+    // sandbox remains off for backward compatibility.
+    {
+        char* vfsRoot = nullptr;
+        configGetString(&gSfallConfig, SFALL_CONFIG_MISC_KEY, "VfsRootDir", &vfsRoot);
+        if (vfsRoot != nullptr && vfsRoot[0] != '\0') {
+            sfallVfsSetRoot(vfsRoot);
+        }
+    }
 }
 
 void sfallOpcodesExit()

@@ -491,6 +491,16 @@ int _replyAddNew(const char* a1, const char* a2);
 // 0x430EFC dialogReply
 int _dialogReply(const char* a1, const char* a2)
 {
+    // Guard against calling _replyAddNew when no reply structure has been
+    // allocated yet. field_C is initialized to -1 at _dialogStart:419 and
+    // is never changed. _dialogOption at line 503 and _dialogOptionProc at
+    // line 515 have this same guard; without it, _getReply (called by
+    // _replyAddNew) indexes _dialog[_tods].field_4 with field_C = -1,
+    // causing an out-of-bounds array access.
+    if (_dialog[_tods].field_C == -1) {
+        return 0;
+    }
+
     // F-030: Wire the reply into the dialog system. _replyAddNew has proper
     // bounds checking (dialog depth limit) at game_dialog.cc:1201-1211.
     _replyAddNew(a1, a2);

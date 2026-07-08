@@ -568,8 +568,9 @@ int itemDestroyAllHidden(Object* owner)
         InventoryItem* inventoryItem = &(inventory->items[index]);
         // NOTE: Uninline.
         if (itemIsHidden(inventoryItem->item)) {
-            itemRemove(owner, inventoryItem->item, 1);
-            objectDestroy(inventoryItem->item);
+            Object* itemToDestroy = inventoryItem->item;
+            itemRemove(owner, itemToDestroy, 1);
+            objectDestroy(itemToDestroy);
         } else {
             index++;
         }

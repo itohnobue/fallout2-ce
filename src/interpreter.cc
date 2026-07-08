@@ -755,6 +755,16 @@ static void opNoop(Program* program)
 static void opPush(Program* program)
 {
     const int pos = program->instructionPointer;
+
+    // PUSH has a 4-byte inline operand in addition to the 2-byte opcode
+    // already consumed by programGetNextOpcode. Validate that the operand
+    // fits within the loaded program data. Without this check, a truncated
+    // .int file with a PUSH opcode at dataSize - 3 or dataSize - 2 would
+    // cause an OOB read in stackReadInt32.
+    if (pos + 4 > program->dataSize) {
+        programFatalError("opPush: bytecode read out of bounds (pos=%d, dataSize=%d)", pos, program->dataSize);
+    }
+
     program->instructionPointer = pos + 4;
 
     const int value = stackReadInt32(program->data, pos);
@@ -897,6 +907,17 @@ static void opCancel(Program* program)
 static void opCancelAll(Program* program)
 {
     const int procedureCount = program->procedureCount();
+
+    // Validate the procedure count against the loaded data size.
+    // procedures = data + 42, count is stored at procedures[0..3],
+    // each Procedure entry consumes sizeof(Procedure) bytes starting
+    // at procedures + 4. A corrupted .int file could claim a procedure
+    // count beyond the allocated buffer.
+    // Equivalent to: 4 + procedureCount * sizeof(Procedure) ≤ dataSize - 42
+    if (procedureCount < 0
+        || static_cast<size_t>(4) + static_cast<size_t>(procedureCount) * sizeof(Procedure) > static_cast<size_t>(program->dataSize) - 42) {
+        programFatalError("opCancelAll: procedure table exceeds data bounds (count=%d, dataSize=%d)", procedureCount, program->dataSize);
+    }
 
     for (int index = 0; index < procedureCount; index++) {
         // TODO: Original code uses different approach, check.

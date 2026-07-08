@@ -1268,6 +1268,7 @@ static int _map_age_dead_critters()
                         Object** tmp = (Object**)internal_realloc(objects, sizeof(*objects) * capacity);
                         if (tmp == nullptr) {
                             debugPrint("\nError: Out of Memory!");
+                            internal_free(objects);
                             return -1;
                         }
                         objects = tmp;
@@ -1281,6 +1282,7 @@ static int _map_age_dead_critters()
                 Object** tmp = (Object**)internal_realloc(objects, sizeof(*objects) * capacity);
                 if (tmp == nullptr) {
                     debugPrint("\nError: Out of Memory!");
+                    internal_free(objects);
                     return -1;
                 }
                 objects = tmp;

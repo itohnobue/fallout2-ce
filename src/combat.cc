@@ -4789,6 +4789,19 @@ static int attackDetermineToHit(Object* attacker, int tile, Object* defender, in
     }
 
     toHit = scriptHooks_ToHit(attacker, defender, tile, hitMode, hitLocation, toHit, toHitUncapped, useDistance);
+
+    // F-H01: Re-clamp to engine bounds after hook may have adjusted hit chance.
+    // scriptHooks_ToHit internally clamps to [-99, 999] which is wider than the
+    // engine's configured hitChanceMax (default 95).  Re-apply the engine's
+    // [-100, hitChanceMax] clamp so scripts cannot widen the cap beyond the
+    // engine limit.
+    if (toHit > hitChanceMax) {
+        toHit = hitChanceMax;
+    }
+    if (toHit < -100) {
+        toHit = -100;
+    }
+
     return toHit;
 }
 
@@ -7242,7 +7255,7 @@ static void damageModCalculateYaam(DamageCalculationContext* context)
         damage *= context->difficultyDamagePercent;
         damage /= 100;
 
-        damage -= damage * damageResistance / 100;
+        damage -= damage * calculatedDamageResistance / 100;
 
         if (damage > 0) {
             // SFALL: Fix I2-F-003 — was pointer arithmetic (context->damagePtr += damage)

@@ -3158,13 +3158,22 @@ void mf_add_trait(OpcodeContext& ctx)
 
     if (ctx.numArgs() >= 2) {
         // 3-arg form: add_trait(critter, traitType, rank)
-        // arg0 = critter object (stored for future per-critter support)
         // arg1 = trait type ID
         // arg2 = rank (optional, defaults to 0)
+        //
+        // NOTE: Per-critter trait storage is not yet implemented. The
+        // 3-arg form currently writes to gAddedTraits (player-scoped)
+        // regardless of the critter argument. The critter object (arg0)
+        // is read for type detection but its identity is not stored.
+        // Full per-critter support requires CID-based storage with
+        // save/load integration and engine trait-system hooking.
         traitType = ctx.arg(1).asInt();
         if (ctx.numArgs() >= 3) {
             rank = ctx.arg(2).asInt();
         }
+        debugPrint("%s(): 3-arg form used (critter, traitType=%d, rank=%d) — "
+            "per-critter storage not yet implemented; trait applied to player scope\n",
+            ctx.name(), traitType, rank);
     } else {
         // 1-arg form: add_trait(traitType) — adds to player with rank 0
         traitType = ctx.arg(0).asInt();

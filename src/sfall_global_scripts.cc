@@ -426,6 +426,13 @@ void sfall_gl_scr_set_repeat(Program* program, int frames)
     GlobalScript* scr = sfall_gl_scr_map_program_to_scr(program);
     if (scr != nullptr) {
         scr->repeat = frames;
+        // When repeat is set to 0 (stop repeating), reset the frame
+        // counter so that a subsequent set_repeat(N) with the same
+        // script starts counting from 0 rather than immediately
+        // triggering if the old count ≥ N.
+        if (frames == 0) {
+            scr->count = 0;
+        }
     }
 }
 

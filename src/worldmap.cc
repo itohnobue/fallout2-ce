@@ -4031,6 +4031,11 @@ static int wmRndEncounterPick()
 
     wmGenData.encounterTableId = wmGenData.currentSubtile->encounterType;
 
+    if (wmGenData.encounterTableId < 0 || wmGenData.encounterTableId >= wmMaxEncounterInfoTables) {
+        debugPrint("\nWorldMap: encounterTableId %d out of range [0, %d]!\n", wmGenData.encounterTableId, wmMaxEncounterInfoTables - 1);
+        return -1;
+    }
+
     EncounterTable* encounterTable = &(wmEncounterTableList[wmGenData.encounterTableId]);
 
     int candidates[41];

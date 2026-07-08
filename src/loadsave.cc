@@ -73,6 +73,39 @@ namespace fallout {
 #define LOAD_SAVE_DESCRIPTION_LENGTH 30
 #define LOAD_SAVE_HANDLER_COUNT 27
 
+// SFALL: Minimum save file version that includes CRC32 checksums on each
+// handler chunk. Version 1.3+ saves have a 4-byte CRC prefix per handler
+// chunk; version 1.2 saves (original format) have no CRC and load without
+// verification. Both versions have the same major=1 and release='R'.
+#define SAVE_FORMAT_CRC_VERSION_MAJOR (3)
+
+// CRC-32 (IEEE 802.3) table — initialized lazily on first use.
+static unsigned int _crc32Table[256];
+static bool _crc32TableInit = false;
+
+static void _crc32Init()
+{
+    if (_crc32TableInit) return;
+    for (unsigned int i = 0; i < 256; i++) {
+        unsigned int crc = i;
+        for (int j = 0; j < 8; j++) {
+            crc = (crc >> 1) ^ (0xEDB88320u & -(crc & 1));
+        }
+        _crc32Table[i] = crc;
+    }
+    _crc32TableInit = true;
+}
+
+static unsigned int _crc32Compute(const unsigned char* data, size_t len)
+{
+    _crc32Init();
+    unsigned int crc = 0xFFFFFFFFu;
+    for (size_t i = 0; i < len; i++) {
+        crc = _crc32Table[(crc ^ data[i]) & 0xFF] ^ (crc >> 8);
+    }
+    return crc ^ 0xFFFFFFFFu;
+}
+
 #define LSGAME_MSG_NAME "LSGAME.MSG"
 
 #define LS_WINDOW_WIDTH 640
@@ -1957,8 +1990,16 @@ static int lsgPerformSaveGame()
     }
 
     for (int index = 0; index < LOAD_SAVE_HANDLER_COUNT; index++) {
-        long pos = fileTell(_flptr);
+        long chunkStart = fileTell(_flptr);
         SaveGameHandler* handler = _master_save_list[index];
+
+        // SFALL: Write placeholder CRC32 before handler data (version 1.3+).
+        // The CRC covers only the handler's data bytes (not the CRC field itself).
+        // Computed after the handler writes, then patched back with fileSeek.
+        fileWriteUInt32(_flptr, 0); // placeholder CRC
+        long dataStart = fileTell(_flptr);
+
+        long pos = chunkStart;
         if (handler(_flptr) == -1) {
             debugPrint("\nLOADSAVE: ** Error writing save function #%d data! **\n", index);
             fileClose(_flptr);
@@ -1970,7 +2011,24 @@ static int lsgPerformSaveGame()
             return -1;
         }
 
-        debugPrint("LOADSAVE: Save function #%d data size written: %d bytes.\n", index, fileTell(_flptr) - pos);
+        long dataEnd = fileTell(_flptr);
+        long dataSize = dataEnd - dataStart;
+
+        // SFALL: Compute CRC over the handler's written data and patch it in.
+        if (dataSize > 0) {
+            unsigned char* buffer = (unsigned char*)internal_malloc(dataSize);
+            if (buffer != nullptr) {
+                fileSeek(_flptr, dataStart, SEEK_SET);
+                fileRead(buffer, 1, dataSize, _flptr);
+                unsigned int crc = _crc32Compute(buffer, dataSize);
+                internal_free(buffer);
+                fileSeek(_flptr, chunkStart, SEEK_SET);
+                fileWriteUInt32(_flptr, crc);
+                fileSeek(_flptr, dataEnd, SEEK_SET);
+            }
+        }
+
+        debugPrint("LOADSAVE: Save function #%d data size written: %d bytes (CRC).\n", index, fileTell(_flptr) - pos);
     }
 
     debugPrint("LOADSAVE: Total save data written: %ld bytes.\n", fileTell(_flptr));
@@ -2090,28 +2148,72 @@ static int lsgLoadGameInSlot(int slot)
 
     debugPrint("LOADSAVE: Load file header size read: %d bytes.\n", fileTell(_flptr) - pos);
 
-    // SFALL: Note I2-M31 — The save file has no CRC/checksum on handler
-    // chunk data. The header is validated (signature + version), but the
-    // LOAD_SAVE_HANDLER_COUNT handler chunks below have zero integrity
-    // checks. This is an intentional design trade-off: (1) adding a CRC
-    // would change the save file format and break backward compatibility
-    // with existing saves; (2) the game engine is single-threaded and
-    // save files are only loaded from local disk — network corruption is
-    // not a threat model; (3) disk-level corruption is rare and would
-    // likely manifest as a header validation failure or a read error
-    // before reaching chunk data. A future version could add opt-in CRC
-    // with a new save format version marker.
+    // SFALL: Handler chunk CRC verification (version 1.3+). Each handler
+    // chunk is prefixed with a 4-byte CRC32 computed over the handler's data
+    // bytes. On load, the CRC is read first, then the handler reads its data,
+    // and a recomputed CRC is compared against the stored value. Mismatch
+    // means the chunk was corrupted on disk or the save format diverged.
+    // Version 1.2 saves have no CRC — they load without verification.
+    bool hasHandlerCrc = (ptr->versionMajor >= SAVE_FORMAT_CRC_VERSION_MAJOR);
+
     for (int index = 0; index < LOAD_SAVE_HANDLER_COUNT; index += 1) {
         long pos = fileTell(_flptr);
         LoadGameHandler* handler = _master_load_list[index];
+
+        unsigned int storedCrc = 0;
+        if (hasHandlerCrc) {
+            if (fileReadUInt32(_flptr, &storedCrc) != 0) {
+                debugPrint("\nLOADSAVE: ** Error reading CRC for load function #%d! **\n", index);
+                fileClose(_flptr);
+                gameReset();
+                _loadingGame = false;
+                return -1;
+            }
+        }
+        long dataStart = fileTell(_flptr);
+
         if (handler(_flptr) == -1) {
             debugPrint("\nLOADSAVE: ** Error reading load function #%d data! **\n", index);
-            int v12 = fileTell(_flptr);
             debugPrint("LOADSAVE: Load function #%d data size read: %d bytes.\n", index, fileTell(_flptr) - pos);
             fileClose(_flptr);
             gameReset();
             _loadingGame = false;
             return -1;
+        }
+
+        long dataEnd = fileTell(_flptr);
+        long dataSize = dataEnd - dataStart;
+
+        if (hasHandlerCrc) {
+            // SFALL: Verify CRC over the handler's data bytes.
+            unsigned int computedCrc = 0;
+            bool crcComputed = false;
+
+            if (dataSize > 0) {
+                unsigned char* buffer = (unsigned char*)internal_malloc(dataSize);
+                if (buffer != nullptr) {
+                    fileSeek(_flptr, dataStart, SEEK_SET);
+                    fileRead(buffer, 1, dataSize, _flptr);
+                    computedCrc = _crc32Compute(buffer, dataSize);
+                    internal_free(buffer);
+                    fileSeek(_flptr, dataEnd, SEEK_SET);
+                    crcComputed = true;
+                }
+            }
+
+            bool crcOk = false;
+            if (dataSize == 0) {
+                // Zero-length handler data: stored CRC should be 0 (the placeholder).
+                crcOk = (storedCrc == 0);
+            } else if (crcComputed) {
+                crcOk = (computedCrc == storedCrc);
+            }
+
+            if (!crcOk) {
+                debugPrint("\nLOADSAVE: ** CRC mismatch for load function #%d! (stored=%08x, computed=%08x) **\n",
+                    index, storedCrc, dataSize == 0 ? 0u : computedCrc);
+                displayMonitorAddMessage("Save data integrity check failed!");
+            }
         }
 
         debugPrint("LOADSAVE: Load function #%d data size read: %d bytes.\n", index, fileTell(_flptr) - pos);
@@ -2144,6 +2246,7 @@ static int lsgLoadGameInSlot(int slot)
         // sfall state (globals, arrays, metarules) from the original save
         // is lost. Inform the user rather than silently skipping.
         debugPrint("\nLOADSAVE: ** sfallgv.sav not found — sfall state not loaded (using defaults) **\n");
+        displayMonitorAddMessage("sfallgv.sav not found — sfall data not restored.");
     }
 
     snprintf(_str, sizeof(_str), "%s\\", "MAPS");
@@ -2314,7 +2417,8 @@ static int lsgLoadHeaderInSlot(int slot)
         return -1;
     }
 
-    if (ptr->versionMinor != 1 || ptr->versionMajor != 2 || ptr->versionRelease != 'R') {
+    if (ptr->versionMinor != 1 || ptr->versionRelease != 'R'
+        || (ptr->versionMajor != 2 && ptr->versionMajor != 3)) {
         debugPrint("\nLOADSAVE: Load slot #%d Version: %d.%d%c\n", slot, ptr->versionMinor, ptr->versionMajor, ptr->versionRelease);
         _ls_error_code = 1;
         return -1;

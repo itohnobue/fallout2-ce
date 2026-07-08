@@ -3590,6 +3590,7 @@ static int _obj_load_obj(File* stream, Object** objectPtr, int elevation, Object
     }
 
     if (objectRead(obj, stream) != 0) {
+        objectDeallocate(&obj);
         *objectPtr = nullptr;
         return -1;
     }
@@ -3630,16 +3631,24 @@ static int _obj_load_obj(File* stream, Object** objectPtr, int elevation, Object
 
     InventoryItem* inventoryItems = inventory->items = (InventoryItem*)internal_malloc(sizeof(*inventoryItems) * inventory->capacity);
     if (inventoryItems == nullptr) {
+        objectDeallocate(&obj);
+        *objectPtr = nullptr;
         return -1;
     }
 
     for (int inventoryItemIndex = 0; inventoryItemIndex < inventory->length; inventoryItemIndex++) {
         InventoryItem* inventoryItem = &(inventoryItems[inventoryItemIndex]);
         if (fileReadInt32(stream, &(inventoryItem->quantity)) != 0) {
+            internal_free(inventoryItems);
+            objectDeallocate(&obj);
+            *objectPtr = nullptr;
             return -1;
         }
 
         if (_obj_load_obj(stream, &(inventoryItem->item), elevation, obj) != 0) {
+            internal_free(inventoryItems);
+            objectDeallocate(&obj);
+            *objectPtr = nullptr;
             return -1;
         }
     }

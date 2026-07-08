@@ -831,7 +831,6 @@ void critterKill(Object* critter, int anim, bool refreshRect)
     critter->data.critter.combat.results |= DAM_DEAD;
 
     partyMemberRemove(critter);
-    scriptHooks_OnDeath(critter);
 
     // NOTE: Original code uses goto to jump out from nested conditions below.
     bool shouldChangeFid = false;
@@ -906,6 +905,16 @@ void critterKill(Object* critter, int anim, bool refreshRect)
     queueClearByEventType(EVENT_TYPE_DRUG, _critterClearObjDrugs);
 
     itemDestroyAllHidden(critter);
+
+    // F-M07: Fire HOOK_ONDEATH after item cleanup to match combat path ordering
+    // (combat.cc:5228→5246).  Note: DESTROY proc and killsIncByType are
+    // intentionally NOT called here — they are combat-specific (XP awards,
+    // combat kill tracking).  scriptRemove also runs before the hook here
+    // (line 899-901 above) vs after in the combat path (combat.cc:5249);
+    // this is acceptable because the dead critter's script is no longer
+    // useful after death, and item visibility during the hook is the
+    // behavior that matters for mod script compatibility.
+    scriptHooks_OnDeath(critter);
 
     if (refreshRect) {
         tileWindowRefreshRect(&updatedRect, elevation);

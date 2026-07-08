@@ -5,6 +5,7 @@
 #include "interpreter_extra.h"
 #include "scripts.h"
 
+#include <array>
 #include <initializer_list>
 #include <memory>
 #include <string>
@@ -346,10 +347,6 @@ public:
     // the free function scriptHooks_GameModeChange().
     static bool _gameModeChangeInProgress;
 
-    // I2-M17: Set to true when a hook call is rejected due to depth cap.
-    // Mod scripts can query this to detect silent rejection.
-    static bool _lastCallRejected;
-
     // I2-M16/I2-M35: Drain stale call-stack entries left by longjmp'd
     // ScriptHookCall frames.  Uses address-based staleness detection:
     // entries with addresses below currentStackAddr are from unwound
@@ -358,6 +355,11 @@ public:
 
 private:
     static std::vector<ScriptHookCall*> _callStack;
+    // I2-M08: Per-type depth counters for hook call reentrancy tracking.
+    // Each hook type gets a guaranteed minimum allocation (MAX_PER_TYPE_DEPTH=4)
+    // from the global budget (MAX_HOOK_CALL_DEPTH=8), preventing one hook type
+    // from starving critical hooks like HOOK_ONDEATH.
+    static std::array<int, HOOK_COUNT> _callStackPerType;
 
     HookType _hookType;
     int _maxRetVals = 0;

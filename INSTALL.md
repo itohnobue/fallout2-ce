@@ -6,7 +6,7 @@ Fallout 2 CE Extended uses CMake as its build system. Whether you're targeting m
 
 All platforms require:
 
-- **CMake** 3.19 or later
+- **CMake** 3.21 or later
 - **Ninja** (recommended for Linux and macOS)
 - **SDL2** development libraries
 - **zlib** development libraries

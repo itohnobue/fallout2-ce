@@ -6,9 +6,9 @@ All notable changes to this fork (Fallout 2 CE Extended) by Nobu. This fork exte
 
 ## Fork Summary
 
-**Total fork commits:** 29 | **Base:** `alexbatalov/fallout2-ce` upstream (merge point at `481cb9e`)
+**Total fork commits:** 30 | **Base:** `alexbatalov/fallout2-ce` upstream (merge point at `481cb9e`)
 
-The fork implements full sfall script compatibility for RPU (Restoration Project Updated) and Et Tu (Fallout 1 in Fallout 2 engine) mods, covering opcodes, metarules, hooks, configuration, and engine behavior parity. Five production audit passes hardened the codebase across 10+ domains.
+The fork implements full sfall script compatibility for RPU (Restoration Project Updated) and Et Tu (Fallout 1 in Fallout 2 engine) mods, covering opcodes, metarules, hooks, configuration, and engine behavior parity. Seven production audit passes hardened the codebase across 10+ domains.
 
 ---
 
@@ -54,7 +54,7 @@ CE reports **sfall 4.5.1** to scripts (`src/sfall_opcodes.cc:73-79`). Version bu
 - All array opcodes (`create_array`, `temp_array`, `fix_array`, `get/set_array`, `resize_array`, `free_array`, `scan_array`, `len_array`, `save/load_array`, `array_key`, `arrayexpr`) fully implemented
 
 **Hooks:**
-- 43 of 62 hook types implemented (24 standard sfall hooks + 5 CE-specific)
+- 43 of 62 hook types implemented (38 standard sfall hooks + 5 CE-specific)
 - **CE-specific hooks** (not present in upstream sfall): `HOOK_DIALOG` (49), `HOOK_DIALOGREACTION` (50), `HOOK_STATLEVELUP` (51), `HOOK_BARTER` (52), `HOOK_MESSAGE` (53)
 - `HOOK_CARTRAVEL` (28) — speed and fuel override during worldmap car travel
 - `HOOK_SETGLOBALVAR` (29) — fires on `op_set_global_var`, allows overriding stored value
@@ -83,17 +83,23 @@ CE reports **sfall 4.5.1** to scripts (`src/sfall_opcodes.cc:73-79`). Version bu
 - 256-entry DIK→SDL scancode mapping table covering all standard keyboard keys
 - VK (Virtual Key) codes with `0x80000000` flag explicitly rejected (not supported)
 
-### Production Audits & Bug Fixes (5 audit passes)
+### Production Audits & Bug Fixes (7 audit passes)
 
 Each audit verified by adversarial pipeline with 2-iteration convergence:
 
-**Audit 1** (commit `a342f63`): 44 verified fixes — 2 CRITICAL null derefs, 6 HIGH safety/security, 36 MEDIUM robustness
+**Audit 1** (commit `f874424`): 89 verified fixes — 2 CRITICAL (audio infinite loop in sound.cc, CI/CD deprecated runners), 2 HIGH (interpreter PTR propagation, movie off-by-7), 85 MEDIUM (opcode bounds, metarule safety, AI state validation, party member guards, config defaults, save/load integrity, UI bounds)
 
-**Audit 2** (commit `d13a00a`): 25 verified fixes — 3 HIGH (FO1 level cap, perk save, game_loaded order), 22 MEDIUM (opcode bugs, save integrity, build system, test coverage)
+**Audit 2** (commit `a342f63`): 44 verified fixes — 2 CRITICAL null derefs, 6 HIGH safety/security, 36 MEDIUM robustness
 
-**Audit 3** (commit `3db72b1`): test suite expanded for maximum post-fork code coverage
+**Audit 3** (commit `d13a00a`): 25 verified fixes — 3 HIGH (FO1 level cap, perk save, game_loaded order), 22 MEDIUM (opcode bugs, save integrity, build system, test coverage)
 
-**Audit 4** (commit `650b8b6`): 42 verified fixes — 3 HIGH (stat bounds, invisibility check, hook call stack drain), 39 MEDIUM (opcode/meta/hook bugs, save integrity, config parsing, strtol bounds)
+**Audit 4** (commit `3db72b1`): test suite expanded for maximum post-fork code coverage
+
+**Audit 5** (commit `650b8b6`): 42 verified fixes — 3 HIGH (stat bounds, invisibility check, hook call stack drain), 39 MEDIUM (opcode/meta/hook bugs, save integrity, config parsing, strtol bounds)
+
+**Audit 6** (commit `5977e2b`): 86 verified fixes — bounds validation, UB guards, save/load integrity, dialog circular buffer, build hardening, test quality
+
+**Audit 7** (commit `e881f30`): 46 verified fixes — iter2 convergence with intersection agents, dialog guards, animation safety, interpreter bounds
 
 **Fix categories across all audits:**
 - Bounds checks on opcode handlers and metarule functions

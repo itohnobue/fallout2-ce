@@ -4,6 +4,8 @@
 #include <cstring>
 #include <unordered_map>
 
+#include "debug.h"
+
 namespace fallout {
 
 struct SfallGlobalVarsState {
@@ -293,6 +295,23 @@ static bool sfall_gl_vars_store(uint64_t key, int value)
     // convention caused explicitly-set zero values (e.g., gPipboyAvailableOverride=0
     // meaning "pipboy unavailable") to be lost on save/load round-trip.
     // Use sfall_gl_vars_remove() for explicit deletion.
+
+    // Cap at 10000 entries to prevent unbounded runtime growth from
+    // script-driven insertions. Load-time already rejects counts > 10000
+    // (line 155); mirror that limit at runtime. Updating an existing key
+    // is always allowed regardless of the cap.
+    //
+    // NOTE: save path (sfall_gl_vars_save, line 86) writes ALL entries
+    // unconditionally; beyond-cap entries added before this fix was
+    // applied will persist through save/load. The cap only restricts
+    // new keys added at runtime starting now.
+    if (sfall_gl_vars_state->vars.size() >= 10000
+        && sfall_gl_vars_state->vars.find(key) == sfall_gl_vars_state->vars.end()) {
+        debugPrint("sfall_gl_vars_store: global vars cap (10000) exceeded, rejecting key %llu\n",
+            static_cast<unsigned long long>(key));
+        return false;
+    }
+
     sfall_gl_vars_state->vars[key] = value;
     return true;
 }

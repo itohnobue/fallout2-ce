@@ -1,12 +1,14 @@
 #include "sfall_script_hooks.h"
 
 #include <algorithm>
+#include <array>
 #include <climits>
 #include <cstring>
 #include <memory>
 #include <string>
 #include <vector>
 
+#include "animation.h"
 #include "db.h"
 #include "debug.h"
 #include "game.h"
@@ -51,8 +53,8 @@ struct GameModeChangeGuard {
 };
 
 std::vector<ScriptHookCall*> ScriptHookCall::_callStack;
+std::array<int, HOOK_COUNT> ScriptHookCall::_callStackPerType = {};
 bool ScriptHookCall::_gameModeChangeInProgress = false;
-bool ScriptHookCall::_lastCallRejected = false;
 
 ScriptHookCall* ScriptHookCall::current()
 {
@@ -60,24 +62,25 @@ ScriptHookCall* ScriptHookCall::current()
 }
 
 ScriptHookCall::ScriptHookCall(HookType hookType, int maxReturnValues, std::initializer_list<ProgramValue> args)
-    : _hookType(hookType)
-    , _maxRetVals(maxReturnValues)
+    : _hookType(static_cast<HookType>(std::clamp(static_cast<int>(hookType), 0, static_cast<int>(HOOK_COUNT) - 1)))
+    , _maxRetVals(std::clamp(maxReturnValues, 0, static_cast<int>(HOOKS_MAX_RETURN_VALUES)))
 {
-    assert(hookType >= 0 && hookType < HOOK_COUNT && maxReturnValues >= 0 && maxReturnValues <= HOOKS_MAX_RETURN_VALUES && args.size() <= HOOKS_MAX_ARGUMENTS);
+    assert(maxReturnValues >= 0 && maxReturnValues <= HOOKS_MAX_RETURN_VALUES && args.size() <= HOOKS_MAX_ARGUMENTS);
     for (auto arg : args) {
+        if (_numArgs >= HOOKS_MAX_ARGUMENTS) break;
         _args[_numArgs++] = arg;
     }
 }
 
 void ScriptHookCall::setArgAt(int idx, ProgramValue value)
 {
-    assert(idx >= 0 && idx < _numArgs);
+    if (idx < 0 || idx >= _numArgs) return;
     _args[idx] = value;
 }
 
 void ScriptHookCall::addReturnValueFromScript(ProgramValue value)
 {
-    assert(_scriptRetVals < HOOKS_MAX_RETURN_VALUES);
+    if (_scriptRetVals >= HOOKS_MAX_RETURN_VALUES) return;
     if (_scriptRetVals >= _maxRetVals)
         return;
 
@@ -92,19 +95,19 @@ void ScriptHookCall::addReturnValueFromScript(ProgramValue value)
 
 ProgramValue ScriptHookCall::getArgAt(int idx) const
 {
-    assert(idx >= 0 && idx < _numArgs);
+    if (idx < 0 || idx >= _numArgs) return {};
     return _args[idx];
 }
 
 ProgramValue ScriptHookCall::getReturnValueAt(int idx) const
 {
-    assert(idx >= 0 && idx < _numRetVals);
+    if (idx < 0 || idx >= _numRetVals) return {};
     return _retVals[idx];
 }
 
 Program* ScriptHookCall::programForReturnValueAt(int idx) const
 {
-    assert(idx >= 0 && idx < _numRetVals);
+    if (idx < 0 || idx >= _numRetVals) return _lastProgram;
     Program* prog = _retValPrograms[idx];
     return prog != nullptr ? prog : _lastProgram;
 }
@@ -126,6 +129,16 @@ void ScriptHookCall::drainStaleEntries(uintptr_t currentStackAddr)
         } else {
             ++i;
         }
+    }
+
+    // I2-M08: Recalculate per-type counters from the live entries in
+    // _callStack.  When stale entries are drained (removed), their per-type
+    // counter increments (set before the longjmp) were never matched by
+    // decrements (normally done in call()).  Recomputing from scratch after
+    // drain guarantees the counters mirror reality.
+    _callStackPerType = {};
+    for (const auto* entry : _callStack) {
+        _callStackPerType[entry->_hookType]++;
     }
 }
 
@@ -151,18 +164,28 @@ void ScriptHookCall::call()
     }
 
     // Depth-cap check (after drain — stale entries have been removed).
+    constexpr size_t MAX_PER_TYPE_DEPTH = 4;
+    if (_callStackPerType[_hookType] >= MAX_PER_TYPE_DEPTH) {
+        // Per-type reentrancy cap reached — this hook type has exhausted its
+        // guaranteed portion of the global budget.  This prevents one hook
+        // type from starving critical hooks like HOOK_ONDEATH.
+        debugPrint("HOOK_DEPTH: type %d exceeded per-type cap %zu\n",
+                   static_cast<int>(_hookType), MAX_PER_TYPE_DEPTH);
+        return;
+    }
+
     if (_callStack.size() >= MAX_HOOK_CALL_DEPTH) {
         // Genuine deep recursion beyond the cap (no stale entries to drain).
         // Reject the call — hook scripts with deeper recursion than
         // MAX_HOOK_CALL_DEPTH are not supported.
-        debugPrint("HOOK_DRAIN: %zu entries at depth cap, rejecting call\n", _callStack.size());
-        _lastCallRejected = true;
+        debugPrint("HOOK_DEPTH: %zu entries at global cap %zu, rejecting call (type=%d)\n",
+                   _callStack.size(), MAX_HOOK_CALL_DEPTH, static_cast<int>(_hookType));
         return;
     }
 
-    _lastCallRejected = false;
     _active = true;
     _callStack.push_back(this);
+    _callStackPerType[_hookType]++;
 
     // Copy the hook list to protect against vector invalidation during
     // iteration. A hook script may call register_hook_proc for the same type
@@ -192,6 +215,7 @@ void ScriptHookCall::call()
 
     assert(_callStack.back() == this);
     _callStack.pop_back();
+    _callStackPerType[_hookType]--;
     _active = false;
 }
 
@@ -223,7 +247,9 @@ void scriptHooksUnregisterProgram(Program* program)
 
 bool scriptHooksRegister(Program* program, const HookType hookType, const int procedureIndex, const bool atEnd)
 {
-    assert(program != nullptr && hookType >= 0 && hookType < HOOK_COUNT && procedureIndex >= 0 && procedureIndex < program->procedureCount());
+    if (program == nullptr) return false;
+    if (static_cast<int>(hookType) < 0 || hookType >= HOOK_COUNT) return false;
+    if (procedureIndex < 0 || procedureIndex >= program->procedureCount()) return false;
 
     auto& hooksByType = scriptHooks[hookType];
     // Use -1 as unregister sentinel to avoid collision with valid procedure index 0.
@@ -495,9 +521,7 @@ int     ret1 - The new maximum damage
 */
 void scriptHooks_ItemDamage(Object* weapon, Object* critter, int hitMode, bool isMeleeWeaponAttack, int* minDamagePtr, int* maxDamagePtr)
 {
-    assert(critter != nullptr);
-    assert(minDamagePtr != nullptr);
-    assert(maxDamagePtr != nullptr);
+    if (critter == nullptr || minDamagePtr == nullptr || maxDamagePtr == nullptr) return;
 
     if (scriptHooks[HOOK_ITEMDAMAGE].empty()) {
         return;
@@ -510,12 +534,21 @@ void scriptHooks_ItemDamage(Object* weapon, Object* critter, int hitMode, bool i
         return;
     }
 
-    *minDamagePtr = hook.getReturnValueAt(0).asInt();
+    // F-M02: Clamp script return values to valid damage range [0, 500].
+    // Negative damage is nonsensical; damage above 500 exceeds any weapon in the game.
+    constexpr int DAMAGE_MIN = 0;
+    constexpr int DAMAGE_MAX = 500;
+    int minDmg = std::clamp(hook.getReturnValueAt(0).asInt(), DAMAGE_MIN, DAMAGE_MAX);
+    int maxDmg = minDmg;
     if (hook.numReturnValues() > 1) {
-        *maxDamagePtr = hook.getReturnValueAt(1).asInt();
-    } else {
-        *maxDamagePtr = *minDamagePtr;
+        maxDmg = std::clamp(hook.getReturnValueAt(1).asInt(), DAMAGE_MIN, DAMAGE_MAX);
     }
+    // Enforce min <= max invariant that callers (randomBetween) assume.
+    if (minDmg > maxDmg) {
+        std::swap(minDmg, maxDmg);
+    }
+    *minDamagePtr = minDmg;
+    *maxDamagePtr = maxDmg;
 }
 
 /*
@@ -567,11 +600,12 @@ int     ret1 - Override XP gained for this action. Values below 0 are ignored.
 */
 int scriptHooks_Steal(Object* thief, Object* target, Object* item, bool isPlanting, int quantity, int* xpOverride)
 {
-    assert(thief != nullptr);
-    assert(target != nullptr);
-    assert(item != nullptr);
-    assert(quantity >= 0);
-    assert(xpOverride != nullptr);
+    if (thief == nullptr || target == nullptr || item == nullptr || xpOverride == nullptr) {
+        return -1;
+    }
+    // Clamp quantity to non-negative; negative quantities are a programming error
+    // but should not propagate as invalid state.
+    if (quantity < 0) quantity = 0;
 
     if (scriptHooks[HOOK_STEAL].empty()) {
         *xpOverride = -1;
@@ -644,7 +678,7 @@ int     ret1 - pass 1 to cancel the encounter and load the specified map from th
 */
 EncounterHookResult scriptHooks_Encounter(EncounterHookEventType eventType, int* mapIdPtr, bool isSpecial, int tableId, int entryId)
 {
-    assert(mapIdPtr != nullptr);
+    if (mapIdPtr == nullptr) return EncounterHookResult::ContinueEncounter;
 
     if (scriptHooks[HOOK_ENCOUNTER].empty()) {
         return EncounterHookResult::ContinueEncounter;
@@ -935,7 +969,7 @@ Critter ret2 - Override the target of the attack
 */
 int scriptHooks_AfterHitRoll(Object* attacker, Object** defenderPtr, int* hitLocationPtr, int hitChance, int roll)
 {
-    assert(defenderPtr != nullptr && hitLocationPtr != nullptr);
+    if (defenderPtr == nullptr || hitLocationPtr == nullptr) return roll;
 
     if (scriptHooks[HOOK_AFTERHITROLL].empty()) {
         return roll;
@@ -1023,7 +1057,17 @@ void scriptHooks_DeathAnim(Object* attacker, Object* defender, Object* weapon, i
     hook.call();
 
     if (hook.numReturnValues() > 0) {
-        *anim = hook.getReturnValueAt(0).asInt();
+        int animFid = hook.getReturnValueAt(0).asInt();
+        // F-M03: Validate the animation FID is a known death animation.
+        // Only death/knockdown animations (ANIM_FALL_BACK through ANIM_FALL_FRONT_BLOOD)
+        // are valid for this hook; non-death-anim FIDs could crash the rendering pipeline.
+        int animType = FID_ANIM_TYPE(animFid);
+        if (animType >= FIRST_KNOCKDOWN_AND_DEATH_ANIM && animType <= LAST_KNOCKDOWN_AND_DEATH_ANIM) {
+            *anim = animFid;
+        } else {
+            debugPrint("HOOK_DEATHANIM2: ignoring invalid anim FID 0x%x (type=%d outside death range [%d,%d])\n",
+                       animFid, animType, FIRST_KNOCKDOWN_AND_DEATH_ANIM, LAST_KNOCKDOWN_AND_DEATH_ANIM);
+        }
     }
 }
 
@@ -1041,9 +1085,9 @@ int     ret1 - pass 1 to allow the skill to be used in combat
 */
 UseSkillOnHookResult scriptHooks_UseSkillOn(Object** userPtr, Object* target, int skill)
 {
-    assert(userPtr != nullptr);
-    assert(*userPtr != nullptr);
-    assert(target != nullptr);
+    if (userPtr == nullptr || *userPtr == nullptr || target == nullptr) {
+        return { true, false, false };
+    }
 
     if (scriptHooks[HOOK_USESKILLON].empty()) {
         return { true, false, false };
@@ -1263,7 +1307,7 @@ NOTE: the hook is executed twice when entering the barter screen or after transa
 */
 void scriptHooks_BarterPrice(BarterPriceContext* ctx)
 {
-    assert(ctx != nullptr);
+    if (ctx == nullptr) return;
 
     if (scriptHooks[HOOK_BARTERPRICE].empty()) {
         return;
@@ -1653,9 +1697,27 @@ When the hook fires:
 */
 void scriptHooks_SlideshowStart()
 {
-    if (ScriptHookCall::_gameModeChangeInProgress) {
-        return;
+    // I2-M07: Drain stale entries from _callStack BEFORE the reentrancy check,
+    // mirroring scriptHooks_GameModeChange.  A longjmp from programFatalError
+    // during a previous slideshow hook dispatch leaves stale entries that make
+    // current() return a non-null stale pointer, permanently blocking slideshow
+    // transitions.
+    {
+        int stackAnchor = 0;
+        ScriptHookCall::drainStaleEntries(reinterpret_cast<uintptr_t>(&stackAnchor));
     }
+
+    if (ScriptHookCall::_gameModeChangeInProgress) {
+        if (ScriptHookCall::current() != nullptr) {
+            // Legitimate reentrancy: a slideshow hook dispatch is actively
+            // in progress.  Block recursive mode change.
+            return;
+        }
+        // Flag is stuck from a previous longjmp.
+        // No hook is currently dispatching — reset and proceed.
+        ScriptHookCall::_gameModeChangeInProgress = false;
+    }
+
     if (scriptHooks[HOOK_GAMEMODECHANGE].empty()) {
         return;
     }
@@ -1666,9 +1728,19 @@ void scriptHooks_SlideshowStart()
 
 void scriptHooks_SlideshowEnd()
 {
-    if (ScriptHookCall::_gameModeChangeInProgress) {
-        return;
+    // I2-M07: Same drain-and-recovery as SlideshowStart.
+    {
+        int stackAnchor = 0;
+        ScriptHookCall::drainStaleEntries(reinterpret_cast<uintptr_t>(&stackAnchor));
     }
+
+    if (ScriptHookCall::_gameModeChangeInProgress) {
+        if (ScriptHookCall::current() != nullptr) {
+            return;
+        }
+        ScriptHookCall::_gameModeChangeInProgress = false;
+    }
+
     if (scriptHooks[HOOK_GAMEMODECHANGE].empty()) {
         return;
     }
