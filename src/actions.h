@@ -6,6 +6,8 @@
 
 namespace fallout {
 
+constexpr int MAX_KNOCKDOWN_DISTANCE = 20;
+
 extern int rotation;
 
 int _action_attack(Attack* attack);

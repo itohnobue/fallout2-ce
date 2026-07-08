@@ -4527,6 +4527,30 @@ struct CritterHitChanceEntry {
 };
 static std::unordered_map<int, CritterHitChanceEntry> gCritterHitChanceOverrides;
 
+// Maximum number of per-critter hit chance overrides accepted on load.
+// The save format keys use %03d indexing (0-999), so 1000 entries
+// is the format's natural capacity. This cap prevents a crafted save
+// from injecting a huge hcCount and causing an unbounded restore loop.
+static constexpr int kMaxHitChanceOverrides = 1000;
+
+// Maximum numbers of per-critter aimed-shot map entries accepted on load.
+// These caps prevent crafted saves from injecting huge counts and causing
+// unbounded restore loops. 500 entries matches existing kMaxPickpocketEntries.
+static constexpr int kMaxAimedShotEntries = 500;
+
+// Maximum number of skill modifier entries accepted on load (one per skill
+// index). Shared across gBaseSkillModMap, gGlobalCritterSkillModMap, and
+// per-critter skill overrides (EX-04, EX-05, EX-06 inner).
+static constexpr int kMaxSkillModEntries = SKILL_COUNT;
+
+// Maximum number of critter PID entries in gCritterSkillModMap accepted on
+// load. 500 matches existing kMaxPickpocketEntries for other pid-keyed maps.
+static constexpr int kMaxCritterSkillPidEntries = 500;
+
+// Maximum number of perk min-level overrides accepted on load. PERK_COUNT
+// is the natural bound — each entry corresponds to at most one valid perk ID.
+static constexpr int kMaxPerkMinLevelOverrides = PERK_COUNT;
+
 bool sfallGetCritterHitChanceMod(Object* critter, int& outMod, int& outMax)
 {
     if (critter == nullptr) {
@@ -4763,6 +4787,8 @@ struct CritterPickpocketEntry {
 };
 static std::unordered_map<int, CritterPickpocketEntry> gCritterPickpocketModMap;
 
+static constexpr int kMaxPickpocketEntries = 500;
+
 static void op_set_critter_pickpocket_mod(Program* program)
 {
     int mod = programStackPopInteger(program);
@@ -4782,6 +4808,14 @@ static void op_set_critter_pickpocket_mod(Program* program)
     }
     if (FID_TYPE(critter->fid) != OBJ_TYPE_CRITTER) {
         programPrintError("set_critter_pickpocket_mod: object is not a critter");
+        return;
+    }
+    // Guard against unbounded map growth from script bugs. Allow existing
+    // entries to be modified even at capacity; only reject new entries.
+    if (static_cast<int>(gCritterPickpocketModMap.size()) >= kMaxPickpocketEntries
+        && gCritterPickpocketModMap.find(critter->pid) == gCritterPickpocketModMap.end()) {
+        debugPrint("set_critter_pickpocket_mod: pickpocket map full (%d entries), entry for pid %d rejected\n",
+            kMaxPickpocketEntries, critter->pid);
         return;
     }
     CritterPickpocketEntry entry;
@@ -6062,7 +6096,7 @@ void sfallOpcodeStateLoad()
     // F-008: Restore perk min level overrides set by set_perk_level (0x817A).
     {
         int savedCount = 0;
-        if (sfall_gl_vars_fetch(kGlVarPerkMLCnt, savedCount)) {
+        if (sfall_gl_vars_fetch(kGlVarPerkMLCnt, savedCount) && savedCount <= kMaxPerkMinLevelOverrides) {
             for (int idx = 0; idx < savedCount; idx++) {
                 char pkKey[16] = {};
                 char pvKey[16] = {};
@@ -6083,7 +6117,7 @@ void sfallOpcodeStateLoad()
     // gBaseSkillModMap: skill → mod for set_base_skill_mod.
     {
         int skCount = 0;
-        if (sfall_gl_vars_fetch(kGlVarBaseSkCnt, skCount)) {
+        if (sfall_gl_vars_fetch(kGlVarBaseSkCnt, skCount) && skCount <= kMaxSkillModEntries) {
             for (int idx = 0; idx < skCount; idx++) {
                 char skKey[16] = {};
                 char modKey[16] = {};
@@ -6103,7 +6137,7 @@ void sfallOpcodeStateLoad()
     // with no critter (nullptr fallback).
     {
         int gcCount = 0;
-        if (sfall_gl_vars_fetch(kGlVarGlobCt, gcCount)) {
+        if (sfall_gl_vars_fetch(kGlVarGlobCt, gcCount) && gcCount <= kMaxSkillModEntries) {
             for (int idx = 0; idx < gcCount; idx++) {
                 char skKey[16] = {};
                 char modKey[16] = {};
@@ -6122,7 +6156,7 @@ void sfallOpcodeStateLoad()
     // gCritterSkillModMap: pid → (skill → mod) for set_critter_skill_mod.
     {
         int crtCount = 0;
-        if (sfall_gl_vars_fetch(kGlVarCrtSkCnt, crtCount)) {
+        if (sfall_gl_vars_fetch(kGlVarCrtSkCnt, crtCount) && crtCount <= kMaxCritterSkillPidEntries) {
             for (int idx = 0; idx < crtCount; idx++) {
                 char pidKey[16] = {};
                 char skCntKey[16] = {};
@@ -6130,7 +6164,7 @@ void sfallOpcodeStateLoad()
                 sprintf(skCntKey, "SFCrPn%04d", idx);
                 int pid = 0;
                 int skCount2 = 0;
-                if (sfall_gl_vars_fetch(pidKey, pid) && sfall_gl_vars_fetch(skCntKey, skCount2)) {
+                if (sfall_gl_vars_fetch(pidKey, pid) && sfall_gl_vars_fetch(skCntKey, skCount2) && skCount2 <= kMaxSkillModEntries) {
                     for (int skIdx = 0; skIdx < skCount2; skIdx++) {
                         char skKey[32] = {};
                         char modKey[32] = {};
@@ -6291,7 +6325,7 @@ void sfallOpcodeStateLoad()
     // Kill counters — restore from indexed key/value pairs.
     {
         int kcCount = 0;
-        if (sfall_gl_vars_fetch(kGlVarKillCtrCnt, kcCount)) {
+        if (sfall_gl_vars_fetch(kGlVarKillCtrCnt, kcCount) && kcCount <= kMaxKillCounterEntries) {
             gSfallKillCounters.clear();
             for (int idx2 = 0; idx2 < kcCount; idx2++) {
                 char key[16] = {};
@@ -6310,7 +6344,7 @@ void sfallOpcodeStateLoad()
     // Per-critter hit chance overrides.
     {
         int hcCount = 0;
-        if (sfall_gl_vars_fetch(kGlVarHitChCtrCnt, hcCount)) {
+        if (sfall_gl_vars_fetch(kGlVarHitChCtrCnt, hcCount) && hcCount <= kMaxHitChanceOverrides) {
             gCritterHitChanceOverrides.clear();
             for (int idx2 = 0; idx2 < hcCount; idx2++) {
                 char key[16] = {};
@@ -6335,7 +6369,7 @@ void sfallOpcodeStateLoad()
     // F-001: Per-critter pickpocket mod map.
     {
         int cpmCount = 0;
-        if (sfall_gl_vars_fetch(kGlVarCrtPMapCnt, cpmCount)) {
+        if (sfall_gl_vars_fetch(kGlVarCrtPMapCnt, cpmCount) && cpmCount <= kMaxPickpocketEntries) {
             gCritterPickpocketModMap.clear();
             for (int idx2 = 0; idx2 < cpmCount; idx2++) {
                 char key[16] = {};
@@ -6405,7 +6439,7 @@ void sfallOpcodeStateLoad()
     // Per-critter aimed-shot override maps (F-016).
     {
         int fasCount = 0;
-        if (sfall_gl_vars_fetch(kGlVarFASMapCnt, fasCount)) {
+        if (sfall_gl_vars_fetch(kGlVarFASMapCnt, fasCount) && fasCount <= kMaxAimedShotEntries) {
             gForceAimedShotsMap.clear();
             for (int idx2 = 0; idx2 < fasCount; idx2++) {
                 char key[16] = {};
@@ -6420,7 +6454,7 @@ void sfallOpcodeStateLoad()
             }
         }
         int dasCount = 0;
-        if (sfall_gl_vars_fetch(kGlVarDASMapCnt, dasCount)) {
+        if (sfall_gl_vars_fetch(kGlVarDASMapCnt, dasCount) && dasCount <= kMaxAimedShotEntries) {
             gDisableAimedShotsMap.clear();
             for (int idx2 = 0; idx2 < dasCount; idx2++) {
                 char key[16] = {};

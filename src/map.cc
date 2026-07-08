@@ -602,6 +602,7 @@ char* mapGetCityName(int map)
     const char* overriddenTitle = sfallGetTownTitleOverride(city);
     if (overriddenTitle != nullptr) {
         strncpy(_scratchStr, overriddenTitle, 40);
+        _scratchStr[39] = '\0';
         return _scratchStr;
     }
 

@@ -5983,6 +5983,8 @@ static int perkDialogShow()
             int selectedPerk = perks[0];
             if (perkAdd(gDude, selectedPerk) == -1) {
                 debugPrint("\n*** Unable to auto-add perk! ***\n");
+                soundPlayFile("iisxxxx1");
+                showDialogBox("Unable to add perk. Requirements not met.", nullptr, 0, 192, 126, _colorTable[32328], nullptr, _colorTable[32328], 0);
             }
             return 1;
         }
@@ -6175,6 +6177,8 @@ static int perkDialogShow()
         if (selectedValue >= 0) {
             if (perkAdd(gDude, selectedValue) == -1) {
                 debugPrint("\n*** Unable to add perk! ***\n");
+                soundPlayFile("iisxxxx1");
+                showDialogBox("Unable to add perk. Requirements not met.", nullptr, 0, 192, 126, _colorTable[32328], nullptr, _colorTable[32328], 0);
                 rc = 2;
             }
         }
@@ -7046,7 +7050,12 @@ static void _pop_perks()
                 break;
             }
 
-            perkAdd(gDude, i);
+            if (perkAdd(gDude, i) == -1) {
+                debugPrint("\n*** Unable to revert perk! ***\n");
+                soundPlayFile("iisxxxx1");
+                showDialogBox("Unable to revert perk. Operation failed.", nullptr, 0, 192, 126, _colorTable[32328], nullptr, _colorTable[32328], 0);
+                break;
+            }
         }
     }
 }

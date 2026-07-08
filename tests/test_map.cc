@@ -1,11 +1,11 @@
 // Unit tests for map.cc and map_edge.cc — coordinate math and aging fix.
 //
 // Tests mirror selected production implementations that are testable standalone:
-//   - tileToPixelOffset / pixelToTileCoord  (map_edge.cc:38-71)
+//   - tileToPixelOffset / pixelToTileCoord  (map_edge.cc:38-55)
 //   - _map_age_dead_critters priority swap   (map.cc:1190-1196)
 //   - EdgeZone / Rect type validation
 //
-// Reference source: src/map_edge.cc:38-71, src/map.cc:1165-1210, src/map_defs.h
+// Reference source: src/map_edge.cc:38-55, src/map.cc:1165-1210, src/map_defs.h
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest.h"
@@ -51,25 +51,15 @@ static void testTileToPixelOffset(int tile, int& outX, int& outY)
     outX = TEST_K_TILE_WIDTH / 2 * x;
 }
 
-// Mirror of map_edge.cc:49-71 pixelToTileCoord.
-// Equivalent to sfall GetCoordFromOffset.
+// Mirror of map_edge.cc:49-55 pixelToTileCoord.
+// Uses the production algorithm: kTileHeight=24, kTileWidth=32,
+// HEX_GRID_WIDTH/2=100. Equivalent to sfall GetCoordFromOffset.
 static void testPixelToTileCoord(int& inOutX, int& inOutY)
 {
-    int x = inOutX;
-    int y = inOutY;
-
-    int tileOffsetX = x / (TEST_K_TILE_WIDTH / 2) * (TEST_K_TILE_WIDTH / 2);
-    int tileOffsetY = y % TEST_K_TILE_HEIGHT;
-
-    if (tileOffsetY >= TEST_K_TILE_HEIGHT / 2) {
-        tileOffsetX += TEST_K_TILE_WIDTH / 2;
-    }
-
-    y = (x - tileOffsetX + tileOffsetY) / TEST_K_TILE_WIDTH;
-    x -= (y / 2) * TEST_K_TILE_WIDTH + tileOffsetX;
-
+    int y = inOutY / TEST_K_TILE_HEIGHT;
+    int x = (inOutX / TEST_K_TILE_WIDTH) + y - (TEST_HEX_GRID_WIDTH / 2);
     inOutX = x;
-    inOutY = y;
+    inOutY = (2 * y) - (x / 2);
 }
 
 // ---- Mirror: _map_age_dead_critters() priority logic (map.cc:1190-1196) ----
@@ -193,55 +183,94 @@ TEST_CASE("tileToPixelOffset — produces non-negative outputs")
 // pixelToTileCoord tests
 // ===========================================================================
 
-TEST_CASE("pixelToTileCoord — origin")
+TEST_CASE("pixelToTileCoord — origin (0,0)")
 {
+    // Production formula: y = inY/24, x = inX/32 + y - 100
+    //                     outX = x, outY = 2*y - x/2
+    // (0, 0): y=0, x=-100, outX=-100, outY=0-(-50)=50
     int x = 0, y = 0;
     testPixelToTileCoord(x, y);
-    // Expects some integer result; validate it's not crazily out of range
-    CHECK(x >= 0);
-    CHECK(y >= 0);
+    CHECK(x == -100);
+    CHECK(y == 50);
 }
 
-TEST_CASE("pixelToTileCoord — non-negative for valid pixel ranges")
+TEST_CASE("pixelToTileCoord — known-good values computed from production formula")
 {
-    // Test a grid of pixel offsets to ensure outputs are non-negative.
-    for (int px = 0; px <= 6400; px += 3200) {
-        for (int py = 0; py <= 3600; py += 1200) {
-            int x = px, y = py;
-            testPixelToTileCoord(x, y);
-            CHECK(x >= 0);
-            CHECK(y >= 0);
-        }
+    // Pre-computed expected outputs using the production algorithm:
+    //   kTileHeight=24, kTileWidth=32, HEX_GRID_WIDTH/2=100
+    //
+    // (3200, 0):   y=0, x=3200/32+0-100=0,   out=(0, 0)
+    // (3232, 0):   y=0, x=3232/32+0-100=1,   out=(1, 0)
+    // (4800, 3576): y=149, x=4800/32+149-100=199, out=(199, 199)
+    // (0, 1200):   y=50, x=0+50-100=-50,     out=(-50, 125)
+    // (320, 0):    y=0, x=10+0-100=-90,      out=(-90, 45)
+
+    struct { int inX; int inY; int expX; int expY; } cases[] = {
+        {3200,    0,    0,   0},
+        {3232,    0,    1,   0},
+        {4800, 3576,  199, 199},
+        {   0, 1200,  -50, 125},
+        { 320,    0,  -90,  45},
+    };
+
+    for (const auto& tc : cases) {
+        int x = tc.inX, y = tc.inY;
+        testPixelToTileCoord(x, y);
+        INFO("Input: (" << tc.inX << ", " << tc.inY << ")");
+        CHECK(x == tc.expX);
+        CHECK(y == tc.expY);
     }
 }
 
-TEST_CASE("tileToPixelOffset roundtrip — selected tiles")
+TEST_CASE("tileToPixelOffset → pixelToTileCoord roundtrip — selected tiles")
 {
-    // tileToPixelOffset and pixelToTileCoord are complementary functions
-    // in the engine's coordinate system. tileToPixelOffset converts a
-    // flat tile index to pixel coordinates, and pixelToTileCoord converts
-    // pixel coordinates to hex-grid tile coordinates (used for mouse-to-
-    // tile mapping).
+    // tileToPixelOffset converts a flat tile index to pixel offsets.
+    // pixelToTileCoord converts pixel offsets to hex-grid-space
+    // coordinates. The roundtrip does NOT reconstruct the original
+    // flat tile index — it returns hex-grid coordinates that the
+    // engine uses for mouse-to-tile mapping.
     //
-    // Note: pixelToTileCoord does NOT reconstruct the original flat tile
-    // index — it returns hex-grid-space coordinates that may differ from
-    // the flat index due to hex tiling and the y &= ~1 lossy rounding
-    // in tileToPixelOffset. This test verifies that basic coordinate
-    // validity holds (no negative values, no crashes).
+    // This test verifies the pixelToTileCoord output against
+    // pre-computed expected hex-grid coordinates from the production
+    // algorithm at map_edge.cc:38-55.
     //
-    // The production algorithm at map_edge.cc:38-71.
-    int tiles[] = { 0, 1, 100, 199, 200, 399, 5000, 10000, 20000, 39999 };
-    for (int origTile : tiles) {
+    // Pre-computed: for each flat tile, compute pixel offset via
+    // tileToPixelOffset, then apply pixelToTileCoord formula.
+
+    struct { int tile; int expX; int expY; } cases[] = {
+        // tile 0: x=0, y=0, y&=~1=0, x=2*0+200-0=200
+        //   px=16*200=3200, py=12*0=0
+        //   pixelToTileCoord: y=0, x=3200/32+0-100=0, out=(0,0)
+        {    0,   0,   0},
+        // tile 1: x=1, y=0, y&=~1=0, x=2*1+200-0=202
+        //   px=16*202=3232, py=0
+        //   pixelToTileCoord: y=0, x=3232/32+0-100=1, out=(1,0)
+        {    1,   1,   0},
+        // tile 100: x=100, y=50, y&=~1=50, x=2*100+200-50=350
+        //   px=16*350=5600, py=12*50=600
+        //   pixelToTileCoord: y=25, x=5600/32+25-100=100, out=(100,0)
+        {  100, 100,   0},
+        // tile 199: x=199, y=99, y&=~1=98, x=2*199+200-98=500
+        //   px=16*500=8000, py=12*98=1176
+        //   pixelToTileCoord: y=49, x=8000/32+49-100=199, out=(199,-1)
+        {  199, 199,  -1},
+        // tile 39999: x=199, y=298, y&=~1=298, x=2*199+200-298=300
+        //   px=16*300=4800, py=12*298=3576
+        //   pixelToTileCoord: y=149, x=4800/32+149-100=199, out=(199,199)
+        {39999, 199, 199},
+    };
+
+    for (const auto& tc : cases) {
         int px, py;
-        testTileToPixelOffset(origTile, px, py);
+        testTileToPixelOffset(tc.tile, px, py);
         int tileX = px, tileY = py;
         testPixelToTileCoord(tileX, tileY);
 
-        // Sanity: tile coordinates should be within valid range
-        CHECK(tileX >= 0);
-        CHECK(tileY >= 0);
+        INFO("tile: " << tc.tile << " px=" << px << " py=" << py);
+        CHECK(tileX == tc.expX);
+        CHECK(tileY == tc.expY);
 
-        // Forward transform sanity: pixel offsets should be non-negative
+        // Forward transform: pixel offsets should always be non-negative
         CHECK(px >= 0);
         CHECK(py >= 0);
     }

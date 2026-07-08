@@ -23,6 +23,12 @@
 #include "settings.h"
 #include "sfall_script_hooks.h"
 
+// Forward declarations for engine globals used by sfall_kb_helpers.cc.
+// We cannot include svga.h or game.h here because test_stubs does not
+// have SDL2 include paths. The actual type definitions are not needed
+// for the variable definitions below.
+struct SDL_Window;
+
 namespace fallout {
 
 // =============================================================
@@ -257,6 +263,29 @@ namespace fallout {
     {
         return nullptr;
     }
+
+    // sfall_kb_helpers.cc constructs ScriptHookCall objects in
+    // sfall_kb_handle_key_pressed. Provide minimal stubs.
+    ScriptHookCall::ScriptHookCall(HookType /*hookType*/, int /*maxReturnValues*/,
+                                   std::initializer_list<ProgramValue> /*args*/)
+    {
+        // no-op: test context has no hook scripts to dispatch
+    }
+
+    void ScriptHookCall::call()
+    {
+        // no-op: test context has no registered hook scripts
+    }
+
+    int ScriptHookCall::numReturnValues() const
+    {
+        return 0;  // no scripts ran, no return values
+    }
+
+    ProgramValue ScriptHookCall::getReturnValueAt(int /*idx*/) const
+    {
+        return ProgramValue();  // empty ProgramValue
+    }
 } // namespace fallout
 
 // ---- Global variables defined by the engine ----
@@ -284,6 +313,12 @@ namespace fallout {
     float sfallTargetKnockbackValue = 0.0f;
     int sfallAttackerKnockbackType = 0;
     float sfallAttackerKnockbackValue = 0.0f;
+
+    // sfall_kb_helpers.cc references these engine globals.
+    // gSdlWindow: SDL window handle (null in test context).
+    // gGameLoaded: whether a game is actively loaded (false in test context).
+    SDL_Window* gSdlWindow = nullptr;
+    bool gGameLoaded = false;
 }
 
 // =============================================================

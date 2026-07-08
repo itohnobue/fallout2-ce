@@ -5015,6 +5015,11 @@ static void attackComputeDamage(Attack* attack, int numRounds, int baseDamageMul
             if (*knockbackDistancePtr < 0) {
                 *knockbackDistancePtr = 0;
             }
+
+            // Knockback distance should not exceed the maximum knockdown distance.
+            if (*knockbackDistancePtr > MAX_KNOCKDOWN_DISTANCE) {
+                *knockbackDistancePtr = MAX_KNOCKDOWN_DISTANCE;
+            }
         }
     }
 

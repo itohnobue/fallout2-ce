@@ -1233,6 +1233,9 @@ SoundDecoder* soundDecoderInit(SoundDecoderReadProc* readProc, void* data, int* 
 
     if (gSoundDecodersCount == 1) {
         _AudioDecoder_scale_tbl = (unsigned char*)malloc(0x20000);
+        if (_AudioDecoder_scale_tbl == nullptr) {
+            goto L66;
+        }
         _AudioDecoder_scale0 = _AudioDecoder_scale_tbl + 0x10000;
     }
 

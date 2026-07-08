@@ -6107,6 +6107,7 @@ static int wmInterfaceDrawCircleOverlay(CityInfo* city, CitySizeDescription* cit
                 wmGetAreaName(city, name);
             } else {
                 strncpy(name, getmsg(&wmMsgFile, &messageListItem, 1004), 40);
+                name[39] = '\0';
             }
 
             int width = fontGetStringWidth(name);
@@ -6337,6 +6338,7 @@ static int wmGetAreaName(CityInfo* city, char* name)
         getmsg(&gMapMessageList, &messageListItem, city->areaId + 1500);
         strncpy(name, messageListItem.text, 40);
     }
+    name[39] = '\0';
 
     return 0;
 }
@@ -6357,6 +6359,7 @@ int wmGetAreaIdxName(int areaIdx, char* name)
         getmsg(&gMapMessageList, &messageListItem, 1500 + areaIdx);
         strncpy(name, messageListItem.text, 40);
     }
+    name[39] = '\0';
 
     return 0;
 }

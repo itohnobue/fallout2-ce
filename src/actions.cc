@@ -38,8 +38,6 @@
 
 namespace fallout {
 
-#define MAX_KNOCKDOWN_DISTANCE 20
-
 typedef enum ScienceRepairTargetType {
     SCIENCE_REPAIR_TARGET_TYPE_DEFAULT,
     SCIENCE_REPAIR_TARGET_TYPE_DUDE,

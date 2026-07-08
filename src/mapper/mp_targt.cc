@@ -232,7 +232,9 @@ int target_load(int pid, TargetSubNode** subnode_ptr)
         }
 
         subnode = subnode->next;
-        fread(subnode, sizeof(TargetSubNode), 1, stream);
+        if (fread(subnode, sizeof(TargetSubNode), 1, stream) != 1) {
+            return -1;
+        }
     }
 
     fclose(stream);

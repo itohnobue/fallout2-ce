@@ -1205,6 +1205,9 @@ int weaponGetAttackTypeForHitMode(Object* weapon, int hitMode)
         index = (proto->item.extendedFlags & 0xF0) >> 4;
     }
 
+    // Clamp index to valid range — extendedFlags is writable via set_proto_data
+    // and the nibble-derived index can be 0-15, but _attack_subtype has only 9 entries.
+    index = std::clamp(index, 0, 8);
     return _attack_subtype[index];
 }
 
@@ -1225,6 +1228,9 @@ int weaponGetSkillForHitMode(Object* weapon, int hitMode)
         index = (proto->item.extendedFlags & 0xF0) >> 4;
     }
 
+    // Clamp index to valid range — extendedFlags is writable via set_proto_data
+    // and the nibble-derived index can be 0-15, but _attack_skill has only 9 entries.
+    index = std::clamp(index, 0, 8);
     int skill = _attack_skill[index];
 
     if (skill == SKILL_SMALL_GUNS) {
@@ -1401,6 +1407,9 @@ int weaponGetAnimationForHitMode(Object* weapon, int hitMode)
         index = (proto->item.extendedFlags & 0xF0) >> 4;
     }
 
+    // Clamp index to valid range — extendedFlags is writable via set_proto_data
+    // and the nibble-derived index can be 0-15, but _attack_anim has only 9 entries.
+    index = std::clamp(index, 0, 8);
     return _attack_anim[index];
 }
 

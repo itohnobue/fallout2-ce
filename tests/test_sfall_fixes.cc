@@ -38,7 +38,7 @@ constexpr int COMBAT_DAMAGE_MIN = 0;
 constexpr int COMBAT_DAMAGE_MAX = 9999;
 constexpr int COMBAT_FLAGS_MASK = DAM_KNOCKED_OUT | DAM_KNOCKED_DOWN | DAM_CRIP | DAM_DEAD | DAM_LOSE_TURN;
 constexpr int COMBAT_KNOCKBACK_MIN = 0;
-constexpr int COMBAT_KNOCKBACK_MAX = 99;
+constexpr int COMBAT_KNOCKBACK_MAX = 20;  // Mirrors production: MAX_KNOCKDOWN_DISTANCE (src/actions.h:9)
 
 struct CombatDamageFields {
     int defenderDamage = 0;
@@ -179,6 +179,29 @@ TEST_CASE("F-01: Combat damage — knockback above max clamped")
     combat_damage_mirror::applyHookReturns(f, 5, returns);
 
     CHECK(f.defenderKnockback == combat_damage_mirror::COMBAT_KNOCKBACK_MAX);
+}
+
+TEST_CASE("F-01b: Combat damage — knockback at production boundary (MAX_KNOCKDOWN_DISTANCE=20)")
+{
+    // This test ensures the test mirror's COMBAT_KNOCKBACK_MAX stays in sync
+    // with production's MAX_KNOCKDOWN_DISTANCE=20 (src/actions.h:9).
+    // With the stale value of 99, knockback=21 and knockback=50 would pass
+    // through unclamped; with the correct value of 20, both are clamped.
+
+    combat_damage_mirror::CombatDamageFields f1;
+    int atBoundary[] = {0, 0, 0, 0, 20};
+    combat_damage_mirror::applyHookReturns(f1, 5, atBoundary);
+    CHECK(f1.defenderKnockback == 20);
+
+    combat_damage_mirror::CombatDamageFields f2;
+    int justAbove[] = {0, 0, 0, 0, 21};
+    combat_damage_mirror::applyHookReturns(f2, 5, justAbove);
+    CHECK(f2.defenderKnockback == 20);
+
+    combat_damage_mirror::CombatDamageFields f3;
+    int wellAbove[] = {0, 0, 0, 0, 50};
+    combat_damage_mirror::applyHookReturns(f3, 5, wellAbove);
+    CHECK(f3.defenderKnockback == 20);
 }
 
 TEST_CASE("F-01: Combat damage — fewer returns than fields leaves remainder untouched")

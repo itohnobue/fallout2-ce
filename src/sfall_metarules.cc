@@ -3381,13 +3381,28 @@ void mf_message_box(OpcodeContext& ctx)
 
 void sfall_metarule(Program* program, int args)
 {
+    // Defensive: validate arg count before any stack manipulation.
+    if (args < 0 || args > METARULE_MAX_ARGS) {
+        // Pop args first (they are on top of the stack — LIFO order),
+        // then pop the metarule name (pushed first, deepest on stack).
+        for (int index = 0; index < args; index++) {
+            programStackPopValue(program);
+        }
+        programStackPopValue(program);
+        programPrintError("op_sfall_func(...) - invalid argument count %d (max %zu).", args, METARULE_MAX_ARGS);
+        programStackPushInteger(program, 0);
+        return;
+    }
+
     // TODO: make OpcodeContext handle the stack.  This will be easier once it is used for all opcodes.
     static ProgramValue values[METARULE_MAX_ARGS];
 
+    // Pop args first (they are on top of the stack — LIFO order).
     for (int index = 0; index < args; index++) {
         values[index] = programStackPopValue(program);
     }
 
+    // Pop name last (name was pushed first, deepest on stack).
     ProgramValue metaruleName = programStackPopValue(program);
     if (!metaruleName.isString()) {
         programPrintError("op_sfall_func(name, ...) - name must be string.");
@@ -3408,6 +3423,15 @@ void sfall_metarule(Program* program, int args)
     if (metaruleInfo == nullptr) {
         programPrintError("op_sfall_func(\"%s\", ...) - metarule function is unknown.", metarule);
         programStackPushInteger(program, -1);
+        return;
+    }
+
+    // Validate argument count against metarule info.
+    // Args are already consumed — no stack-balance cleanup needed.
+    if (args < metaruleInfo->minArgs || args > metaruleInfo->maxArgs) {
+        programPrintError("%s() - invalid number of arguments (%d), must be from %d to %d.",
+            metaruleInfo->name, args, metaruleInfo->minArgs, metaruleInfo->maxArgs);
+        programStackPushInteger(program, metaruleInfo->errorReturn);
         return;
     }
 

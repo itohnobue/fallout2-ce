@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "actions.h"
 #include "animation.h"
 #include "db.h"
 #include "debug.h"
@@ -1285,7 +1286,11 @@ void scriptHooks_ComputeDamage(Attack* attack, int numRounds, int baseDmgMult)
     // flags persist into critter->data.critter.combat.results.
     constexpr int COMBAT_FLAGS_MASK = DAM_KNOCKED_OUT | DAM_KNOCKED_DOWN | DAM_CRIP | DAM_DEAD | DAM_LOSE_TURN;
     constexpr int COMBAT_KNOCKBACK_MIN = 0;
-    constexpr int COMBAT_KNOCKBACK_MAX = 99;
+    // COMBAT_KNOCKBACK_MAX is aligned with MAX_KNOCKDOWN_DISTANCE (actions.h:20).
+    // All knockback consumers flow through actionKnockdown which caps at
+    // MAX_KNOCKDOWN_DISTANCE; advertising a wider range in the hook API would
+    // silently clamp higher values to 20, misleading mod authors.
+    constexpr int COMBAT_KNOCKBACK_MAX = MAX_KNOCKDOWN_DISTANCE;
 
     int* fields[] = {
         &attack->defenderDamage,
