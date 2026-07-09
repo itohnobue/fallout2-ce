@@ -748,3 +748,50 @@ add_executable(test_validation_fixes
 )
 target_link_libraries(test_validation_fixes PRIVATE doctest)
 add_test(NAME test_validation_fixes COMMAND test_validation_fixes)
+
+# ============================================================
+# Stage 9 Fix — Register Stage 9 Test Files (4 entries)
+# ============================================================
+
+# ---- Test: fixes metarules (F-26, F-27, F-28, F-29, F-54) ----
+# Self-contained mirror test — does not link sfall_metarules.cc.
+# No engine headers needed — all type constants mirrored locally.
+add_executable(test_fixes_metarules
+    test_fixes_metarules.cc
+)
+target_link_libraries(test_fixes_metarules PRIVATE doctest)
+add_test(NAME test_fixes_metarules COMMAND test_fixes_metarules)
+
+# ---- Test: fixes opcodes (F-09, F2-05, F2-06, F2-08, F2-16) ----
+# Self-contained mirror test — includes sfall_opcodes.h and obj_types.h
+# for type constants (OBJ_TYPE_CRITTER, FID_TYPE, etc.).
+# SDL2/zlib headers needed for transitive includes from interpreter.h/perk.h.
+add_executable(test_fixes_opcodes
+    test_fixes_opcodes.cc
+)
+target_include_directories(test_fixes_opcodes PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_include_directories(test_fixes_opcodes PRIVATE ${ZLIB_INCLUDE_DIRS})
+target_link_libraries(test_fixes_opcodes PRIVATE doctest ${SDL2_LIBRARIES})
+add_test(NAME test_fixes_opcodes COMMAND test_fixes_opcodes)
+
+# ---- Test: fixes hooks (F-21, F-42, F2-02, F2-04) ----
+# Self-contained mirror test — includes sfall_script_hooks.h and obj_types.h
+# for HookType enum, HOOK_COUNT, OBJ_TYPE_*, DAM_DEAD, PID_TYPE constants.
+# SDL2/zlib headers needed for transitive includes from interpreter.h/combat.h.
+add_executable(test_fixes_hooks
+    test_fixes_hooks.cc
+)
+target_include_directories(test_fixes_hooks PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_include_directories(test_fixes_hooks PRIVATE ${ZLIB_INCLUDE_DIRS})
+target_link_libraries(test_fixes_hooks PRIVATE doctest ${SDL2_LIBRARIES})
+add_test(NAME test_fixes_hooks COMMAND test_fixes_hooks)
+
+# ---- Test: fixes saveload (F-55, F-61, F2-20, F2-21, F2-22, F2-25) ----
+# Self-contained mirror test — does not link loadsave.cc or sfall_global_scripts.cc.
+# No engine headers needed — CRC-32, atomic write FSM, path traversal, and
+# procCount validation are all mirrored locally.
+add_executable(test_fixes_saveload
+    test_fixes_saveload.cc
+)
+target_link_libraries(test_fixes_saveload PRIVATE doctest)
+add_test(NAME test_fixes_saveload COMMAND test_fixes_saveload)

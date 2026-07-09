@@ -2557,13 +2557,14 @@ int _scr_remove_all()
     gScriptsEnumerationElevation = 0;
     gMapSid = -1;
 
-    programListFree();
-
-    // All programs have been freed — clear hook vectors to remove
-    // dangling Program* references. Individual scriptRemove() calls
-    // above cleaned per-script hooks, but NO_REMOVE scripts were
-    // skipped; reset catches anything remaining.
+    // Clear hook vectors BEFORE freeing programs to avoid dangling
+    // Program* references in the hook vectors. scriptHooksReset() does
+    // not access Program objects (scriptHooksClear just clears vectors,
+    // sfallAnimCallbackReset just nulls global pointers), so it is safe
+    // to call before programListFree().
     scriptHooksReset();
+
+    programListFree();
 
     _exportClearAllVariables();
 
@@ -2594,8 +2595,8 @@ int _scr_remove_all_force()
     gScriptsEnumerationScriptListExtent = nullptr;
     gScriptsEnumerationElevation = 0;
     gMapSid = -1;
-    programListFree();
     scriptHooksReset();
+    programListFree();
     _exportClearAllVariables();
 
     return 0;

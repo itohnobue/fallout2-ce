@@ -96,7 +96,7 @@ static void op_obj_is_carrying_obj(Program* program)
     Object* invenObj = static_cast<Object*>(programStackPopPointer(program));
 
     int count = 0;
-    if (invenObj != nullptr && itemObj != nullptr) {
+    if (invenObj != nullptr && itemObj != nullptr && FID_TYPE(invenObj->fid) == OBJ_TYPE_CRITTER) {
         Inventory* inventory = &(invenObj->data.inventory);
         for (int index = 0; index < inventory->length; index++) {
             InventoryItem* inventoryItem = &(inventory->items[index]);
@@ -503,7 +503,11 @@ static void op_set_sfall_global(Program* program)
         } else if (variable.opcode == VALUE_TYPE_INT) {
             sfall_gl_vars_store_float(variable.integerValue, value.asFloat());
         }
-    } else {
+    } else if (value.isInt()) {
+        // Integer values: store directly. The previous code treated all
+        // non-float ProgramValues as integers, but string/pointer values
+        // hold heap offsets in integerValue — storing those as globals
+        // causes data corruption that persists through save/load.
         if ((variable.opcode & VALUE_TYPE_MASK) == VALUE_TYPE_STRING) {
             const char* key = programGetString(program, variable.opcode, variable.integerValue);
             sfall_gl_vars_store(key, value.integerValue);
@@ -514,6 +518,11 @@ static void op_set_sfall_global(Program* program)
             int overrideValue = scriptHooks_SetGlobalVar(variable.integerValue, value.integerValue);
             sfall_gl_vars_store(variable.integerValue, overrideValue);
         }
+    } else {
+        // Reject unsupported value types (string, pointer, dynamic string).
+        // Storing these would write a heap offset as a global integer,
+        // causing data corruption across save/load cycles.
+        programPrintError("set_sfall_global: unsupported value type %s", value.typeDebugString());
     }
 }
 
@@ -1309,6 +1318,13 @@ static void op_create_message_window(Program* program)
     }
 
     char* copy = internal_strdup(string);
+
+    // internal_strdup can return nullptr on allocation failure (OOM).
+    // mf_message_box (sfall_metarules.cc:3463-3469) has the same guard.
+    // Without this check, strchr(copy, '\n') dereferences nullptr.
+    if (copy == nullptr) {
+        return;
+    }
 
     // Parse newline-delimited body lines; first segment is the title.
     char* body[4];
@@ -5206,6 +5222,15 @@ static void op_set_critter_skill_mod(Program* program)
         programPrintError("set_critter_skill_mod: object is not a critter");
         return;
     }
+    // Guard against unbounded map growth from script bugs. Allow existing
+    // entries to be modified even at capacity; only reject new entries.
+    // kMaxCritterSkillPidEntries matches the load-side cap (line 6698).
+    if (static_cast<int>(gCritterSkillModMap.size()) >= kMaxCritterSkillPidEntries
+        && gCritterSkillModMap.find(critter->pid) == gCritterSkillModMap.end()) {
+        debugPrint("set_critter_skill_mod: critter skill mod map full (%d entries), entry for pid %d rejected\n",
+            kMaxCritterSkillPidEntries, critter->pid);
+        return;
+    }
     gCritterSkillModMap[critter->pid][skill] = mod;
 }
 
@@ -6745,6 +6770,15 @@ void sfallOpcodeStateLoad()
 
     // Perk owed counter.
     if (sfall_gl_vars_fetch(kGlVarPerkOwed, val)) {
+        // Clamp to [0, 255] on load, matching the setter opcode (op_set_perk_owed).
+        // The setter clamps to prevent negative values and unreasonably large
+        // perk owed counts. Load bypassing this clamp allows crafted saves
+        // to permanently block perk granting with negative values.
+        if (val < 0) {
+            val = 0;
+        } else if (val > 255) {
+            val = 255;
+        }
         gSfallPerkOwed = val;
     }
 

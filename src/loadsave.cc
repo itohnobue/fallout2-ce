@@ -1963,9 +1963,14 @@ static int lsgPerformSaveGame()
     snprintf(_gmpath, sizeof(_gmpath), "%s\\%s%.2d\\", "SAVEGAME", "SLOT", _slot_cursor + 1);
     strcat(_gmpath, "SAVE.DAT");
 
+    // Build temp file path for atomic write (temp-file-then-rename, same pattern
+    // used by sfallgv.sav at lines 2050-2086).
+    char _saveDatTmp[COMPAT_MAX_PATH];
+    snprintf(_saveDatTmp, sizeof(_saveDatTmp), "%s.tmp", _gmpath);
+
     debugPrint("\nLOADSAVE: Save name: %s\n", _gmpath);
 
-    _flptr = fileOpen(_gmpath, "wb");
+    _flptr = fileOpen(_saveDatTmp, "wb");
     if (_flptr == nullptr) {
         debugPrint("\nLOADSAVE: ** Error opening save game for writing! **\n");
         _RestoreSave();
@@ -1981,6 +1986,7 @@ static int lsgPerformSaveGame()
         debugPrint("\nLOADSAVE: ** Error writing save game header! **\n");
         debugPrint("LOADSAVE: Save file header size written: %d bytes.\n", fileTell(_flptr) - pos);
         fileClose(_flptr);
+        compat_remove(_saveDatTmp);
         _RestoreSave();
         snprintf(_gmpath, sizeof(_gmpath), "%s\\%s%.2d\\", "SAVEGAME", "SLOT", _slot_cursor + 1);
         MapDirErase(_gmpath, "BAK");
@@ -2003,6 +2009,7 @@ static int lsgPerformSaveGame()
         if (handler(_flptr) == -1) {
             debugPrint("\nLOADSAVE: ** Error writing save function #%d data! **\n", index);
             fileClose(_flptr);
+            compat_remove(_saveDatTmp);
             _RestoreSave();
             snprintf(_gmpath, sizeof(_gmpath), "%s\\%s%.2d\\", "SAVEGAME", "SLOT", _slot_cursor + 1);
             MapDirErase(_gmpath, "BAK");
@@ -2028,6 +2035,7 @@ static int lsgPerformSaveGame()
             } else {
                 debugPrint("\nLOADSAVE: ** Error allocating CRC buffer for save function #%d! **\n", index);
                 fileClose(_flptr);
+                compat_remove(_saveDatTmp);
                 _RestoreSave();
                 snprintf(_gmpath, sizeof(_gmpath), "%s\\%s%.2d\\", "SAVEGAME", "SLOT", _slot_cursor + 1);
                 MapDirErase(_gmpath, "BAK");
@@ -2060,9 +2068,10 @@ static int lsgPerformSaveGame()
             fileClose(sfFile);
             if (!saved || compat_rename(tmpPath, sfPath) != 0) {
                 // sfallgv.sav write or rename failed. Clean up the temp file,
-                // close SAVE.DAT, and restore the previous save state.
+                // close SAVE.DAT temp file, and restore the previous save state.
                 compat_remove(tmpPath);
                 fileClose(_flptr);
+                compat_remove(_saveDatTmp);
                 _RestoreSave();
                 snprintf(_gmpath, sizeof(_gmpath), "%s\\%s%.2d\\", "SAVEGAME", "SLOT", _slot_cursor + 1);
                 MapDirErase(_gmpath, "BAK");
@@ -2076,6 +2085,7 @@ static int lsgPerformSaveGame()
             // leaving SAVE.DAT without a corresponding sfallgv.sav.
             debugPrint("\nLOADSAVE: ** Error opening sfallgv.sav temp file for writing! **\n");
             fileClose(_flptr);
+            compat_remove(_saveDatTmp);
             _RestoreSave();
             snprintf(_gmpath, sizeof(_gmpath), "%s\\%s%.2d\\", "SAVEGAME", "SLOT", _slot_cursor + 1);
             MapDirErase(_gmpath, "BAK");
@@ -2088,6 +2098,18 @@ static int lsgPerformSaveGame()
     // SAVE.DAT is finalized only after sfallgv.sav is safely on disk.
     fileClose(_flptr);
     _flptr = nullptr;
+
+    // Atomically rename temp file to final SAVE.DAT.
+    if (compat_rename(_saveDatTmp, _gmpath) != 0) {
+        debugPrint("\nLOADSAVE: ** Error renaming temp save file to SAVE.DAT! **\n");
+        compat_remove(_saveDatTmp);
+        _RestoreSave();
+        snprintf(_gmpath, sizeof(_gmpath), "%s\\%s%.2d\\", "SAVEGAME", "SLOT", _slot_cursor + 1);
+        MapDirErase(_gmpath, "BAK");
+        _partyMemberUnPrepSave();
+        backgroundSoundResume();
+        return -1;
+    }
 
     snprintf(_gmpath, sizeof(_gmpath), "%s\\%s%.2d\\", "SAVEGAME", "SLOT", _slot_cursor + 1);
     MapDirErase(_gmpath, "BAK");
@@ -2138,9 +2160,29 @@ static int lsgLoadGameInSlot(int slot)
 
     _flptr = fileOpen(_gmpath, "rb");
     if (_flptr == nullptr) {
-        debugPrint("\nLOADSAVE: ** Error opening load game file for reading! **\n");
-        _loadingGame = false;
-        return -1;
+        // Auto-recover from backup if SAVE.DAT was corrupted by a crash
+        // during a non-atomic direct write. The atomic temp-file-then-rename
+        // pattern (above) prevents this in the future, but saves made before
+        // this fix may still have orphaned .BAK files.
+        char _saveDatBak[COMPAT_MAX_PATH];
+        snprintf(_saveDatBak, sizeof(_saveDatBak), "%s.BAK", _gmpath);
+        File* bakFile = fileOpen(_saveDatBak, "rb");
+        if (bakFile != nullptr) {
+            fileClose(bakFile);
+            debugPrint("\nLOADSAVE: SAVE.DAT missing, recovering from SAVE.DAT.BAK...\n");
+            if (compat_rename(_saveDatBak, _gmpath) == 0) {
+                _flptr = fileOpen(_gmpath, "rb");
+                if (_flptr != nullptr) {
+                    debugPrint("LOADSAVE: Successfully recovered save from backup.\n");
+                    // fall through to normal load
+                }
+            }
+        }
+        if (_flptr == nullptr) {
+            debugPrint("\nLOADSAVE: ** Error opening load game file for reading! **\n");
+            _loadingGame = false;
+            return -1;
+        }
     }
 
     long pos = fileTell(_flptr);
@@ -2292,6 +2334,8 @@ static int lsgSaveHeaderInSlot(int slot)
 {
     _ls_error_code = 4;
 
+    long headerStart = fileTell(_flptr);
+
     LoadSaveSlotData* ptr = &(_LSData[slot]);
     strncpy(ptr->signature, LOAD_SAVE_SIGNATURE, 24);
 
@@ -2396,6 +2440,26 @@ static int lsgSaveHeaderInSlot(int slot)
         return -1;
     }
 
+    // Compute and write header CRC32 covering all header fields.
+    // This protects the entire header (signature, version, characterName,
+    // description, dates, gameTime, elevation, map, fileName, preview, padding)
+    // and specifically guards versionMajor against corruption (F2-20, F2-21).
+    long headerEnd = fileTell(_flptr);
+    long headerSize = headerEnd - headerStart;
+    if (headerSize > 0) {
+        unsigned char* headerBuf = (unsigned char*)internal_malloc(headerSize);
+        if (headerBuf != nullptr) {
+            fileSeek(_flptr, headerStart, SEEK_SET);
+            fileRead(headerBuf, 1, headerSize, _flptr);
+            unsigned int headerCrc = _crc32Compute(headerBuf, headerSize);
+            internal_free(headerBuf);
+            fileSeek(_flptr, headerEnd, SEEK_SET);
+            if (fileWriteUInt32(_flptr, headerCrc) == -1) {
+                return -1;
+            }
+        }
+    }
+
     _ls_error_code = 0;
 
     return 0;
@@ -2405,6 +2469,8 @@ static int lsgSaveHeaderInSlot(int slot)
 static int lsgLoadHeaderInSlot(int slot)
 {
     _ls_error_code = 3;
+
+    long headerStart = fileTell(_flptr);
 
     LoadSaveSlotData* ptr = &(_LSData[slot]);
 
@@ -2487,6 +2553,42 @@ static int lsgLoadHeaderInSlot(int slot)
 
     if (fileSeek(_flptr, 128, 1) != 0) {
         return -1;
+    }
+
+    // Verify header CRC if present (added in version 1.3+ alongside handler CRC).
+    // fileReadUInt32 will fail (return non-zero) for old saves that don't have
+    // the 4-byte CRC suffix — we silently accept those. If CRC bytes are present,
+    // verify them against the full header data. This protects versionMajor (F2-21:
+    // corruption of 3→2 would cause CRC mismatch) and all other header fields
+    // (F2-20: header integrity protection).
+    long headerEnd = fileTell(_flptr);
+    unsigned int storedHeaderCrc;
+    if (fileReadUInt32(_flptr, &storedHeaderCrc) == 0) {
+        long headerSize = headerEnd - headerStart;
+        if (headerSize > 0) {
+            unsigned char* headerBuf = (unsigned char*)internal_malloc(headerSize);
+            if (headerBuf != nullptr) {
+                fileSeek(_flptr, headerStart, SEEK_SET);
+                fileRead(headerBuf, 1, headerSize, _flptr);
+                unsigned int computedCrc = _crc32Compute(headerBuf, headerSize);
+                internal_free(headerBuf);
+                if (computedCrc != storedHeaderCrc) {
+                    debugPrint("\nLOADSAVE: ** Header CRC mismatch! (stored=%08x, computed=%08x) **\n",
+                        storedHeaderCrc, computedCrc);
+                    _ls_error_code = 1;
+                    return -1;
+                }
+            }
+        }
+        // Seek back past the CRC to the header end position, so subsequent
+        // handler CRC reads see the correct offset. The handler loop in
+        // lsgLoadGameInSlot starts reading from the current position.
+        fileSeek(_flptr, headerEnd + 4, SEEK_SET);
+    } else {
+        // No header CRC bytes (old-format save). Seek back to header end so
+        // the handler loop starts at the correct position.
+        debugPrint("LOADSAVE: No header CRC found (old save format) — skipping header integrity check.\n");
+        fileSeek(_flptr, headerEnd, SEEK_SET);
     }
 
     _ls_error_code = 0;
@@ -3163,6 +3265,15 @@ static int _SlotMap2Game(File* stream)
         char fileName[COMPAT_MAX_PATH];
         if (_mygets(fileName, stream) == -1) {
             break;
+        }
+
+        // Reject file names containing path traversal components ("..", "/",
+        // absolute paths) to prevent crafted saves from escaping the save
+        // directory (F2-22). Matches existing checks in sfall_ext.cc:224
+        // and sfall_metarules.cc:1269.
+        if (compat_path_contains_traversal(fileName)) {
+            debugPrint("\nLOADSAVE: ** Rejecting unsafe map file name (path traversal): %s **\n", fileName);
+            continue;
         }
 
         snprintf(_str0, sizeof(_str0), "%s\\%s\\%s%.2d\\%s", _patches, "SAVEGAME", "SLOT", _slot_cursor + 1, fileName);

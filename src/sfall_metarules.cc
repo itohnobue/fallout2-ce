@@ -1515,6 +1515,11 @@ void mf_set_window_flag(OpcodeContext& ctx)
 void mf_set_unique_id(OpcodeContext& ctx)
 {
     Object* object = ctx.arg(0).asObject();
+    if (object == nullptr) {
+        // F-27: Guard against null dereference at three sites below.
+        ctx.setReturn(-1);
+        return;
+    }
     if (ctx.numArgs() > 1 && ctx.arg(1).asInt() == -1) {
         // unassign unique_id only if it has one
         if (object->id > OBJECT_ID_UNIQUE_START) {
@@ -2738,6 +2743,11 @@ void mf_get_can_rest_on_map(OpcodeContext& ctx)
 void mf_get_current_inven_size(OpcodeContext& ctx)
 {
     Object* obj = ctx.arg(0).asObject();
+    if (obj == nullptr) {
+        // F-26: Guard against null dereference — asObject() can return nullptr.
+        ctx.setReturn(0);
+        return;
+    }
     ctx.setReturn(obj->data.inventory.length);
 }
 
@@ -2801,6 +2811,12 @@ void mf_get_object_ai_data(OpcodeContext& ctx)
 {
     Object* obj = ctx.arg(0).asObject();
     int dataType = ctx.arg(1).asInt();
+
+    if (obj == nullptr) {
+        // F-28: Guard against null dereference — asObject() can return nullptr.
+        ctx.setReturn(0);
+        return;
+    }
 
     if (PID_TYPE(obj->pid) != OBJ_TYPE_CRITTER) {
         ctx.setReturn(0);
@@ -2953,6 +2969,10 @@ void mf_remove_timer_event(OpcodeContext& ctx)
 
     if (owner == nullptr) {
         debugPrint("%s(): called with null script owner\n", ctx.name());
+        // F-29: Early return after null check — avoid passing null owner to
+        // _scrSetQueueTestVals and queueClearByEventType below.
+        ctx.setReturn(0);
+        return;
     }
 
     if (ctx.numArgs() == 0) {
@@ -3559,13 +3579,26 @@ void sfall_metarule(Program* program, int args)
     if (args < metaruleInfo->minArgs || args > metaruleInfo->maxArgs) {
         programPrintError("%s() - invalid number of arguments (%d), must be from %d to %d.",
             metaruleInfo->name, args, metaruleInfo->minArgs, metaruleInfo->maxArgs);
-        programStackPushInteger(program, metaruleInfo->errorReturn);
+        // F-54: String-returning metarules must push a string on error, not an int.
+        // Pushing int-0 causes programFatalError when the caller consumes it as a string.
+        if (metaruleInfo->handler == mf_string_format
+            || metaruleInfo->handler == mf_string_format_array) {
+            programStackPushString(program, "");
+        } else {
+            programStackPushInteger(program, metaruleInfo->errorReturn);
+        }
         return;
     }
 
     OpcodeContext ctx(program, metaruleInfo, args, values);
     if (!ctx.validateArguments()) {
-        ctx.setReturn(metaruleInfo->errorReturn);
+        // F-54: String-returning metarules must push a string on error, not an int.
+        if (metaruleInfo->handler == mf_string_format
+            || metaruleInfo->handler == mf_string_format_array) {
+            ctx.setReturn("");
+        } else {
+            ctx.setReturn(metaruleInfo->errorReturn);
+        }
         ctx.pushReturnValue();
         return;
     }

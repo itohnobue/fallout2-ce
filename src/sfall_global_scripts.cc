@@ -8,6 +8,7 @@
 
 #include "animation.h"
 #include "db.h"
+#include "debug.h"
 #include "input.h"
 #include "platform_compat.h"
 #include "scripts.h"
@@ -240,6 +241,21 @@ void sfall_gl_scr_load_hook_scripts()
 
         // Walk all procedures and auto-register those matching "hs_*".
         int procCount = program->procedureCount();
+
+        // Validate the procedure count against the loaded data size.
+        // procedures = data + 42, count is stored at procedures[0..3],
+        // each Procedure entry consumes sizeof(Procedure) bytes starting
+        // at procedures + 4. A corrupted .int file could claim a procedure
+        // count beyond the allocated buffer (F2-25).
+        // Equivalent to: 4 + procCount * sizeof(Procedure) ≤ dataSize - 42
+        if (procCount < 0
+            || static_cast<size_t>(4) + static_cast<size_t>(procCount) * sizeof(Procedure) > static_cast<size_t>(program->dataSize) - 42) {
+            debugPrint("\nSCRIPT: ** Hook script %s has invalid procedure count (%d) — data size is %d — skipping **\n",
+                path, procCount, program->dataSize);
+            programFree(program);
+            continue;
+        }
+
         unsigned char* procPtr = program->procedures + 4;
         for (int pi = 0; pi < procCount; pi++) {
             int nameOffset = stackReadInt32(procPtr, offsetof(Procedure, nameOffset));

@@ -10,6 +10,7 @@
 
 #include "actions.h"
 #include "animation.h"
+#include "critter.h"
 #include "db.h"
 #include "debug.h"
 #include "game.h"
@@ -1057,13 +1058,16 @@ int scriptHooks_AfterHitRoll(Object* attacker, Object** defenderPtr, int* hitLoc
         // accepting it as a defender override.  Non-critter objects
         // (items, scenery, walls, etc.) do not have valid critter
         // combat data, and dereferencing data.critter.combat on them
-        // is undefined behavior.  Reject the override and log a
+        // is undefined behavior.  Additionally, reject dead critters
+        // (F-42): a dead defender causes incorrect Silent Death
+        // multiplier computation in combat.cc (whoHitMe deref at
+        // lines 4133 and 4170).  Reject the override and log a
         // diagnostic, consistent with how other invalid return values
         // are handled in this function.
-        if (overrideDefender != nullptr && PID_TYPE(overrideDefender->pid) == OBJ_TYPE_CRITTER) {
+        if (overrideDefender != nullptr && PID_TYPE(overrideDefender->pid) == OBJ_TYPE_CRITTER && !critterIsDead(overrideDefender)) {
             *defenderPtr = overrideDefender;
         } else if (overrideDefender != nullptr) {
-            debugPrint("HOOK_AFTERHITROLL: ignoring non-critter defender override (type=%d)", PID_TYPE(overrideDefender->pid));
+            debugPrint("HOOK_AFTERHITROLL: ignoring non-critter or dead defender override (type=%d, dead=%d)", PID_TYPE(overrideDefender->pid), critterIsDead(overrideDefender) ? 1 : 0);
         }
     }
 
@@ -1164,9 +1168,16 @@ UseSkillOnHookResult scriptHooks_UseSkillOn(Object** userPtr, Object* target, in
         }
     } else {
         Object* overrideUser = userOverride.asObject();
-        if (overrideUser != nullptr) {
+        // F2-04: Validate that the returned object is a critter before
+        // accepting it as a user override.  Non-critter objects do not
+        // have valid critter data, and downstream dereferences of
+        // data.critter.combat are undefined behavior.  This matches the
+        // HOOK_AFTERHITROLL pattern at line ~1064.
+        if (overrideUser != nullptr && PID_TYPE(overrideUser->pid) == OBJ_TYPE_CRITTER) {
             *userPtr = overrideUser;
             result.userOverridden = true;
+        } else if (overrideUser != nullptr) {
+            debugPrint("HOOK_USESKILLON: ignoring non-critter user override (type=%d)", PID_TYPE(overrideUser->pid));
         }
     }
 
@@ -1659,6 +1670,8 @@ int     ret1 - fuel consumption override (pass -1 to keep engine value)
 */
 void scriptHooks_CarTravel(int* speedPtr, int* fuelConsumptionPtr)
 {
+    if (speedPtr == nullptr || fuelConsumptionPtr == nullptr) return;
+
     if (scriptHooks[HOOK_CARTRAVEL].empty()) {
         return;
     }

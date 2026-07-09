@@ -113,7 +113,7 @@ void check_int_data(
             printf("ERROR: Wrong opcode %x in file %s at pos=0x%lx\n", opcode, fName.c_str(), i);
             return;
         };
-        unsigned int opcodeIndex = opcode & 0x3FF;
+        unsigned int opcodeIndex = opcode & 0x3FFF;
         fallout::OpcodeHandler* handler = fallout::gInterpreterOpcodeHandlers[opcodeIndex];
         if (handler == NULL) {
             auto& set = unknown_opcodes[opcode];
@@ -145,7 +145,7 @@ void check_int_data(
 
         i += 2;
 
-        if (opcodeIndex == (fallout::OPCODE_PUSH & 0x3FF)) {
+        if (opcodeIndex == (fallout::OPCODE_PUSH & 0x3FFF)) {
             i += 4;
             isPreviousPush = true;
         } else {
@@ -317,7 +317,7 @@ auto get_opcode_name(fallout::opcode_t opcode)
         std::begin(opcodeInfoArray),
         std::end(opcodeInfoArray),
         [&opcode](const SfallOpcodeInfo& info) {
-            return info.opcode == (opcode & 0x3FF);
+            return info.opcode == (opcode & 0x3FFF);
         });
 
     if (sfallName != std::end(opcodeInfoArray)) {
@@ -382,7 +382,7 @@ void checkScriptsOpcodes()
             // https://github.com/sfall-team/sfall/blob/master/sfall/Modules/Scripting/Opcodes.cpp
             printf("OPCODE %s (0x%x - 0x%x - %i):\n",
                 get_opcode_name(opcode).c_str(),
-                opcode, opcode & 0x3FF, opcode & 0x3FF);
+                opcode, opcode & 0x3FFF, opcode & 0x3FFF);
             for (auto fName : iter.second) {
                 printf("  - %s\n", fName.c_str());
             }
@@ -409,7 +409,7 @@ void checkScriptsOpcodes()
             auto& opcode = iter.first;
             for (auto fName : iter.second) {
                 std::string oss = "OPCODE " + get_opcode_name(opcode) + " "
-                    + toHexString(opcode & 0x3FF)
+                    + toHexString(opcode & 0x3FFF)
                     + " (" + toHexString(opcode) + ")";
 
                 files[fName].insert(oss);
