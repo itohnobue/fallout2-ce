@@ -39,6 +39,7 @@
 #include "scripts.h"
 #include "settings.h"
 #include "sfall_script_hooks.h"
+#include "sfall_metarules.h"
 #include "skill.h"
 #include "stat.h"
 #include "svga.h"
@@ -2734,6 +2735,24 @@ void _gdSetupFidget(int headFrmId, int reaction)
         _lipsKey = nullptr;
         _lipsFp = nullptr;
         return;
+    }
+
+    // F-011 (FIX): Apply talking head mood override set via the
+    // talking_head_mood metarule. Values: -1 = no override (use engine
+    // default), 0 = force neutral, 1 = force good/bad (preserving the
+    // reaction direction when available, defaulting to good otherwise).
+    int talkingHeadMood = sfallGetTalkingHeadMood();
+    if (talkingHeadMood >= 0) {
+        if (talkingHeadMood == 0) {
+            reaction = FIDGET_NEUTRAL;
+        } else {
+            // mood == 1: suppress neutral, use reaction direction or default to good.
+            if (reaction == FIDGET_NEUTRAL || reaction == -1) {
+                reaction = FIDGET_GOOD;
+            }
+            // else keep good/bad as-is — the reaction parameter already reflects
+            // the dialog's disposition.
+        }
     }
 
     int anim = HEAD_ANIMATION_NEUTRAL_PHONEMES;

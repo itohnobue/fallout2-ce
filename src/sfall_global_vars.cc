@@ -2,7 +2,9 @@
 
 #include <cstdint>
 #include <cstring>
+#include <string>
 #include <unordered_map>
+#include <vector>
 
 #include "debug.h"
 
@@ -11,6 +13,11 @@ namespace fallout {
 struct SfallGlobalVarsState {
     std::unordered_map<uint64_t, int> vars;
     std::unordered_map<uint64_t, float> floatVars;
+    // F-003/F-004: String-valued global vars for persisting dynamically-
+    // allocated string state (perk names/descs, fake perk/trait names/descs,
+    // perkbox title, movie path overrides). Serialized after the float section
+    // in save format version 2+.
+    std::unordered_map<uint64_t, std::string> stringVars;
 };
 
 #pragma pack(push)
@@ -33,7 +40,11 @@ struct FloatVarEntry {
 
 // Magic number for save format identification: "SFGV" (Sfall Global Vars).
 static const uint32_t kSfallGlobalVarsMagic = 0x53464756;
-static const int32_t kSfallGlobalVarsVersion = 1;
+// F-003/F-004: Version 2 adds a string section after the float section.
+// String entries are length-prefixed UTF-8 records. Old code (version 1)
+// ignores the trailing string data — backward compatible.
+// New code loading old saves (version 1) skips the string section.
+static const int32_t kSfallGlobalVarsVersion = 2;
 // F-16 (FIX): Maximum number of entries for both integer and float global vars.
 // Mirrors the load-time cap at line 181 (which rejects counts > 10000).
 // The integer store has this check at line 308; the float store was missing it.
@@ -59,6 +70,7 @@ void sfall_gl_vars_reset()
 {
     sfall_gl_vars_state->vars.clear();
     sfall_gl_vars_state->floatVars.clear();
+    sfall_gl_vars_state->stringVars.clear();
 }
 
 void sfall_gl_vars_exit()
@@ -72,12 +84,10 @@ void sfall_gl_vars_exit()
 bool sfall_gl_vars_save(File* stream)
 {
     // ============================================================
-    // IMPORTANT: This save format supports ONLY int and float values.
-    // String state (perk names, descriptions, perkbox title, and any
-    // other string-based opcode state) is NOT persisted to savegames.
-    // The global vars system provides no string storage API.
-    // Mod scripts MUST re-call all string setter opcodes after every
-    // game load to restore their state.
+    // IMPORTANT: This save format supports int, float, AND string values
+    // (string support added in version 2 for F-003/F-004 fix).
+    // String state is stored as length-prefixed UTF-8 records after
+    // the float section.
     // ============================================================
 
     // Write format header: magic number + version for forward compatibility.
@@ -122,23 +132,48 @@ bool sfall_gl_vars_save(File* stream)
         }
     }
 
+    // F-003/F-004: Save string global vars (version 2+).
+    // String entries are length-prefixed: uint64_t key, int32_t length,
+    // followed by length bytes of UTF-8 data (no null terminator in the
+    // length count). Null/empty strings are NOT stored — the caller
+    // should not call store_string for them.
+    int stringCount = static_cast<int>(sfall_gl_vars_state->stringVars.size());
+    if (fileWrite(&stringCount, sizeof(stringCount), 1, stream) != 1) {
+        return false;
+    }
+
+    for (auto& pair : sfall_gl_vars_state->stringVars) {
+        uint64_t key = pair.first;
+        const std::string& value = pair.second;
+        int32_t len = static_cast<int32_t>(value.size());
+
+        if (fileWrite(&key, sizeof(key), 1, stream) != 1) {
+            return false;
+        }
+        if (fileWrite(&len, sizeof(len), 1, stream) != 1) {
+            return false;
+        }
+        if (len > 0 && fileWrite(value.data(), static_cast<size_t>(len), 1, stream) != 1) {
+            return false;
+        }
+    }
+
     return true;
 }
 
 bool sfall_gl_vars_load(File* stream)
 {
     // ============================================================
-    // IMPORTANT: Only int and float values are restored from savegames.
-    // String state (perk names, descriptions, perkbox title) must be
-    // re-applied by mod scripts via set_perk_name, set_perk_desc,
-    // set_perkbox_title after every game load — this format has no
-    // mechanism to persist string data.
+    // IMPORTANT: Int, float, AND string values are restored from savegames
+    // (string support added in version 2 for F-003/F-004 fix). Old saves
+    // (version 1) without string data are handled gracefully.
     // ============================================================
 
     // Clear existing state so that on any load failure the state
     // is empty rather than partially populated (see E-09).
     sfall_gl_vars_state->vars.clear();
     sfall_gl_vars_state->floatVars.clear();
+    sfall_gl_vars_state->stringVars.clear();
 
     // Detect save format: new format starts with magic number "SFGV".
     // Old format starts with an int32 count (valid range 0-10000, never equals magic).
@@ -149,10 +184,10 @@ bool sfall_gl_vars_load(File* stream)
 
     int count;
     bool hasFloatVars = false;
+    int32_t version = 0;  // F-003/F-004: visible for string section check
 
     if (magicOrCount == kSfallGlobalVarsMagic) {
         // New format with version header.
-        int32_t version;
         if (fileRead(&version, sizeof(version), 1, stream) != 1) {
             return false;
         }
@@ -214,6 +249,51 @@ bool sfall_gl_vars_load(File* stream)
             sfall_gl_vars_state->floatVars[floatEntry.key] = floatEntry.value;
 
             floatCount--;
+        }
+    }
+
+    // F-003/F-004: Load string global vars (version 2+ only).
+    // Old saves (version 1) have no string section — skip.
+    if (hasFloatVars && version >= 2) {
+        int stringCount;
+        if (fileRead(&stringCount, sizeof(stringCount), 1, stream) != 1) {
+            return false;
+        }
+
+        if (stringCount < 0 || stringCount > static_cast<int>(kMaxGlobalVars)) {
+            return false;
+        }
+
+        sfall_gl_vars_state->stringVars.reserve(static_cast<size_t>(stringCount));
+
+        for (int i = 0; i < stringCount; i++) {
+            uint64_t key = 0;
+            int32_t len = 0;
+
+            if (fileRead(&key, sizeof(key), 1, stream) != 1) {
+                return false;
+            }
+            if (fileRead(&len, sizeof(len), 1, stream) != 1) {
+                return false;
+            }
+
+            // Reject negative or unreasonably large lengths.
+            if (len < 0 || len > 65536) {
+                return false;
+            }
+
+            if (len > 0) {
+                // Read string data into a temporary buffer, then construct std::string.
+                // Use vector<char> for automatic cleanup and exception safety.
+                std::vector<char> buf(static_cast<size_t>(len));
+                if (fileRead(buf.data(), static_cast<size_t>(len), 1, stream) != 1) {
+                    return false;
+                }
+                sfall_gl_vars_state->stringVars[key] = std::string(buf.data(), static_cast<size_t>(len));
+            } else {
+                // Empty string — store as empty std::string.
+                sfall_gl_vars_state->stringVars[key] = std::string();
+            }
         }
     }
 
@@ -415,6 +495,86 @@ bool sfall_gl_vars_fetch_float(int key, float& value)
 
     value = it->second;
     return true;
+}
+
+// --- String global vars (F-003/F-004 fix) ---
+
+bool sfall_gl_vars_store_string(const char* key, const char* value)
+{
+    if (sfall_gl_vars_state == nullptr) {
+        return false;
+    }
+
+    bool ok;
+    uint64_t numericKey = sfall_gl_vars_key_to_uint64(key, ok);
+    if (!ok) {
+        return false;
+    }
+
+    // Null or empty value — remove any existing entry (same semantics
+    // as the setter opcodes: setting to null/empty clears the override).
+    if (value == nullptr || value[0] == '\0') {
+        sfall_gl_vars_state->stringVars.erase(numericKey);
+        return true;
+    }
+
+    // Same size cap as int/float vars to prevent unbounded runtime growth.
+    if (sfall_gl_vars_state->stringVars.size() >= kMaxGlobalVars
+        && sfall_gl_vars_state->stringVars.find(numericKey) == sfall_gl_vars_state->stringVars.end()) {
+        debugPrint("sfall_gl_vars_store_string: string vars cap (%zu) exceeded, rejecting key\n",
+            kMaxGlobalVars);
+        return false;
+    }
+
+    sfall_gl_vars_state->stringVars[numericKey] = std::string(value);
+    return true;
+}
+
+char* sfall_gl_vars_fetch_string(const char* key)
+{
+    if (sfall_gl_vars_state == nullptr) {
+        return nullptr;
+    }
+
+    bool ok;
+    uint64_t numericKey = sfall_gl_vars_key_to_uint64(key, ok);
+    if (!ok) {
+        return nullptr;
+    }
+
+    auto it = sfall_gl_vars_state->stringVars.find(numericKey);
+    if (it == sfall_gl_vars_state->stringVars.end()) {
+        return nullptr;
+    }
+
+    const std::string& value = it->second;
+    if (value.empty()) {
+        return nullptr;
+    }
+
+    // Allocate and return a copy — caller must delete[].
+    size_t len = value.size() + 1;
+    char* result = new (std::nothrow) char[len];
+    if (result == nullptr) {
+        return nullptr;
+    }
+    memcpy(result, value.c_str(), len);
+    return result;
+}
+
+bool sfall_gl_vars_remove_string(const char* key)
+{
+    if (sfall_gl_vars_state == nullptr) {
+        return false;
+    }
+
+    bool ok;
+    uint64_t numericKey = sfall_gl_vars_key_to_uint64(key, ok);
+    if (!ok) {
+        return false;
+    }
+
+    return sfall_gl_vars_state->stringVars.erase(numericKey) > 0;
 }
 
 } // namespace fallout

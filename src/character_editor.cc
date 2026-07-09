@@ -34,6 +34,7 @@
 #include "mouse.h"
 #include "object.h"
 #include "palette.h"
+#include "party_member.h"
 #include "perk.h"
 #include "platform_compat.h"
 #include "proto.h"
@@ -622,7 +623,7 @@ static int gCharacterEditorFolderCardFrmId;
 static int gCharacterEditorFolderViewTopLine;
 
 // 0x5705B8 folder_card_title
-static char* gCharacterEditorFolderCardTitle;
+static const char* gCharacterEditorFolderCardTitle;
 
 // 0x5705BC folder_card_title2
 static char* gCharacterEditorFolderCardSubtitle;
@@ -2218,6 +2219,85 @@ static void characterEditorDrawPerksFolder()
         gCharacterEditorFolderCardSubtitle = nullptr;
         // Perks add additional abilities. Every third experience level, you can choose one perk.
         gCharacterEditorFolderCardDescription = getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, 127);
+    }
+
+    // F-11: Display NPC fake perks/traits for party members.
+    // The player-level fake perk/trait APIs (sfallGetFakePerks, sfallGetFakeTraits
+    // in sfall_opcodes.h) are consumed in the perk selection dialog
+    // (perkDialogDrawPerks, lines 5937/6139/6541). The NPC equivalents
+    // (sfallGetFakePerksNpc, sfallGetFakeTraitsNpc, sfallGetFakeSelectablePerksNpc
+    // in sfall_metarules.h) were fully implemented but never wired — this section
+    // wires them into the character sheet folder view.
+    auto partyMembers = get_all_party_members_objects(false);
+    for (size_t pi = 0; pi < partyMembers.size(); pi++) {
+        Object* pm = partyMembers[pi];
+        if (pm == gDude) {
+            continue;
+        }
+        if (pm == nullptr) {
+            continue;
+        }
+
+        auto* perksNpc = sfallGetFakePerksNpc(pm->cid);
+        auto* traitsNpc = sfallGetFakeTraitsNpc(pm->cid);
+        auto* selPerksNpc = sfallGetFakeSelectablePerksNpc(pm->cid);
+
+        bool hasNpcData = (perksNpc != nullptr && !perksNpc->empty()) ||
+                          (traitsNpc != nullptr && !traitsNpc->empty()) ||
+                          (selPerksNpc != nullptr && !selPerksNpc->empty());
+
+        if (!hasNpcData) {
+            continue;
+        }
+
+        // Heading: party member name
+        const char* pmName = critterGetName(pm);
+        if (pmName == nullptr) {
+            pmName = "Party Member";
+        }
+        characterEditorFolderViewDrawHeading(pmName);
+
+        // NPC fake perks
+        if (perksNpc != nullptr) {
+            for (const auto& entry : *perksNpc) {
+                const FakePerkNpcEntry& npcEntry = entry.second;
+                if (characterEditorFolderViewDrawString(npcEntry.name.c_str())) {
+                    gCharacterEditorFolderCardFrmId = npcEntry.image >= 0 ? npcEntry.image : 0;
+                    gCharacterEditorFolderCardTitle = npcEntry.name.c_str();
+                    gCharacterEditorFolderCardSubtitle = nullptr;
+                    gCharacterEditorFolderCardDescription = npcEntry.desc.empty() ? nullptr : const_cast<char*>(npcEntry.desc.c_str());
+                    hasContent = true;
+                }
+            }
+        }
+
+        // NPC fake traits
+        if (traitsNpc != nullptr) {
+            for (const auto& entry : *traitsNpc) {
+                const FakePerkNpcEntry& npcEntry = entry.second;
+                if (characterEditorFolderViewDrawString(npcEntry.name.c_str())) {
+                    gCharacterEditorFolderCardFrmId = npcEntry.image >= 0 ? npcEntry.image : 0;
+                    gCharacterEditorFolderCardTitle = npcEntry.name.c_str();
+                    gCharacterEditorFolderCardSubtitle = nullptr;
+                    gCharacterEditorFolderCardDescription = npcEntry.desc.empty() ? nullptr : const_cast<char*>(npcEntry.desc.c_str());
+                    hasContent = true;
+                }
+            }
+        }
+
+        // NPC fake selectable perks
+        if (selPerksNpc != nullptr) {
+            for (const auto& entry : *selPerksNpc) {
+                const FakePerkNpcEntry& npcEntry = entry.second;
+                if (characterEditorFolderViewDrawString(npcEntry.name.c_str())) {
+                    gCharacterEditorFolderCardFrmId = npcEntry.image >= 0 ? npcEntry.image : 0;
+                    gCharacterEditorFolderCardTitle = npcEntry.name.c_str();
+                    gCharacterEditorFolderCardSubtitle = nullptr;
+                    gCharacterEditorFolderCardDescription = npcEntry.desc.empty() ? nullptr : const_cast<char*>(npcEntry.desc.c_str());
+                    hasContent = true;
+                }
+            }
+        }
     }
 }
 

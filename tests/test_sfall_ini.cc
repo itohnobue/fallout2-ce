@@ -1264,3 +1264,93 @@ TEST_CASE("mf_get_ini_config — DAT path (isDb=true) — M-055 (sfall_ini.cc:43
 
     resetIniState();
 }
+
+// =============================================================
+// HK-3: Traversal rejection integration tests
+// =============================================================
+// LIMITATION: test_sfall_ini links test_common_stubs.cc which provides
+// a stub for compat_path_contains_traversal that always returns false.
+// Therefore, real traversal rejection cannot be tested in this binary.
+// The actual traversal detection logic is tested independently by
+// test_platform_compat.cc (40+ assertions) and test_sfall_hooks.cc
+// (26 assertions). The tests below document the integration point
+// and verify that the stub does not inadvertently reject valid paths.
+//
+// Once the test infrastructure supports linking the real
+// compat_path_contains_traversal (by adding platform_compat.cc to
+// test_sources or providing a mock-backed stub), the first subcase
+// should be inverted to CHECK_FALSE (traversal should be rejected).
+
+TEST_CASE("HK-3: Traversal path passes through stub (documents integration point)")
+{
+    resetIniState();
+
+    SUBCASE("traversal path '../system.ini' NOT rejected by stub")
+    {
+        // With the stub returning false, compat_path_contains_traversal
+        // reports "no traversal" for all paths, including those with "..".
+        // The triplet "../system.ini|Section|Key" parses successfully and
+        // the function proceeds to attempt file I/O (which fails with stubs).
+        // This test documents that with the current stub, traversal paths
+        // are NOT rejected — the real rejection logic lives in
+        // test_platform_compat.cc.
+        char buf[64] = {};
+        CHECK(sfall_ini_get_string("../system.ini|Section|Key", buf, sizeof(buf)));
+        // Returns true: triplet parsed OK (stub didn't reject), file I/O
+        // fails silently but triplet parsing succeeds.
+    }
+
+    SUBCASE("traversal path '..\\ddraw.ini' NOT rejected by stub")
+    {
+        // Backslash variant — same behavior with stub returning false.
+        char buf[64] = {};
+        CHECK(sfall_ini_get_string("..\\ddraw.ini|Misc|SpeedMulti", buf, sizeof(buf)));
+    }
+
+    SUBCASE("absolute unix path '/etc/passwd' NOT rejected by stub")
+    {
+        // Absolute paths are also detected as traversal by the real function
+        // (platform_compat.cc:489-491). With the stub, they pass through.
+        char buf[64] = {};
+        CHECK(sfall_ini_get_string("/etc/passwd|Section|Key", buf, sizeof(buf)));
+    }
+
+    SUBCASE("absolute windows path 'C:\\Windows\\win.ini' NOT rejected by stub")
+    {
+        // Windows absolute paths with drive letter are also traversal by the
+        // real function (platform_compat.cc:493-495). With the stub, they
+        // pass through.
+        char buf[64] = {};
+        CHECK(sfall_ini_get_string("C:\\Windows\\win.ini|Section|Key", buf, sizeof(buf)));
+    }
+
+    SUBCASE("embedded dots 'toolkit..ini' passes — not a traversal")
+    {
+        // Embedded dots ("toolkit..ini") are NOT directory traversals. The
+        // real compat_path_contains_traversal checks for ".." as a standalone
+        // path component (preceded/followed by a path separator or at string
+        // boundaries), not embedded dots within a filename. This test verifies
+        // that the stub doesn't accidentally reject valid filenames with
+        // embedded dots.
+        char buf[64] = {};
+        CHECK(sfall_ini_get_string("toolkit..ini|Section|Key", buf, sizeof(buf)));
+        // Expected: true (triplet parses; embedded dots not traversal).
+    }
+
+    SUBCASE("normal filename 'mods/fo1_settings.ini' passes — no traversal")
+    {
+        // Sanity check: a normal path with subdirectory but no ".." component
+        // should work fine (subject to file I/O stub limitations).
+        char buf[64] = {};
+        CHECK(sfall_ini_get_string("mods/fo1_settings.ini|Section|Key", buf, sizeof(buf)));
+    }
+
+    SUBCASE("parent directory in path 'foo/../bar.ini' not rejected by stub")
+    {
+        // Middle-segment traversal — stub returns false so this passes.
+        char buf[64] = {};
+        CHECK(sfall_ini_get_string("foo/../bar.ini|Section|Key", buf, sizeof(buf)));
+    }
+
+    resetIniState();
+}

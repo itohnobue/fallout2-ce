@@ -4084,12 +4084,10 @@ static void op_set_npc_stat_min(Program* program)
 // set_perk_name (0x8189) — sets display name override for a perk.
 // Stored in static table; perkGetName() needs integration to read it.
 //
-// NOTE: sfallPerkNameOverrides and sfallPerkDescOverrides are NOT persisted
-// in save/load because the sfall global vars system (sfall_gl_vars_store)
-// only supports int and float values — there is no string storage API.
-// Mod scripts MUST re-populate name/desc overrides on game load via
-// set_perk_name / set_perk_desc opcodes. These arrays are cleared in
-// sfallOpcodesReset() but are NOT restored by sfallOpcodeStateLoad().
+// NOTE: sfallPerkNameOverrides and sfallPerkDescOverrides ARE now persisted
+// in save/load via sfall_gl_vars_store_string() / sfall_gl_vars_fetch_string()
+// (added in global vars version 2). The string data is serialized at the end
+// of sfallOpcodeStateSave() and restored at the end of sfallOpcodeStateLoad().
 // ============================================================
 static constexpr int kMaxPerkNameOverrides = 128;
 static char* sfallPerkNameOverrides[kMaxPerkNameOverrides] = {};
@@ -5785,13 +5783,10 @@ void sfallOpcodesReset()
     sfallAttackerKnockbackValue = 0.0f;
 
     // ============================================================
-    // String state (perk names, descriptions, perkbox title) is NOT
-    // persisted to savegames. The sfall global vars system supports
-    // only int/float types — no string storage API exists.
-    // These arrays are cleared here on game reset and are NOT restored
-    // by sfallOpcodeStateLoad(). Mod scripts MUST re-call all string
-    // setter opcodes (set_perk_name, set_perk_desc, set_perkbox_title)
-    // after every game load to restore their state.
+    // String state (perk names, descriptions, perkbox title) IS now
+    // persisted to savegames via sfall_gl_vars_store_string() (F-003/F-004
+    // fix, global vars version 2). These arrays are cleared here on game
+    // reset and restored by sfallOpcodeStateLoad() after loading a save.
     // ============================================================
     // Free perk name/desc override entries.
     for (int i = 0; i < kMaxPerkNameOverrides; i++) {
@@ -6059,15 +6054,10 @@ void sfallOpcodeStateSave()
     sfall_gl_vars_store(kGlVarSwiftMod, sfallSwiftLearnerMod);
     sfall_gl_vars_store(kGlVarHpPMod, sfallHpPerLevelMod);
 
-    // F-016: sfallPerkboxTitle (set via set_perkbox_title opcode) is NOT
-    // serialized here. The global vars system only supports int/float values;
-    // string storage is not available. This matches the existing limitation
-    // for sfallPerkNameOverrides[] and sfallPerkDescOverrides[] (see comment
-    // at op_set_perk_name). Mod scripts must re-call the opcode on game load.
-    //
-    // When string persistence is added to the global vars system, the title
-    // should be stored with a key like "SFPTTitle" and restored in
-    // sfallOpcodeStateLoad().
+    // F-003/F-004: sfallPerkboxTitle and other string state is now persisted
+    // via sfall_gl_vars_store_string() (added in global vars version 2).
+    // The string serialization occurs at the end of this function after all
+    // int/float globals have been saved.
 
     // F-002: Save per-stat min/max bounds set via set_stat_max (0x81B4),
     // set_stat_min (0x81B5), and their PC/NPC variants. These modify
@@ -6303,11 +6293,10 @@ void sfallOpcodeStateSave()
         idx++;
     }
 
-    // F-062 (I2-088): Serialize fake perks and traits. Only int fields
-    // (level, image, active) are stored since the global vars system
-    // does not support string values. name/desc strings MUST be re-
-    // populated by mod scripts on game load via set_fake_perk /
-    // set_fake_trait / set_selectable_perk opcodes.
+    // F-062 (I2-088): Serialize fake perks and traits. Int fields (level,
+    // image, active) are stored directly. name/desc strings are persisted
+    // separately via sfall_gl_vars_store_string() in the string section
+    // below (F-003/F-004 fix).
     // Format: count per type, then indexed {level, image, active}.
     sfall_gl_vars_store(kGlVarFakePkCnt, sfallFakePerkCount);
     for (int i = 0; i < sfallFakePerkCount && i < kMaxFakePerks; i++) {
@@ -6358,6 +6347,97 @@ void sfallOpcodeStateSave()
         sprintf(key, "SFDASv%03d", idx);
         sfall_gl_vars_store(key, entry.second ? 1 : 0);
         idx++;
+    }
+
+    // F-003/F-004/I2F-001/I2F-002: Persist string state using the string
+    // global vars API (added in sfall_gl_vars version 2). Strings are stored
+    // as length-prefixed UTF-8 records after the float section in sfallgv.sav.
+    // Each string array uses 8-char keys encoding the array index.
+
+    // Clear all string keys before repopulating (OP-2 fix).
+    // Without this, stale entries from prior saves survive when an
+    // override is set → saved → cleared → saved again without reset.
+    // This mirrors the int/float pattern where every key is always
+    // unconditionally overwritten.
+    char clearKey[9] = {};
+    for (int i = 0; i < kMaxPerkNameOverrides; i++) {
+        sprintf(clearKey, "SFpN%03d", i);
+        sfall_gl_vars_remove_string(clearKey);
+        sprintf(clearKey, "SFpD%03d", i);
+        sfall_gl_vars_remove_string(clearKey);
+    }
+    for (int i = 0; i < kMaxFakePerks; i++) {
+        sprintf(clearKey, "SFFPn%02d", i);
+        sfall_gl_vars_remove_string(clearKey);
+        sprintf(clearKey, "SFFPd%02d", i);
+        sfall_gl_vars_remove_string(clearKey);
+    }
+    for (int i = 0; i < kMaxFakeTraits; i++) {
+        sprintf(clearKey, "SFFTn%02d", i);
+        sfall_gl_vars_remove_string(clearKey);
+        sprintf(clearKey, "SFFTd%02d", i);
+        sfall_gl_vars_remove_string(clearKey);
+    }
+    sfall_gl_vars_remove_string("SFPTitle");
+    for (int i = 0; i < kMaxMoviePathOverrides; i++) {
+        sprintf(clearKey, "SFMVp%02d", i);
+        sfall_gl_vars_remove_string(clearKey);
+    }
+
+    // Perk name/desc overrides (F-003).
+    for (int i = 0; i < kMaxPerkNameOverrides; i++) {
+        if (sfallPerkNameOverrides[i] != nullptr) {
+            char key[9] = {};
+            sprintf(key, "SFpN%03d", i);
+            sfall_gl_vars_store_string(key, sfallPerkNameOverrides[i]);
+        }
+        if (sfallPerkDescOverrides[i] != nullptr) {
+            char key[9] = {};
+            sprintf(key, "SFpD%03d", i);
+            sfall_gl_vars_store_string(key, sfallPerkDescOverrides[i]);
+        }
+    }
+
+    // Fake perk name/desc strings (F-004).
+    for (int i = 0; i < sfallFakePerkCount && i < kMaxFakePerks; i++) {
+        if (sfallFakePerks[i].name != nullptr) {
+            char key[9] = {};
+            sprintf(key, "SFFPn%02d", i);
+            sfall_gl_vars_store_string(key, sfallFakePerks[i].name);
+        }
+        if (sfallFakePerks[i].desc != nullptr) {
+            char key[9] = {};
+            sprintf(key, "SFFPd%02d", i);
+            sfall_gl_vars_store_string(key, sfallFakePerks[i].desc);
+        }
+    }
+
+    // Fake trait name/desc strings (F-004).
+    for (int i = 0; i < sfallFakeTraitCount && i < kMaxFakeTraits; i++) {
+        if (sfallFakeTraits[i].name != nullptr) {
+            char key[9] = {};
+            sprintf(key, "SFFTn%02d", i);
+            sfall_gl_vars_store_string(key, sfallFakeTraits[i].name);
+        }
+        if (sfallFakeTraits[i].desc != nullptr) {
+            char key[9] = {};
+            sprintf(key, "SFFTd%02d", i);
+            sfall_gl_vars_store_string(key, sfallFakeTraits[i].desc);
+        }
+    }
+
+    // Perkbox title (I2F-001).
+    if (sfallPerkboxTitle != nullptr) {
+        sfall_gl_vars_store_string("SFPTitle", sfallPerkboxTitle);
+    }
+
+    // Movie path overrides (I2F-002).
+    for (int i = 0; i < kMaxMoviePathOverrides; i++) {
+        if (sfallMoviePathOverrides[i] != nullptr) {
+            char key[9] = {};
+            sprintf(key, "SFMVp%02d", i);
+            sfall_gl_vars_store_string(key, sfallMoviePathOverrides[i]);
+        }
     }
 }
 
@@ -6471,10 +6551,9 @@ void sfallOpcodeStateLoad()
         sfallHpPerLevelMod = val;
     }
 
-    // F-016: sfallPerkboxTitle is NOT restored here — see comment in
-    // sfallOpcodeStateSave() for details (string persistence not available).
-    // When string serialization is added to the global vars system, restore
-    // the title here with sfall_gl_vars_fetch_string("SFPTTitle", ...).
+    // F-003/F-004: sfallPerkboxTitle is now restored via sfall_gl_vars_fetch_string()
+    // (global vars version 2). See the string restoration section at the end of
+    // this function.
 
     // F-002: Restore per-stat min/max bounds set via set_stat_max (0x81B4),
     // set_stat_min (0x81B5), and their PC/NPC variants.
@@ -6852,11 +6931,9 @@ void sfallOpcodeStateLoad()
     }
 
     // F-062 (I2-088): Restore fake perks and traits from serialized state.
-    // name/desc strings are NOT restored (global vars system only supports
-    // int/float) — mod scripts must re-call set_fake_perk / set_fake_trait /
-    // set_selectable_perk on game load to repopulate strings. The restored
-    // int fields (level, image, active) keep the array positions and counts
-    // intact so the entries are in a consistent state when scripts repopulate.
+    // name/desc strings ARE now restored via sfall_gl_vars_fetch_string()
+    // (F-003/F-004 fix, global vars version 2). The string restoration
+    // happens after all int/float fields are loaded (see string section below).
     {
         int fpCount = 0;
         if (sfall_gl_vars_fetch(kGlVarFakePkCnt, fpCount) && fpCount > 0 && fpCount <= kMaxFakePerks) {
@@ -6927,6 +7004,91 @@ void sfallOpcodeStateLoad()
                     gDisableAimedShotsMap[pid] = (ival != 0);
                 }
             }
+        }
+    }
+
+    // F-003/F-004/I2F-001/I2F-002: Restore string state from the string
+    // global vars (added in sfall_gl_vars version 2). String data was
+    // serialized after all int/float globals. sfall_gl_vars_fetch_string()
+    // returns a newly-allocated copy that we take ownership of.
+
+    // Perk name/desc overrides (F-003).
+    for (int i = 0; i < kMaxPerkNameOverrides; i++) {
+        char key[9] = {};
+        sprintf(key, "SFpN%03d", i);
+        char* str = sfall_gl_vars_fetch_string(key);
+        if (str != nullptr) {
+            delete[] sfallPerkNameOverrides[i];
+            sfallPerkNameOverrides[i] = str;
+        }
+    }
+    for (int i = 0; i < kMaxPerkNameOverrides; i++) {
+        char key[9] = {};
+        sprintf(key, "SFpD%03d", i);
+        char* str = sfall_gl_vars_fetch_string(key);
+        if (str != nullptr) {
+            delete[] sfallPerkDescOverrides[i];
+            sfallPerkDescOverrides[i] = str;
+        }
+    }
+
+    // Fake perk name/desc strings (F-004).
+    for (int i = 0; i < sfallFakePerkCount && i < kMaxFakePerks; i++) {
+        char key[9] = {};
+        sprintf(key, "SFFPn%02d", i);
+        char* str = sfall_gl_vars_fetch_string(key);
+        if (str != nullptr) {
+            delete[] sfallFakePerks[i].name;
+            sfallFakePerks[i].name = str;
+        }
+    }
+    for (int i = 0; i < sfallFakePerkCount && i < kMaxFakePerks; i++) {
+        char key[9] = {};
+        sprintf(key, "SFFPd%02d", i);
+        char* str = sfall_gl_vars_fetch_string(key);
+        if (str != nullptr) {
+            delete[] sfallFakePerks[i].desc;
+            sfallFakePerks[i].desc = str;
+        }
+    }
+
+    // Fake trait name/desc strings (F-004).
+    for (int i = 0; i < sfallFakeTraitCount && i < kMaxFakeTraits; i++) {
+        char key[9] = {};
+        sprintf(key, "SFFTn%02d", i);
+        char* str = sfall_gl_vars_fetch_string(key);
+        if (str != nullptr) {
+            delete[] sfallFakeTraits[i].name;
+            sfallFakeTraits[i].name = str;
+        }
+    }
+    for (int i = 0; i < sfallFakeTraitCount && i < kMaxFakeTraits; i++) {
+        char key[9] = {};
+        sprintf(key, "SFFTd%02d", i);
+        char* str = sfall_gl_vars_fetch_string(key);
+        if (str != nullptr) {
+            delete[] sfallFakeTraits[i].desc;
+            sfallFakeTraits[i].desc = str;
+        }
+    }
+
+    // Perkbox title (I2F-001).
+    {
+        char* str = sfall_gl_vars_fetch_string("SFPTitle");
+        if (str != nullptr) {
+            delete[] sfallPerkboxTitle;
+            sfallPerkboxTitle = str;
+        }
+    }
+
+    // Movie path overrides (I2F-002).
+    for (int i = 0; i < kMaxMoviePathOverrides; i++) {
+        char key[9] = {};
+        sprintf(key, "SFMVp%02d", i);
+        char* str = sfall_gl_vars_fetch_string(key);
+        if (str != nullptr) {
+            delete[] sfallMoviePathOverrides[i];
+            sfallMoviePathOverrides[i] = str;
         }
     }
 }
@@ -7083,9 +7245,9 @@ int sfallGetHideRealPerks()
 // Movie path override storage (F-021). Set via set_movie_path (0x8177).
 // Keyed by movie ID. Integrated with movie.cc via sfallGetMoviePathOverride()
 // (called at game_movie.cc:150-157 before resolving movie file paths).
-// Note: movie path overrides are NOT serialized to save files because
-// sfall_gl_vars only supports int/float values, and movie paths are
-// char* strings. Overrides must be re-applied by mod scripts on game load.
+// Note: movie path overrides ARE now serialized to save files via
+// sfall_gl_vars_store_string() (F-003/F-004 fix, global vars version 2).
+// Overrides survive save/load round-trips without script intervention.
 // (Declarations for kMaxMoviePathOverrides and sfallMoviePathOverrides[]
 // are at file scope before sfallOpcodesReset.)
 
@@ -7100,8 +7262,8 @@ const char* sfallGetMoviePathOverride(int movieId)
 // set_movie_path(string name, int movieid) — 0x8177
 // Replaces a movie file path for the given movie ID.
 // The override is consumed by sfallGetMoviePathOverride() at game_movie.cc:150-157.
-// Note: overrides are NOT persisted across save/load — scripts must re-apply
-// them in a game-load handler if they need to persist.
+// Note: overrides ARE now persisted across save/load via
+// sfall_gl_vars_store_string() (F-003/F-004 fix, global vars version 2).
 static void op_set_movie_path(Program* program)
 {
     int movieid = programStackPopInteger(program);

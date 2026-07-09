@@ -20,6 +20,7 @@
 #include "sfall_script_hooks.h"
 #include "animation.h"
 
+#include <cstring>
 #include <string>
 #include <type_traits>
 
@@ -1307,4 +1308,185 @@ TEST_CASE("F-09: Sneak — both pointers must be non-null")
 
     // Both null: triggers
     CHECK((nullPtr == nullptr || nullPtr == nullptr) == true);
+}
+
+// =================================================================
+// F-016 / I2F-008: EncounterHookEventType completeness
+// =================================================================
+// The existing test at line 92 verifies LocalMapEnter == 2.
+// This test adds ForcedEncounter == 256 verification, completing
+// the enum value coverage for all three encounter event types.
+
+TEST_CASE("F-016/I2F-008: EncounterHookEventType — ForcedEncounter == 256")
+{
+    // sfall convention: 0x100 (256) = forced encounter.
+    // CE passes this directly as arg0 to HOOK_ENCOUNTER scripts
+    // (see sfall_script_hooks.cc:723).
+    CHECK(static_cast<int>(EncounterHookEventType::ForcedEncounter) == 256);
+}
+
+TEST_CASE("F-016/I2F-008: EncounterHookEventType — all three values are distinct")
+{
+    // Verify no accidental overlap between the three event types.
+    CHECK(static_cast<int>(EncounterHookEventType::RandomEncounter) !=
+          static_cast<int>(EncounterHookEventType::LocalMapEnter));
+    CHECK(static_cast<int>(EncounterHookEventType::RandomEncounter) !=
+          static_cast<int>(EncounterHookEventType::ForcedEncounter));
+    CHECK(static_cast<int>(EncounterHookEventType::LocalMapEnter) !=
+          static_cast<int>(EncounterHookEventType::ForcedEncounter));
+}
+
+TEST_CASE("F-016/I2F-008: EncounterHookEventType — script-visible values are non-zero for enter/forced")
+{
+    // Scripts distinguish event types by checking arg0. Both LocalMapEnter
+    // (2) and ForcedEncounter (256) must be non-zero so scripts can
+    // differentiate from RandomEncounter (0). After the fix, the SSL test
+    // script uses `event_type == 2` for worldmap entry rerouting.
+    CHECK(static_cast<int>(EncounterHookEventType::LocalMapEnter) != 0);
+    CHECK(static_cast<int>(EncounterHookEventType::ForcedEncounter) != 0);
+}
+
+// =================================================================
+// F-022: INI traversal check — component-based vs substring-based
+// =================================================================
+// Mirror of platform_compat.cc:485 compat_path_contains_traversal().
+// This duplicated logic verifies the behavior that the production code
+// in sfall_ini.cc now depends on.  The mirror is component-based:
+// it walks path components and checks for an exact ".." component,
+// allowing filenames like "toolkit..ini" that contain ".." as part
+// of a longer component name.
+
+static bool test_compat_path_contains_traversal(const char* path)
+{
+    if (path == nullptr) {
+        return false;
+    }
+
+    const char* p = path;
+
+    // Skip leading separators.
+    while (*p == '/' || *p == '\\') {
+        p++;
+    }
+
+    while (*p != '\0') {
+        // Find the end of the current component (next separator or NUL).
+        const char* start = p;
+        while (*p != '\0' && *p != '/' && *p != '\\') {
+            p++;
+        }
+
+        size_t len = static_cast<size_t>(p - start);
+        if (len == 2 && start[0] == '.' && start[1] == '.') {
+            return true; // ".." component found
+        }
+
+        // Skip separators between components.
+        while (*p == '/' || *p == '\\') {
+            p++;
+        }
+    }
+
+    return false;
+}
+
+TEST_CASE("F-022: INI traversal — actual traversal paths are rejected")
+{
+    // These paths contain ".." as a standalone path component and
+    // MUST be rejected by compat_path_contains_traversal.
+
+    SUBCASE("simple .. at start")
+    {
+        CHECK(test_compat_path_contains_traversal("../system.ini") == true);
+        CHECK(test_compat_path_contains_traversal("..\\system.ini") == true);
+    }
+
+    SUBCASE(".. in middle of path")
+    {
+        CHECK(test_compat_path_contains_traversal("mods/../ddraw.ini") == true);
+        CHECK(test_compat_path_contains_traversal("mods\\..\\ddraw.ini") == true);
+    }
+
+    SUBCASE(".. at end of path")
+    {
+        CHECK(test_compat_path_contains_traversal("scripts/..") == true);
+    }
+
+    SUBCASE("multiple .. components")
+    {
+        CHECK(test_compat_path_contains_traversal("../../system.ini") == true);
+    }
+}
+
+TEST_CASE("F-022: INI traversal — filenames with embedded dots are allowed")
+{
+    // These paths contain ".." as part of a longer filename component.
+    // The old strstr-based check would REJECT all of these.
+    // The new compat_path_contains_traversal check ALLOWS them because
+    // ".." is not a standalone path component.
+
+    SUBCASE("filename containing two dots")
+    {
+        CHECK(test_compat_path_contains_traversal("toolkit..ini") == false);
+    }
+
+    SUBCASE("filename starting with .. but longer")
+    {
+        CHECK(test_compat_path_contains_traversal("..file.ini") == false);
+    }
+
+    SUBCASE("filename ending with ..")
+    {
+        CHECK(test_compat_path_contains_traversal("file..") == false);
+    }
+
+    SUBCASE("filename with dots in base name")
+    {
+        CHECK(test_compat_path_contains_traversal("config..ini") == false);
+        CHECK(test_compat_path_contains_traversal("sfall_test..dat") == false);
+    }
+
+    SUBCASE("normal filenames without dots pass")
+    {
+        CHECK(test_compat_path_contains_traversal("ddraw.ini") == false);
+        CHECK(test_compat_path_contains_traversal("f2_res.ini") == false);
+        CHECK(test_compat_path_contains_traversal("sfall-mods.ini") == false);
+    }
+}
+
+TEST_CASE("F-022: INI traversal — three dots is NOT traversal")
+{
+    // "..." is not ".." — it's a valid filename on most platforms.
+    CHECK(test_compat_path_contains_traversal("...") == false);
+    CHECK(test_compat_path_contains_traversal("scripts/.../test.ssl") == false);
+}
+
+TEST_CASE("F-022: INI traversal — dot component alone is safe")
+{
+    // "." is the current directory, not traversal.
+    CHECK(test_compat_path_contains_traversal("./test.ini") == false);
+    CHECK(test_compat_path_contains_traversal(".") == false);
+}
+
+TEST_CASE("F-022: INI traversal — edge cases")
+{
+    SUBCASE("null path returns false")
+    {
+        CHECK(test_compat_path_contains_traversal(nullptr) == false);
+    }
+
+    SUBCASE("empty path returns false")
+    {
+        CHECK(test_compat_path_contains_traversal("") == false);
+    }
+
+    SUBCASE("absolute safe path")
+    {
+        CHECK(test_compat_path_contains_traversal("/mods/config/ddraw.ini") == false);
+    }
+
+    SUBCASE("mixed separators with traversal")
+    {
+        CHECK(test_compat_path_contains_traversal("scripts/..\\ddraw.ini") == true);
+    }
 }

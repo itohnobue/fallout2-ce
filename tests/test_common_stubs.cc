@@ -137,6 +137,17 @@ bool compat_is_dir(const char* /*path*/)
     return false;
 }
 
+// sfall_ini.cc uses compat_path_contains_traversal to validate filenames
+// before INI lookups (sfall_ini.cc:75). Return false (no traversal detected)
+// so that test cases can exercise the INI parsing path without being blocked
+// by traversal rejection. The real traversal logic is tested separately by
+// test_platform_compat.cc.
+bool compat_path_contains_traversal(const char* path)
+{
+    (void)path;
+    return false;
+}
+
 // =============================================================
 // db.h / xfile.h stubs (File I/O)
 // =============================================================

@@ -674,7 +674,7 @@ Runs whenever a random encounter occurs (except the Horrigan meeting and scripte
 You can override the map for loading or the encounter.
 
 CE ARGUMENT LAYOUT (5 args):
-int     arg0 - event type: 0 - when a random encounter occurs, 1 - when the player enters from the world map
+int     arg0 - event type: 0 - when a random encounter occurs, 2 - when the player enters from the world map
 int     arg1 - the map ID that the encounter will load
 int     arg2 - 1 when the encounter is a special encounter, 0 otherwise
 int     arg3 - encounter table number, or -1 if not an encounter

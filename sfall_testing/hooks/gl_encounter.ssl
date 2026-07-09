@@ -40,7 +40,7 @@ procedure encounter_handler begin
 
     display_msg(string_format5("encounter event=%d map=%d special=%d table=%d entry=%d", event_type, map_id, is_special, table_num, entry_num));
 
-    if (mode == 1 and event_type == 1) then begin
+    if (mode == 1 and event_type == 2) then begin
         call begin_pending_assertions(event_type);
         display_msg(string_format1("encounter rerouting worldmap entry to map %d", expected_map));
         set_sfall_return(expected_map);
@@ -85,7 +85,7 @@ procedure map_enter_p_proc begin
 
     call assertEquals("encounter reroute preserves car town", car_current_town, car_town_before);
 
-    if (pending_event == 1) then
+    if (pending_event == 2) then
         call report_test_results("hook_encounter_worldmap_enter");
 
     pending_event := -1;

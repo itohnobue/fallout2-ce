@@ -775,8 +775,8 @@ TEST_CASE("sfall_gl_vars_save / sfall_gl_vars_load — M-051 (sfall_global_vars.
 
     SUBCASE("save function — zero globals produces valid minimal header")
     {
-        // I2F-036: Save with zero variables produces a valid 16-byte header
-        // (magic + version + intCount=0 + floatCount=0).
+        // I2F-036: Save with zero variables produces a valid 20-byte header
+        // (magic + version + intCount=0 + floatCount=0 + stringCount=0).
 
         XFile mockFile = {};
         mockFile.type = XFILE_TYPE_FILE;
@@ -788,8 +788,8 @@ TEST_CASE("sfall_gl_vars_save / sfall_gl_vars_load — M-051 (sfall_global_vars.
         CHECK(saveOk == true);
 
         long fileSize = ftell(mockFile.file);
-        // header: 4(magic) + 4(version) + 4(intCount=0) + 4(floatCount=0) = 16
-        CHECK(fileSize == 16);
+        // header: 4(magic) + 4(version) + 4(intCount=0) + 4(floatCount=0) + 4(stringCount=0) = 20
+        CHECK(fileSize == 20);
 
         fclose(mockFile.file);
         g_mockFile = nullptr;

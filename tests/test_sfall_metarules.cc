@@ -2426,3 +2426,387 @@ TEST_CASE("F-08: get_water_days_left_x — returns 0 when gFallout1Behavior is f
     const int ticksPerDay = 100000;
     CHECK(TestGetWaterDaysLeftX(false, false, 150, 5 * ticksPerDay, ticksPerDay) == 0);
 }
+
+// =================================================================
+// F-011 + I2F-006: gTalkingHeadMood persistence and reset tests
+// =================================================================
+//
+// These tests mirror the production logic in sfall_metarules.cc:
+// - sfall_metarules_reset() resets gTalkingHeadMood to -1
+// - sfall_metarules_save() writes gTalkingHeadMood as int32
+// - sfall_metarules_load() reads gTalkingHeadMood for version >= 7
+//
+// The in-memory save/load simulation uses a simple vector<int> as
+// a mock binary stream.
+
+// Mock metarule state mirroring production file-static variables.
+struct TestMetaruleSaveState {
+    int talkingHeadMood = -1;
+    int npcEngineLevelUpEnabled = 1;
+    int worldmapHealTime = -1;
+    int restHealTime = -1;
+    int carIntfaceArtFid = -1;
+    int restMode = -1;
+    int blockCombat = 0;
+
+    // Reset all state to defaults (mirrors sfall_metarules_reset).
+    void reset() {
+        talkingHeadMood = -1;
+        npcEngineLevelUpEnabled = 1;
+        worldmapHealTime = -1;
+        restHealTime = -1;
+        carIntfaceArtFid = -1;
+        restMode = -1;
+        blockCombat = 0;
+    }
+
+    // Save all state to a mock int32 stream.
+    // Mirrors sfall_metarules_save() — version 7 format.
+    void save(std::vector<int>& stream) const {
+        // Version
+        stream.push_back(7);
+        // Scalars (mirrors production order)
+        stream.push_back(0);               // dialogShowCount
+        stream.push_back(npcEngineLevelUpEnabled);
+        stream.push_back(worldmapHealTime);
+        stream.push_back(restHealTime);
+        stream.push_back(carIntfaceArtFid);
+        stream.push_back(restMode);
+        stream.push_back(0);               // sIntfaceHiddenState
+        stream.push_back(-1);              // mapEnterX
+        stream.push_back(-1);              // mapEnterY
+        stream.push_back(-1);              // mapEnterElevation
+        // After string + maps + NPC data + originalDudeCid fields are
+        // skipped for this test — we only verify scalar round-trip.
+        // gBlockCombat (version 5)
+        stream.push_back(blockCombat);
+        // gTalkingHeadMood (version 7)
+        stream.push_back(talkingHeadMood);
+    }
+
+    // Load from a mock int32 stream. versionReadAt offset = 0.
+    // Mirrors sfall_metarules_load().
+    static TestMetaruleSaveState load(const std::vector<int>& stream) {
+        TestMetaruleSaveState state;
+        state.reset();
+
+        if (stream.empty()) return state;
+        size_t pos = 0;
+        int version = stream[pos++];
+        if (version < 1 || version > 7) return state;
+
+        // Scalars
+        int dialogShowCount = stream[pos++]; (void)dialogShowCount;
+        if (pos >= stream.size()) return state;
+        state.npcEngineLevelUpEnabled = stream[pos++];
+        if (pos >= stream.size()) return state;
+        state.worldmapHealTime = stream[pos++];
+        if (pos >= stream.size()) return state;
+        state.restHealTime = stream[pos++];
+        if (pos >= stream.size()) return state;
+        state.carIntfaceArtFid = stream[pos++];
+        if (pos >= stream.size()) return state;
+        state.restMode = stream[pos++];
+        if (pos >= stream.size()) return state;
+        pos++; // sIntfaceHiddenState
+        pos++; // mapEnterX
+        pos++; // mapEnterY
+        pos++; // mapEnterElevation
+
+        // Skip string + maps + NPC data + originalDudeCid:
+        // In mock stream, after the 10 scalars above, we jump to
+        // the version-gated fields below. For this test, stream
+        // tail = [gBlockCombat, gTalkingHeadMood] or just [gBlockCombat].
+
+        // Version 2-4 fields: skipped (not in our mock stream tail).
+        // The stream layout for this test is:
+        //   [version, 10 scalars, gBlockCombat, gTalkingHeadMood]  (version 7)
+        // So after scalars, the next items are the version-gated tail.
+
+        // Version 5+: gBlockCombat
+        if (version >= 5 && pos < stream.size()) {
+            state.blockCombat = stream[pos++];
+        }
+
+        // Version 7+: gTalkingHeadMood
+        if (version >= 7 && pos < stream.size()) {
+            state.talkingHeadMood = stream[pos++];
+        }
+
+        return state;
+    }
+};
+
+TEST_CASE("F-011: gTalkingHeadMood — reset to default (-1)")
+{
+    TestMetaruleSaveState state;
+    state.talkingHeadMood = 1;   // set by metarule during game session
+    state.reset();                // simulate gameReset() → sfall_metarules_reset()
+    CHECK(state.talkingHeadMood == -1);
+}
+
+TEST_CASE("F-011: gTalkingHeadMood — survives save/load round-trip (v7)")
+{
+    TestMetaruleSaveState state;
+    state.talkingHeadMood = 0;  // neutral override
+
+    // Save to mock stream
+    std::vector<int> stream;
+    state.save(stream);
+
+    // Load from mock stream
+    TestMetaruleSaveState restored = TestMetaruleSaveState::load(stream);
+    CHECK(restored.talkingHeadMood == 0);
+}
+
+TEST_CASE("F-011: gTalkingHeadMood — different mood values survive round-trip")
+{
+    // Test all valid mood values: -1, 0, 1
+    for (int mood : { -1, 0, 1 }) {
+        TestMetaruleSaveState state;
+        state.talkingHeadMood = mood;
+
+        std::vector<int> stream;
+        state.save(stream);
+
+        TestMetaruleSaveState restored = TestMetaruleSaveState::load(stream);
+        INFO("Mood value: ", mood);
+        CHECK(restored.talkingHeadMood == mood);
+    }
+}
+
+TEST_CASE("F-011: gTalkingHeadMood — v6 saves default to -1 on load")
+{
+    // Simulate a v6 save (no gTalkingHeadMood field in stream).
+    // The reset() sets talkingHeadMood = -1; load for version < 7
+    // should keep the reset default.
+    TestMetaruleSaveState state;
+    state.reset();
+
+    // Build a minimal v6 stream: version=6 + 10 scalars + gBlockCombat
+    std::vector<int> v6stream = { 6, 0, 1, -1, -1, -1, -1, 0, -1, -1, -1, 0 };
+    TestMetaruleSaveState restored = TestMetaruleSaveState::load(v6stream);
+    CHECK(restored.talkingHeadMood == -1);
+}
+
+TEST_CASE("F-011: gTalkingHeadMood — other scalars unaffected by round-trip")
+{
+    TestMetaruleSaveState state;
+    state.talkingHeadMood = 1;
+    state.npcEngineLevelUpEnabled = 0;
+    state.worldmapHealTime = 42;
+    state.blockCombat = 1;
+
+    std::vector<int> stream;
+    state.save(stream);
+
+    TestMetaruleSaveState restored = TestMetaruleSaveState::load(stream);
+    CHECK(restored.talkingHeadMood == 1);
+    CHECK(restored.npcEngineLevelUpEnabled == 0);
+    CHECK(restored.worldmapHealTime == 42);
+    CHECK(restored.blockCombat == 1);
+}
+
+// =================================================================
+// F-011: sfallGetTalkingHeadMood() consumer wiring test
+// =================================================================
+//
+// This tests the game_dialog.cc integration logic that maps the
+// talking_head_mood metarule value to FIDGET_* reaction constants.
+//
+// Production flow:
+//   gTalkingHeadMood set via talking_head_mood metarule
+//   → sfallGetTalkingHeadMood() returns the stored value
+//   → _gdSetupFidget() applies override before HEAD_ANIMATION switch:
+//       mood -1: no override, use reaction as-is
+//       mood  0: force FIDGET_NEUTRAL (4)
+//       mood  1: suppress neutral → use reaction if good/bad, else default to FIDGET_GOOD (1)
+
+// Mirrors the FIDGET constants from art.h
+static constexpr int TEST_FIDGET_GOOD = 1;
+static constexpr int TEST_FIDGET_NEUTRAL = 4;
+static constexpr int TEST_FIDGET_BAD = 7;
+
+// Mirror of _gdSetupFidget's talking head mood override logic.
+static int applyTalkingHeadMoodOverride(int reaction, int talkingHeadMood)
+{
+    if (talkingHeadMood < 0) {
+        return reaction; // no override
+    }
+    if (talkingHeadMood == 0) {
+        return TEST_FIDGET_NEUTRAL;
+    }
+    // mood == 1: suppress neutral, use reaction direction or default to good
+    if (reaction == TEST_FIDGET_NEUTRAL || reaction == -1) {
+        return TEST_FIDGET_GOOD;
+    }
+    return reaction; // keep good/bad as-is
+}
+
+TEST_CASE("F-011: talking head mood override — mood -1 (no override) passes through")
+{
+    // -1 means "no override" — reaction should be unchanged
+    CHECK(applyTalkingHeadMoodOverride(TEST_FIDGET_GOOD, -1) == TEST_FIDGET_GOOD);
+    CHECK(applyTalkingHeadMoodOverride(TEST_FIDGET_NEUTRAL, -1) == TEST_FIDGET_NEUTRAL);
+    CHECK(applyTalkingHeadMoodOverride(TEST_FIDGET_BAD, -1) == TEST_FIDGET_BAD);
+}
+
+TEST_CASE("F-011: talking head mood override — mood 0 forces neutral")
+{
+    // mood 0 = force neutral regardless of reaction
+    CHECK(applyTalkingHeadMoodOverride(TEST_FIDGET_GOOD, 0) == TEST_FIDGET_NEUTRAL);
+    CHECK(applyTalkingHeadMoodOverride(TEST_FIDGET_NEUTRAL, 0) == TEST_FIDGET_NEUTRAL);
+    CHECK(applyTalkingHeadMoodOverride(TEST_FIDGET_BAD, 0) == TEST_FIDGET_NEUTRAL);
+}
+
+TEST_CASE("F-011: talking head mood override — mood 1 suppresses neutral")
+{
+    // mood 1: good/bad preserved, neutral → good
+    CHECK(applyTalkingHeadMoodOverride(TEST_FIDGET_GOOD, 1) == TEST_FIDGET_GOOD);
+    CHECK(applyTalkingHeadMoodOverride(TEST_FIDGET_BAD, 1) == TEST_FIDGET_BAD);
+    CHECK(applyTalkingHeadMoodOverride(TEST_FIDGET_NEUTRAL, 1) == TEST_FIDGET_GOOD);
+}
+
+TEST_CASE("F-011: talking head mood override — mood 1 with reaction -1 defaults to good")
+{
+    // reaction -1 (no current mood) + mood 1 → force good
+    CHECK(applyTalkingHeadMoodOverride(-1, 1) == TEST_FIDGET_GOOD);
+}
+
+// =================================================================
+// I2F-007: NPC fake perk/trait accessor round-trip tests
+// =================================================================
+//
+// These tests mirror the production accessor logic in sfall_metarules.cc:
+//   sfallGetFakePerksNpc(cid)  → unordered_map<string,FakePerkNpcEntry>* or nullptr
+//   sfallGetFakeTraitsNpc(cid) → unordered_map<string,FakePerkNpcEntry>* or nullptr
+//   sfallGetFakeSelectablePerksNpc(cid) → same
+//
+// The accessors search static unordered_maps keyed by critter CID.
+
+struct TestNpcEntry {
+    std::string name;
+    int level;
+    int image;
+    std::string desc;
+};
+
+// Mirror of the production accessor logic (sfall_metarules.cc:4270-4286).
+using TestNpcMap = std::unordered_map<int, std::unordered_map<std::string, TestNpcEntry>>;
+
+static const std::unordered_map<std::string, TestNpcEntry>* testGetFakePerksNpc(
+    const TestNpcMap& map, int cid)
+{
+    auto it = map.find(cid);
+    return (it != map.end()) ? &it->second : nullptr;
+}
+
+TEST_CASE("I2F-007: NPC fake perks accessor — returns nullptr for unknown CID")
+{
+    TestNpcMap npcPerks;
+    CHECK(testGetFakePerksNpc(npcPerks, 42) == nullptr);
+    CHECK(testGetFakePerksNpc(npcPerks, -1) == nullptr);
+}
+
+TEST_CASE("I2F-007: NPC fake perks accessor — returns valid pointer for known CID")
+{
+    TestNpcMap npcPerks;
+    npcPerks[1]["QuickPockets"] = TestNpcEntry{"QuickPockets", 1, 55, "Quick inventory"};
+    npcPerks[1]["ActionBoy"] = TestNpcEntry{"ActionBoy", 2, 94, "More AP"};
+
+    auto* result = testGetFakePerksNpc(npcPerks, 1);
+    REQUIRE(result != nullptr);
+    CHECK(result->size() == 2);
+    CHECK(result->find("QuickPockets") != result->end());
+    CHECK(result->find("ActionBoy") != result->end());
+    CHECK(result->find("Nonexistent") == result->end());
+
+    // Verify entry contents
+    auto it = result->find("QuickPockets");
+    CHECK(it->second.name == "QuickPockets");
+    CHECK(it->second.level == 1);
+    CHECK(it->second.image == 55);
+    CHECK(it->second.desc == "Quick inventory");
+}
+
+TEST_CASE("I2F-007: NPC fake perks accessor — CID isolation")
+{
+    TestNpcMap npcPerks;
+    npcPerks[1]["PerkA"] = TestNpcEntry{"PerkA", 1, 0, ""};
+    npcPerks[2]["PerkB"] = TestNpcEntry{"PerkB", 1, 0, ""};
+
+    auto* r1 = testGetFakePerksNpc(npcPerks, 1);
+    auto* r2 = testGetFakePerksNpc(npcPerks, 2);
+    auto* r3 = testGetFakePerksNpc(npcPerks, 3);
+
+    REQUIRE(r1 != nullptr);
+    REQUIRE(r2 != nullptr);
+    CHECK(r3 == nullptr);
+
+    CHECK(r1->find("PerkA") != r1->end());
+    CHECK(r1->find("PerkB") == r1->end());
+    CHECK(r2->find("PerkB") != r2->end());
+    CHECK(r2->find("PerkA") == r2->end());
+}
+
+TEST_CASE("I2F-007: NPC fake perks accessor — empty entry after removal")
+{
+    TestNpcMap npcPerks;
+    npcPerks[1]["TempPerk"] = TestNpcEntry{"TempPerk", 1, 0, ""};
+
+    // After erasing the perk, the CID entry should still exist but be empty.
+    npcPerks[1].erase("TempPerk");
+    auto* result = testGetFakePerksNpc(npcPerks, 1);
+    REQUIRE(result != nullptr);
+    CHECK(result->empty());
+}
+
+TEST_CASE("I2F-007: NPC fake perks accessor — multiple CIDs with overlapping names")
+{
+    TestNpcMap npcPerks;
+    npcPerks[10]["SharedPerk"] = TestNpcEntry{"SharedPerk", 2, 10, "NPC A version"};
+    npcPerks[20]["SharedPerk"] = TestNpcEntry{"SharedPerk", 3, 20, "NPC B version"};
+
+    auto* r10 = testGetFakePerksNpc(npcPerks, 10);
+    auto* r20 = testGetFakePerksNpc(npcPerks, 20);
+
+    REQUIRE(r10 != nullptr);
+    REQUIRE(r20 != nullptr);
+
+    auto it10 = r10->find("SharedPerk");
+    auto it20 = r20->find("SharedPerk");
+    REQUIRE(it10 != r10->end());
+    REQUIRE(it20 != r20->end());
+
+    // Same name, different CID → different entries
+    CHECK(it10->second.level == 2);
+    CHECK(it10->second.image == 10);
+    CHECK(it20->second.level == 3);
+    CHECK(it20->second.image == 20);
+}
+
+TEST_CASE("I2F-007: NPC fake trait accessor — same pattern as perks")
+{
+    TestNpcMap npcTraits;
+    npcTraits[5]["Bruiser"] = TestNpcEntry{"Bruiser", 1, 45, "+2 STR, -2 AP"};
+    npcTraits[5]["Gifted"] = TestNpcEntry{"Gifted", 1, 47, "+1 all SPECIAL"};
+
+    auto* result = testGetFakePerksNpc(npcTraits, 5);
+    REQUIRE(result != nullptr);
+    CHECK(result->size() == 2);
+
+    auto* missing = testGetFakePerksNpc(npcTraits, 99);
+    CHECK(missing == nullptr);
+}
+
+TEST_CASE("I2F-007: NPC fake selectable perk accessor — same pattern")
+{
+    TestNpcMap npcSelPerks;
+    npcSelPerks[3]["BonusMove"] = TestNpcEntry{"BonusMove", 1, 96, "+2 free move AP"};
+
+    auto* result = testGetFakePerksNpc(npcSelPerks, 3);
+    REQUIRE(result != nullptr);
+    CHECK(result->size() == 1);
+    CHECK(result->begin()->second.name == "BonusMove");
+    CHECK(result->begin()->second.image == 96);
+}

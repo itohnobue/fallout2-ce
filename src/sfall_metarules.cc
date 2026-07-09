@@ -3604,6 +3604,7 @@ void sfall_metarules_reset()
     gSfallWaterTimerDays = 150;
     gPendingTimerEvents.clear();
     gNextTimerId = 1;
+    gTalkingHeadMood = -1;
     gDrugDataOverrides.clear();
     gInterfaceOverlayState = {};
 
@@ -3620,7 +3621,7 @@ void sfall_metarules_reset()
 // --- Metarule state save/load ---
 //
 // Persistence format (simple tagged binary):
-//   Version int32 (currently 5)
+//   Version int32 (currently 7)
 //   For each scalar: int32 value
 //   For each map: int32 count, then (key, value) pairs
 //   For each set: int32 count, then values
@@ -3630,7 +3631,7 @@ void sfall_metarules_reset()
 // On load, if the version marker doesn't match, the function returns early
 // (sfall_metarules_reset() has already restored defaults) — forward compatibility.
 
-#define METARULES_SAVE_VERSION 6
+#define METARULES_SAVE_VERSION 7
 
 // F-41: Maximum entries for save/load metarule collections.
 // Prevents infinite loops on corrupt save data with absurd count values.
@@ -3970,6 +3971,9 @@ bool sfall_metarules_save(File* stream)
     // core combat stream).
     if (fileWriteInt32(stream, gBlockCombat) == -1) return false;
 
+    // Version 7 addition: talking head mood override (F-011 fix).
+    if (fileWriteInt32(stream, gTalkingHeadMood) == -1) return false;
+
     return true;
 }
 
@@ -4108,6 +4112,13 @@ bool sfall_metarules_load(File* stream)
     // as default.
     if (version >= 5) {
         if (fileReadInt32(stream, &gBlockCombat) == -1) return false;
+    }
+
+    // Version 7 addition: talking head mood override.
+    // For version 1-6 saves, sfall_metarules_reset() already sets -1 as default
+    // (no override, use engine-calculated reaction).
+    if (version >= 7) {
+        if (fileReadInt32(stream, &gTalkingHeadMood) == -1) return false;
     }
 
     return true;

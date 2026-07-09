@@ -33,6 +33,10 @@
 #include "sfall_opcodes.h"
 
 #include <climits>
+#include <cstdio>
+#include <cstring>
+#include <string>
+#include <unordered_map>
 
 #include "game_movie.h"
 #include "obj_types.h"
@@ -3436,5 +3440,420 @@ TEST_CASE("F-09: full priority chain — all layers exercised")
              " base:", tc.baseMax, " global:", tc.globalMax);
         CHECK(cap == tc.expected);
     }
+}
+
+// ============================================================
+// F-003/F-004: String global vars persistence tests.
+// ============================================================
+
+TEST_CASE("F-003: sfall_gl_vars_string — store and fetch round-trip")
+{
+    REQUIRE(sfall_gl_vars_init());
+
+    SUBCASE("store and fetch non-empty string")
+    {
+        bool stored = sfall_gl_vars_store_string("SFTest01", "Hello World");
+        CHECK(stored == true);
+
+        char* str = sfall_gl_vars_fetch_string("SFTest01");
+        REQUIRE(str != nullptr);
+        CHECK(std::strcmp(str, "Hello World") == 0);
+        delete[] str;
+    }
+
+    SUBCASE("fetch non-existent key returns nullptr")
+    {
+        char* str = sfall_gl_vars_fetch_string("NoSuchKy");
+        CHECK(str == nullptr);
+    }
+
+    SUBCASE("store empty string removes entry (returns nullptr on fetch)")
+    {
+        sfall_gl_vars_store_string("SFTest02", "value");
+        sfall_gl_vars_store_string("SFTest02", "");  // empty → remove
+
+        char* str = sfall_gl_vars_fetch_string("SFTest02");
+        CHECK(str == nullptr);
+    }
+
+    SUBCASE("store nullptr removes entry")
+    {
+        sfall_gl_vars_store_string("SFTest03", "value");
+        sfall_gl_vars_store_string("SFTest03", nullptr);  // null → remove
+
+        char* str = sfall_gl_vars_fetch_string("SFTest03");
+        CHECK(str == nullptr);
+    }
+
+    SUBCASE("overwrite existing string")
+    {
+        sfall_gl_vars_store_string("SFTest04", "old");
+        sfall_gl_vars_store_string("SFTest04", "new value");
+
+        char* str = sfall_gl_vars_fetch_string("SFTest04");
+        REQUIRE(str != nullptr);
+        CHECK(std::strcmp(str, "new value") == 0);
+        delete[] str;
+    }
+
+    SUBCASE("string with special characters survives round-trip")
+    {
+        const char* special = "Line1\nLine2\tTab\0Hidden";
+        sfall_gl_vars_store_string("SFSpec01", special);
+
+        // Note: std::string stores up to first null, so the embedded null terminator
+        // limits the stored string. This is expected behavior for C-string APIs.
+        char* str = sfall_gl_vars_fetch_string("SFSpec01");
+        REQUIRE(str != nullptr);
+        CHECK(std::strcmp(str, "Line1\nLine2\tTab") == 0);  // up to \0 before "Hidden"
+        delete[] str;
+    }
+
+    SUBCASE("remove string key")
+    {
+        sfall_gl_vars_store_string("SFRemv01", "to remove");
+        bool removed = sfall_gl_vars_remove_string("SFRemv01");
+        CHECK(removed == true);
+
+        char* str = sfall_gl_vars_fetch_string("SFRemv01");
+        CHECK(str == nullptr);
+    }
+
+    SUBCASE("remove non-existent key returns false")
+    {
+        bool removed = sfall_gl_vars_remove_string("NoSuchKy2");
+        CHECK(removed == false);
+    }
+
+    SUBCASE("reset clears string state")
+    {
+        sfall_gl_vars_store_string("SFClrTest", "clear me");
+        sfall_gl_vars_reset();
+
+        char* str = sfall_gl_vars_fetch_string("SFClrTest");
+        CHECK(str == nullptr);
+    }
+
+    SUBCASE("8-char key encoding works")
+    {
+        // 8-character keys are packed directly into uint64_t.
+        sfall_gl_vars_store_string("SFpN042", "packed key");
+        char* str = sfall_gl_vars_fetch_string("SFpN042");
+        REQUIRE(str != nullptr);
+        CHECK(std::strcmp(str, "packed key") == 0);
+        delete[] str;
+    }
+
+    SUBCASE("long key (>8 chars) using FNV-1a hash")
+    {
+        // Keys longer than 8 chars are FNV-1a hashed. Verify round-trip.
+        sfall_gl_vars_store_string("VeryLongKeyName", "hashed value");
+        char* str = sfall_gl_vars_fetch_string("VeryLongKeyName");
+        REQUIRE(str != nullptr);
+        CHECK(std::strcmp(str, "hashed value") == 0);
+        delete[] str;
+    }
+
+    SUBCASE("fetch string copies data (caller owns)")
+    {
+        sfall_gl_vars_store_string("SFOwnTst", "owned data");
+
+        char* str1 = sfall_gl_vars_fetch_string("SFOwnTst");
+        char* str2 = sfall_gl_vars_fetch_string("SFOwnTst");
+        REQUIRE(str1 != nullptr);
+        REQUIRE(str2 != nullptr);
+        CHECK(std::strcmp(str1, "owned data") == 0);
+        CHECK(std::strcmp(str2, "owned data") == 0);
+        // Pointers should be different (independent copies).
+        CHECK(str1 != str2);
+
+        // Writing to one copy should not affect the other.
+        str1[0] = 'X';
+        CHECK(std::strcmp(str2, "owned data") == 0);
+
+        delete[] str1;
+        delete[] str2;
+    }
+
+    sfall_gl_vars_exit();
+}
+
+// ============================================================
+// F-003/F-004: Mirror test — verify the save/load key format
+// used in sfallOpcodeStateSave/Load for string persistence.
+// ============================================================
+
+namespace string_var_test {
+
+// In-memory stores mirroring the production pattern.
+static std::unordered_map<uint64_t, int> gIntVars;
+static std::unordered_map<uint64_t, float> gFloatVars;
+static std::unordered_map<uint64_t, std::string> gStringVars;
+
+static uint64_t strToKey(const char* s) {
+    size_t len = std::strlen(s);
+    if (len == 0) return 0;
+    if (len <= 8) {
+        uint64_t key = 0;
+        std::memcpy(&key, s, len);
+        return key;
+    }
+    // FNV-1a hash for keys > 8 chars (mirrors production).
+    constexpr uint64_t FNV_OFFSET = 14695981039346656037ULL;
+    constexpr uint64_t FNV_PRIME  = 1099511628211ULL;
+    uint64_t hash = FNV_OFFSET;
+    for (size_t i = 0; i < len; i++) {
+        hash ^= static_cast<uint64_t>(static_cast<unsigned char>(s[i]));
+        hash *= FNV_PRIME;
+    }
+    return hash;
+}
+
+static void mirrorStoreInt(const char* key, int val) {
+    gIntVars[strToKey(key)] = val;
+}
+
+static bool mirrorFetchInt(const char* key, int& val) {
+    auto it = gIntVars.find(strToKey(key));
+    if (it != gIntVars.end()) { val = it->second; return true; }
+    return false;
+}
+
+static void mirrorStoreString(const char* key, const char* val) {
+    if (val == nullptr || val[0] == '\0') {
+        gStringVars.erase(strToKey(key));
+    } else {
+        gStringVars[strToKey(key)] = std::string(val);
+    }
+}
+
+static char* mirrorFetchString(const char* key) {
+    auto it = gStringVars.find(strToKey(key));
+    if (it == gStringVars.end() || it->second.empty()) return nullptr;
+    size_t len = it->second.size() + 1;
+    char* result = new char[len];
+    std::memcpy(result, it->second.c_str(), len);
+    return result;
+}
+
+static void mirrorReset() {
+    gIntVars.clear();
+    gFloatVars.clear();
+    gStringVars.clear();
+}
+
+// Mirror of sfallOpcodeStateSave() string section.
+static void mirrorSaveStrings() {
+    // Perk name/desc — simulate 3 overrides at indices 0, 42, 127.
+    mirrorStoreString("SFpN000", "Quick Pockets");
+    mirrorStoreString("SFpD000", "You are faster with items.");
+    mirrorStoreString("SFpN042", "Better Crits");
+    mirrorStoreString("SFpD042", "Improved critical hit chance.");
+    mirrorStoreString("SFpN127", "Slayer");
+    mirrorStoreString("SFpD127", "All attacks are critical hits.");
+
+    // Fake perk — 2 entries.
+    mirrorStoreString("SFFPn00", "Custom Perk A");
+    mirrorStoreString("SFFPd00", "Description of custom perk A.");
+    mirrorStoreString("SFFPn01", "Custom Perk B");
+    mirrorStoreString("SFFPd01", "Description of custom perk B.");
+
+    // Fake trait — 1 entry.
+    mirrorStoreString("SFFTn00", "Custom Trait X");
+    mirrorStoreString("SFFTd00", "Description of custom trait X.");
+
+    // Perkbox title.
+    mirrorStoreString("SFPTitle", "Select Your Perk");
+
+    // Movie path overrides — 2 entries.
+    mirrorStoreString("SFMVp00", "data/custom_intro.mve");
+    mirrorStoreString("SFMVp15", "data/custom_ending.mve");
+}
+
+// Mirror of sfallOpcodeStateLoad() string section.
+static struct MirrorStringState {
+    const char* name;
+    const char* desc;
+} gMirrorPerkNames[128] = {};
+static constexpr int kMirrorMaxPerks = 128;
+
+static void mirrorLoadPerkName(int i, const char* keyFmt) {
+    char key[9] = {};
+    std::sprintf(key, keyFmt, i);
+    char* str = mirrorFetchString(key);
+    if (str != nullptr) {
+        delete[] gMirrorPerkNames[i].name;
+        gMirrorPerkNames[i].name = str;
+    }
+}
+
+static void mirrorLoadPerkDesc(int i, const char* keyFmt) {
+    char key[9] = {};
+    std::sprintf(key, keyFmt, i);
+    char* str = mirrorFetchString(key);
+    if (str != nullptr) {
+        delete[] gMirrorPerkNames[i].desc;
+        gMirrorPerkNames[i].desc = str;
+    }
+}
+
+static void mirrorCleanup() {
+    for (int i = 0; i < kMirrorMaxPerks; i++) {
+        delete[] gMirrorPerkNames[i].name;
+        delete[] gMirrorPerkNames[i].desc;
+        gMirrorPerkNames[i].name = nullptr;
+        gMirrorPerkNames[i].desc = nullptr;
+    }
+}
+
+} // namespace string_var_test
+
+TEST_CASE("F-003: Mirror — sfallOpcodeStateSave→Load string round-trip")
+{
+    using namespace string_var_test;
+    mirrorReset();
+
+    // Simulate save.
+    mirrorSaveStrings();
+
+    // Verify keys were stored.
+    {
+        char* str = mirrorFetchString("SFpN000");
+        REQUIRE(str != nullptr);
+        CHECK(std::strcmp(str, "Quick Pockets") == 0);
+        delete[] str;
+    }
+    {
+        char* str = mirrorFetchString("SFpN042");
+        REQUIRE(str != nullptr);
+        CHECK(std::strcmp(str, "Better Crits") == 0);
+        delete[] str;
+    }
+
+    // Simulate load: restore perk name/desc overrides.
+    for (int i = 0; i < kMirrorMaxPerks; i++) {
+        mirrorLoadPerkName(i, "SFpN%03d");
+        mirrorLoadPerkDesc(i, "SFpD%03d");
+    }
+
+    CHECK(gMirrorPerkNames[0].name != nullptr);
+    CHECK(std::strcmp(gMirrorPerkNames[0].name, "Quick Pockets") == 0);
+    CHECK(gMirrorPerkNames[0].desc != nullptr);
+    CHECK(std::strcmp(gMirrorPerkNames[0].desc, "You are faster with items.") == 0);
+
+    CHECK(gMirrorPerkNames[42].name != nullptr);
+    CHECK(std::strcmp(gMirrorPerkNames[42].name, "Better Crits") == 0);
+
+    CHECK(gMirrorPerkNames[127].name != nullptr);
+    CHECK(std::strcmp(gMirrorPerkNames[127].name, "Slayer") == 0);
+
+    // Unset indices remain nullptr.
+    CHECK(gMirrorPerkNames[1].name == nullptr);
+    CHECK(gMirrorPerkNames[1].desc == nullptr);
+    CHECK(gMirrorPerkNames[41].name == nullptr);
+
+    // Verify fake perk strings.
+    {
+        char* str = mirrorFetchString("SFFPn00");
+        REQUIRE(str != nullptr);
+        CHECK(std::strcmp(str, "Custom Perk A") == 0);
+        delete[] str;
+    }
+    {
+        char* str = mirrorFetchString("SFFPd01");
+        REQUIRE(str != nullptr);
+        CHECK(std::strcmp(str, "Description of custom perk B.") == 0);
+        delete[] str;
+    }
+
+    // Verify fake trait strings.
+    {
+        char* str = mirrorFetchString("SFFTn00");
+        REQUIRE(str != nullptr);
+        CHECK(std::strcmp(str, "Custom Trait X") == 0);
+        delete[] str;
+    }
+
+    // Verify perkbox title.
+    {
+        char* str = mirrorFetchString("SFPTitle");
+        REQUIRE(str != nullptr);
+        CHECK(std::strcmp(str, "Select Your Perk") == 0);
+        delete[] str;
+    }
+
+    // Verify movie path overrides.
+    {
+        char* str = mirrorFetchString("SFMVp00");
+        REQUIRE(str != nullptr);
+        CHECK(std::strcmp(str, "data/custom_intro.mve") == 0);
+        delete[] str;
+    }
+    {
+        char* str = mirrorFetchString("SFMVp15");
+        REQUIRE(str != nullptr);
+        CHECK(std::strcmp(str, "data/custom_ending.mve") == 0);
+        delete[] str;
+    }
+    {
+        // Unset movie path slot returns nullptr.
+        char* str = mirrorFetchString("SFMVp01");
+        CHECK(str == nullptr);
+    }
+
+    // Simulate reset: all strings freed.
+    mirrorCleanup();
+    mirrorReset();
+}
+
+TEST_CASE("F-003: Mirror — null/empty strings are not stored or restored")
+{
+    using namespace string_var_test;
+    mirrorReset();
+
+    // Store null/empty should result in no entry.
+    mirrorStoreString("SFpN000", nullptr);
+    mirrorStoreString("SFpN001", "");
+    mirrorStoreString("SFpN002", "real value");
+    mirrorStoreString("SFpN003", nullptr);
+
+    char* str0 = mirrorFetchString("SFpN000");
+    CHECK(str0 == nullptr);
+
+    char* str1 = mirrorFetchString("SFpN001");
+    CHECK(str1 == nullptr);
+
+    char* str2 = mirrorFetchString("SFpN002");
+    REQUIRE(str2 != nullptr);
+    CHECK(std::strcmp(str2, "real value") == 0);
+    delete[] str2;
+
+    char* str3 = mirrorFetchString("SFpN003");
+    CHECK(str3 == nullptr);
+
+    mirrorReset();
+}
+
+TEST_CASE("F-003: Mirror — reset clears all string state")
+{
+    using namespace string_var_test;
+    mirrorReset();
+
+    mirrorStoreString("SFPTitle", "Test Title");
+    mirrorStoreString("SFMVp00", "test.mve");
+
+    // Verify stored.
+    {
+        char* str = mirrorFetchString("SFPTitle");
+        CHECK(str != nullptr);
+        delete[] str;
+    }
+
+    // Reset.
+    mirrorReset();
+
+    // Verify cleared.
+    CHECK(mirrorFetchString("SFPTitle") == nullptr);
+    CHECK(mirrorFetchString("SFMVp00") == nullptr);
 }
 

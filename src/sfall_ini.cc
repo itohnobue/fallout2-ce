@@ -63,13 +63,16 @@ static const char* parse_ini_triplet(const char* triplet, char* fileName, char* 
     strncpy(fileName, triplet, fileNameLength);
     fileName[fileNameLength] = '\0';
 
-    // Reject filenames containing ".." to prevent directory traversal
-    // out of the mods/config directory. After stripping path separators
-    // and parent-directory references, a traversal attempt like
-    // "..\\system.ini" or "mods\\..\\ddraw.ini" would bypass access
-    // controls, so we reject any filename component that contains "..".
+    // Reject filenames with directory traversal components (".." as
+    // a standalone path component) to prevent escaping the mods/config
+    // directory. After stripping path separators and parent-directory
+    // references, a traversal attempt like "..\\system.ini" or
+    // "mods\\..\\ddraw.ini" would bypass access controls.
+    // Uses component-based checking (compat_path_contains_traversal)
+    // which correctly rejects ".." as a path component while allowing
+    // legitimate filenames with embedded dots (e.g., "toolkit..ini").
     // This matches the existing guard in VFS and mod loading paths.
-    if (strstr(fileName, "..") != nullptr) {
+    if (compat_path_contains_traversal(fileName)) {
         return nullptr;
     }
 
