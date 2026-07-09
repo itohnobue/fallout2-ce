@@ -5158,6 +5158,23 @@ static void attackComputeDamage(Attack* attack, int numRounds, int baseDamageMul
         if (shouldKnockback) {
             int knockbackDistanceDivisor = weaponGetPerk(attack->weapon) == PERK_WEAPON_KNOCKBACK ? 5 : 10;
 
+            // F-S4-M19: HOOK_COMBATDAMAGE ret4 (defenderKnockback) is
+            // written to attack->defenderKnockback by scriptHooks_ComputeDamage
+            // at hook dispatch time (before this computation). The engine
+            // formula below unconditionally overwrites ret4 for melee and
+            // explosion hits on standard critters, so any ret4 value set by
+            // a hook handler is dead on arrival.
+            //
+            // Scripts that need to control knockback should use the sfall
+            // globals mechanism instead:
+            //   set_weapon_knockback(type, value) — sets sfallWeaponKnockback*
+            //   set_target_knockback(type, value)  — sets sfallTargetKnockback*
+            //   set_attacker_knockback(type, value) — sets sfallAttackerKnockback*
+            //
+            // These globals are applied in the SFALL knockback modifier block
+            // below (lines 5170-5186) AFTER the engine formula, allowing
+            // scripts to override or augment the base knockback value.
+            // Type 1 = absolute (replaces engine value), Type 2 = additive.
             *knockbackDistancePtr = *damagePtr / knockbackDistanceDivisor;
 
             // SFALL: Fix F-004 — apply knockback modifiers set by

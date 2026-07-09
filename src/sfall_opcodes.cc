@@ -537,9 +537,28 @@ static void op_available_global_script_types(Program* program)
 // scripts. sfall globals bypassed this hook entirely — two separate global
 // var systems, only vanilla got the hook coverage.
 //
-// The hook interface is (int varIndex, int value) → int override. This maps
-// naturally to int-keyed int-value sfall globals. String-keyed globals and
-// float-valued globals do not fit the int-keyed hook contract — those paths
+// F-S4-M16: HOOK_SETGLOBALVAR dispatch is restricted to int-keyed int-value
+// writes (line 573). The hook interface is (int varIndex, int value) → int
+// override, which maps naturally to int-keyed int-value sfall globals.
+//
+// The following globals write paths bypass HOOK_SETGLOBALVAR entirely:
+//   1. String-keyed globals (both int and float values) — key is a string,
+//      which does not fit the int-keyed hook contract.
+//   2. Float-valued int-keyed globals — value is a float, which would require
+//      truncation or re-interpretation to fit the int-typed hook signature.
+//
+// This is a known design limitation, not a bug. The hook contract was
+// architected for the classic set_global_var(int, int) opcode and does not
+// accommodate string keys or float values. Mods that need to intercept STRING
+// or FLOAT global writes should use one of these alternative patterns:
+//   (a) Store a companion int-keyed sentinel alongside the string/float value
+//       to trigger hook notification on the companion key.
+//   (b) Use a companion global script (hs_*.int) that polls or observes the
+//       relevant string/float globals via get_sfall_global_str / float.
+//   (c) Extend the hook contract in a future sfall API version to accept
+//       string keys and variant-typed values.
+//
+// The float-valued int-keyed path (line 559) and all string-keyed paths
 // store directly without hook dispatch.
 //
 // Recursion protection: the ScriptHookCall system has MAX_HOOK_CALL_DEPTH=8
@@ -5768,6 +5787,12 @@ static void op_get_kill_counter(Program* program)
 
 static constexpr int kMaxKillCounterEntries = 5000;
 
+// Per-critter last target/attacker maps are keyed by Object::id and grow
+// with the number of distinct critters that have been involved in combat.
+// 5000 entries is generous for any practical gameplay scenario and matches
+// the kill counter limit.
+static constexpr int kMaxLastTargetEntries = 5000;
+
 static void op_mod_kill_counter(Program* program)
 {
     int amount = programStackPopInteger(program);
@@ -6163,6 +6188,8 @@ static constexpr const char kGlVarFASMapCnt[] = "SFFAScnt";
 static constexpr const char kGlVarDASMapCnt[] = "SFDAScnt";
 static constexpr const char kGlVarDMaleModel[] = "SFDMale ";
 static constexpr const char kGlVarDFemaleModel[] = "SFDFmale";
+static constexpr const char kGlVarLastTrgCnt[] = "SFLTcnt ";
+static constexpr const char kGlVarLastAtkCnt[] = "SFLAcnt ";
 
 // Persist all opcode-related global state into the sfall global vars map
 // before sfall_gl_vars_save() writes to sfallgv.sav.
@@ -6489,6 +6516,34 @@ void sfallOpcodeStateSave()
         sfall_gl_vars_store(key, entry.first);
         sprintf(key, "SFDASv%03d", idx);
         sfall_gl_vars_store(key, entry.second ? 1 : 0);
+        idx++;
+    }
+
+    // Per-critter last target/attacker maps (F-011 / F-S4-M15).
+    // Format: entry count + indexed key/value pairs (prefix "SFLT" / "SFLA").
+    // Key = critter Object::id, value = target/attacker Object::id.
+    // These maps were previously cleared on reset but never saved, so
+    // get_last_target/get_last_attacker returned nullptr after load.
+    int ltCount = static_cast<int>(gCritterLastTarget.size());
+    sfall_gl_vars_store(kGlVarLastTrgCnt, ltCount);
+    idx = 0;
+    for (const auto& entry : gCritterLastTarget) {
+        char key[16] = {};
+        sprintf(key, "SFLTk%03d", idx);
+        sfall_gl_vars_store(key, entry.first);
+        sprintf(key, "SFLTv%03d", idx);
+        sfall_gl_vars_store(key, entry.second);
+        idx++;
+    }
+    int laCount = static_cast<int>(gCritterLastAttacker.size());
+    sfall_gl_vars_store(kGlVarLastAtkCnt, laCount);
+    idx = 0;
+    for (const auto& entry : gCritterLastAttacker) {
+        char key[16] = {};
+        sprintf(key, "SFLAk%03d", idx);
+        sfall_gl_vars_store(key, entry.first);
+        sprintf(key, "SFLAv%03d", idx);
+        sfall_gl_vars_store(key, entry.second);
         idx++;
     }
 
@@ -7154,6 +7209,44 @@ void sfallOpcodeStateLoad()
                     int ival = 0;
                     sfall_gl_vars_fetch(key, ival);
                     gDisableAimedShotsMap[pid] = (ival != 0);
+                }
+            }
+        }
+    }
+
+    // Per-critter last target map (F-011 / F-S4-M15).
+    {
+        int ltCount = 0;
+        if (sfall_gl_vars_fetch(kGlVarLastTrgCnt, ltCount) && ltCount <= kMaxLastTargetEntries) {
+            gCritterLastTarget.clear();
+            for (int idx2 = 0; idx2 < ltCount; idx2++) {
+                char key[16] = {};
+                sprintf(key, "SFLTk%03d", idx2);
+                int critterId = 0;
+                if (sfall_gl_vars_fetch(key, critterId)) {
+                    sprintf(key, "SFLTv%03d", idx2);
+                    int targetId = 0;
+                    sfall_gl_vars_fetch(key, targetId);
+                    gCritterLastTarget[critterId] = targetId;
+                }
+            }
+        }
+    }
+
+    // Per-critter last attacker map (F-011 / F-S4-M15).
+    {
+        int laCount = 0;
+        if (sfall_gl_vars_fetch(kGlVarLastAtkCnt, laCount) && laCount <= kMaxLastTargetEntries) {
+            gCritterLastAttacker.clear();
+            for (int idx2 = 0; idx2 < laCount; idx2++) {
+                char key[16] = {};
+                sprintf(key, "SFLAk%03d", idx2);
+                int critterId = 0;
+                if (sfall_gl_vars_fetch(key, critterId)) {
+                    sprintf(key, "SFLAv%03d", idx2);
+                    int attackerId = 0;
+                    sfall_gl_vars_fetch(key, attackerId);
+                    gCritterLastAttacker[critterId] = attackerId;
                 }
             }
         }

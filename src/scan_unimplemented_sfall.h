@@ -4,6 +4,12 @@
 // A copy-paste from sFall
 // commit 930d1e8a032388c1989b0e9f7a469f570e44f621
 // https://github.com/sfall-team/sfall
+//
+// FIX-10: This snapshot is now reference-only — the scanner no longer
+// uses it as a pre-filter. See scan_unimplemented_opcodes.h for the
+// replacement logic that iterates the runtime kMetarules[] table directly.
+// Keep this array as a historical record of sfall metarules known at the
+// time of the snapshot. Do NOT use it for scanner logic.
 #include <string>
 
 static const std::string sfall_metarules[] = {

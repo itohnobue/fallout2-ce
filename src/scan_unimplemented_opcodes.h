@@ -77,12 +77,12 @@ std::string get_hook_name(int hookId)
         "HOOK_ROLLCHECK",
         "HOOK_BESTWEAPON",
         "HOOK_CANUSEWEAPON",
-        // RESERVED 49 to 60
-        nullptr, // 49
-        nullptr, // 50
-        nullptr, // 51
-        nullptr, // 52
-        nullptr, // 53
+        // Phase 7 hooks (49-53)
+        "HOOK_DIALOG",        // 49
+        "HOOK_DIALOGREACTION", // 50
+        "HOOK_STATLEVELUP",   // 51
+        "HOOK_BARTER",        // 52
+        "HOOK_MESSAGE",       // 53
         nullptr, // 54
         nullptr, // 55
         nullptr, // 56
@@ -269,31 +269,30 @@ void check_file_data(unsigned char* data, int fileSize, std::string fName)
 
     check_int_data(fName, data, code_pos, fileSize);
 
+    // FIX-10: Replace static sfall_metarules[] snapshot pre-filter with
+    // direct runtime kMetarules[] lookup. The old snapshot was stale —
+    // 24 CE-added metarules never reached the kMetarules check because
+    // the snapshot pre-filter rejected them first. Also eliminated 1 false
+    // positive from a deprecated entry in the snapshot.
+    // Now: check every script string directly against the runtime
+    // kMetarules[] table. If a string matches a kMetarules entry whose
+    // handler is nullptr (stub/unimplemented), report it.
+    // Strings that don't match any kMetarules entry are not known
+    // metarules and are skipped.
     for (auto script_str : script_strings) {
-        if (
-            std::find(
-                std::begin(sfall_metarules),
-                std::end(sfall_metarules),
-                script_str)
-            != std::end(sfall_metarules)) {
-            // That looks like a sFall metarule
-            if (
-                std::find_if(
-                    fallout::kMetarules, fallout::kMetarules + fallout::kMetarulesCount,
-                    [&script_str](auto rule) {
-                        return std::string(rule.name) == script_str;
-                    })
-                == fallout::kMetarules + fallout::kMetarulesCount) {
-
+        auto it = std::find_if(
+            fallout::kMetarules, fallout::kMetarules + fallout::kMetarulesCount,
+            [&script_str](auto rule) {
+                return std::string(rule.name) == script_str;
+            });
+        if (it != fallout::kMetarules + fallout::kMetarulesCount) {
+            // Found in runtime kMetarules[] — it's a known metarule.
+            // Report only if the handler is nullptr (stub/unimplemented).
+            if (it->handler == nullptr) {
                 auto& set = sus_strings[script_str];
                 set.insert(fName);
-
-                // printf("WARNING: Found sFall metarule %s in file %s, but it is not defined in kMetarules\n",
-                //   script_str.c_str(), fName.c_str());
-                // sus_strings[s].insert(fName);
             }
         }
-        // std::cout << "Script string: " << script_str << std::endl;
     }
 
     checked_files++;

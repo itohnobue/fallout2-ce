@@ -384,7 +384,7 @@ const MetaruleInfo kMetarules[] = {
     { "get_object_data", mf_get_object_data, 2, 2, 0, { ARG_OBJECT, ARG_INT } },
     { "get_outline", mf_get_outline, 1, 1, 0, { ARG_OBJECT } },
     { "get_quest_failure_value", mf_get_quest_failure_value, 1, 1, 0, { ARG_INT } },
-    { "get_sfall_arg_at", mf_get_sfall_arg_at, 1, 1, 0, { ARG_INT } },
+    { "get_sfall_arg_at", mf_get_sfall_arg_at, 1, 1, -1, { ARG_INT } },
     { "get_stat_max", mf_get_stat_max, 1, 2, 0, { ARG_INT, ARG_INT } },
     { "get_stat_min", mf_get_stat_min, 1, 2, 0, { ARG_INT, ARG_INT } },
     // {"get_string_pointer",        mf_get_string_pointer,        1, 1,  0, {ARG_STRING}}, // note: deprecated; do not implement
@@ -818,6 +818,7 @@ void mf_get_sfall_arg_at(OpcodeContext& ctx)
             result = hookCall->getArgAt(argNum);
         } else {
             ctx.printError("%s: argNum %d out of range [0, %d]", ctx.name(), argNum, hookCall->numArgs() - 1);
+            result = ProgramValue(ctx.metaruleInfo()->errorReturn);
         }
     }
     ctx.setReturn(result);
@@ -1493,6 +1494,7 @@ void mf_set_window_flag(OpcodeContext& ctx)
     case WINDOW_TRANSPARENT:
         break;
     default:
+        ctx.setReturn(ctx.metaruleInfo()->errorReturn);
         return;
     }
 
@@ -1501,7 +1503,10 @@ void mf_set_window_flag(OpcodeContext& ctx)
         const char* windowName = ctx.stringArg(0);
         if (!scriptWindowSetNamedFlag(windowName, bitFlag, enabled)) {
             ctx.printError("%s() - window '%s' is not found.", ctx.name(), windowName);
+            ctx.setReturn(ctx.metaruleInfo()->errorReturn);
+            return;
         }
+        ctx.setReturn(0);
         return;
     }
 
@@ -1511,10 +1516,12 @@ void mf_set_window_flag(OpcodeContext& ctx)
     }
 
     if (windowId == -1) {
+        ctx.setReturn(ctx.metaruleInfo()->errorReturn);
         return;
     }
 
     applyWindowFlag(windowId, bitFlag, enabled);
+    ctx.setReturn(0);
 }
 
 void mf_set_unique_id(OpcodeContext& ctx)
@@ -1542,11 +1549,15 @@ void mf_show_window(OpcodeContext& ctx)
 {
     if (ctx.numArgs() == 0) {
         scriptWindowShow();
+        ctx.setReturn(0);
     } else if (ctx.numArgs() == 1) {
         const char* windowName = ctx.stringArg(0);
         if (!scriptWindowShowNamed(windowName)) {
             debugPrint("show_window: window '%s' is not found", windowName);
+            ctx.setReturn(ctx.metaruleInfo()->errorReturn);
+            return;
         }
+        ctx.setReturn(0);
     }
 }
 
@@ -1554,11 +1565,15 @@ void mf_hide_window(OpcodeContext& ctx)
 {
     if (ctx.numArgs() == 0) {
         scriptWindowHide();
+        ctx.setReturn(0);
     } else {
         const char* windowName = ctx.stringArg(0);
         if (!scriptWindowHideNamed(windowName)) {
             ctx.printError("%s() - window '%s' is not found.", ctx.name(), windowName);
+            ctx.setReturn(ctx.metaruleInfo()->errorReturn);
+            return;
         }
+        ctx.setReturn(0);
     }
 }
 
@@ -1585,6 +1600,7 @@ void mf_win_fill_color(OpcodeContext& ctx)
 
     if (ctx.numArgs() != 5) {
         ctx.printError("%s() - invalid number of arguments (%d), must be 0 or 5.", ctx.name(), ctx.numArgs());
+        ctx.setReturn(ctx.metaruleInfo()->errorReturn);
         return;
     }
 
@@ -3371,6 +3387,12 @@ void mf_add_trait(OpcodeContext& ctx)
     if (ctx.numArgs() == 3) {
         // 3-arg form: add_trait(critter, traitType, rank)
         // arg0 = critter (object), arg1 = trait type ID, arg2 = rank
+        if (!ctx.arg(0).isPointer()) {
+            ctx.printError("%s() - argument #1 must be an object (critter), got %s.",
+                           ctx.name(), ctx.arg(0).typeDebugString());
+            ctx.setReturn(ctx.metaruleInfo()->errorReturn);
+            return;
+        }
         Object* critter = ctx.arg(0).asObject();
         traitType = ctx.arg(1).asInt();
         rank = ctx.arg(2).asInt();
@@ -3412,6 +3434,12 @@ void mf_remove_trait(OpcodeContext& ctx)
 {
     if (ctx.numArgs() == 2) {
         // 2-arg form: remove_trait(critter, traitType) — NPC-scoped removal.
+        if (!ctx.arg(0).isPointer()) {
+            ctx.printError("%s() - argument #1 must be an object (critter), got %s.",
+                           ctx.name(), ctx.arg(0).typeDebugString());
+            ctx.setReturn(ctx.metaruleInfo()->errorReturn);
+            return;
+        }
         Object* critter = ctx.arg(0).asObject();
         int traitType = ctx.arg(1).asInt();
 

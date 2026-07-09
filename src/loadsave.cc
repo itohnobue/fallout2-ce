@@ -48,11 +48,13 @@
 #include "random.h"
 #include "scripts.h"
 #include "settings.h"
+#include "sfall_arrays.h"
 #include "sfall_callbacks.h"
 #include "sfall_config.h"
 #include "sfall_ext.h"
 #include "sfall_global_scripts.h"
 #include "sfall_global_vars.h"
+#include "sfall_metarules.h"
 #include "skill.h"
 #include "stat.h"
 #include "svga.h"
@@ -2298,11 +2300,17 @@ static int lsgLoadGameInSlot(int slot)
         bool loaded = sfallLoadGameData(_flptr);
         fileClose(_flptr);
         if (!loaded) {
-            // sfallgv.sav exists but is corrupt. SAVE.DAT was loaded
-            // successfully and _PrepLoad (handler 0) already cleared sfall
-            // globals to defaults. Treat corrupt sfallgv.sav the same as
-            // missing — proceed with defaults rather than aborting the
-            // entire load via gameReset().
+            // sfallgv.sav exists but is corrupt. sfallLoadGameData() may
+            // have partially loaded state (globals, arrays, metarules)
+            // before failing. Re-clear all three sfall state domains so
+            // no partial state survives — matching the state after a
+            // missing sfallgv.sav where _PrepLoad's gameReset() clears
+            // everything. Without this re-clear, partial globals, arrays,
+            // or metarule overrides from the corrupt save persist into the
+            // game session and would be serialized on next save.
+            sfall_gl_vars_reset();
+            sfallArraysReset();
+            sfall_metarules_reset();
             debugPrint("\nLOADSAVE: ** sfallgv.sav corrupt — sfall state not loaded (using defaults) **\n");
             displayMonitorAddMessage("sfallgv.sav corrupt — sfall data not restored.");
         }

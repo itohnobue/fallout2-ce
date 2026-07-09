@@ -1075,9 +1075,16 @@ ArrayId LoadArray(const ProgramValue& key, Program* program)
     if (keyEl.getType() == ArrayElementType::STRING
         && strcmp(keyEl.getString(), kAllArraysSpecialKey) == 0) {
         int count = static_cast<int>(_state->savedArrays.size());
-        ArrayId tmpId = CreateTempArray(count, 0);
+        // CreateTempArray(0, 0) forces ASSOC flag per CreateArray len<=0
+        // convention. When count==0, create with len=1 to get a list,
+        // then resize to 0 to produce an empty list. Same workaround
+        // established in ListAsArray() and StringSplit().
+        ArrayId tmpId = CreateTempArray(count > 0 ? count : 1, 0);
         auto* tmpArr = get_array_by_id(tmpId);
         if (tmpArr != nullptr) {
+            if (count == 0) {
+                tmpArr->ResizeArray(0);
+            }
             int index = 0;
             // std::map iterates in sorted order, matching sfall's explicit sort
             for (const auto& [savedKey, arrayId] : _state->savedArrays) {
@@ -1257,10 +1264,17 @@ ArrayId ArrayFilter(ArrayId arrayId, Program* program, int procedureIndex)
     // GetArrayKey(-1) returns 0 for list arrays, 1 for associative arrays.
     bool isAssoc = (src->GetArrayKey(-1, program).integerValue == 1);
 
-    ArrayId resultId = CreateTempArray(isAssoc ? -1 : 0, 0);
+    // CreateTempArray(0, 0) forces ASSOC flag per CreateArray len<=0
+    // convention. For list sources, create with len=1 to get a list,
+    // then resize to 0 for an empty starting point. Same workaround
+    // established in ListAsArray() and StringSplit().
+    ArrayId resultId = CreateTempArray(isAssoc ? -1 : 1, 0);
     SFallArray* dst = get_array_by_id(resultId);
     if (dst == nullptr) {
         return 0;
+    }
+    if (!isAssoc) {
+        dst->ResizeArray(0);
     }
 
     int size = src->size();
@@ -1324,10 +1338,17 @@ ArrayId ArrayTransform(ArrayId arrayId, Program* program, int procedureIndex)
     // GetArrayKey(-1) returns 0 for list arrays, 1 for associative arrays.
     bool isAssoc = (src->GetArrayKey(-1, program).integerValue == 1);
 
-    ArrayId resultId = CreateTempArray(isAssoc ? -1 : 0, 0);
+    // CreateTempArray(0, 0) forces ASSOC flag per CreateArray len<=0
+    // convention. For list sources, create with len=1 to get a list,
+    // then resize to 0 for an empty starting point. Same workaround
+    // established in ListAsArray() and StringSplit().
+    ArrayId resultId = CreateTempArray(isAssoc ? -1 : 1, 0);
     SFallArray* dst = get_array_by_id(resultId);
     if (dst == nullptr) {
         return 0;
+    }
+    if (!isAssoc) {
+        dst->ResizeArray(0);
     }
 
     int size = src->size();

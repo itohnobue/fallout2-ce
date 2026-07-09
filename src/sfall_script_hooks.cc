@@ -58,6 +58,13 @@ std::vector<ScriptHookCall*> ScriptHookCall::_callStack;
 std::array<int, HOOK_COUNT> ScriptHookCall::_callStackPerType = {};
 bool ScriptHookCall::_gameModeChangeInProgress = false;
 
+// FIX-02: Dedicated reentrancy guard for HOOK_SETGLOBALVAR.
+// sfall blocks ALL chained dispatches of this hook (not just depth-capping).
+// The generic MAX_PER_TYPE_DEPTH=4 allows up to 4 levels which contradicts
+// sfall behavior. Use a simple boolean flag: block if already in progress.
+// Reset in scriptHooksReset() for longjmp recovery.
+static bool _setGlobalVarInProgress = false;
+
 ScriptHookCall* ScriptHookCall::current()
 {
     return !_callStack.empty() ? _callStack.back() : nullptr;
@@ -351,6 +358,11 @@ void scriptHooksReset()
     // stuck at true, permanently disabling the hook.  scriptHooksReset()
     // runs on gameReset / new game, providing a guaranteed cleanup point.
     ScriptHookCall::_gameModeChangeInProgress = false;
+    // Reset HOOK_SETGLOBALVAR reentrancy guard (FIX-02).
+    // A longjmp from programFatalError during a SETGLOBALVAR hook dispatch
+    // skips the final _setGlobalVarInProgress = false, permanently blocking
+    // the hook. Reset on game reset / new game as a guaranteed cleanup point.
+    _setGlobalVarInProgress = false;
     // Clear call-stack entries and per-type counters left from the
     // previous game session.  Stale entries accumulate when longjmp
     // (programFatalError) skips _callStack.pop_back() during hook
@@ -1723,8 +1735,16 @@ int scriptHooks_SetGlobalVar(int varIndex, int value)
         return value;
     }
 
+    // Block chained reentrancy: if a SETGLOBALVAR hook handler itself sets
+    // another global var, skip the nested hook dispatch (matching sfall).
+    if (_setGlobalVarInProgress) {
+        return value;
+    }
+
+    _setGlobalVarInProgress = true;
     ScriptHookCall hook(HOOK_SETGLOBALVAR, 1, { varIndex, value });
     hook.call();
+    _setGlobalVarInProgress = false;
 
     if (hook.numReturnValues() <= 0) {
         return value;
