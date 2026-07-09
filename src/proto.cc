@@ -940,7 +940,7 @@ int _proto_dude_init(const char* path)
         debugPrint("\n ** Error in proto_dude_init()! **\n");
     }
 
-    return 0;
+    return _retval;
 }
 
 // 0x49FBBC proto_scenery_init
@@ -1389,7 +1389,9 @@ int protoInit()
 
     _protos_been_initialized = 1;
 
-    _proto_dude_init("premade\\player.gcd");
+    if (_proto_dude_init("premade\\player.gcd") == -1) {
+        debugPrint("\nError: _proto_dude_init failed in proto_init()!\n");
+    }
 
     for (i = 0; i < 6; i++) {
         if (!messageListInit(&(_proto_msg_files[i]))) {
@@ -1519,7 +1521,9 @@ void protoReset()
     _proto_header_load();
 
     _protos_been_initialized = 1;
-    _proto_dude_init("premade\\player.gcd");
+    if (_proto_dude_init("premade\\player.gcd") == -1) {
+        debugPrint("\nError: _proto_dude_init failed in protoReset()!\n");
+    }
 }
 
 // 0x4A0898 proto_exit

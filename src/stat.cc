@@ -585,6 +585,19 @@ int critterSetBonusStat(Object* critter, int stat, int value)
     }
 
     if (stat >= 0 && stat < SAVEABLE_STAT_COUNT) {
+        // UF-H-020: Add min/max value clamping matching critterSetBaseStat
+        // pattern. Without this, bonus stat modifiers can be set to
+        // arbitrary values even though the final stat via critterGetStat is
+        // clamped. Reject out-of-range values to prevent stale garbage from
+        // persisting in proto data.
+        if (value < gStatDescriptions[stat].minimumValue) {
+            return -2;
+        }
+
+        if (value > gStatDescriptions[stat].maximumValue) {
+            return -3;
+        }
+
         Proto* proto;
         protoGetProto(critter->pid, &proto);
         proto->critter.data.bonusStats[stat] = value;

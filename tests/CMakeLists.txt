@@ -786,6 +786,15 @@ target_include_directories(test_fixes_hooks PRIVATE ${ZLIB_INCLUDE_DIRS})
 target_link_libraries(test_fixes_hooks PRIVATE doctest ${SDL2_LIBRARIES})
 add_test(NAME test_fixes_hooks COMMAND test_fixes_hooks)
 
+# ---- Test: window guards (UF-H-025, UF-H-026, UF-H-028 through UF-H-034) ----
+# Self-contained mirror test — does not link window.cc (40+ engine deps).
+# Verifies all guarded script window functions return gracefully at index -1.
+add_executable(test_window_guards
+    test_window_guards.cc
+)
+target_link_libraries(test_window_guards PRIVATE doctest)
+add_test(NAME test_window_guards COMMAND test_window_guards)
+
 # ---- Test: fixes saveload (F-55, F-61, F2-20, F2-21, F2-22, F2-25) ----
 # Self-contained mirror test — does not link loadsave.cc or sfall_global_scripts.cc.
 # No engine headers needed — CRC-32, atomic write FSM, path traversal, and
@@ -838,3 +847,80 @@ add_executable(test_fixes_stage6_misc
 )
 target_link_libraries(test_fixes_stage6_misc PRIVATE doctest)
 add_test(NAME test_fixes_stage6_misc COMMAND test_fixes_stage6_misc)
+
+# ============================================================
+# Stage 4 Implementation — RENDER + SCANNER Fix Tests (1 entry)
+# ============================================================
+
+# ---- Test: render scanner fixes (UF-H-047 + UF-011) ----
+# Self-contained mirror test — does not link draw.cc or scanner sources
+# (50+ engine deps). Validates zero-guard pattern in blit stretch functions
+# and hook implementation filter table.
+# SDL2/zlib headers needed for transitive includes from sfall_script_hooks.h.
+add_executable(test_render_scanner_fixes
+    test_render_scanner_fixes.cc
+)
+target_include_directories(test_render_scanner_fixes PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_include_directories(test_render_scanner_fixes PRIVATE ${ZLIB_INCLUDE_DIRS})
+target_link_libraries(test_render_scanner_fixes PRIVATE doctest ${SDL2_LIBRARIES})
+add_test(NAME test_render_scanner_fixes COMMAND test_render_scanner_fixes)
+
+# ============================================================
+# Stage 4 Audio — Audio Fix Regression Tests (3 entries)
+# ============================================================
+
+# ---- Test: audio subsystem fixes (UF-006, UF-007, UF-H-037) ----
+# Self-contained test — does not link audio.cc, sound_decoder.cc,
+# sound_effects_cache.cc, or sound_effects_list.cc.
+# Validates forward seek arithmetic, null-decoder error propagation,
+# and odd-size buffer bounds via local mirrors.
+add_executable(test_audio_fixes
+    test_audio_fixes.cc
+)
+target_link_libraries(test_audio_fixes PRIVATE doctest)
+add_test(NAME test_audio_fixes COMMAND test_audio_fixes)
+
+# ============================================================
+# Stage 4 MISC UI/CONFIG — Fix Regression Tests (1 entry)
+# ============================================================
+
+# ---- Test: misc UI/config fixes (UF-H-015/H-016, UF-H-020, UF-H-039, UF-H-043) ----
+# Self-contained mirror test — does not link inventory.cc, stat.cc, movie.cc,
+# or config.cc (50+ engine deps). The configGetInt base=10 test uses a local
+# strtol-based mirror to validate the behavioral change without linking config.cc.
+# Covers: barter bounds offset, bonus stat clamping, movie error codes,
+# configGetInt base=10 octal-parse fix.
+add_executable(test_misc_ui_config_fixes
+    test_misc_ui_config_fixes.cc
+)
+target_link_libraries(test_misc_ui_config_fixes PRIVATE doctest)
+add_test(NAME test_misc_ui_config_fixes COMMAND test_misc_ui_config_fixes)
+
+# ============================================================
+# Stage 4 Game Core — Fix Regression Tests (1 entry)
+# Covers: UF-H-008, UF-H-014, UF-H-017, UF-H-018, UF-004, UF-010, UF-H-044
+# ============================================================
+
+# ---- Test: game core fixes (null guards, bounds checks, error propagation) ----
+# Self-contained mirror test — does not link interpreter_extra.cc, combat_ai.cc,
+# item.cc, proto.cc, or actions.cc (50+ engine deps each).
+add_executable(test_game_core_fixes
+    test_game_core_fixes.cc
+)
+target_link_libraries(test_game_core_fixes PRIVATE doctest)
+add_test(NAME test_game_core_fixes COMMAND test_game_core_fixes)
+
+# ============================================================
+# Stage 4 sfall Compat Fixes — New Test Executable (1 entry)
+# Covers UF-H-035 (rest mode translation), UF-H-050 (VK mapping),
+# UF-H-022 (NPC trait removal).
+# ============================================================
+
+# ---- Test: sfall compat fixes (UF-H-035, UF-H-050, UF-H-022) ----
+# Self-contained mirror test — does not link sfall_metarules.cc or
+# sfall_kb_helpers.cc (50+ engine dependencies each).
+add_executable(test_sfall_compat_fixes
+    test_sfall_compat_fixes.cc
+)
+target_link_libraries(test_sfall_compat_fixes PRIVATE doctest)
+add_test(NAME test_sfall_compat_fixes COMMAND test_sfall_compat_fixes)

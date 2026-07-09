@@ -251,7 +251,9 @@ bool configSetString(Config* config, const char* sectionKey, const char* key, co
 }
 
 // 0x42C05C
-bool configGetInt(Config* config, const char* sectionKey, const char* key, int* valuePtr, unsigned char base /* = 0 */)
+// UF-H-043: Default base=10 (always decimal) to prevent octal-parse
+// failures on leading-zero-padded values like "08"/"09".
+bool configGetInt(Config* config, const char* sectionKey, const char* key, int* valuePtr, unsigned char base /* = 10 */)
 {
     if (valuePtr == nullptr) {
         return false;
@@ -281,7 +283,7 @@ bool configGetInt(Config* config, const char* sectionKey, const char* key, int* 
     return true;
 }
 
-bool configGetInt(Config* config, const char* sectionKey, const char* key, int* valuePtr, const int defaultValue, unsigned char base)
+bool configGetInt(Config* config, const char* sectionKey, const char* key, int* valuePtr, const int defaultValue, unsigned char base /* = 10 */)
 {
     if (config == nullptr || sectionKey == nullptr || key == nullptr || valuePtr == nullptr) {
         return false;

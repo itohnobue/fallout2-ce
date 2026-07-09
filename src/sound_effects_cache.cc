@@ -477,6 +477,9 @@ static int soundEffectsCacheFileReadCompressed(int handle, void* buf, unsigned i
     int sampleRate;
     int sampleCount;
     SoundDecoder* soundDecoder = soundDecoderInit(soundEffectsCacheSoundDecoderReadHandler, &handle, &channels, &sampleRate, &sampleCount);
+    if (soundDecoder == nullptr) {
+        return -1;
+    }
 
     if (soundEffect->position != 0) {
         void* temp = internal_malloc(soundEffect->position);

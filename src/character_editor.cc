@@ -640,6 +640,13 @@ static int gCharacterEditorFolderViewHighlightedLine;
 // 0x5705CC folder_card_desc
 static char* gCharacterEditorFolderCardDescription;
 
+// Owned storage for card strings obtained from unordered_map entries
+// (e.g., FakePerkNpcEntry). Pointers into unordered_map elements become
+// stale if the map is modified — copy into owned storage before assigning
+// to the global card pointers (UF-H-019).
+static char* gCharacterEditorFolderCardTitleOwned = nullptr;
+static char* gCharacterEditorFolderCardDescriptionOwned = nullptr;
+
 // 0x5705D0 folder_ypos
 static int gCharacterEditorFolderViewNextY;
 
@@ -2263,9 +2270,20 @@ static void characterEditorDrawPerksFolder()
                 const FakePerkNpcEntry& npcEntry = entry.second;
                 if (characterEditorFolderViewDrawString(npcEntry.name.c_str())) {
                     gCharacterEditorFolderCardFrmId = npcEntry.image >= 0 ? npcEntry.image : 0;
-                    gCharacterEditorFolderCardTitle = npcEntry.name.c_str();
+                    // UF-H-019: Copy into owned storage — .c_str() from
+                    // unordered_map becomes stale if the map is modified.
+                    internal_free(gCharacterEditorFolderCardTitleOwned);
+                    gCharacterEditorFolderCardTitleOwned = internal_strdup(npcEntry.name.c_str());
+                    gCharacterEditorFolderCardTitle = gCharacterEditorFolderCardTitleOwned;
                     gCharacterEditorFolderCardSubtitle = nullptr;
-                    gCharacterEditorFolderCardDescription = npcEntry.desc.empty() ? nullptr : const_cast<char*>(npcEntry.desc.c_str());
+                    internal_free(gCharacterEditorFolderCardDescriptionOwned);
+                    if (!npcEntry.desc.empty()) {
+                        gCharacterEditorFolderCardDescriptionOwned = internal_strdup(npcEntry.desc.c_str());
+                        gCharacterEditorFolderCardDescription = gCharacterEditorFolderCardDescriptionOwned;
+                    } else {
+                        gCharacterEditorFolderCardDescriptionOwned = nullptr;
+                        gCharacterEditorFolderCardDescription = nullptr;
+                    }
                     hasContent = true;
                 }
             }
@@ -2277,9 +2295,19 @@ static void characterEditorDrawPerksFolder()
                 const FakePerkNpcEntry& npcEntry = entry.second;
                 if (characterEditorFolderViewDrawString(npcEntry.name.c_str())) {
                     gCharacterEditorFolderCardFrmId = npcEntry.image >= 0 ? npcEntry.image : 0;
-                    gCharacterEditorFolderCardTitle = npcEntry.name.c_str();
+                    // UF-H-019: Copy into owned storage.
+                    internal_free(gCharacterEditorFolderCardTitleOwned);
+                    gCharacterEditorFolderCardTitleOwned = internal_strdup(npcEntry.name.c_str());
+                    gCharacterEditorFolderCardTitle = gCharacterEditorFolderCardTitleOwned;
                     gCharacterEditorFolderCardSubtitle = nullptr;
-                    gCharacterEditorFolderCardDescription = npcEntry.desc.empty() ? nullptr : const_cast<char*>(npcEntry.desc.c_str());
+                    internal_free(gCharacterEditorFolderCardDescriptionOwned);
+                    if (!npcEntry.desc.empty()) {
+                        gCharacterEditorFolderCardDescriptionOwned = internal_strdup(npcEntry.desc.c_str());
+                        gCharacterEditorFolderCardDescription = gCharacterEditorFolderCardDescriptionOwned;
+                    } else {
+                        gCharacterEditorFolderCardDescriptionOwned = nullptr;
+                        gCharacterEditorFolderCardDescription = nullptr;
+                    }
                     hasContent = true;
                 }
             }
@@ -2291,9 +2319,19 @@ static void characterEditorDrawPerksFolder()
                 const FakePerkNpcEntry& npcEntry = entry.second;
                 if (characterEditorFolderViewDrawString(npcEntry.name.c_str())) {
                     gCharacterEditorFolderCardFrmId = npcEntry.image >= 0 ? npcEntry.image : 0;
-                    gCharacterEditorFolderCardTitle = npcEntry.name.c_str();
+                    // UF-H-019: Copy into owned storage.
+                    internal_free(gCharacterEditorFolderCardTitleOwned);
+                    gCharacterEditorFolderCardTitleOwned = internal_strdup(npcEntry.name.c_str());
+                    gCharacterEditorFolderCardTitle = gCharacterEditorFolderCardTitleOwned;
                     gCharacterEditorFolderCardSubtitle = nullptr;
-                    gCharacterEditorFolderCardDescription = npcEntry.desc.empty() ? nullptr : const_cast<char*>(npcEntry.desc.c_str());
+                    internal_free(gCharacterEditorFolderCardDescriptionOwned);
+                    if (!npcEntry.desc.empty()) {
+                        gCharacterEditorFolderCardDescriptionOwned = internal_strdup(npcEntry.desc.c_str());
+                        gCharacterEditorFolderCardDescription = gCharacterEditorFolderCardDescriptionOwned;
+                    } else {
+                        gCharacterEditorFolderCardDescriptionOwned = nullptr;
+                        gCharacterEditorFolderCardDescription = nullptr;
+                    }
                     hasContent = true;
                 }
             }

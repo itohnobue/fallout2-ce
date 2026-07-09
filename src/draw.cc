@@ -155,6 +155,10 @@ void bufferDrawRectShadowed(unsigned char* buf, int pitch, int left, int top, in
 // 0x4D33F0
 void blitBufferToBufferStretch(const unsigned char* src, int srcWidth, int srcHeight, int srcPitch, unsigned char* dest, int destWidth, int destHeight, int destPitch)
 {
+    if (srcWidth <= 0 || srcHeight <= 0) {
+        return;
+    }
+
     int stepX = (destWidth << 16) / srcWidth;
     int stepY = (destHeight << 16) / srcHeight;
 
@@ -182,6 +186,10 @@ void blitBufferToBufferStretch(const unsigned char* src, int srcWidth, int srcHe
 // 0x4D3560
 void blitBufferToBufferStretchTrans(const unsigned char* src, int srcWidth, int srcHeight, int srcPitch, unsigned char* dest, int destWidth, int destHeight, int destPitch)
 {
+    if (srcWidth <= 0 || srcHeight <= 0) {
+        return;
+    }
+
     int stepX = (destWidth << 16) / srcWidth;
     int stepY = (destHeight << 16) / srcHeight;
 

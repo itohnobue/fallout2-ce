@@ -7,6 +7,7 @@
 #include "scan_unimplemented_sfall.h"
 #include "scan_unimplemented_utils.h"
 #include "sfall_metarules.h"
+#include "sfall_script_hooks.h"
 #include <algorithm>
 #include <iomanip>
 #include <iostream>
@@ -99,6 +100,83 @@ std::string get_hook_name(int hookId)
     return std::string(hook_names[hookId]);
 }
 
+// Lookup table: true if the hook ID has an active implementation (fire sites exist).
+// Must stay in sync with the HookType enum in sfall_script_hooks.h.
+// Indexed by hook ID; size == HOOK_COUNT.
+static constexpr bool kImplementedHooks[] = {
+    // 0-9
+    true,  // 0:  HOOK_TOHIT
+    true,  // 1:  HOOK_AFTERHITROLL
+    true,  // 2:  HOOK_CALCAPCOST
+    false, // 3:  HOOK_DEATHANIM1 (not implemented)
+    true,  // 4:  HOOK_DEATHANIM2
+    true,  // 5:  HOOK_COMBATDAMAGE
+    true,  // 6:  HOOK_ONDEATH
+    true,  // 7:  HOOK_FINDTARGET
+    true,  // 8:  HOOK_USEOBJON
+    false, // 9:  HOOK_REMOVEINVENOBJ (not implemented)
+    // 10-19
+    true,  // 10: HOOK_BARTERPRICE
+    true,  // 11: HOOK_MOVECOST
+    false, // 12: HOOK_HEXMOVEBLOCKING (not implemented)
+    false, // 13: HOOK_HEXAIBLOCKING (not implemented)
+    false, // 14: HOOK_HEXSHOOTBLOCKING (not implemented)
+    false, // 15: HOOK_HEXSIGHTBLOCKING (not implemented)
+    true,  // 16: HOOK_ITEMDAMAGE
+    true,  // 17: HOOK_AMMOCOST
+    true,  // 18: HOOK_USEOBJ
+    true,  // 19: HOOK_KEYPRESS
+    // 20-29
+    true,  // 20: HOOK_MOUSECLICK
+    true,  // 21: HOOK_USESKILL
+    true,  // 22: HOOK_STEAL
+    true,  // 23: HOOK_WITHINPERCEPTION
+    true,  // 24: HOOK_INVENTORYMOVE
+    true,  // 25: HOOK_INVENWIELD
+    true,  // 26: HOOK_ADJUSTFID
+    true,  // 27: HOOK_COMBATTURN
+    true,  // 28: HOOK_CARTRAVEL
+    true,  // 29: HOOK_SETGLOBALVAR
+    // 30-39
+    true,  // 30: HOOK_RESTTIMER
+    true,  // 31: HOOK_GAMEMODECHANGE
+    true,  // 32: HOOK_USEANIMOBJ
+    true,  // 33: HOOK_EXPLOSIVETIMER
+    true,  // 34: HOOK_DESCRIPTIONOBJ
+    true,  // 35: HOOK_USESKILLON
+    true,  // 36: HOOK_ONEXPLOSION
+    false, // 37: HOOK_SUBCOMBATDAMAGE (not implemented)
+    true,  // 38: HOOK_SETLIGHTING
+    true,  // 39: HOOK_SNEAK
+    // 40-49
+    true,  // 40: HOOK_STDPROCEDURE
+    true,  // 41: HOOK_STDPROCEDURE_END
+    true,  // 42: HOOK_TARGETOBJECT
+    true,  // 43: HOOK_ENCOUNTER
+    false, // 44: HOOK_ADJUSTPOISON (not implemented)
+    false, // 45: HOOK_ADJUSTRADS (not implemented)
+    false, // 46: HOOK_ROLLCHECK (not implemented)
+    false, // 47: HOOK_BESTWEAPON (not implemented)
+    true,  // 48: HOOK_CANUSEWEAPON
+    true,  // 49: HOOK_DIALOG
+    // 50-59
+    true,  // 50: HOOK_DIALOGREACTION
+    true,  // 51: HOOK_STATLEVELUP
+    true,  // 52: HOOK_BARTER
+    true,  // 53: HOOK_MESSAGE
+    false, // 54: reserved
+    false, // 55: reserved
+    false, // 56: reserved
+    false, // 57: reserved
+    false, // 58: reserved
+    false, // 59: reserved
+    // 60-61
+    false, // 60: reserved
+    false, // 61: HOOK_BUILDSFXWEAPON (not implemented)
+};
+static_assert(sizeof(kImplementedHooks) / sizeof(kImplementedHooks[0]) == fallout::HOOK_COUNT,
+    "kImplementedHooks size must match HOOK_COUNT — update this table when adding/removing hooks");
+
 void check_int_data(
     std::string fName,
     unsigned char* data,
@@ -123,8 +201,10 @@ void check_int_data(
         if (opcodeIndex == 0x207) { // register_hook
             if (i >= 6 && fallout::stackReadInt16(data, i - 6) == 0xC001) {
                 auto hookProcIndex = fallout::stackReadInt32(data, i - 6 + 2);
-                // All hooks are unknown atm
-                unknown_hooks[hookProcIndex].insert(fName);
+                // Only record hooks that have no active implementation
+                if (!(hookProcIndex >= 0 && hookProcIndex < fallout::HOOK_COUNT && kImplementedHooks[hookProcIndex])) {
+                    unknown_hooks[hookProcIndex].insert(fName);
+                }
             } else {
                 printf("ERROR: Unknown usage of register_hook in file %s at pos=0x%lx\n", fName.c_str(), i);
                 exit(1);
@@ -133,8 +213,10 @@ void check_int_data(
             if (
                 i >= 6 * 2 && fallout::stackReadInt16(data, i - 6) == 0xC001 && fallout::stackReadInt16(data, i - 6 * 2) == 0xC001) {
                 auto hookProcIndex = fallout::stackReadInt32(data, i - 6 * 2 + 2);
-                // All hooks are unknown atm
-                unknown_hooks[hookProcIndex].insert(fName);
+                // Only record hooks that have no active implementation
+                if (!(hookProcIndex >= 0 && hookProcIndex < fallout::HOOK_COUNT && kImplementedHooks[hookProcIndex])) {
+                    unknown_hooks[hookProcIndex].insert(fName);
+                }
             } else {
                 printf("ERROR: Unknown usage of register_hook_proc in file %s at pos=0x%lx\n", fName.c_str(), i);
                 exit(1);

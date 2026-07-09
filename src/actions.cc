@@ -609,6 +609,10 @@ int _action_attack(Attack* attack)
 // 0x4112B4
 int _action_melee(Attack* attack, int anim)
 {
+    if (attack == nullptr || attack->defender == nullptr) {
+        return 0;
+    }
+
     int fid;
     Art* art;
     CacheEntry* cache_entry;
@@ -1239,7 +1243,7 @@ int actionPickUp(Object* critter, Object* item)
         int actionFrame;
         CacheEntry* cacheEntry;
         Art* art = artLock(fid, &cacheEntry);
-        if (art == nullptr) {
+        if (art != nullptr) {
             actionFrame = artGetActionFrame(art);
             artUnlock(cacheEntry);
         } else {

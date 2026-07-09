@@ -1,6 +1,7 @@
 #include "scripts.h"
 
 #include <assert.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,6 +24,7 @@
 #include "game_mouse.h"
 #include "game_movie.h"
 #include "input.h"
+#include "map.h"
 #include "memory.h"
 #include "message.h"
 #include "object.h"
@@ -141,6 +143,13 @@ static int gGameModeEnabled = 0;
 //
 // 0x51C720 fallout_game_time
 static unsigned int gGameTime = 302400;
+
+// UF-H-036: Fractional remainder for mapGetTimeMultiplier() accumulation.
+// The worldmap path (wmGameTimeIncrement, worldmap.cc:4668) uses the
+// multiplier via gScriptWorldMapMulti + a double remainder to accumulate
+// fractional ticks without losing precision.  We mirror that pattern here
+// for the local-map path.
+static double gGameTimeLocalRemainder = 0.0;
 
 // 0x51C724 days_in_month
 static const int gGameTimeDaysPerMonth[12] = {
@@ -873,7 +882,14 @@ static void _script_chk_timed_events()
     if (getTicksBetween(currentTime, gLastQueueProcessingTime) >= 100) {
         gLastQueueProcessingTime = currentTime;
         if (!isInCombat()) {
-            gGameTime += 1;
+            // UF-H-036: Apply the script world map time multiplier from map.h
+            // so local-map time advances at the same rate as worldmap time.
+            // Uses the same remainder-accumulation pattern as the worldmap
+            // path (worldmap.cc:4668) to avoid losing fractional ticks.
+            double rawTicks = 1.0 * static_cast<double>(mapGetTimeMultiplier()) + gGameTimeLocalRemainder;
+            double intPart = 0.0;
+            gGameTimeLocalRemainder = modf(rawTicks, &intPart);
+            gGameTime += static_cast<unsigned int>(intPart);
         }
         shouldProcessQueue = true;
     }

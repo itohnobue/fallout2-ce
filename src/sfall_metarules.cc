@@ -353,7 +353,7 @@ const MetaruleInfo kMetarules[] = {
     { "add_iface_tag", mf_add_iface_tag, 0, 0 },
     { "add_g_timer_event", mf_add_g_timer_event, 2, 2, -1, { ARG_INT, ARG_INT } },
     { "add_trait", mf_add_trait, 1, 3, -1, { ARG_ANY, ARG_INT, ARG_INT } },
-    { "remove_trait", mf_remove_trait, 1, 1, -1, { ARG_INT } },
+    { "remove_trait", mf_remove_trait, 1, 2, -1, { ARG_ANY, ARG_INT } },
     { "art_cache_clear", mf_art_cache_flush, 0, 0 },
     { "art_frame_data", mf_art_frame_data, 1, 3, 0, { ARG_INTSTR, ARG_INT, ARG_INT } },
     { "attack_is_aimed", mf_attack_is_aimed, 0, 0 },
@@ -3026,16 +3026,103 @@ void mf_set_can_rest_on_map(OpcodeContext& ctx)
     ctx.setReturn(0);
 }
 
+// ============================================================
+// Rest Mode — sfall contract translation (UF-H-035)
+//
+// sfall defines rest_mode as a bitmask:
+//   SFALL_RESTMODE_NO_HEALING   = 1  (suppress healing during rest)
+//   SFALL_RESTMODE_STRICT       = 2  (only allow rest on explicit tiles)
+//   SFALL_RESTMODE_UNTIL_HEALED = 4  (rest until fully healed, CE unimplemented)
+//
+// CE's internal representation uses sequential integers:
+//   -1 = default engine behavior
+//    0 = RESTMODE_DISABLED (rest never allowed)
+//    1 = RESTMODE_STRICT (only on explicitly-set tiles)
+//    2 = RESTMODE_NO_HEALING (suppress healing)
+//
+// These numbering schemes are INCOMPATIBLE — without translation, every
+// sfall value maps to the wrong CE behavior.  Et Tu's LARIPPER.ssl calls
+// set_rest_mode(RESTMODE_STRICT) sending 2, which CE interprets as
+// RESTMODE_NO_HEALING instead.
+//
+// CE does not implement UNTIL_HEALED; the bit is silently dropped.
+// Combined RESTMODE_STRICT|RESTMODE_NO_HEALING (3) maps to
+// RESTMODE_DISABLED (0) since CE cannot express the combination:
+// strict tile enforcement + healing suppression = functionally "no rest."
+// ============================================================
+
+// sfall bitmask constants (authoritative from sfall source).
+static constexpr int kSfallRestmodeNoHealing = 1;
+static constexpr int kSfallRestmodeStrict = 2;
+static constexpr int kSfallRestmodeUntilHealed = 4;
+
+// CE-internal rest mode values.
+static constexpr int kCeRestmodeDefault = -1;
+static constexpr int kCeRestmodeDisabled = 0;
+static constexpr int kCeRestmodeStrict = 1;
+static constexpr int kCeRestmodeNoHealing = 2;
+
+/// Translates a sfall rest_mode bitmask to the CE internal mode.
+/// Returns the CE mode value to forward to wmSetRestMode().
+static int translateSfallRestMode(int sfallMode)
+{
+    // -1 is the sentinel for "use default engine behavior" in both systems.
+    if (sfallMode == kCeRestmodeDefault) {
+        return kCeRestmodeDefault;
+    }
+
+    if (sfallMode == 0) {
+        return kCeRestmodeDisabled;
+    }
+
+    // Extract individual feature bits from the sfall bitmask.
+    bool noHealing = (sfallMode & kSfallRestmodeNoHealing) != 0;
+    bool strict = (sfallMode & kSfallRestmodeStrict) != 0;
+    bool untilHealed = (sfallMode & kSfallRestmodeUntilHealed) != 0;
+
+    // UNTIL_HEALED is not implemented in CE — note the gap and proceed
+    // with the remaining bits.
+    if (untilHealed) {
+        debugPrint("set_rest_mode: UNTIL_HEALED (bit 4) requested but not "
+                    "implemented in CE engine; ignoring.\n");
+    }
+
+    // Both NO_HEALING and STRICT: CE cannot combine modes (they are
+    // sequential integers, not a bitmask).  Strict tile enforcement
+    // plus healing suppression together mean "no useful rest" —
+    // map to DISABLED as the safest fallback.
+    if (noHealing && strict) {
+        return kCeRestmodeDisabled;
+    }
+
+    if (noHealing) {
+        return kCeRestmodeNoHealing;
+    }
+
+    if (strict) {
+        return kCeRestmodeStrict;
+    }
+
+    // Only UNTIL_HEALED was set (already warned above) —
+    // fall back to engine default.
+    return kCeRestmodeDefault;
+}
+
 // set_rest_mode(int mode): stores the resting mode for both sfall persistence
 // and the worldmap rest system.
-// Mode bitmask: 0 = disabled (RESTMODE_DISABLED), 1 = strict areas only,
-// 2 = no healing (RESTMODE_NO_HEALING). -1 = use default engine behavior.
-// Wired via wmSetRestMode() — consumed at worldmap.cc:2990.
+//
+// Accepts a sfall rest_mode bitmask (0=disabled, 1=no_healing, 2=strict,
+// 4=until_healed, combinations supported) and translates it to the CE
+// internal mode before forwarding to wmSetRestMode().
+//
+// Wired via wmSetRestMode() — consumed at worldmap.cc:3179 (rest allowance)
+// and party_member.cc:862 / pipboy.cc:2264 (healing suppression).
 void mf_set_rest_mode(OpcodeContext& ctx)
 {
-    int mode = ctx.arg(0).asInt();
-    gRestMode = mode;
-    wmSetRestMode(mode);
+    int sfallMode = ctx.arg(0).asInt();
+    int ceMode = translateSfallRestMode(sfallMode);
+    gRestMode = ceMode;
+    wmSetRestMode(ceMode);
     ctx.setReturn(0);
 }
 
@@ -3309,10 +3396,57 @@ void mf_add_trait(OpcodeContext& ctx)
     ctx.setReturn(1);
 }
 
-// remove_trait(int trait_type): removes a previously-added trait from the player.
+// remove_trait: removes a previously-added trait.
+//
+// Two calling conventions (mirrors add_trait):
+//   1-arg: remove_trait(traitType)        — removes from player (gAddedTraits)
+//   2-arg: remove_trait(critter, traitType) — removes from NPC (gAddedTraitsNpc)
+//
 // Returns 1 if the trait was present and removed, 0 if it was not found.
+//
+// UF-H-022 (FIXED): Previously only operated on player-scoped gAddedTraits.
+// gAddedTraitsNpc had add/save/load but zero consumers — NPC trait additions
+// were permanent and irrevocable.  Now the 2-arg form removes from the
+// per-critter gAddedTraitsNpc map, completing the NPC trait lifecycle.
 void mf_remove_trait(OpcodeContext& ctx)
 {
+    if (ctx.numArgs() == 2) {
+        // 2-arg form: remove_trait(critter, traitType) — NPC-scoped removal.
+        Object* critter = ctx.arg(0).asObject();
+        int traitType = ctx.arg(1).asInt();
+
+        if (critter != nullptr && critter != gDude && critter->cid > 0) {
+            auto npcIt = gAddedTraitsNpc.find(critter->cid);
+            if (npcIt != gAddedTraitsNpc.end()) {
+                auto traitIt = npcIt->second.find(traitType);
+                if (traitIt != npcIt->second.end()) {
+                    npcIt->second.erase(traitIt);
+                    // Clean up the CID map entry if no traits remain.
+                    if (npcIt->second.empty()) {
+                        gAddedTraitsNpc.erase(npcIt);
+                    }
+                    ctx.setReturn(1);
+                    return;
+                }
+            }
+            ctx.setReturn(0);
+            return;
+        }
+        // Non-dude critter or dude_obj: remove from player-scoped gAddedTraits
+        // using the trait type already extracted from arg1.
+        {
+            auto it = gAddedTraits.find(traitType);
+            if (it != gAddedTraits.end()) {
+                gAddedTraits.erase(it);
+                ctx.setReturn(1);
+            } else {
+                ctx.setReturn(0);
+            }
+        }
+        return;
+    }
+
+    // 1-arg form: remove_trait(traitType) — player-scoped removal.
     int traitType = ctx.arg(0).asInt();
     auto it = gAddedTraits.find(traitType);
     if (it != gAddedTraits.end()) {

@@ -555,6 +555,45 @@ static constexpr SDL_Scancode kVkToSdl[256] = {
     SDL_SCANCODE_UNKNOWN, // 0xFF
 };
 
+// UF-H-050: Reverse lookup table — maps SDL_Scancode → VK code.
+// Built lazily from kVkToSdl on first use (see get_vk_from_scancode()).
+// When a scancode maps to multiple VK codes (kVkToSdl has duplicate
+// scancodes, e.g. LSHIFT/RSHIFT both map to their respective scan codes),
+// the first mapping found is used — these are physical-layout duplicates
+// where any VK variant is acceptable for script key identification.
+static std::unordered_map<SDL_Scancode, int> kSdlScancodeToVk;
+
+/// Returns the VK (Virtual Key) code corresponding to the given SDL scancode,
+/// or -1 if no mapping exists.  Populates kSdlScancodeToVk on first call.
+static int get_vk_from_scancode(SDL_Scancode sc)
+{
+    if (kSdlScancodeToVk.empty()) {
+        for (int vk = 0; vk < 256; ++vk) {
+            SDL_Scancode mapped = kVkToSdl[vk];
+            if (mapped != SDL_SCANCODE_UNKNOWN) {
+                // Insert only the first mapping per scancode (most
+                // significant — duplicate scancodes are physical variants).
+                kSdlScancodeToVk.try_emplace(mapped, vk);
+            }
+        }
+    }
+    auto it = kSdlScancodeToVk.find(sc);
+    return (it != kSdlScancodeToVk.end()) ? it->second : -1;
+}
+
+/// Converts an SDL_Keycode to the corresponding VK (Virtual Key) code
+/// for HOOK_KEYPRESS arg2 compatibility.
+/// Steps: SDL_Keycode → SDL_Scancode (via SDL) → VK code (via reverse table).
+/// Returns the VK code, or -1 if no mapping exists.
+static int sdl_keycode_to_vk(SDL_Keycode keycode)
+{
+    SDL_Scancode sc = SDL_GetScancodeFromKey(keycode);
+    if (sc == SDL_SCANCODE_UNKNOWN) {
+        return -1;
+    }
+    return get_vk_from_scancode(sc);
+}
+
 // Translates Sfall key code to SDL scancode.
 //
 // VK (Virtual Key) codes have the 0x80000000 flag set and use a different
@@ -661,17 +700,18 @@ int sfall_kb_handle_key_pressed(int sdlScanCode, bool pressed, SDL_Keycode keysy
     // F-03 (FIXED): HOOK_KEYPRESS argument order per sfall convention:
     //   arg0 = pressed state (1=pressed, 0=released)
     //   arg1 = DIK keyCode
-    //   arg2 = SDL_Keycode keysym
+    //   arg2 = VK_ code (converted from SDL_Keycode via reverse kVkToSdl)
     // Et tu's TMA handler checks arg0 for pressed/not-pressed and arg1 for
     // DIK_ESCAPE; the old order (dikCode, pressed) caused every key to
     // spuriously match DIK_ESCAPE because arg0 was the key code.
-    // NOTE (F-016): arg2 is an SDL_Keycode value (not a VK_ or DIK_ code).
-    // SDL_Keycode values diverge from VK_ constants (e.g. SDLK_F=102 vs VK_F=70,
-    // only '0' aligns at 48). Scripts comparing arg2 against VK_ constants will
-    // silently mismatch. Use DIK_ codes (via arg1) or SDL_Keycode constants per
-    // SDL_keycode.h for cross-platform key identification.
+    // UF-H-050 (FIXED): arg2 now carries a VK_ Virtual Key code converted
+    // from the raw SDL_Keycode via sdl_keycode_to_vk().  Previously arg2
+    // was the raw SDL_Keycode, which diverges from VK_ for letter keys
+    // (SDLK_F=102 vs VK_F=70) and function keys (SDLK_F1=0x4000003A vs
+    // VK_F1=0x70).  Scripts comparing arg2 against VK_ constants now match.
     int dikCode = get_key_from_scancode(scanCode);
-    ScriptHookCall hook(HOOK_KEYPRESS, 1, { pressed ? 1 : 0, dikCode, static_cast<int>(keysym) });
+    int vkCode = sdl_keycode_to_vk(keysym);
+    ScriptHookCall hook(HOOK_KEYPRESS, 1, { pressed ? 1 : 0, dikCode, vkCode });
     hook.call();
 
     if (hook.numReturnValues() <= 0) {

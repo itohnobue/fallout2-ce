@@ -259,6 +259,12 @@ int audioOpen(const char* fname, AudioFileInfo* info, bool* isMemoryBackedPtr)
     } else if (openMode == AUDIO_OPEN_MODE_COMPRESSED) {
         audioFile->flags |= AUDIO_COMPRESSED;
         audioFile->soundDecoder = soundDecoderInit(audioSoundDecoderReadHandler, audioFile->stream, &(audioFile->channels), &(audioFile->sampleRate), &(audioFile->fileSize));
+        if (audioFile->soundDecoder == nullptr) {
+            fileClose(audioFile->stream);
+            memset(audioFile, 0, sizeof(*audioFile));
+            debugPrint("AudioOpen: Couldn't decode %s\n", path);
+            return -1;
+        }
         audioFile->fileSize *= 2;
         audioFile->bitsPerSample = 16;
 
@@ -374,6 +380,11 @@ long audioSeek(int handle, long offset, int origin)
             soundDecoderFree(audioFile->soundDecoder);
             fileSeek(audioFile->stream, 0, SEEK_SET);
             audioFile->soundDecoder = soundDecoderInit(audioSoundDecoderReadHandler, audioFile->stream, &(audioFile->channels), &(audioFile->sampleRate), &(audioFile->fileSize));
+            if (audioFile->soundDecoder == nullptr) {
+                fileClose(audioFile->stream);
+                audioFile->stream = nullptr;
+                return -1;
+            }
             audioFile->position = 0;
             audioFile->fileSize *= 2;
 
@@ -392,7 +403,7 @@ long audioSeek(int handle, long offset, int origin)
             }
         } else {
             buf = (unsigned char*)internal_malloc_safe(1024, __FILE__, __LINE__); // "..\int\audio.c", 321
-            remainingBytesToSkip = audioFile->position - pos;
+            remainingBytesToSkip = pos - audioFile->position;
             while (remainingBytesToSkip > 1024) {
                 remainingBytesToSkip -= 1024;
                 audioRead(handle, buf, 1024);

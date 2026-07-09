@@ -821,7 +821,11 @@ void _movieUpdate()
         return;
     }
 
-    if (_stepMovie() == -1) {
+    // UF-H-039: Check ALL negative error codes from _stepMovie(),
+    // not just -1 (end-of-movie). Other error codes (-2 through -8,
+    // -10) from corrupt/modded MVE files fell through, causing a
+    // blank-frame loop. Treat any negative return as a fatal error.
+    if (_stepMovie() < 0) {
         _cleanupMovie(true);
         return;
     }

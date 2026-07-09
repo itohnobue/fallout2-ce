@@ -1270,7 +1270,9 @@ void opFillWin(Program* program)
         }
     }
 
-    scriptWindowSelectId(program->windowId);
+    if (!scriptWindowSelectId(program->windowId)) {
+        return;
+    }
 
     scriptWindowFill(r.floatValue, g.floatValue, b.floatValue);
 }
@@ -1317,7 +1319,9 @@ void opFillRect(Program* program)
         }
     }
 
-    scriptWindowSelectId(program->windowId);
+    if (!scriptWindowSelectId(program->windowId)) {
+        return;
+    }
 
     scriptWindowFillRect(x, y, width, height, r.floatValue, g.floatValue, b.floatValue);
 }
@@ -1365,6 +1369,8 @@ void opDisplayGfx(Program* program)
     int y = programStackPopInteger(program);
     int x = programStackPopInteger(program);
     char* fileName = programStackPopString(program);
+
+    scriptWindowSelectId(program->windowId);
 
     char* mangledFileName = _interpretMangleName(fileName);
     scriptWindowDisplay(mangledFileName, x, y, width, height);

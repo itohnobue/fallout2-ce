@@ -1082,6 +1082,10 @@ size_t soundDecoderDecode(SoundDecoder* soundDecoder, void* buffer, size_t size)
     samp_ptr = soundDecoder->samp_ptr;
     samp_cnt = soundDecoder->samp_cnt;
 
+    // Round size down to even to prevent off-by-one overflow when writing
+    // unsigned short (2 bytes) with a byte-level loop counter.
+    size &= ~(size_t)1;
+
     size_t bytesRead;
     for (bytesRead = 0; bytesRead < size; bytesRead += 2) {
         if (samp_cnt == 0) {

@@ -40,8 +40,13 @@ bool configGetString(Config* config, const char* sectionKey, const char* key, ch
 // No copy is performed. The returned pointer may refer either to an internal string or to defaultValue; it must be treated as read-only, and callers must ensure defaultValue remains valid for the duration of use.
 bool configGetString(Config* config, const char* sectionKey, const char* key, char** valuePtr, const char* defaultValue);
 bool configSetString(Config* config, const char* sectionKey, const char* key, const char* value);
-bool configGetInt(Config* config, const char* sectionKey, const char* key, int* valuePtr, unsigned char base = 0);
-bool configGetInt(Config* config, const char* sectionKey, const char* key, int* valuePtr, int defaultValue, unsigned char base = 0);
+// UF-H-043: Default base changed from 0 (auto-detect hex/octal) to 10
+// (always decimal) to match configGetIntList behavior. Base=0 caused
+// leading-zero-padded values like "08"/"09" to silently parse as 0
+// (invalid octal). Callers that genuinely need hex parsing should
+// explicitly pass base=0.
+bool configGetInt(Config* config, const char* sectionKey, const char* key, int* valuePtr, unsigned char base = 10);
+bool configGetInt(Config* config, const char* sectionKey, const char* key, int* valuePtr, int defaultValue, unsigned char base = 10);
 bool configGetIntList(Config* config, const char* section, const char* key, int* arr, int count);
 bool configSetInt(Config* config, const char* sectionKey, const char* key, int value);
 bool configRead(Config* config, const char* filePath, bool isDb);

@@ -118,9 +118,30 @@ static void op_obj_is_carrying_obj(Program* program)
     programStackPushInteger(program, count);
 }
 
-// read_byte — reads a single byte from a specified address.
-// In CE we cannot dereference arbitrary engine addresses, so we emulate
-// known sfall memory locations with CE-native equivalents.
+// ============================================================
+// VOODOO read_* opcodes — emulated sfall memory reads (UF-H-001)
+//
+// CE cannot dereference arbitrary engine addresses.  Instead, known
+// sfall memory locations are emulated with CE-native equivalents.
+// Unknown addresses return -1 and log a diagnostic.
+//
+// Supported read_byte addresses:
+//   0x56D38C — combat target highlight state → combatGetTargetHighlight()
+//   0x410003 — Rotators fork detection signature → hardcoded 0xF4
+//              (ETu's gl_rotators.ssl checks this byte to enable
+//               Rotators-specific features)
+//
+// Migration guidance for mods:
+//   - Most FO1/Fallout2 engine state available through CE-native metarules
+//     (see sfall_metarules.h for the full catalog).
+//   - gFallout1Behavior flag covers many FO1 behavioral differences
+//     (hit chance formula, rest healing, encounter dialog, level cap, etc.).
+//   - Use opcode_exists() at runtime to check whether read_* opcodes are
+//     registered before calling them.
+//   - read_short / read_int / read_string currently have zero implemented
+//     addresses — all known mod usage goes through read_byte or metarules.
+// ============================================================
+
 static void op_read_byte(Program* program)
 {
     int addr = programStackPopInteger(program);
@@ -138,6 +159,11 @@ static void op_read_byte(Program* program)
         value = 0xF4;
         break;
     default:
+#ifndef NDEBUG
+        debugPrint("%s: VOODOO read_byte at 0x%x — address not supported. "
+                   "Returning -1. See sfall_opcodes.cc for supported addresses "
+                   "and migration guidance.\n", program->name, addr);
+#endif
         programPrintError("%s: attempt to 'read_byte' at 0x%x (not supported)", program->name, addr);
         break;
     }
@@ -148,10 +174,16 @@ static void op_read_byte(Program* program)
 // read_short — reads a 16-bit value from a specified address.
 // CE cannot dereference arbitrary engine addresses. Registered as a
 // stub returning -1 so scripts that check for this opcode do not crash.
-// RPU/ETu scripts do not currently call read_short directly.
+// Currently has zero implemented addresses (all known mod usage is
+// through read_byte or CE-native metarules).
 static void op_read_short(Program* program)
 {
     int addr = programStackPopInteger(program);
+#ifndef NDEBUG
+    debugPrint("%s: VOODOO read_short at 0x%x — not supported in CE engine. "
+               "Returning -1. Prefer CE-native metarule alternatives.\n",
+               program->name, addr);
+#endif
     programPrintError("%s: read_short at 0x%x — not supported in CE engine, returning -1", program->name, addr);
     programStackPushInteger(program, -1);
 }
@@ -159,10 +191,15 @@ static void op_read_short(Program* program)
 // read_int — reads a 32-bit value from a specified address.
 // CE cannot dereference arbitrary engine addresses. Registered as a
 // stub returning -1 so scripts that check for this opcode do not crash.
-// RPU/ETu scripts do not currently call read_int directly.
+// Currently has zero implemented addresses.
 static void op_read_int(Program* program)
 {
     int addr = programStackPopInteger(program);
+#ifndef NDEBUG
+    debugPrint("%s: VOODOO read_int at 0x%x — not supported in CE engine. "
+               "Returning -1. Prefer CE-native metarule alternatives.\n",
+               program->name, addr);
+#endif
     programPrintError("%s: read_int at 0x%x — not supported in CE engine, returning -1", program->name, addr);
     programStackPushInteger(program, -1);
 }
@@ -173,10 +210,14 @@ static void op_read_int(Program* program)
 // Previously unregistered — calling opcode 0x8159 triggered
 // programFatalError (longjmp abort). Now returns -1 gracefully
 // like read_short/read_int/read_byte.
-// RPU/ETu scripts do not currently call read_string directly.
 static void op_read_string(Program* program)
 {
     int addr = programStackPopInteger(program);
+#ifndef NDEBUG
+    debugPrint("%s: VOODOO read_string at 0x%x — not supported in CE engine. "
+               "Returning -1. Prefer CE-native metarule alternatives.\n",
+               program->name, addr);
+#endif
     programPrintError("%s: read_string at 0x%x — not supported in CE engine, returning -1", program->name, addr);
     programStackPushInteger(program, -1);
 }
@@ -3723,11 +3764,26 @@ static void op_mod_skill_points_per_level(Program* program)
 // registered as safe no-ops that pop their arguments and log a debug
 // message, preventing script crashes on unregistered opcode errors.
 //
-// NOTE: gFallout1Behavior exists as a config flag but currently has
-// zero integration with these VOODOO handlers — none of the write_*
-// opcodes check or respect it. Actual FO1/FO2 behavioral differences
-// (hit chance, rest healing, encounter dialog, etc.) are handled in
-// separate engine modules (combat.cc, worldmap.cc, pipboy.cc, etc.).
+// UF-001: Many FO1 behaviors that mods achieve via write_* opcodes have
+// native CE implementations gated behind gFallout1Behavior:
+//
+//   gFallout1Behavior flag controls (set via [Misc] Fallout1Behavior=1):
+//     - 3-trait limit at character creation (trait.cc:343)
+//     - Level cap of 21 instead of 99 (stat.cc:742)
+//     - Instant full party heal during rest (party_member.cc:862)
+//     - Alternative encounter computation (worldmap.cc:3936,4160)
+//     - Reaction thresholds (reaction.cc:24)
+//     - Water timer (sfall_metarules.cc:935)
+//     - Combat AI weapon preference (combat_ai.cc:1149,2196,2640)
+//     - Endgame slide logic (endgame.cc:277)
+//     - Book repair logic (item.cc:818)
+//     - Game-mode flag fallback (game.cc:173,313)
+//     - Pipboy rest duration (pipboy.cc:2098)
+//
+// Scripts using write_byte at FO1 memory addresses (e.g., 0x451A6F for
+// hit chance formula) should migrate to gFallout1Behavior or CE-native
+// metarule alternatives where available.  See sfall_metarules.h for the
+// full metarule catalog (set_rest_mode, set_spray_settings, etc.).
 //
 // VOODOO write opcodes are always registered as safe no-ops.
 // AllowUnsafeScripting (ddraw.ini [Debugging] section) is parsed but
@@ -3740,6 +3796,10 @@ static void op_write_byte(Program* program)
     int value = programStackPopInteger(program);
     int addr = programStackPopInteger(program);
 
+#ifndef NDEBUG
+    debugPrint("VOODOO write_byte(0x%08X, %d) — NOT SUPPORTED in CE engine. "
+               "See gFallout1Behavior flag and CE-native metarule alternatives.\n", addr, value);
+#endif
     programPrintError("VOODOO write_byte(0x%08X, %d) — NOT SUPPORTED in CE engine (different address space). "
                        "Use CE-native opcodes or metarules instead.\n", addr, value);
 }
@@ -3749,6 +3809,10 @@ static void op_write_short(Program* program)
     int value = programStackPopInteger(program);
     int addr = programStackPopInteger(program);
 
+#ifndef NDEBUG
+    debugPrint("VOODOO write_short(0x%08X, %d) — NOT SUPPORTED in CE engine. "
+               "See gFallout1Behavior flag and CE-native metarule alternatives.\n", addr, value);
+#endif
     programPrintError("VOODOO write_short(0x%08X, %d) — NOT SUPPORTED in CE engine (different address space). "
                        "Use CE-native opcodes or metarules instead.\n", addr, value);
 }
@@ -3758,6 +3822,10 @@ static void op_write_int(Program* program)
     int value = programStackPopInteger(program);
     int addr = programStackPopInteger(program);
 
+#ifndef NDEBUG
+    debugPrint("VOODOO write_int(0x%08X, %d) — NOT SUPPORTED in CE engine. "
+               "See gFallout1Behavior flag and CE-native metarule alternatives.\n", addr, value);
+#endif
     programPrintError("VOODOO write_int(0x%08X, %d) — NOT SUPPORTED in CE engine (different address space). "
                        "Use CE-native opcodes or metarules instead.\n", addr, value);
 }
@@ -3767,6 +3835,11 @@ static void op_write_string(Program* program)
     const char* value = programStackPopString(program);
     int addr = programStackPopInteger(program);
 
+#ifndef NDEBUG
+    debugPrint("VOODOO write_string(0x%08X, \"%s\") — NOT SUPPORTED in CE engine. "
+               "See gFallout1Behavior flag and CE-native metarule alternatives.\n",
+               addr, value != nullptr ? value : "(null)");
+#endif
     programPrintError("VOODOO write_string(0x%08X, \"%s\") — NOT SUPPORTED in CE engine (different address space). "
                        "Use CE-native opcodes or metarules instead.\n", addr, value != nullptr ? value : "(null)");
 }

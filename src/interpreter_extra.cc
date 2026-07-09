@@ -4696,7 +4696,7 @@ static void opSfxBuildCharName(Program* program)
         programStackPushString(program, soundEffectName);
     } else {
         scriptPredefinedError(program, "sfx_build_char_name", SCRIPT_ERROR_OBJECT_IS_NULL);
-        programStackPushString(program, nullptr);
+        programStackPushString(program, "");
     }
 }
 
@@ -4774,7 +4774,7 @@ static void opSfxBuildOpenName(Program* program)
         programStackPushString(program, soundEffectName);
     } else {
         scriptPredefinedError(program, "sfx_build_open_name", SCRIPT_ERROR_OBJECT_IS_NULL);
-        programStackPushString(program, nullptr);
+        programStackPushString(program, "");
     }
 }
 

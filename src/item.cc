@@ -386,7 +386,10 @@ int itemAdd(Object* owner, Object* itemToAdd, int quantity)
 
         ammoQuantity += ammoQuantityToAdd;
         if (ammoQuantity > capacity) {
-            ammoSetQuantity(itemToAdd, ammoQuantity - capacity);
+            // Preserve all combined rounds on the new item instead of
+            // setting only the excess. The old item is destroyed at line
+            // 400, so setting only excess would lose capacity rounds.
+            ammoSetQuantity(itemToAdd, ammoQuantity);
             inventory->items[index].quantity++;
         } else {
             ammoSetQuantity(itemToAdd, ammoQuantity);
@@ -2213,7 +2216,9 @@ int armorGetArmorClass(Object* armor)
     }
 
     Proto* proto;
-    protoGetProto(armor->pid, &proto);
+    if (protoGetProto(armor->pid, &proto) == -1) {
+        return 0;
+    }
 
     return proto->item.data.armor.armorClass;
 }
@@ -2226,7 +2231,9 @@ int armorGetDamageResistance(Object* armor, int damageType)
     }
 
     Proto* proto;
-    protoGetProto(armor->pid, &proto);
+    if (protoGetProto(armor->pid, &proto) == -1) {
+        return 0;
+    }
 
     return proto->item.data.armor.damageResistance[damageType];
 }
@@ -2239,7 +2246,9 @@ int armorGetDamageThreshold(Object* armor, int damageType)
     }
 
     Proto* proto;
-    protoGetProto(armor->pid, &proto);
+    if (protoGetProto(armor->pid, &proto) == -1) {
+        return 0;
+    }
 
     return proto->item.data.armor.damageThreshold[damageType];
 }
@@ -2252,7 +2261,9 @@ int armorGetPerk(Object* armor)
     }
 
     Proto* proto;
-    protoGetProto(armor->pid, &proto);
+    if (protoGetProto(armor->pid, &proto) == -1) {
+        return -1;
+    }
 
     return proto->item.data.armor.perk;
 }
@@ -2265,7 +2276,9 @@ int armorGetMaleFid(Object* armor)
     }
 
     Proto* proto;
-    protoGetProto(armor->pid, &proto);
+    if (protoGetProto(armor->pid, &proto) == -1) {
+        return -1;
+    }
 
     return proto->item.data.armor.maleFid;
 }
@@ -2278,7 +2291,9 @@ int armorGetFemaleFid(Object* armor)
     }
 
     Proto* proto;
-    protoGetProto(armor->pid, &proto);
+    if (protoGetProto(armor->pid, &proto) == -1) {
+        return -1;
+    }
 
     return proto->item.data.armor.femaleFid;
 }

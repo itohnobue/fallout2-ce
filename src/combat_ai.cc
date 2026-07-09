@@ -2149,7 +2149,16 @@ static Object* _ai_best_weapon(Object* attacker, Object* weapon1, Object* weapon
         return nullptr;
     }
 
-    if (ai->best_weapon == BEST_WEAPON_RANDOM) {
+    // Validate best_weapon to prevent OOB access into _weapPrefOrderings.
+    // Matches the guard pattern in _caiHasWeapPrefType at line 2121.
+    // ai->best_weapon is parsed from ai.txt at runtime or loaded from save
+    // file deserialization (raw int32); corrupted data can produce OOB values.
+    int bestWeapon = ai->best_weapon;
+    if (bestWeapon < 0 || bestWeapon >= BEST_WEAPON_COUNT) {
+        return nullptr;
+    }
+
+    if (bestWeapon == BEST_WEAPON_RANDOM) {
         return randomBetween(1, 100) <= 50 ? weapon1 : weapon2;
     }
     int minDamage;
@@ -2216,7 +2225,7 @@ static Object* _ai_best_weapon(Object* attacker, Object* weapon1, Object* weapon
 
     if (!ignoreWeapon1) {
         for (int index = 0; index < ATTACK_TYPE_COUNT; index++) {
-            if (_weapPrefOrderings[ai->best_weapon + 1][index] == attackType1) {
+            if (_weapPrefOrderings[bestWeapon + 1][index] == attackType1) {
                 order1 = index;
                 break;
             }
@@ -2263,7 +2272,7 @@ static Object* _ai_best_weapon(Object* attacker, Object* weapon1, Object* weapon
 
     if (!ignoreWeapon2) {
         for (int index = 0; index < ATTACK_TYPE_COUNT; index++) {
-            if (_weapPrefOrderings[ai->best_weapon + 1][index] == attackType2) {
+            if (_weapPrefOrderings[bestWeapon + 1][index] == attackType2) {
                 order2 = index;
                 break;
             }

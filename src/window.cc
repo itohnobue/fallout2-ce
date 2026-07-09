@@ -678,6 +678,10 @@ static void redrawButton(ManagedButton* managedButton)
 // 0x4B7610
 bool scriptWindowHide()
 {
+    if (gCurrentManagedWindowIndex == -1) {
+        return false;
+    }
+
     ManagedWindow* managedWindow = &(gManagedWindows[gCurrentManagedWindowIndex]);
     if (managedWindow->window == -1) {
         return false;
@@ -691,6 +695,10 @@ bool scriptWindowHide()
 // 0x4B7648
 bool scriptWindowShow()
 {
+    if (gCurrentManagedWindowIndex == -1) {
+        return false;
+    }
+
     ManagedWindow* managedWindow = &(gManagedWindows[gCurrentManagedWindowIndex]);
     if (managedWindow->window == -1) {
         return false;
@@ -748,18 +756,30 @@ bool scriptWindowSetFlag(int windowId, int bitFlag, bool enabled)
 // 0x4B7734
 int scriptWindowWidth()
 {
+    if (gCurrentManagedWindowIndex == -1) {
+        return -1;
+    }
+
     return gManagedWindows[gCurrentManagedWindowIndex].width;
 }
 
 // 0x4B7754
 int scriptWindowHeight()
 {
+    if (gCurrentManagedWindowIndex == -1) {
+        return -1;
+    }
+
     return gManagedWindows[gCurrentManagedWindowIndex].height;
 }
 
 // 0x4B7680
 bool scriptWindowDraw()
 {
+    if (gCurrentManagedWindowIndex == -1) {
+        return false;
+    }
+
     ManagedWindow* managedWindow = &(gManagedWindows[gCurrentManagedWindowIndex]);
     if (managedWindow->window == -1) {
         return false;
@@ -1456,6 +1476,10 @@ void _displayFileRaw(char* fileName)
 // 0x4B8E50
 bool scriptWindowDisplay(char* fileName, int x, int y, int width, int height)
 {
+    if (gCurrentManagedWindowIndex == -1) {
+        return false;
+    }
+
     int imageWidth;
     int imageHeight;
     unsigned char* imageData = datafileRead(fileName, &imageWidth, &imageHeight);
@@ -1473,6 +1497,10 @@ bool scriptWindowDisplay(char* fileName, int x, int y, int width, int height)
 // 0x4B8EF0 windowDisplayBuf
 bool scriptWindowDisplayBuf(unsigned char* src, int srcWidth, int srcHeight, int destX, int destY, int destWidth, int destHeight)
 {
+    if (gCurrentManagedWindowIndex == -1) {
+        return false;
+    }
+
     ManagedWindow* managedWindow = &(gManagedWindows[gCurrentManagedWindowIndex]);
 
     if (destX < 0) {
@@ -1920,6 +1948,10 @@ bool scriptWindowAddButton(const char* buttonName, int x, int y, int width, int 
 // 0x4B9DD0
 bool scriptWindowAddButtonGfx(const char* buttonName, char* pressedFileName, char* normalFileName, char* hoverFileName)
 {
+    if (gCurrentManagedWindowIndex == -1) {
+        return false;
+    }
+
     ManagedWindow* managedWindow = &(gManagedWindows[gCurrentManagedWindowIndex]);
     for (int index = 0; index < managedWindow->buttonsLength; index++) {
         ManagedButton* managedButton = &(managedWindow->buttons[index]);
@@ -2211,6 +2243,10 @@ bool scriptWindowAddButtonTextWithOffsets(const char* buttonName, const char* te
 // 0x4BA694
 bool scriptWindowFill(float r, float g, float b)
 {
+    if (gCurrentManagedWindowIndex == -1) {
+        return false;
+    }
+
     int colorIndex = ((int)(r * 31.0) << 10) | ((int)(g * 31.0) << 5) | (int)(b * 31.0);
 
     ManagedWindow* managedWindow = &(gManagedWindows[gCurrentManagedWindowIndex]);
@@ -2227,6 +2263,10 @@ bool scriptWindowFill(float r, float g, float b)
 // 0x4BA738
 bool scriptWindowFillRect(int x, int y, int width, int height, float r, float g, float b)
 {
+    if (gCurrentManagedWindowIndex == -1) {
+        return false;
+    }
+
     ManagedWindow* managedWindow = &(gManagedWindows[gCurrentManagedWindowIndex]);
 
     x = (int)(x * managedWindow->scaleX);
@@ -2254,6 +2294,10 @@ bool scriptWindowFillRect(int x, int y, int width, int height, float r, float g,
 // 0x4BA844
 void scriptWindowEndRegion()
 {
+    if (gCurrentManagedWindowIndex == -1) {
+        return;
+    }
+
     ManagedWindow* managedWindow = &(gManagedWindows[gCurrentManagedWindowIndex]);
     Region* region = managedWindow->regions[managedWindow->currentRegionIndex];
     scriptWindowAddRegionPoint(region->points->x, region->points->y, false);
@@ -2522,6 +2566,10 @@ bool scriptWindowSetMovieFlags(int flags)
 // 0x4BB24C
 bool scriptWindowPlayMovie(char* filePath)
 {
+    if (gCurrentManagedWindowIndex == -1) {
+        return false;
+    }
+
     if (_movieRun(gManagedWindows[gCurrentManagedWindowIndex].window, filePath) != 0) {
         return false;
     }
@@ -2532,6 +2580,10 @@ bool scriptWindowPlayMovie(char* filePath)
 // 0x4BB280
 bool scriptWindowPlayMovieRect(char* filePath, int x, int y, int w, int h)
 {
+    if (gCurrentManagedWindowIndex == -1) {
+        return false;
+    }
+
     if (_movieRunRect(gManagedWindows[gCurrentManagedWindowIndex].window, filePath, x, y, w, h) != 0) {
         return false;
     }

@@ -427,6 +427,11 @@ static int soundEffectsListPopulateFileSizes()
                 int sampleRate;
                 int sampleCount;
                 SoundDecoder* soundDecoder = soundDecoderInit(soundEffectsListSoundDecoderReadHandler, stream, &channels, &sampleRate, &sampleCount);
+                if (soundDecoder == nullptr) {
+                    fileClose(stream);
+                    internal_free(path);
+                    return SFXL_ERR;
+                }
                 entry->dataSize = 2 * sampleCount;
                 soundDecoderFree(soundDecoder);
                 fileClose(stream);
