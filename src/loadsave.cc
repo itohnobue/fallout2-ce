@@ -2025,8 +2025,20 @@ static int lsgPerformSaveGame()
         if (dataSize > 0) {
             unsigned char* buffer = (unsigned char*)internal_malloc(dataSize);
             if (buffer != nullptr) {
+                memset(buffer, 0, dataSize);
                 fileSeek(_flptr, dataStart, SEEK_SET);
-                fileRead(buffer, 1, dataSize, _flptr);
+                if (fileRead(buffer, 1, dataSize, _flptr) != dataSize) {
+                    internal_free(buffer);
+                    debugPrint("\nLOADSAVE: ** Error reading save data for CRC in function #%d! **\n", index);
+                    fileClose(_flptr);
+                    compat_remove(_saveDatTmp);
+                    _RestoreSave();
+                    snprintf(_gmpath, sizeof(_gmpath), "%s\\%s%.2d\\", "SAVEGAME", "SLOT", _slot_cursor + 1);
+                    MapDirErase(_gmpath, "BAK");
+                    _partyMemberUnPrepSave();
+                    backgroundSoundResume();
+                    return -1;
+                }
                 unsigned int crc = _crc32Compute(buffer, dataSize);
                 internal_free(buffer);
                 fileSeek(_flptr, chunkStart, SEEK_SET);
@@ -2050,52 +2062,13 @@ static int lsgPerformSaveGame()
 
     debugPrint("LOADSAVE: Total save data written: %ld bytes.\n", fileTell(_flptr));
 
-    // I2F-021: Write sfallgv.sav atomically before closing SAVE.DAT.
-    // Writing to a temp file then renaming ensures that a crash between
-    // SAVE.DAT close and sfallgv.sav write doesn't leave SAVE.DAT on disk
-    // without a corresponding sfallgv.sav (inconsistent state).
-    // Only after both files are safely written is SAVE.DAT finalized.
-    {
-        char sfPath[COMPAT_MAX_PATH];
-        char tmpPath[COMPAT_MAX_PATH];
-        snprintf(sfPath, sizeof(sfPath), "%s\\%s%.2d\\", "SAVEGAME", "SLOT", _slot_cursor + 1);
-        snprintf(tmpPath, sizeof(tmpPath), "%ssfallgv.tmp", sfPath);
-        strcat(sfPath, "sfallgv.sav");
-
-        File* sfFile = fileOpen(tmpPath, "wb");
-        if (sfFile != nullptr) {
-            bool saved = sfallSaveGameData(sfFile);
-            fileClose(sfFile);
-            if (!saved || compat_rename(tmpPath, sfPath) != 0) {
-                // sfallgv.sav write or rename failed. Clean up the temp file,
-                // close SAVE.DAT temp file, and restore the previous save state.
-                compat_remove(tmpPath);
-                fileClose(_flptr);
-                compat_remove(_saveDatTmp);
-                _RestoreSave();
-                snprintf(_gmpath, sizeof(_gmpath), "%s\\%s%.2d\\", "SAVEGAME", "SLOT", _slot_cursor + 1);
-                MapDirErase(_gmpath, "BAK");
-                _partyMemberUnPrepSave();
-                backgroundSoundResume();
-                return -1;
-            }
-        } else {
-            // F2-022: sfallgv.sav temp file open failed (disk full, permissions).
-            // SAVE.DAT has already been written — must roll back to avoid
-            // leaving SAVE.DAT without a corresponding sfallgv.sav.
-            debugPrint("\nLOADSAVE: ** Error opening sfallgv.sav temp file for writing! **\n");
-            fileClose(_flptr);
-            compat_remove(_saveDatTmp);
-            _RestoreSave();
-            snprintf(_gmpath, sizeof(_gmpath), "%s\\%s%.2d\\", "SAVEGAME", "SLOT", _slot_cursor + 1);
-            MapDirErase(_gmpath, "BAK");
-            _partyMemberUnPrepSave();
-            backgroundSoundResume();
-            return -1;
-        }
-    }
-
-    // SAVE.DAT is finalized only after sfallgv.sav is safely on disk.
+    // I2F-031: Commit SAVE.DAT first, then sfallgv.sav.
+    // If a crash occurs between these two commits, the worst case is
+    // new SAVE.DAT + old (or missing) sfallgv.sav. Missing or corrupt
+    // sfallgv.sav is handled gracefully by loading defaults (F-M042).
+    // The previous ordering (sfallgv first, SAVE.DAT second) could leave
+    // new sfallgv with old SAVE.DAT — a semantic mismatch that was not
+    // detectable during load.
     fileClose(_flptr);
     _flptr = nullptr;
 
@@ -2109,6 +2082,43 @@ static int lsgPerformSaveGame()
         _partyMemberUnPrepSave();
         backgroundSoundResume();
         return -1;
+    }
+
+    // SAVE.DAT is committed. Now write sfallgv.sav atomically.
+    {
+        char sfPath[COMPAT_MAX_PATH];
+        char tmpPath[COMPAT_MAX_PATH];
+        snprintf(sfPath, sizeof(sfPath), "%s\\%s%.2d\\", "SAVEGAME", "SLOT", _slot_cursor + 1);
+        snprintf(tmpPath, sizeof(tmpPath), "%ssfallgv.tmp", sfPath);
+        strcat(sfPath, "sfallgv.sav");
+
+        File* sfFile = fileOpen(tmpPath, "wb");
+        if (sfFile != nullptr) {
+            bool saved = sfallSaveGameData(sfFile);
+            fileClose(sfFile);
+            if (!saved || compat_rename(tmpPath, sfPath) != 0) {
+                // sfallgv.sav write or rename failed after SAVE.DAT was
+                // already committed. Clean up the temp file and restore
+                // the previous save state (which will revert SAVE.DAT).
+                compat_remove(tmpPath);
+                _RestoreSave();
+                snprintf(_gmpath, sizeof(_gmpath), "%s\\%s%.2d\\", "SAVEGAME", "SLOT", _slot_cursor + 1);
+                MapDirErase(_gmpath, "BAK");
+                _partyMemberUnPrepSave();
+                backgroundSoundResume();
+                return -1;
+            }
+        } else {
+            // sfallgv.sav temp file open failed. SAVE.DAT is already
+            // committed — restore the previous save state.
+            debugPrint("\nLOADSAVE: ** Error opening sfallgv.sav temp file for writing! **\n");
+            _RestoreSave();
+            snprintf(_gmpath, sizeof(_gmpath), "%s\\%s%.2d\\", "SAVEGAME", "SLOT", _slot_cursor + 1);
+            MapDirErase(_gmpath, "BAK");
+            _partyMemberUnPrepSave();
+            backgroundSoundResume();
+            return -1;
+        }
     }
 
     snprintf(_gmpath, sizeof(_gmpath), "%s\\%s%.2d\\", "SAVEGAME", "SLOT", _slot_cursor + 1);
@@ -2243,12 +2253,14 @@ static int lsgLoadGameInSlot(int slot)
             if (dataSize > 0) {
                 unsigned char* buffer = (unsigned char*)internal_malloc(dataSize);
                 if (buffer != nullptr) {
+                    memset(buffer, 0, dataSize);
                     fileSeek(_flptr, dataStart, SEEK_SET);
-                    fileRead(buffer, 1, dataSize, _flptr);
-                    computedCrc = _crc32Compute(buffer, dataSize);
+                    if (fileRead(buffer, 1, dataSize, _flptr) == dataSize) {
+                        computedCrc = _crc32Compute(buffer, dataSize);
+                        crcComputed = true;
+                    }
                     internal_free(buffer);
                     fileSeek(_flptr, dataEnd, SEEK_SET);
-                    crcComputed = true;
                 }
             }
 
@@ -2286,13 +2298,13 @@ static int lsgLoadGameInSlot(int slot)
         bool loaded = sfallLoadGameData(_flptr);
         fileClose(_flptr);
         if (!loaded) {
-            // SAVE.DAT was loaded successfully but sfallgv.sav is corrupt.
-            // The engine state is partially restored (27 handlers applied).
-            // gameReset() cleans up the partially-loaded state to prevent
-            // data loss from sfall globals silently reverting to defaults.
-            gameReset();
-            _loadingGame = false;
-            return -1;
+            // sfallgv.sav exists but is corrupt. SAVE.DAT was loaded
+            // successfully and _PrepLoad (handler 0) already cleared sfall
+            // globals to defaults. Treat corrupt sfallgv.sav the same as
+            // missing — proceed with defaults rather than aborting the
+            // entire load via gameReset().
+            debugPrint("\nLOADSAVE: ** sfallgv.sav corrupt — sfall state not loaded (using defaults) **\n");
+            displayMonitorAddMessage("sfallgv.sav corrupt — sfall data not restored.");
         }
     } else {
         // F2-023: sfallgv.sav is missing for this save slot.
@@ -2449,8 +2461,12 @@ static int lsgSaveHeaderInSlot(int slot)
     if (headerSize > 0) {
         unsigned char* headerBuf = (unsigned char*)internal_malloc(headerSize);
         if (headerBuf != nullptr) {
+            memset(headerBuf, 0, headerSize);
             fileSeek(_flptr, headerStart, SEEK_SET);
-            fileRead(headerBuf, 1, headerSize, _flptr);
+            if (fileRead(headerBuf, 1, headerSize, _flptr) != headerSize) {
+                internal_free(headerBuf);
+                return -1;
+            }
             unsigned int headerCrc = _crc32Compute(headerBuf, headerSize);
             internal_free(headerBuf);
             fileSeek(_flptr, headerEnd, SEEK_SET);
@@ -2568,8 +2584,13 @@ static int lsgLoadHeaderInSlot(int slot)
         if (headerSize > 0) {
             unsigned char* headerBuf = (unsigned char*)internal_malloc(headerSize);
             if (headerBuf != nullptr) {
+                memset(headerBuf, 0, headerSize);
                 fileSeek(_flptr, headerStart, SEEK_SET);
-                fileRead(headerBuf, 1, headerSize, _flptr);
+                if (fileRead(headerBuf, 1, headerSize, _flptr) != headerSize) {
+                    internal_free(headerBuf);
+                    _ls_error_code = 1;
+                    return -1;
+                }
                 unsigned int computedCrc = _crc32Compute(headerBuf, headerSize);
                 internal_free(headerBuf);
                 if (computedCrc != storedHeaderCrc) {
@@ -3510,6 +3531,7 @@ static int _SaveBackup()
         _strmfe(_str1, _str0, "BAK");
         if (compat_rename(_str0, _str1) != 0) {
             fileNameListFree(&fileList, 0);
+            _map_backup_count = 0;
             return -1;
         }
     }
@@ -3533,6 +3555,7 @@ static int _SaveBackup()
         fileClose(stream2);
 
         if (_copy_file(_str0, _str1) == -1) {
+            _map_backup_count = 0;
             return -1;
         }
 
@@ -3548,6 +3571,7 @@ static int _SaveBackup()
     if (sfallgvBackupStream != nullptr) {
         fileClose(sfallgvBackupStream);
         if (compat_rename(_str0, _str1) != 0) {
+            _map_backup_count = 0;
             return -1;
         }
     }
@@ -3628,7 +3652,12 @@ static int _RestoreSave()
     snprintf(_str0, sizeof(_str0), "%ssfallgv.sav", _gmpath);
     snprintf(_str1, sizeof(_str1), "%ssfallgv.bak", _gmpath);
     compat_remove(_str0);
-    compat_rename(_str1, _str0);
+    if (compat_rename(_str1, _str0) != 0) {
+        // Restore from backup failed — clean up the leftover .bak file
+        // so case-sensitive filesystems don't accumulate orphaned backups.
+        debugPrint("\nLOADSAVE: Warning, failed to restore sfallgv.sav from backup.\n");
+        compat_remove(_str1);
+    }
 
     return 0;
 }

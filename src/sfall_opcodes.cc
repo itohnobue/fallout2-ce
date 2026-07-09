@@ -189,6 +189,9 @@ static void op_set_pc_base_stat(Program* program)
     // important call to update derived stats, which is not present in Sfall.
     int value = programStackPopInteger(program);
     int stat = programStackPopInteger(program);
+    if (gDude == nullptr) {
+        return;
+    }
     critterSetBaseStat(gDude, stat, value);
 }
 
@@ -214,6 +217,9 @@ static void op_set_pc_bonus_stat(Program* program)
     // important call to update derived stats, which is not present in Sfall.
     int value = programStackPopInteger(program);
     int stat = programStackPopInteger(program);
+    if (gDude == nullptr) {
+        return;
+    }
     critterSetBonusStat(gDude, stat, value);
 }
 
@@ -238,6 +244,10 @@ static void op_get_pc_base_stat(Program* program)
     // dude's proto. This can have unforeseen consequences when dealing with
     // current stats.
     int stat = programStackPopInteger(program);
+    if (gDude == nullptr) {
+        programStackPushInteger(program, 0);
+        return;
+    }
     programStackPushInteger(program, critterGetBaseStat(gDude, stat));
 }
 
@@ -259,6 +269,10 @@ static void op_get_critter_base_stat(Program* program)
 static void op_get_pc_bonus_stat(Program* program)
 {
     int stat = programStackPopInteger(program);
+    if (gDude == nullptr) {
+        programStackPushInteger(program, 0);
+        return;
+    }
     int value = critterGetBonusStat(gDude, stat);
     programStackPushInteger(program, value);
 }
@@ -558,12 +572,29 @@ static void op_get_sfall_global_int(Program* program)
         if ((variable.opcode & VALUE_TYPE_MASK) == VALUE_TYPE_STRING) {
             const char* key = programGetString(program, variable.opcode, variable.integerValue);
             if (sfall_gl_vars_fetch_float(key, floatValue)) {
-                programStackPushInteger(program, static_cast<int>(floatValue));
+                // Guard against float-to-int overflow UB (I2-M002).
+                // Use long long intermediate, matching op_ceil pattern.
+                long long llValue = static_cast<long long>(floatValue);
+                if (llValue > INT_MAX) {
+                    programStackPushInteger(program, INT_MAX);
+                } else if (llValue < INT_MIN) {
+                    programStackPushInteger(program, INT_MIN);
+                } else {
+                    programStackPushInteger(program, static_cast<int>(floatValue));
+                }
                 return;
             }
         } else if (variable.opcode == VALUE_TYPE_INT) {
             if (sfall_gl_vars_fetch_float(variable.integerValue, floatValue)) {
-                programStackPushInteger(program, static_cast<int>(floatValue));
+                // Guard against float-to-int overflow UB (I2-M002).
+                long long llValue = static_cast<long long>(floatValue);
+                if (llValue > INT_MAX) {
+                    programStackPushInteger(program, INT_MAX);
+                } else if (llValue < INT_MIN) {
+                    programStackPushInteger(program, INT_MIN);
+                } else {
+                    programStackPushInteger(program, static_cast<int>(floatValue));
+                }
                 return;
             }
         }
@@ -1551,7 +1582,12 @@ static void op_substr(Program* program)
             programStackPushString(program, buf);
             return;
         }
-        length = abs(length); // length can't be negative
+        // Guard against abs(INT_MIN) which is undefined behavior.
+        if (length == INT_MIN) {
+            length = INT_MAX;
+        } else {
+            length = abs(length); // length can't be negative
+        }
     }
 
     // check position
@@ -5694,7 +5730,16 @@ static void op_mod_kill_counter(Program* program)
         return;
     }
 
-    gSfallKillCounters[critterType] += amount;
+    // Guard against signed integer overflow (I2-M003).
+    // amount is clamped to [-1e6, 1e6] but accumulated value can overflow.
+    int currentValue = gSfallKillCounters[critterType];
+    if (amount > 0 && currentValue > INT_MAX - amount) {
+        gSfallKillCounters[critterType] = INT_MAX;
+    } else if (amount < 0 && currentValue < INT_MIN - amount) {
+        gSfallKillCounters[critterType] = INT_MIN;
+    } else {
+        gSfallKillCounters[critterType] = currentValue + amount;
+    }
 }
 
 // ============================================================

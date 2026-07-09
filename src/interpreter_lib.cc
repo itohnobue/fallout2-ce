@@ -279,6 +279,18 @@ void opTokenize(Program* program)
 {
     int ch = programStackPopInteger(program);
 
+    // I2-M015: A NUL delimiter (ch == 0) causes a buffer over-read past the
+    // string.  The `*start == ch` check at line 312 matches the NUL terminator
+    // of the string, then `start + 1` and the subsequent `*end != ch` loop read
+    // past the string allocation.  Reject early — NUL cannot serve as a
+    // delimiter.
+    if (ch == 0) {
+        programStackPopValue(program);
+        programStackPopString(program);
+        programStackPushInteger(program, 0);
+        return;
+    }
+
     ProgramValue prevValue = programStackPopValue(program);
 
     char* prev = nullptr;
@@ -2129,7 +2141,10 @@ static void opSoundPlay(Program* program)
 static void opSoundPause(Program* program)
 {
     int data = programStackPopInteger(program);
-    intLibSoundPause(data);
+    // F-M023: Push return value to stack so scripts can detect failure
+    // (e.g. invalid sound handle). Matches opSoundPlay behavior (line 2124).
+    int rc = intLibSoundPause(data);
+    programStackPushInteger(program, rc);
 }
 
 // soundresume
@@ -2137,7 +2152,8 @@ static void opSoundPause(Program* program)
 static void opSoundResume(Program* program)
 {
     int data = programStackPopInteger(program);
-    intLibSoundResume(data);
+    int rc = intLibSoundResume(data);
+    programStackPushInteger(program, rc);
 }
 
 // soundstop
@@ -2145,7 +2161,8 @@ static void opSoundResume(Program* program)
 static void opSoundStop(Program* program)
 {
     int data = programStackPopInteger(program);
-    intLibSoundStop(data);
+    int rc = intLibSoundStop(data);
+    programStackPushInteger(program, rc);
 }
 
 // soundrewind
@@ -2153,7 +2170,8 @@ static void opSoundStop(Program* program)
 static void opSoundRewind(Program* program)
 {
     int data = programStackPopInteger(program);
-    intLibSoundRewind(data);
+    int rc = intLibSoundRewind(data);
+    programStackPushInteger(program, rc);
 }
 
 // sounddelete
@@ -2161,7 +2179,8 @@ static void opSoundRewind(Program* program)
 static void opSoundDelete(Program* program)
 {
     int data = programStackPopInteger(program);
-    intLibSoundDelete(data);
+    int rc = intLibSoundDelete(data);
+    programStackPushInteger(program, rc);
 }
 
 // SetOneOptPause
@@ -2170,12 +2189,15 @@ static void opSetOneOptPause(Program* program)
 {
     int data = programStackPopInteger(program);
 
+    // I2-M012: The original guard conditions were inverted — all 4 state×data
+    // combinations produced wrong results. Correct logic: return early (no-op)
+    // only when the flag is already in the desired state; otherwise toggle.
     if (data) {
-        if ((_dialogGetMediaFlag() & 8) == 0) {
+        if ((_dialogGetMediaFlag() & 8) != 0) {
             return;
         }
     } else {
-        if ((_dialogGetMediaFlag() & 8) != 0) {
+        if ((_dialogGetMediaFlag() & 8) == 0) {
             return;
         }
     }
@@ -2363,6 +2385,16 @@ void intLibRemoveProgramReferences(Program* program)
         if (program == gIntLibKeyHandlerEntries[index].program) {
             gIntLibKeyHandlerEntries[index].program = nullptr;
         }
+    }
+
+    // I2-M013: Clear the generic (any-key) handler if its program matches.
+    // The per-key loop above only iterates key-specific entries; the generic
+    // handler (stored at addkey with key=-1, line 1414) was never checked.
+    // Without this, a freed program's handler would be invoked on the next
+    // key press via intLibDoInput (line 2221-2224), causing use-after-free.
+    if (program == gIntLibGenericKeyHandlerProgram) {
+        gIntLibGenericKeyHandlerProgram = nullptr;
+        gIntLibGenericKeyHandlerProc = 0;
     }
 
     intExtraRemoveProgramReferences(program);

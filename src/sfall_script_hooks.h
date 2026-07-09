@@ -362,6 +362,12 @@ public:
     // frames.  Called from call() and scriptHooks_GameModeChange().
     static void drainStaleEntries(uintptr_t currentStackAddr);
 
+    // I2-M26: Clear all call-stack entries and per-type counters.
+    // Called by scriptHooksReset() on game reset / new game cycle
+    // to prevent stale entries from blocking hook execution after
+    // a game state transition.
+    static void clearCallStack();
+
 private:
     static std::vector<ScriptHookCall*> _callStack;
     // I2-M08: Per-type depth counters for hook call reentrancy tracking.

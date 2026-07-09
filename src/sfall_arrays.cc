@@ -814,6 +814,14 @@ void SetArrayFromExpression(const ProgramValue& key, const ProgramValue& val, Pr
         return;
     }
 
+    // Expression arrays are always lists (never associative).  Non-int keys
+    // cannot index a list — validate BEFORE calling ResizeArray to prevent
+    // double-stage corruption: key.asInt() on a non-int key returns 0, which
+    // triggers an erroneous resize before SetArray silently rejects the key.
+    if (!key.isInt()) {
+        return;
+    }
+
     auto size = arr->size();
     if (size >= ARRAY_MAX_SIZE) {
         return;
@@ -864,8 +872,18 @@ ArrayId ListAsArray(int type)
     sfall_lists_fill(type, objects);
 
     int count = static_cast<int>(objects.size());
-    ArrayId arrayId = CreateTempArray(count, 0);
+    // CreateTempArray(0, 0) creates an associative array per sfall convention
+    // (len <= 0 forces ASSOC flag).  For an empty list, pass count=1 to force
+    // list type, then immediately resize to 0 to produce a valid empty list.
+    // This ensures scripts iterating with get_array_key(-1) always see a list
+    // (returns 0) rather than an associative array (returns 1), regardless of
+    // whether the list is empty or populated.
+    ArrayId arrayId = CreateTempArray(count > 0 ? count : 1, 0);
     auto arr = get_array_by_id(arrayId);
+
+    if (count == 0) {
+        arr->ResizeArray(0);
+    }
 
     // A little bit ugly and likely inefficient.
     for (int index = 0; index < count; index++) {

@@ -252,6 +252,11 @@ static std::unordered_map<int, std::unordered_map<std::string, FakePerkNpcEntry>
 // Rank defaults to 0 when not specified (1-arg form).
 static std::map<int, int> gAddedTraits;
 
+// Per-critter traits added via the 3-arg add_trait(critter, traitType, rank) form.
+// Keyed by CID for save/load stability across sessions.
+// Each entry maps trait type ID -> rank for a specific NPC critter.
+static std::unordered_map<int, std::map<int, int>> gAddedTraitsNpc;
+
 // Map enter position override (set by set_map_enter_position, read by get_map_enter_position).
 // -1 = no override stored.
 static int gMapEnterX = -1;
@@ -2106,7 +2111,12 @@ void mf_string_format_array(OpcodeContext& ctx)
 
 void mf_floor2(OpcodeContext& ctx)
 {
-    ctx.setReturn(static_cast<int>(floor(ctx.arg(0).asFloat())));
+    double val = floor(ctx.arg(0).asFloat());
+    if (std::isnan(val) || val < static_cast<double>(INT_MIN) || val > static_cast<double>(INT_MAX)) {
+        ctx.setReturn(0);
+        return;
+    }
+    ctx.setReturn(static_cast<int>(val));
 }
 
 // --- Rotators fork compatibility wrappers (C-06) ---
@@ -3271,36 +3281,28 @@ void mf_add_trait(OpcodeContext& ctx)
     int traitType;
     int rank = 0;
 
-    if (ctx.numArgs() >= 2) {
+    if (ctx.numArgs() == 3) {
         // 3-arg form: add_trait(critter, traitType, rank)
-        // arg1 = trait type ID
-        // arg2 = rank (optional, defaults to 0)
-        //
-        // NOTE: Per-critter trait storage is not yet implemented. The
-        // 3-arg form currently writes to gAddedTraits (player-scoped)
-        // regardless of the critter argument. The critter object (arg0)
-        // is read for type detection but its identity is not stored.
-        // Full per-critter support requires CID-based storage with
-        // save/load integration and engine trait-system hooking.
+        // arg0 = critter (object), arg1 = trait type ID, arg2 = rank
+        Object* critter = ctx.arg(0).asObject();
         traitType = ctx.arg(1).asInt();
-        if (ctx.numArgs() >= 3) {
-            rank = ctx.arg(2).asInt();
+        rank = ctx.arg(2).asInt();
+
+        if (critter != nullptr && critter != gDude && critter->cid > 0) {
+            // Per-critter trait storage, keyed by CID for save/load stability.
+            gAddedTraitsNpc[critter->cid][traitType] = rank;
+            ctx.setReturn(1);
+            return;
         }
-        // F-24: When the 3-arg form is used with a critter that is not the
-        // player (gDude), emit a visible warning so script developers know
-        // per-critter trait storage is not implemented. The trait is still
-        // applied to the player scope.
-        if (ctx.arg(0).isPointer()) {
-            Object* critter = ctx.arg(0).asObject();
-            if (critter != nullptr && critter != gDude) {
-                ctx.printError("%s(): add_trait per-critter storage not implemented; "
-                    "trait %d applied to player scope instead of critter %d",
-                    ctx.name(), traitType, critter->id);
-            }
-        }
+        // Non-dude critter (null, CID zero) or dude_obj: fall through to
+        // player-scoped gAddedTraits.
     } else {
-        // 1-arg form: add_trait(traitType) — adds to player with rank 0
+        // 1-arg: add_trait(traitType) — adds to player with rank 0.
+        // 2-arg: add_trait(traitType, rank) — adds to player with specified rank.
         traitType = ctx.arg(0).asInt();
+        if (ctx.numArgs() >= 2) {
+            rank = ctx.arg(1).asInt();
+        }
     }
 
     gAddedTraits[traitType] = rank;
@@ -3582,7 +3584,11 @@ void sfall_metarule(Program* program, int args)
         // F-54: String-returning metarules must push a string on error, not an int.
         // Pushing int-0 causes programFatalError when the caller consumes it as a string.
         if (metaruleInfo->handler == mf_string_format
-            || metaruleInfo->handler == mf_string_format_array) {
+            || metaruleInfo->handler == mf_string_format_array
+            || metaruleInfo->handler == mf_get_terrain_name
+            || metaruleInfo->handler == mf_get_town_title
+            || metaruleInfo->handler == mf_string_replace
+            || metaruleInfo->handler == mf_string_to_case) {
             programStackPushString(program, "");
         } else {
             programStackPushInteger(program, metaruleInfo->errorReturn);
@@ -3594,7 +3600,11 @@ void sfall_metarule(Program* program, int args)
     if (!ctx.validateArguments()) {
         // F-54: String-returning metarules must push a string on error, not an int.
         if (metaruleInfo->handler == mf_string_format
-            || metaruleInfo->handler == mf_string_format_array) {
+            || metaruleInfo->handler == mf_string_format_array
+            || metaruleInfo->handler == mf_get_terrain_name
+            || metaruleInfo->handler == mf_get_town_title
+            || metaruleInfo->handler == mf_string_replace
+            || metaruleInfo->handler == mf_string_to_case) {
             ctx.setReturn("");
         } else {
             ctx.setReturn(metaruleInfo->errorReturn);
@@ -3626,6 +3636,7 @@ void sfall_metarules_reset()
     gFakeSelectablePerksNpc.clear();
     sIntfaceHiddenState = false;
     gAddedTraits.clear();
+    gAddedTraitsNpc.clear();
     gExplosiveOverrides.clear();
     gMapEnterX = -1;
     gMapEnterY = -1;
@@ -3654,7 +3665,8 @@ void sfall_metarules_reset()
 // --- Metarule state save/load ---
 //
 // Persistence format (simple tagged binary):
-//   Version int32 (currently 7)
+// Persistence format (simple tagged binary):
+//   Version int32 (currently 8)
 //   For each scalar: int32 value
 //   For each map: int32 count, then (key, value) pairs
 //   For each set: int32 count, then values
@@ -3664,7 +3676,7 @@ void sfall_metarules_reset()
 // On load, if the version marker doesn't match, the function returns early
 // (sfall_metarules_reset() has already restored defaults) — forward compatibility.
 
-#define METARULES_SAVE_VERSION 7
+#define METARULES_SAVE_VERSION 8
 
 // F-41: Maximum entries for save/load metarule collections.
 // Prevents infinite loops on corrupt save data with absurd count values.
@@ -3971,6 +3983,15 @@ bool sfall_metarules_save(File* stream)
     if (!metarulesSaveStringMap(stream, gTownTitleOverrides)) return false;
     if (!metarulesSaveIntIntMap(stream, gQuestFailureValues)) return false;
     if (!metarulesSaveIntIntMap(stream, gAddedTraits)) return false;
+    // Version 8: per-critter add_trait storage (CID -> traitType -> rank).
+    {
+        int npcCount = static_cast<int>(gAddedTraitsNpc.size());
+        if (fileWriteInt32(stream, npcCount) == -1) return false;
+        for (const auto& [cid, traits] : gAddedTraitsNpc) {
+            if (fileWriteInt32(stream, cid) == -1) return false;
+            if (!metarulesSaveIntIntMap(stream, traits)) return false;
+        }
+    }
     if (!metarulesSaveExplosiveMap(stream, gExplosiveOverrides)) return false;
 
     // NPC-keyed data (v3 format includes metadata: level, image, desc)
@@ -4075,6 +4096,19 @@ bool sfall_metarules_load(File* stream)
         if (!metarulesLoadIntSet(stream, legacyTraits)) return false;
         for (int t : legacyTraits) {
             gAddedTraits[t] = 0; // default rank for legacy saves
+        }
+    }
+    // Version 8: per-critter add_trait storage (CID -> traitType -> rank).
+    // For version ≤7 saves, gAddedTraitsNpc stays empty (reset to default).
+    if (version >= 8) {
+        int npcCount;
+        if (fileReadInt32(stream, &npcCount) == -1) return false;
+        for (int i = 0; i < npcCount; i++) {
+            int cid;
+            if (fileReadInt32(stream, &cid) == -1) return false;
+            std::map<int, int> traits;
+            if (!metarulesLoadIntIntMap(stream, traits)) return false;
+            gAddedTraitsNpc[cid] = std::move(traits);
         }
     }
     if (!metarulesLoadExplosiveMap(stream, gExplosiveOverrides, version)) return false;

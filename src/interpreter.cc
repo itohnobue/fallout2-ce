@@ -1,6 +1,7 @@
 #include "interpreter.h"
 
 #include <assert.h>
+#include <cmath>
 #include <limits.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -851,6 +852,17 @@ static void opDelayedCall(Program* program)
     }
 
     unsigned char* const procedure_ptr = program->procedures + 4 + 24 * data[0];
+
+    // Guard against negative delay and signed overflow in 1000 * data[1].
+    // Follows the same pattern as opWait which clamps to [0, 3600000] ms.
+    if (data[1] < 0) {
+        debugPrint("\nScript Error: %s: op_delayed_call: negative delay, clamping to 0\n", program->name);
+        data[1] = 0;
+    }
+    if (data[1] > 3600) {
+        debugPrint("\nScript Error: %s: op_delayed_call: excessive delay %d seconds, clamping to 3600\n", program->name, data[1]);
+        data[1] = 3600;
+    }
 
     int delay = 1000 * data[1];
 
@@ -1821,7 +1833,9 @@ static void opDivide(Program* program)
         // with 0x7FFFFFFF in order to determine if it's zero. Probably some
         // kind of compiler optimization.
         if (divisor == 0.0) {
-            programFatalError("Division (DIV) by zero");
+            programPrintError("Division (DIV) by zero\n");
+            programStackPushFloat(program, 0.0f);
+            break;
         }
 
         programStackPushFloat(program, value[1].floatValue / divisor);
@@ -1832,13 +1846,24 @@ static void opDivide(Program* program)
 
             // NOTE: Same as above.
             if (divisor == 0.0) {
-                programFatalError("Division (DIV) by zero");
+                programPrintError("Division (DIV) by zero\n");
+                programStackPushFloat(program, 0.0f);
+                break;
             }
 
             programStackPushFloat(program, (float)value[1].integerValue / divisor);
         } else {
             if (value[0].integerValue == 0) {
-                programFatalError("Division (DIV) by zero");
+                programPrintError("Division (DIV) by zero\n");
+                programStackPushInteger(program, 0);
+                break;
+            }
+
+            // Guard against INT_MIN / -1 which causes signed overflow UB (SIGFPE on x86).
+            if (value[0].integerValue == -1 && value[1].integerValue == INT_MIN) {
+                debugPrint("Division (DIV) overflow: INT_MIN / -1\n");
+                programStackPushInteger(program, INT_MAX);
+                break;
             }
 
             programStackPushInteger(program, value[1].integerValue / value[0].integerValue);
@@ -1874,7 +1899,12 @@ static void opModulo(Program* program)
         programFatalError("Division (MOD) by zero");
     }
 
-    programStackPushInteger(program, value[1].integerValue % value[0].integerValue);
+    // Guard against INT_MIN % -1 which causes signed overflow UB.
+    if (value[0].integerValue == -1 && value[1].integerValue == INT_MIN) {
+        programStackPushInteger(program, 0);
+    } else {
+        programStackPushInteger(program, value[1].integerValue % value[0].integerValue);
+    }
 }
 
 // 0x46A6B4
@@ -2090,6 +2120,18 @@ static void opLogicalOperatorNot(Program* program)
     programStackPushInteger(program, result);
 }
 
+// Safely convert float to int with clamping for out-of-range values.
+// C-style casts (int)floatValue are UB when floatValue is outside
+// [INT_MIN, INT_MAX], NaN, or infinity.
+static int floatToIntSafe(float value)
+{
+    if (std::isnan(value)) return 0;
+    if (std::isinf(value)) return (value > 0) ? INT_MAX : INT_MIN;
+    if (value > static_cast<float>(INT_MAX)) return INT_MAX;
+    if (value < static_cast<float>(INT_MIN)) return INT_MIN;
+    return static_cast<int>(value);
+}
+
 // 0x46AB2C
 static void opUnaryMinus(Program* program)
 {
@@ -2097,7 +2139,13 @@ static void opUnaryMinus(Program* program)
     ProgramValue programValue = programStackPopValue(program);
     switch (programValue.opcode) {
     case VALUE_TYPE_INT:
-        programStackPushInteger(program, -programValue.integerValue);
+        // Guard against -INT_MIN which causes signed overflow UB.
+        if (programValue.integerValue == INT_MIN) {
+            debugPrint("Unary minus overflow: -INT_MIN\n");
+            programStackPushInteger(program, INT_MAX);
+        } else {
+            programStackPushInteger(program, -programValue.integerValue);
+        }
         break;
     case VALUE_TYPE_FLOAT:
         programStackPushFloat(program, -programValue.floatValue);
@@ -2124,7 +2172,7 @@ static void opFloor(Program* program)
         programFatalError("Invalid arg given to floor()");
     } else if (value.opcode == VALUE_TYPE_FLOAT) {
         value.opcode = VALUE_TYPE_INT;
-        value.integerValue = (int)value.floatValue;
+        value.integerValue = floatToIntSafe(value.floatValue);
     }
 
     programStackPushValue(program, value);
@@ -2144,17 +2192,17 @@ static void opBitwiseOperatorAnd(Program* program)
     case VALUE_TYPE_FLOAT:
         switch (value[0].opcode) {
         case VALUE_TYPE_FLOAT:
-            result = (int)value[1].floatValue & (int)value[0].floatValue;
+            result = floatToIntSafe(value[1].floatValue) & floatToIntSafe(value[0].floatValue);
             break;
         default:
-            result = (int)value[1].floatValue & value[0].integerValue;
+            result = floatToIntSafe(value[1].floatValue) & value[0].integerValue;
             break;
         }
         break;
     case VALUE_TYPE_INT:
         switch (value[0].opcode) {
         case VALUE_TYPE_FLOAT:
-            result = value[1].integerValue & (int)value[0].floatValue;
+            result = value[1].integerValue & floatToIntSafe(value[0].floatValue);
             break;
         default:
             result = value[1].integerValue & value[0].integerValue;
@@ -2182,17 +2230,17 @@ static void opBitwiseOperatorOr(Program* program)
     case VALUE_TYPE_FLOAT:
         switch (value[0].opcode) {
         case VALUE_TYPE_FLOAT:
-            result = (int)value[1].floatValue | (int)value[0].floatValue;
+            result = floatToIntSafe(value[1].floatValue) | floatToIntSafe(value[0].floatValue);
             break;
         default:
-            result = (int)value[1].floatValue | value[0].integerValue;
+            result = floatToIntSafe(value[1].floatValue) | value[0].integerValue;
             break;
         }
         break;
     case VALUE_TYPE_INT:
         switch (value[0].opcode) {
         case VALUE_TYPE_FLOAT:
-            result = value[1].integerValue | (int)value[0].floatValue;
+            result = value[1].integerValue | floatToIntSafe(value[0].floatValue);
             break;
         default:
             result = value[1].integerValue | value[0].integerValue;
@@ -2220,17 +2268,17 @@ static void opBitwiseOperatorXor(Program* program)
     case VALUE_TYPE_FLOAT:
         switch (value[0].opcode) {
         case VALUE_TYPE_FLOAT:
-            result = (int)value[1].floatValue ^ (int)value[0].floatValue;
+            result = floatToIntSafe(value[1].floatValue) ^ floatToIntSafe(value[0].floatValue);
             break;
         default:
-            result = (int)value[1].floatValue ^ value[0].integerValue;
+            result = floatToIntSafe(value[1].floatValue) ^ value[0].integerValue;
             break;
         }
         break;
     case VALUE_TYPE_INT:
         switch (value[0].opcode) {
         case VALUE_TYPE_FLOAT:
-            result = value[1].integerValue ^ (int)value[0].floatValue;
+            result = value[1].integerValue ^ floatToIntSafe(value[0].floatValue);
             break;
         default:
             result = value[1].integerValue ^ value[0].integerValue;
@@ -3102,13 +3150,18 @@ void programExecuteProcedureAsync(Program* program, int procedureIndex)
         // NOTE: Uninline.
         setupExternalCall(program, externalProgram, externalProcedureAddress, 28);
 
-        procedurePtr = externalProgram->procedures + 4 + sizeof(Procedure) * procedureIndex;
-        procedureFlags = stackReadInt32(procedurePtr, offsetof(Procedure, flags));
+        // Look up the procedure index in the external program by name,
+        // not the calling program's procedureIndex which may differ.
+        int externalProcedureIndex = programFindProcedure(externalProgram, procedureIdentifier);
+        if (externalProcedureIndex != -1) {
+            procedurePtr = externalProgram->procedures + 4 + sizeof(Procedure) * externalProcedureIndex;
+            procedureFlags = stackReadInt32(procedurePtr, offsetof(Procedure, flags));
 
-        if ((procedureFlags & PROCEDURE_FLAG_CRITICAL) != 0) {
-            // NOTE: Uninline.
-            opEnterCriticalSection(externalProgram);
-            programInterpret(externalProgram, 0);
+            if ((procedureFlags & PROCEDURE_FLAG_CRITICAL) != 0) {
+                // NOTE: Uninline.
+                opEnterCriticalSection(externalProgram);
+                programInterpret(externalProgram, 0);
+            }
         }
     } else {
         procedureAddress = stackReadInt32(procedurePtr, offsetof(Procedure, bodyOffset));
@@ -3381,6 +3434,10 @@ void interpreterRegisterOpcode(int opcode, OpcodeHandler* handler)
         exit(1);
     }
 
+    if (gInterpreterOpcodeHandlers[index] != nullptr) {
+        debugPrint("Warning: duplicate opcode registration for opcode 0x%x (index %d)\n", opcode, index);
+    }
+
     gInterpreterOpcodeHandlers[index] = handler;
 }
 
@@ -3573,6 +3630,9 @@ ProgramValue programReturnStackPopValue(Program* program)
 int programReturnStackPopInteger(Program* program)
 {
     const ProgramValue programValue = programReturnStackPopValue(program);
+    if (programValue.opcode != VALUE_TYPE_INT) {
+        programFatalError("integer expected, got %x", programValue.opcode);
+    }
     return programValue.integerValue;
 }
 
@@ -3684,7 +3744,7 @@ int ProgramValue::asInt() const
     case VALUE_TYPE_INT:
         return integerValue;
     case VALUE_TYPE_FLOAT:
-        return static_cast<int>(floatValue);
+        return floatToIntSafe(floatValue);
     default:
         return 0;
     }

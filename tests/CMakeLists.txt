@@ -795,3 +795,46 @@ add_executable(test_fixes_saveload
 )
 target_link_libraries(test_fixes_saveload PRIVATE doctest)
 add_test(NAME test_fixes_saveload COMMAND test_fixes_saveload)
+
+# ============================================================
+# Stage 10 Test-Add — New Fix-Validation Test Executables (4 entries)
+# ============================================================
+
+# ---- Test: fixes stage6 arithmetic (interpreter INT_MIN/float-to-int/NaN UB) ----
+# Self-contained mirror test — does not link interpreter.cc, sfall_opcodes.cc,
+# or sfall_metarules.cc (50+ engine deps each).
+# Covers F-M015/M016/M017/M018/M019/M020, I2-M001/M002/M003/M016/M019/M021,
+# F-06/F-07/F-17: INT_MIN guards, float-to-int UB, NaN UB, kill counter overflow.
+add_executable(test_fixes_stage6_arithmetic
+    test_fixes_stage6_arithmetic.cc
+)
+target_link_libraries(test_fixes_stage6_arithmetic PRIVATE doctest)
+add_test(NAME test_fixes_stage6_arithmetic COMMAND test_fixes_stage6_arithmetic)
+
+# ---- Test: fixes stage6 combat (killType OOB, gBlockCombat, knockback, team validation) ----
+# Self-contained mirror test — does not link combat.cc or combat_ai.cc (40+ engine deps).
+# Covers I2-H002, I2-M035/M036/M045/M046, F-M043/M044/M045, F-H025, F-03/F-04/F-05.
+add_executable(test_fixes_stage6_combat
+    test_fixes_stage6_combat.cc
+)
+target_link_libraries(test_fixes_stage6_combat PRIVATE doctest)
+add_test(NAME test_fixes_stage6_combat COMMAND test_fixes_stage6_combat)
+
+# ---- Test: fixes stage6 saveload (write ordering, CRC init, backup handling) ----
+# Self-contained mirror test — does not link loadsave.cc or scripts.cc (engine I/O deps).
+# Covers I2-M028/M029/M031/M033/M034, F-M041/M042/M060.
+add_executable(test_fixes_stage6_saveload
+    test_fixes_stage6_saveload.cc
+)
+target_link_libraries(test_fixes_stage6_saveload PRIVATE doctest)
+add_test(NAME test_fixes_stage6_saveload COMMAND test_fixes_stage6_saveload)
+
+# ---- Test: fixes stage6 misc (interpreter_lib, dialog, arrays, hooks, scripts, metarules) ----
+# Self-contained mirror test — does not link production .cc files (50+ engine deps).
+# Covers F-M011/M013/M014/M022/M023/M039/M040/M054/M057/M058/M059, I2-M011/M012/
+# M013/M014/M015/M017/M018/M022/M024/M026/M027/M053, F-14.
+add_executable(test_fixes_stage6_misc
+    test_fixes_stage6_misc.cc
+)
+target_link_libraries(test_fixes_stage6_misc PRIVATE doctest)
+add_test(NAME test_fixes_stage6_misc COMMAND test_fixes_stage6_misc)

@@ -1778,7 +1778,15 @@ static Object* _ai_danger_source(Object* a1)
                 if (hook.numReturnValues() > 0) {
                     Object* hookCandidate = hook.getReturnValueAt(0).asObject();
                     if (hookCandidate != nullptr && PID_TYPE(hookCandidate->pid) == OBJ_TYPE_CRITTER) {
-                        return hookCandidate;
+                        // SFALL: Fix I2-M045 — validate that the hook
+                        // didn't return an ally as a target. playerTarget
+                        // is validated for team (line above), but the
+                        // hook return value bypasses all validation.
+                        // Without this check, a script can return a
+                        // teammate and force friendly fire.
+                        if (hookCandidate->data.critter.combat.team != a1->data.critter.combat.team) {
+                            return hookCandidate;
+                        }
                     } else if (hookCandidate != nullptr) {
                         debugPrint("HOOK_FINDTARGET: script returned non-critter object (pid=%d), ignoring override",
                             hookCandidate->pid);
@@ -1870,7 +1878,18 @@ static Object* _ai_danger_source(Object* a1)
                         // undefined behavior in downstream combat code that expects
                         // critter-specific fields (combat.results, team, data.critter).
                         if (hookCandidate != nullptr && PID_TYPE(hookCandidate->pid) == OBJ_TYPE_CRITTER) {
-                            candidate = hookCandidate;
+                            // SFALL: Fix I2-M045 — validate that the hook
+                            // didn't return an ally as a target. The engine
+                            // candidate is team-validated (lines 1814-1815,
+                            // 1839-1840), but the hook return value bypasses
+                            // all validation. Without this check, a script
+                            // can return a teammate and force friendly fire.
+                            if (hookCandidate->data.critter.combat.team != a1->data.critter.combat.team) {
+                                candidate = hookCandidate;
+                            } else {
+                                debugPrint("HOOK_FINDTARGET: script returned same-team critter (pid=%d), ignoring override",
+                                    hookCandidate->pid);
+                            }
                         } else if (hookCandidate != nullptr) {
                             debugPrint("HOOK_FINDTARGET: script returned non-critter object (pid=%d), ignoring override",
                                 hookCandidate->pid);
@@ -1904,7 +1923,16 @@ static Object* _ai_danger_source(Object* a1)
                 if (hook.numReturnValues() > 0) {
                     Object* hookCandidate = hook.getReturnValueAt(0).asObject();
                     if (hookCandidate != nullptr && PID_TYPE(hookCandidate->pid) == OBJ_TYPE_CRITTER) {
-                        whoHitMe = hookCandidate;
+                        // SFALL: Fix I2-M045 — validate that the hook
+                        // didn't return an ally as a target. The same-function
+                        // dead-path team check at line 1924 shows the expected
+                        // pattern, but the alive-path hook bypasses it.
+                        if (hookCandidate->data.critter.combat.team != a1->data.critter.combat.team) {
+                            whoHitMe = hookCandidate;
+                        } else {
+                            debugPrint("HOOK_FINDTARGET: script returned same-team critter (pid=%d), ignoring override",
+                                hookCandidate->pid);
+                        }
                     } else if (hookCandidate != nullptr) {
                         debugPrint("HOOK_FINDTARGET: script returned non-critter object (pid=%d), ignoring override",
                             hookCandidate->pid);
@@ -1965,7 +1993,17 @@ static Object* _ai_danger_source(Object* a1)
         if (hook.numReturnValues() > 0) {
             Object* hookCandidate = hook.getReturnValueAt(0).asObject();
             if (hookCandidate != nullptr && PID_TYPE(hookCandidate->pid) == OBJ_TYPE_CRITTER) {
-                result = hookCandidate;
+                // SFALL: Fix I2-M045 — validate that the hook didn't return
+                // an ally as a target. The `result` from aiFindAttackers is
+                // team-filtered, but the hook return value bypasses all
+                // validation. This is the broadest-scope fallback — applies
+                // to ALL critter types, not just party members.
+                if (hookCandidate->data.critter.combat.team != a1->data.critter.combat.team) {
+                    result = hookCandidate;
+                } else {
+                    debugPrint("HOOK_FINDTARGET: script returned same-team critter (pid=%d), ignoring override",
+                        hookCandidate->pid);
+                }
             } else if (hookCandidate != nullptr) {
                 debugPrint("HOOK_FINDTARGET: script returned non-critter object (pid=%d), ignoring override",
                     hookCandidate->pid);
@@ -2102,6 +2140,15 @@ static Object* _ai_best_weapon(Object* attacker, Object* weapon1, Object* weapon
     }
 
     AiPacket* ai = aiGetPacket(attacker);
+
+    // SFALL: Fix F-H025 — aiGetPacket may return nullptr if the critter
+    // has no valid AI packet. Multiple callers (e.g. dialog combat
+    // initiated by 'W' key) can reach _ai_best_weapon without AI packet
+    // setup. Handle gracefully with early return.
+    if (ai == nullptr) {
+        return nullptr;
+    }
+
     if (ai->best_weapon == BEST_WEAPON_RANDOM) {
         return randomBetween(1, 100) <= 50 ? weapon1 : weapon2;
     }
@@ -3693,6 +3740,14 @@ int _combatai_msg(Object* critter, Attack* attack, int type, int delay)
 
     AiPacket* ai = aiGetPacket(critter);
 
+    // SFALL: Fix F-H025 — aiGetPacket may return nullptr if the critter
+    // has no valid AI packet. This is a public API called from actions.cc
+    // for all combat attacks; 8+ sibling functions null-check but this
+    // one did not. Handle gracefully with early return.
+    if (ai == nullptr) {
+        return -1;
+    }
+
     debugPrint("%s is using %s packet with a %d%% chance to taunt\n", objectGetName(critter), ai->name, ai->chance);
 
     if (randomBetween(1, 100) > ai->chance) {
@@ -3725,8 +3780,21 @@ int _combatai_msg(Object* critter, Attack* attack, int type, int delay)
         string = _target_str;
         break;
     case AI_MESSAGE_TYPE_HIT:
-        start = ai->hit[attack->defenderHitLocation].start;
-        end = ai->hit[attack->defenderHitLocation].end;
+        // SFALL: Fix I2-M046 — validate hit location before using as
+        // index into ai->hit[]. The array is dimensioned
+        // [HIT_LOCATION_SPECIFIC_COUNT=8], but attack->defenderHitLocation
+        // can be HIT_LOCATION_UNCALLED (8) when the AFTERHITROLL hook
+        // returns it. The hook validation in sfall_script_hooks.cc uses
+        // < HIT_LOCATION_COUNT (9) which allows UNCALLED through. Clamp
+        // OOB values to TORSO as a defense-in-depth guard.
+        {
+            int hitLoc = attack->defenderHitLocation;
+            if (hitLoc >= HIT_LOCATION_SPECIFIC_COUNT) {
+                hitLoc = HIT_LOCATION_TORSO;
+            }
+            start = ai->hit[hitLoc].start;
+            end = ai->hit[hitLoc].end;
+        }
         string = _target_str;
         break;
     default:
@@ -3770,6 +3838,17 @@ static int _ai_print_msg(Object* critter, int type)
     }
 
     AiPacket* ai = aiGetPacket(critter);
+
+    // SFALL: Fix I2-H003 — defense-in-depth null check on deferred
+    // callback. _ai_print_msg is registered as an animation callback
+    // from _combatai_msg; by the time the callback fires, the critter's
+    // AI packet may have been removed. The primary crash site is already
+    // guarded by F-H025 in _combatai_msg, but this independent guard
+    // prevents a delayed crash if the packet is invalidated between
+    // registration and callback execution.
+    if (ai == nullptr) {
+        return 0;
+    }
 
     Rect rect;
     if (textObjectAdd(critter, string, ai->font, ai->color, ai->outline_color, &rect) == 0) {

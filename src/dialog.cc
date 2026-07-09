@@ -566,6 +566,12 @@ int _dialogQuit()
 // 0x4311B8 dialogSetOptionWindow
 int dialogSetOptionWindow(int a1, int a2, int a3, int a4, char* a5)
 {
+    // F-M022/I2-M014: Free existing string before overwriting to prevent
+    // memory leak. Sibling _dialogSetScrollUp has the same guard (line 604-607).
+    if (off_56DB74 != nullptr) {
+        internal_free_safe(off_56DB74, __FILE__, __LINE__); // "..\\int\\DIALOG.C", 2736
+    }
+
     dword_56DB6C = a1;
     dword_56DB70 = a2;
     dword_56DB64 = a3;
@@ -577,6 +583,12 @@ int dialogSetOptionWindow(int a1, int a2, int a3, int a4, char* a5)
 // 0x4311E0 dialogSetReplyWindow
 int dialogSetReplyWindow(int a1, int a2, int a3, int a4, char* a5)
 {
+    // F-M022/I2-M014: Free existing string before overwriting to prevent
+    // memory leak. Sibling _dialogSetScrollUp has the same guard (line 604-607).
+    if (off_56DB8C != nullptr) {
+        internal_free_safe(off_56DB8C, __FILE__, __LINE__); // "..\\int\\DIALOG.C", 2741
+    }
+
     dword_56DB84 = a1;
     dword_56DB88 = a2;
     dword_56DB7C = a3;
@@ -735,6 +747,18 @@ void _dialogClose()
 
     if (off_56DBCC) {
         internal_free_safe(off_56DBCC, __FILE__, __LINE__); // "..\\int\\DIALOG.C", 2826
+    }
+
+    // F-M022: Free option/reply window strings. These are allocated via
+    // strdup_safe in opSayReplyWindow/opSayOptionWindow and were not freed.
+    if (off_56DB74) {
+        internal_free_safe(off_56DB74, __FILE__, __LINE__); // "..\\int\\DIALOG.C", 2828
+        off_56DB74 = nullptr;
+    }
+
+    if (off_56DB8C) {
+        internal_free_safe(off_56DB8C, __FILE__, __LINE__); // "..\\int\\DIALOG.C", 2830
+        off_56DB8C = nullptr;
     }
 }
 

@@ -2055,14 +2055,25 @@ static void opMetarule3(Program* program)
             if (param1.opcode != VALUE_TYPE_PTR || param1.pointerValue == nullptr) {
                 break;
             }
+            if ((param2.opcode & VALUE_TYPE_MASK) != VALUE_TYPE_INT) {
+                break;
+            }
             _scrSetQueueTestVals(static_cast<Object*>(param1.pointerValue), param2.integerValue);
             queueClearByEventType(EVENT_TYPE_SCRIPT, _scrQueueRemoveFixed);
         }
         break;
     case METARULE3_MARK_SUBTILE:
+        if ((param1.opcode & VALUE_TYPE_MASK) != VALUE_TYPE_INT
+            || (param2.opcode & VALUE_TYPE_MASK) != VALUE_TYPE_INT
+            || (param3.opcode & VALUE_TYPE_MASK) != VALUE_TYPE_INT) {
+            break;
+        }
         result.integerValue = wmSubTileMarkRadiusVisited(param1.integerValue, param2.integerValue, param3.integerValue);
         break;
     case METARULE3_GET_KILL_COUNT:
+        if ((param1.opcode & VALUE_TYPE_MASK) != VALUE_TYPE_INT) {
+            break;
+        }
         result.integerValue = killsGetByType(param1.integerValue);
         break;
     case METARULE3_MARK_MAP_ENTRANCE:
@@ -2071,6 +2082,11 @@ static void opMetarule3(Program* program)
         // to metarule3(104, MAPIDX, STATE, -1)). Detect the sentinel value: -1
         // means 2-arg form (param2 = state, elevation defaults to 0). Otherwise
         // param2 = elevation and param3 = state (3-arg form).
+        if ((param1.opcode & VALUE_TYPE_MASK) != VALUE_TYPE_INT
+            || (param2.opcode & VALUE_TYPE_MASK) != VALUE_TYPE_INT
+            || (param3.opcode & VALUE_TYPE_MASK) != VALUE_TYPE_INT) {
+            break;
+        }
         if (param3.integerValue == -1) {
             result.integerValue = wmMapMarkMapEntranceState(param1.integerValue, 0, param2.integerValue);
         } else {
@@ -2079,6 +2095,10 @@ static void opMetarule3(Program* program)
         break;
     case METARULE3_WM_SUBTILE_STATE:
         if (1) {
+            if ((param1.opcode & VALUE_TYPE_MASK) != VALUE_TYPE_INT
+                || (param2.opcode & VALUE_TYPE_MASK) != VALUE_TYPE_INT) {
+                break;
+            }
             int state;
             if (wmSubTileGetVisitedState(param1.integerValue, param2.integerValue, &state) == 0) {
                 result.integerValue = state;
@@ -2087,6 +2107,11 @@ static void opMetarule3(Program* program)
         break;
     case METARULE3_TILE_GET_NEXT_CRITTER:
         if (1) {
+            if ((param1.opcode & VALUE_TYPE_MASK) != VALUE_TYPE_INT
+                || (param2.opcode & VALUE_TYPE_MASK) != VALUE_TYPE_INT
+                || param3.opcode != VALUE_TYPE_PTR) {
+                break;
+            }
             int tile = param1.integerValue;
             int elevation = param2.integerValue;
             Object* previousCritter = static_cast<Object*>(param3.pointerValue);
@@ -2113,8 +2138,14 @@ static void opMetarule3(Program* program)
         break;
     case METARULE3_ART_SET_BASE_FID_NUM:
         if (1) {
+            if (param1.opcode != VALUE_TYPE_PTR) {
+                break;
+            }
             Object* obj = static_cast<Object*>(param1.pointerValue);
             if (obj == nullptr) {
+                break;
+            }
+            if ((param2.opcode & VALUE_TYPE_MASK) != VALUE_TYPE_INT) {
                 break;
             }
             int frmId = param2.integerValue;
@@ -2131,10 +2162,16 @@ static void opMetarule3(Program* program)
         }
         break;
     case METARULE3_TILE_SET_CENTER:
+        if ((param1.opcode & VALUE_TYPE_MASK) != VALUE_TYPE_INT) {
+            break;
+        }
         result.integerValue = tileSetCenter(param1.integerValue, TILE_SET_CENTER_REFRESH_WINDOW);
         break;
     case METARULE3_CHEM_USE_LEVEL:
         if (1) {
+            if (param1.opcode != VALUE_TYPE_PTR) {
+                break;
+            }
             Object* obj = static_cast<Object*>(param1.pointerValue);
             if (obj == nullptr) {
                 break;
@@ -2146,6 +2183,9 @@ static void opMetarule3(Program* program)
         result.integerValue = wmCarIsOutOfGas() ? 1 : 0;
         break;
     case METARULE3_SET_WM_MUSIC:
+        if ((param1.opcode & VALUE_TYPE_MASK) != VALUE_TYPE_INT) {
+            break;
+        }
         if ((param2.opcode & VALUE_TYPE_MASK) == VALUE_TYPE_STRING) {
             const char* musicName = programGetString(program, param2.opcode, param2.integerValue);
             wmSetMapMusic(param1.integerValue, musicName);
@@ -2162,6 +2202,9 @@ static void opMetarule3(Program* program)
             // The static DisableHorrigan config (sfall_callbacks.cc:84-89) sets
             // gDidMeetFrankHorrigan=true at startup. This metarule3 allows
             // dynamic runtime control from scripts.
+            if ((param1.opcode & VALUE_TYPE_MASK) != VALUE_TYPE_INT) {
+                break;
+            }
             int days = param1.integerValue;
             if (days == 0) {
                 gDidMeetFrankHorrigan = true;
@@ -2188,6 +2231,10 @@ static void opMetarule3(Program* program)
         if (1) {
             // metarule3(211, page, slot): Sets the current save slot.
             // page = page number (0-based), slot = slot within page (0-based).
+            if ((param1.opcode & VALUE_TYPE_MASK) != VALUE_TYPE_INT
+                || (param2.opcode & VALUE_TYPE_MASK) != VALUE_TYPE_INT) {
+                break;
+            }
             int page = param1.integerValue;
             int slot = param2.integerValue;
             loadsaveSetCurrentSlot(page, slot);
@@ -2213,6 +2260,10 @@ static void opMetarule3(Program* program)
             // share the main save slot cursor. We set the main cursor to the
             // specified page+slot position. The third arg (index) is unused but
             // accepted for API compatibility.
+            if ((param1.opcode & VALUE_TYPE_MASK) != VALUE_TYPE_INT
+                || (param2.opcode & VALUE_TYPE_MASK) != VALUE_TYPE_INT) {
+                break;
+            }
             int page = param1.integerValue;
             int slot = param2.integerValue;
             // param3 (index) intentionally unused — CE does not have separate
@@ -2232,6 +2283,9 @@ static void opMetarule3(Program* program)
         // The variable is written by metarule3(999) but has zero consumers.
         // When cooperative combat is implemented, wire this flag into the
         // combat target-selection logic (combat_ai.cc / party_member.cc).
+        if ((param1.opcode & VALUE_TYPE_MASK) != VALUE_TYPE_INT) {
+            break;
+        }
         gPartyCooperativeCombat = (param1.integerValue != 0);
         break;
     default:
@@ -3442,21 +3496,36 @@ static void opMetarule(Program* program)
         result = (gMapHeader.flags & MAP_SAVED) == 0;
         break;
     case METARULE_ELEVATOR:
+        if ((param.opcode & VALUE_TYPE_MASK) != VALUE_TYPE_INT) {
+            break;
+        }
         scriptsRequestElevator(scriptGetSelfWithOverride(program), param.integerValue);
         result = 0;
         break;
     case METARULE_PARTY_COUNT:
         // F-25: Pass the filter flag from the metarule argument.
         // filter 0 = all members, 1 = exclude robots, 2 = exclude dogs.
+        if ((param.opcode & VALUE_TYPE_MASK) != VALUE_TYPE_INT) {
+            break;
+        }
         result = _getPartyMemberCount(param.integerValue);
         break;
     case METARULE_AREA_KNOWN:
+        if ((param.opcode & VALUE_TYPE_MASK) != VALUE_TYPE_INT) {
+            break;
+        }
         result = wmAreaVisitedState(param.integerValue);
         break;
     case METARULE_WHO_ON_DRUGS:
+        if (param.opcode != VALUE_TYPE_PTR) {
+            break;
+        }
         result = queueHasEvent(static_cast<Object*>(param.pointerValue), EVENT_TYPE_DRUG);
         break;
     case METARULE_MAP_KNOWN:
+        if ((param.opcode & VALUE_TYPE_MASK) != VALUE_TYPE_INT) {
+            break;
+        }
         result = wmMapIsKnown(param.integerValue);
         break;
     case METARULE_IS_LOADGAME:
@@ -3469,13 +3538,22 @@ static void opMetarule(Program* program)
         result = wmCarGiveToParty();
         break;
     case METARULE_GIVE_CAR_GAS:
+        if ((param.opcode & VALUE_TYPE_MASK) != VALUE_TYPE_INT) {
+            break;
+        }
         result = wmCarFillGas(param.integerValue);
         break;
     case METARULE_SKILL_CHECK_TAG:
+        if ((param.opcode & VALUE_TYPE_MASK) != VALUE_TYPE_INT) {
+            break;
+        }
         result = skillIsTagged(param.integerValue);
         break;
     case METARULE_DROP_ALL_INVEN:
         if (1) {
+            if (param.opcode != VALUE_TYPE_PTR) {
+                break;
+            }
             Object* object = static_cast<Object*>(param.pointerValue);
             if (object == nullptr) {
                 break;
@@ -3489,6 +3567,9 @@ static void opMetarule(Program* program)
         break;
     case METARULE_INVEN_UNWIELD_WHO:
         if (1) {
+            if (param.opcode != VALUE_TYPE_PTR) {
+                break;
+            }
             Object* object = static_cast<Object*>(param.pointerValue);
 
             if (object == nullptr) {
@@ -3534,6 +3615,9 @@ static void opMetarule(Program* program)
         break;
     case METARULE_WEAPON_DAMAGE_TYPE:
         if (1) {
+            if (param.opcode != VALUE_TYPE_PTR) {
+                break;
+            }
             Object* object = static_cast<Object*>(param.pointerValue);
             if (object == nullptr) {
                 break;
@@ -3556,6 +3640,9 @@ static void opMetarule(Program* program)
         break;
     case METARULE_CRITTER_BARTERS:
         if (1) {
+            if (param.opcode != VALUE_TYPE_PTR) {
+                break;
+            }
             Object* object = static_cast<Object*>(param.pointerValue);
             if (object == nullptr) {
                 break;
@@ -3571,6 +3658,9 @@ static void opMetarule(Program* program)
         break;
     case METARULE_CRITTER_KILL_TYPE:
         if (1) {
+            if (param.opcode != VALUE_TYPE_PTR) {
+                break;
+            }
             Object* critter = static_cast<Object*>(param.pointerValue);
             if (critter == nullptr) {
                 break;
@@ -3580,6 +3670,9 @@ static void opMetarule(Program* program)
         break;
     case METARULE_SET_CAR_CARRY_AMOUNT:
         if (1) {
+            if ((param.opcode & VALUE_TYPE_MASK) != VALUE_TYPE_INT) {
+                break;
+            }
             Proto* proto;
             if (protoGetProto(PROTO_ID_CAR_TRUNK, &proto) != -1) {
                 proto->item.data.container.maxSize = param.integerValue;
@@ -3713,9 +3806,15 @@ static void opRegAnimFunc(Program* program)
     if (!animationCheckCombatMode()) {
         switch (cmd) {
         case OP_REG_ANIM_FUNC_BEGIN:
+            if ((param.opcode & VALUE_TYPE_MASK) != VALUE_TYPE_INT) {
+                break;
+            }
             reg_anim_begin(param.integerValue);
             break;
         case OP_REG_ANIM_FUNC_CLEAR:
+            if (param.opcode != VALUE_TYPE_PTR) {
+                break;
+            }
             reg_anim_clear(static_cast<Object*>(param.pointerValue));
             break;
         case OP_REG_ANIM_FUNC_END:

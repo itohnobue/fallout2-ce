@@ -144,6 +144,12 @@ void ScriptHookCall::drainStaleEntries(uintptr_t currentStackAddr)
     }
 }
 
+void ScriptHookCall::clearCallStack()
+{
+    _callStack.clear();
+    _callStackPerType = {};
+}
+
 void ScriptHookCall::call()
 {
     // I2-M16: Drain stale entries left by longjmp'd ScriptHookCall frames.
@@ -345,6 +351,12 @@ void scriptHooksReset()
     // stuck at true, permanently disabling the hook.  scriptHooksReset()
     // runs on gameReset / new game, providing a guaranteed cleanup point.
     ScriptHookCall::_gameModeChangeInProgress = false;
+    // Clear call-stack entries and per-type counters left from the
+    // previous game session.  Stale entries accumulate when longjmp
+    // (programFatalError) skips _callStack.pop_back() during hook
+    // dispatch.  After 8 stale entries, ALL hook types are blocked.
+    // Clearing on reset ensures a clean slate for the new game session.
+    ScriptHookCall::clearCallStack();
     // Reset animation callback pointer to prevent stale pointer
     // after game reset / new game cycle. Without this, sfallAnimCallbackProgram
     // could reference freed Program memory from a previous game session.

@@ -141,6 +141,7 @@ static int attackComputeCriticalFailure(Attack* attack);
 static void _do_random_cripple(int* flagsPtr);
 static int attackDetermineToHit(Object* attacker, int tile, Object* defender, int hitLocation, int hitMode, bool useDistance);
 static void attackComputeDamage(Attack* attack, int numRounds, int baseDamageMult);
+static inline int floatToIntSafe(float value);
 static void _check_for_death(Object* a1, int a2, int* a3);
 static void _set_new_results(Object* a1, int a2);
 static void _damage_object(Object* a1, int damage, bool animated, int a4, Object* a5);
@@ -3614,6 +3615,14 @@ void attackInit(Attack* attack, Object* attacker, Object* defender, int hitMode,
 // 0x422F3C
 int _combat_attack(Object* attacker, Object* defender, int hitMode, int hitLocation)
 {
+    // SFALL: Fix I2-H002 — gBlockCombat check to prevent AI attacks
+    // when combat is blocked. _combat_attack_this (player path) and
+    // _combat already check gBlockCombat, but _ai_attack → _combat_attack
+    // did not, allowing AI to attack while player is blocked.
+    if (gBlockCombat != 0) {
+        return -1;
+    }
+
     if (attacker != gDude && hitMode == HIT_MODE_PUNCH && randomBetween(1, 4) == 1) {
         int fid = buildFid(OBJ_TYPE_CRITTER, attacker->fid & 0xFFF, ANIM_KICK_LEG, (attacker->fid & 0xF000) >> 12, FID_ROTATION(attacker->fid));
         if (artExists(fid)) {
@@ -3636,7 +3645,11 @@ int _combat_attack(Object* attacker, Object* defender, int hitMode, int hitLocat
     // disable takes precedence when both flags are set for the same PID.
     if (sfallGetDisableAimedShots(attacker->pid) && hitLocation != HIT_LOCATION_TORSO && hitLocation != HIT_LOCATION_UNCALLED) {
         hitLocation = HIT_LOCATION_UNCALLED;
-    } else if (sfallGetForceAimedShots(attacker->pid) && hitLocation == HIT_LOCATION_UNCALLED) {
+    // SFALL: Fix F-M045 — AI uses HIT_LOCATION_TORSO for unaimed shots
+    // instead of HIT_LOCATION_UNCALLED. When force_aimed_shots is active,
+    // convert AI's unaimed TORSO to HEAD. Player TORSO is a deliberate
+    // aimed choice and should not be overridden.
+    } else if (sfallGetForceAimedShots(attacker->pid) && (hitLocation == HIT_LOCATION_UNCALLED || (attacker != gDude && hitLocation == HIT_LOCATION_TORSO))) {
         hitLocation = HIT_LOCATION_HEAD;
     }
 
@@ -3648,6 +3661,17 @@ int _combat_attack(Object* attacker, Object* defender, int hitMode, int hitLocat
     // _explosion_ctd I2-28 fixes).
     Attack main_ctd;
     attackInit(&main_ctd, attacker, defender, hitMode, hitLocation);
+    // SFALL: Fix I2-M040 — save sfall knockback state before
+    // attackCompute. attackComputeDamage consumes and zeroes these
+    // globals, but _gcsd may adjust the damage afterwards. We need
+    // the original state to recompute knockback from adjusted damage.
+    float savedWeaponKnockbackValue = sfallWeaponKnockbackValue;
+    int savedWeaponKnockbackType = sfallWeaponKnockbackType;
+    float savedTargetKnockbackValue = sfallTargetKnockbackValue;
+    int savedTargetKnockbackType = sfallTargetKnockbackType;
+    float savedAttackerKnockbackValue = sfallAttackerKnockbackValue;
+    int savedAttackerKnockbackType = sfallAttackerKnockbackType;
+
     debugPrint("computing attack...\n");
 
     if (attackCompute(&main_ctd) == -1) {
@@ -3655,6 +3679,8 @@ int _combat_attack(Object* attacker, Object* defender, int hitMode, int hitLocat
     }
 
     if (_gcsd != nullptr) {
+        int preAdjustDamage = main_ctd.defenderDamage;
+
         main_ctd.defenderDamage += _gcsd->damageBonus;
 
         if (main_ctd.defenderDamage < _gcsd->minDamage) {
@@ -3663,6 +3689,51 @@ int _combat_attack(Object* attacker, Object* defender, int hitMode, int hitLocat
 
         if (main_ctd.defenderDamage > _gcsd->maxDamage) {
             main_ctd.defenderDamage = _gcsd->maxDamage;
+        }
+
+        // SFALL: Fix I2-M040 — recompute knockback from adjusted damage.
+        // attackComputeDamage computed knockback from the pre-_gcsd
+        // damage. When damageBonus or min/max clamp changes the damage,
+        // knockback stays stale. Recompute here using the original sfall
+        // state saved before attackCompute (which zeroed the globals).
+        if (main_ctd.defenderKnockback > 0 && main_ctd.defenderDamage != preAdjustDamage) {
+            int divisor = weaponGetPerk(main_ctd.weapon) == PERK_WEAPON_KNOCKBACK ? 5 : 10;
+            int newKnockback = main_ctd.defenderDamage / divisor;
+
+            if (savedWeaponKnockbackType == 1) {
+                newKnockback = floatToIntSafe(savedWeaponKnockbackValue);
+            } else if (savedWeaponKnockbackType == 2) {
+                newKnockback += floatToIntSafe(savedWeaponKnockbackValue);
+            }
+
+            if (savedTargetKnockbackType == 1) {
+                newKnockback = floatToIntSafe(savedTargetKnockbackValue);
+            } else if (savedTargetKnockbackType == 2) {
+                newKnockback += floatToIntSafe(savedTargetKnockbackValue);
+            }
+
+            if (savedAttackerKnockbackType == 1) {
+                newKnockback = floatToIntSafe(savedAttackerKnockbackValue);
+            } else if (savedAttackerKnockbackType == 2) {
+                newKnockback += floatToIntSafe(savedAttackerKnockbackValue);
+            }
+
+            // Re-apply Stonewall halving if applicable (same logic as
+            // attackComputeDamage). The roll for Stonewall is not reseeded,
+            // so we apply halving here unconditionally — the decision to
+            // have knockback at all is already baked into defenderKnockback > 0.
+            if (main_ctd.defender == gDude && perkGetRank(gDude, PERK_STONEWALL) != 0) {
+                newKnockback /= 2;
+            }
+
+            if (newKnockback < 0) {
+                newKnockback = 0;
+            }
+            if (newKnockback > MAX_KNOCKDOWN_DISTANCE) {
+                newKnockback = MAX_KNOCKDOWN_DISTANCE;
+            }
+
+            main_ctd.defenderKnockback = newKnockback;
         }
 
         if (_gcsd->overrideAttackResults) {
@@ -3787,6 +3858,18 @@ static int _shoot_along_path(Attack* attack, int endTile, int rounds, int anim)
     int roundsHitMainTarget = 0;
     int currentTile = attack->attacker->tile;
 
+    // SFALL: Fix I2-M049 — save sfall knockback globals before the
+    // burst-fire spray loop. Each call to attackComputeDamage inside
+    // the loop consumes (zeroes) the globals, so subsequent spray
+    // victims see stale zero values. Save once here and restore
+    // before each attackComputeDamage call below.
+    float savedWeaponKnockbackValue_049 = sfallWeaponKnockbackValue;
+    int savedWeaponKnockbackType_049 = sfallWeaponKnockbackType;
+    float savedTargetKnockbackValue_049 = sfallTargetKnockbackValue;
+    int savedTargetKnockbackType_049 = sfallTargetKnockbackType;
+    float savedAttackerKnockbackValue_049 = sfallAttackerKnockbackValue;
+    int savedAttackerKnockbackType_049 = sfallAttackerKnockbackType;
+
     // SFALL: Fix M-29 — shoot_ctd was a file-level static; now stack-local
     // to prevent reentrancy corruption via COMBATDAMAGE hook callbacks.
     // Values are read AFTER attackComputeDamage returns, so nested calls
@@ -3833,6 +3916,20 @@ static int _shoot_along_path(Attack* attack, int endTile, int rounds, int anim)
                     attack->extras[index] = critter;
                     attackInit(&shoot_ctd, attack->attacker, critter, attack->hitMode, HIT_LOCATION_TORSO);
                     shoot_ctd.attackerFlags |= DAM_HIT;
+
+                    // SFALL: Fix I2-M049 — restore sfall knockback
+                    // globals before each attackComputeDamage call in
+                    // the burst spray loop. The previous call (or
+                    // initial attackComputeDamage for the main target)
+                    // zeroed them; restoring ensures every spray
+                    // victim sees the same knockback modifiers.
+                    sfallWeaponKnockbackValue = savedWeaponKnockbackValue_049;
+                    sfallWeaponKnockbackType = savedWeaponKnockbackType_049;
+                    sfallTargetKnockbackValue = savedTargetKnockbackValue_049;
+                    sfallTargetKnockbackType = savedTargetKnockbackType_049;
+                    sfallAttackerKnockbackValue = savedAttackerKnockbackValue_049;
+                    sfallAttackerKnockbackType = savedAttackerKnockbackType_049;
+
                     attackComputeDamage(&shoot_ctd, roundsHit, 2);
 
                     if (index == attack->extrasLength) {
@@ -3872,6 +3969,15 @@ static int _compute_spray(Attack* attack, int accuracy, int* roundsHitMainTarget
 
     if (ammoCostPerRound == 0) {
         *roundsFiredPtr = currentAmmo > 0 ? burstRounds : 0;
+
+        // SFALL: Fix F-M044 — guard against zero-burst weapons
+        // (weaponGetBurstRounds returns 0 with ammoCostPerRound=0).
+        // Match the existing behavior from the ammoCostPerRound > 0
+        // branch (below): if we have ammo but computed 0 rounds,
+        // fire at least one round to avoid a silent no-op attack.
+        if (*roundsFiredPtr == 0 && currentAmmo > 0) {
+            *roundsFiredPtr = 1;
+        }
     } else {
         int roundsFired = currentAmmo / ammoCostPerRound;
         if (roundsFired > burstRounds) {
@@ -4067,7 +4173,30 @@ static int attackCompute(Attack* attack)
     int roll;
 
     if (anim == ANIM_FIRE_BURST || anim == ANIM_FIRE_CONTINUOUS) {
+        // SFALL: Fix I2-M049 — save sfall knockback globals before
+        // _compute_spray. The spray function calls attackComputeDamage
+        // for each extra victim, which consumes (zeroes) the globals.
+        // Restore them before the main target's attackComputeDamage below
+        // so both the main target and extras see the same modifiers.
+        float savedWeaponKnockbackValue_049m = sfallWeaponKnockbackValue;
+        int savedWeaponKnockbackType_049m = sfallWeaponKnockbackType;
+        float savedTargetKnockbackValue_049m = sfallTargetKnockbackValue;
+        int savedTargetKnockbackType_049m = sfallTargetKnockbackType;
+        float savedAttackerKnockbackValue_049m = sfallAttackerKnockbackValue;
+        int savedAttackerKnockbackType_049m = sfallAttackerKnockbackType;
+
         roll = _compute_spray(attack, accuracy, &roundsHitMainTarget, &roundsFired, anim);
+
+        // SFALL: Fix I2-M049 — restore sfall knockback globals for
+        // the main target's attackComputeDamage (which follows after
+        // the roll processing block). _compute_spray's internal
+        // attackComputeDamage calls zeroed the globals.
+        sfallWeaponKnockbackValue = savedWeaponKnockbackValue_049m;
+        sfallWeaponKnockbackType = savedWeaponKnockbackType_049m;
+        sfallTargetKnockbackValue = savedTargetKnockbackValue_049m;
+        sfallTargetKnockbackType = savedTargetKnockbackType_049m;
+        sfallAttackerKnockbackValue = savedAttackerKnockbackValue_049m;
+        sfallAttackerKnockbackType = savedAttackerKnockbackType_049m;
     } else {
         int chance = critterGetStat(attack->attacker, STAT_CRITICAL_CHANCE);
         roll = randomRoll(accuracy, chance - hit_location_penalty[attack->defenderHitLocation], nullptr);
@@ -4387,6 +4516,13 @@ static int attackComputeCriticalHit(Attack* attack)
         criticalHitDescription = &(gPlayerCriticalHitTable[attack->defenderHitLocation][effect]);
     } else {
         int killType = critterGetKillType(defender);
+        // SFALL: Fix I2-M035 — bounds check killType before using as
+        // array index into gCriticalHitTables. Vanilla proto values are
+        // 0–18, but modded protos may have killType >= SFALL_KILL_TYPE_COUNT
+        // (≥38), causing OOB access. Clamp out-of-range values to 0 (men).
+        if (killType < 0 || killType >= SFALL_KILL_TYPE_COUNT) {
+            killType = 0;
+        }
         criticalHitDescription = &(gCriticalHitTables[killType][attack->defenderHitLocation][effect]);
     }
 
@@ -4458,6 +4594,14 @@ static int attackComputeCriticalFailure(Attack* attack)
     int attackType = weaponGetAttackTypeForHitMode(attack->weapon, attack->hitMode);
     int criticalFailureTableIndex = weaponGetCriticalFailureType(attack->weapon);
     if (criticalFailureTableIndex == -1) {
+        criticalFailureTableIndex = 0;
+    }
+
+    // SFALL: Fix I2-M036 — bounds-check criticalFailureTableIndex before
+    // indexing _cf_table. weaponGetCriticalFailureType returns an unbounded
+    // proto integer; only -1 is checked. Index >= WEAPON_CRITICAL_FAILURE_TYPE_COUNT
+    // accesses past _cf_table[7][5]. Clamp out-of-range values to 0.
+    if (criticalFailureTableIndex < 0 || criticalFailureTableIndex >= WEAPON_CRITICAL_FAILURE_TYPE_COUNT) {
         criticalFailureTableIndex = 0;
     }
 
@@ -4971,6 +5115,29 @@ static void attackComputeDamage(Attack* attack, int numRounds, int baseDamageMul
         }
     }
 
+    // SFALL: Fix F-15 — reset knockback globals unconditionally before
+    // the COMBATDAMAGE hook fires. On the miss path (DAM_HIT == 0),
+    // knockbackDistancePtr is nullptr, which would skip the knockback
+    // computation (now positioned after the hook). The unconditional reset
+    // here ensures clean global state regardless of hit/miss path.
+    sfallWeaponKnockbackType = 0;
+    sfallWeaponKnockbackValue = 0.0f;
+    sfallTargetKnockbackType = 0;
+    sfallTargetKnockbackValue = 0.0f;
+    sfallAttackerKnockbackType = 0;
+    sfallAttackerKnockbackValue = 0.0f;
+
+    // SFALL: Fix I2-M048 — the COMBATDAMAGE hook fires BEFORE knockback
+    // computation (moved below). This allows script hooks to set knockback
+    // globals (via set_weapon_knockback / set_target_knockback / etc.)
+    // and have them consumed by the knockback computation that follows,
+    // instead of being cleared by the post-hook reset before consumption.
+    scriptHooks_ComputeDamage(attack, numRounds, baseDamageMult);
+
+    // SFALL: Fix I2-M048 (continued) — knockback computation now positioned
+    // AFTER the COMBATDAMAGE hook so that hook-set sfall knockback globals
+    // are correctly consumed. Previously this block ran before the hook,
+    // making hook-set knockback values dead on arrival.
     if (knockbackDistancePtr != nullptr
         && (critter->flags & OBJECT_MULTIHEX) == 0
         && (damageType == DAMAGE_TYPE_EXPLOSION || attack->weapon == nullptr || weaponGetAttackTypeForHitMode(attack->weapon, attack->hitMode) == ATTACK_TYPE_MELEE)
@@ -4993,14 +5160,13 @@ static void attackComputeDamage(Attack* attack, int numRounds, int baseDamageMul
 
             *knockbackDistancePtr = *damagePtr / knockbackDistanceDivisor;
 
-            if (hasStonewall) {
-                *knockbackDistancePtr /= 2;
-            }
-
             // SFALL: Fix F-004 — apply knockback modifiers set by
             // set_weapon_knockback (0x8195), set_target_knockback (0x8196),
             // set_attacker_knockback (0x8197). Type 0 = none, 1 = absolute,
             // 2 = additive. Defaults are 0 (no modification).
+            // NOTE: Stonewall is applied AFTER sfall modifiers (Fix F-M043)
+            // so that absolute knockback from scripts interacts properly
+            // with the perk, rather than being nullified.
             if (sfallWeaponKnockbackType == 1) {
                 *knockbackDistancePtr = floatToIntSafe(sfallWeaponKnockbackValue);
             } else if (sfallWeaponKnockbackType == 2) {
@@ -5019,6 +5185,13 @@ static void attackComputeDamage(Attack* attack, int numRounds, int baseDamageMul
                 *knockbackDistancePtr += floatToIntSafe(sfallAttackerKnockbackValue);
             }
 
+            // SFALL: Fix F-M043 — apply Stonewall halving AFTER sfall
+            // knockback modifiers so that absolute (type 1) script-set
+            // knockback values are still affected by the perk.
+            if (hasStonewall) {
+                *knockbackDistancePtr /= 2;
+            }
+
             // Knockback distance should never be negative.
             if (*knockbackDistancePtr < 0) {
                 *knockbackDistancePtr = 0;
@@ -5031,33 +5204,12 @@ static void attackComputeDamage(Attack* attack, int numRounds, int baseDamageMul
         }
     }
 
-    // SFALL: Fix F-15 — reset knockback globals unconditionally before
-    // the COMBATDAMAGE hook fires. On the miss path (DAM_HIT == 0),
-    // knockbackDistancePtr is set to nullptr at line 4782, which skips
-    // the entire knockback computation block above. Without an unconditional
-    // reset here, hook-set knockback values from a prior attack survive
-    // through misses indefinitely and contaminate every subsequent hit.
-    // Globals are reset unconditionally here (before the hook fires) to
-    // ensure clean state regardless of hit/miss path, then reset again
-    // after the hook returns (below) to clear any hook-set values.
-    sfallWeaponKnockbackType = 0;
-    sfallWeaponKnockbackValue = 0.0f;
-    sfallTargetKnockbackType = 0;
-    sfallTargetKnockbackValue = 0.0f;
-    sfallAttackerKnockbackType = 0;
-    sfallAttackerKnockbackValue = 0.0f;
-
-    scriptHooks_ComputeDamage(attack, numRounds, baseDamageMult);
-
     // SFALL: Fix F-14 — reset knockback globals after the COMBATDAMAGE
-    // hook fires. The hook can set knockback modifiers via set_sfall_return
-    // (script calls set_weapon_knockback / set_target_knockback / etc.
-    // inside the hook handler). Without a post-hook reset, those hook-set
-    // values survive past attackComputeDamage() return and contaminate the
-    // NEXT attack call (e.g., explosion extras processed in the same frame).
-    // Combined with F-15 above (unconditional pre-hook reset), this ensures
-    // knockback globals are always zeroed regardless of hit/miss and
-    // regardless of hook-side modifications.
+    // hook and knockback computation. The hook return value mechanism
+    // (ret4 = defenderKnockback) writes directly to attack->defenderKnockback
+    // in scriptHooks_ComputeDamage, independent of sfall globals. The
+    // post-knockback reset here ensures hook-set globals don't contaminate
+    // the next attackComputeDamage call (e.g., explosion extras).
     sfallWeaponKnockbackType = 0;
     sfallWeaponKnockbackValue = 0.0f;
     sfallTargetKnockbackType = 0;

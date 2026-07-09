@@ -1463,13 +1463,21 @@ static int scriptsLoadScriptsList()
 
     char string[260];
     while (fileReadString(string, 260, stream)) {
-        gScriptsListEntriesLength++;
+        // I2-M028: Defer gScriptsListEntriesLength increment until after
+        // realloc succeeds.  Pre-incrementing leaks a phantom entry in
+        // global state (scriptsIsValidScriptIndex returns true for an OOB
+        // index) when realloc fails.
+        int newLength = gScriptsListEntriesLength + 1;
 
-        ScriptsListEntry* entries = (ScriptsListEntry*)internal_realloc(gScriptsListEntries, sizeof(*entries) * gScriptsListEntriesLength);
+        ScriptsListEntry* entries = (ScriptsListEntry*)internal_realloc(gScriptsListEntries, sizeof(*entries) * newLength);
         if (entries == nullptr) {
+            // F-M039: Close file stream on realloc failure to prevent
+            // handle leak.
+            fileClose(stream);
             return -1;
         }
 
+        gScriptsListEntriesLength = newLength;
         gScriptsListEntries = entries;
 
         ScriptsListEntry* entry = &(entries[gScriptsListEntriesLength - 1]);
@@ -1480,6 +1488,10 @@ static int scriptsLoadScriptsList()
         if (substr != nullptr) {
             int length = substr - string;
             if (length > 13) {
+                // I2-M027: Close file stream when name exceeds 13 chars
+                // to prevent second handle leak (distinct from F-M039
+                // at the realloc failure site above).
+                fileClose(stream);
                 return -1;
             }
 
@@ -2202,6 +2214,12 @@ int scriptLoadAll(File* stream)
             }
 
             if (scriptListExtentRead(extent, stream) != 0) {
+                // I2-M029: Free the allocated extent on read failure.
+                // scriptList->head still references this extent; null
+                // it out so the caller's cleanup doesn't double-free.
+                internal_free(extent);
+                scriptList->head = nullptr;
+                scriptList->tail = nullptr;
                 return -1;
             }
 
@@ -2217,6 +2235,9 @@ int scriptLoadAll(File* stream)
                 }
 
                 if (scriptListExtentRead(extent, stream) != 0) {
+                    // I2-M029: Free the allocated extent on read failure
+                    // to prevent leak of the newly-created extent.
+                    internal_free(extent);
                     return -1;
                 }
 
@@ -2382,11 +2403,17 @@ static int scriptsRemoveLocalVars(Script* script)
                     gMapLocalVars + (script->localVarsOffset + script->localVarsCount),
                     sizeof(*gMapLocalVars) * (oldMapLocalVarsCount - script->localVarsCount - script->localVarsOffset));
 
-                gMapLocalVars = (int*)internal_realloc(gMapLocalVars, sizeof(*gMapLocalVars) * gMapLocalVarsLength);
-                if (gMapLocalVars == nullptr) {
+                // I2-H001: Use temp variable for realloc to prevent
+                // gMapLocalVars from being nulled on failure.  The
+                // `p = realloc(p)` anti-pattern loses the original
+                // buffer; subsequent mapGetLocalVar/mapSetLocalVar
+                // calls would dereference NULL.
+                int* newVars = (int*)internal_realloc(gMapLocalVars, sizeof(*gMapLocalVars) * gMapLocalVarsLength);
+                if (newVars == nullptr) {
                     debugPrint("\nError in mem_realloc in scr_remove_local_vars!\n");
                     return -1;
                 }
+                gMapLocalVars = newVars;
 
                 for (int index = 0; index < SCRIPT_TYPE_COUNT; index++) {
                     ScriptList* scriptList = &(gScriptLists[index]);
