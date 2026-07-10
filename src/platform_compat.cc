@@ -35,18 +35,20 @@ static bool compatIsPathSeparator(char ch)
     return ch == '/' || ch == '\\';
 }
 
-static void compat_prepare_native_path(char* nativePath, const char* path)
+static bool compat_prepare_native_path(char* nativePath, const char* path)
 {
     if (strlen(path) >= COMPAT_MAX_PATH) {
-        // Path is too long and will be truncated — the resulting path may
-        // reference a wrong file or fail to resolve correctly.
-        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "compat_prepare_native_path: path truncated (%zu chars), original: %s", strlen(path), path);
+        // Path is too long — refuse to truncate. Returning an error
+        // prevents callers from operating on the wrong file.
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "compat_prepare_native_path: path too long (%zu chars), original: %s", strlen(path), path);
+        return false;
     }
 
     strncpy(nativePath, path, COMPAT_MAX_PATH - 1);
     nativePath[COMPAT_MAX_PATH - 1] = '\0';
     compat_windows_path_to_native(nativePath);
     compat_resolve_path(nativePath);
+    return true;
 }
 
 int compat_stricmp(const char* string1, const char* string2)
@@ -259,7 +261,10 @@ long compat_filelength(int fd)
 int compat_mkdir(const char* path)
 {
     char nativePath[COMPAT_MAX_PATH];
-    compat_prepare_native_path(nativePath, path);
+    if (!compat_prepare_native_path(nativePath, path)) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
 
 #ifdef _WIN32
     return mkdir(nativePath);
@@ -298,7 +303,9 @@ int compat_mkdir_recursive(const char* path)
 bool compat_is_dir(const char* path)
 {
     char nativePath[COMPAT_MAX_PATH];
-    compat_prepare_native_path(nativePath, path);
+    if (!compat_prepare_native_path(nativePath, path)) {
+        return false;
+    }
 
 #ifdef _WIN32
     struct _stat info;
@@ -318,7 +325,9 @@ bool compat_is_dir(const char* path)
 bool compat_file_exists(const char* filePath)
 {
     char nativePath[COMPAT_MAX_PATH];
-    compat_prepare_native_path(nativePath, filePath);
+    if (!compat_prepare_native_path(nativePath, filePath)) {
+        return false;
+    }
 
 #ifdef _WIN32
     struct _stat info;
@@ -349,14 +358,19 @@ unsigned int compat_timeGetTime()
 FILE* compat_fopen(const char* path, const char* mode)
 {
     char nativePath[COMPAT_MAX_PATH];
-    compat_prepare_native_path(nativePath, path);
+    if (!compat_prepare_native_path(nativePath, path)) {
+        errno = ENAMETOOLONG;
+        return nullptr;
+    }
     return fopen(nativePath, mode);
 }
 
 gzFile compat_gzopen(const char* path, const char* mode)
 {
     char nativePath[COMPAT_MAX_PATH];
-    compat_prepare_native_path(nativePath, path);
+    if (!compat_prepare_native_path(nativePath, path)) {
+        return nullptr;
+    }
     return gzopen(nativePath, mode);
 }
 
@@ -393,17 +407,26 @@ char* compat_gzgets(gzFile stream, char* buffer, int maxCount)
 int compat_remove(const char* path)
 {
     char nativePath[COMPAT_MAX_PATH];
-    compat_prepare_native_path(nativePath, path);
+    if (!compat_prepare_native_path(nativePath, path)) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
     return remove(nativePath);
 }
 
 int compat_rename(const char* oldFileName, const char* newFileName)
 {
     char nativeOldFileName[COMPAT_MAX_PATH];
-    compat_prepare_native_path(nativeOldFileName, oldFileName);
+    if (!compat_prepare_native_path(nativeOldFileName, oldFileName)) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
 
     char nativeNewFileName[COMPAT_MAX_PATH];
-    compat_prepare_native_path(nativeNewFileName, newFileName);
+    if (!compat_prepare_native_path(nativeNewFileName, newFileName)) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
 
     return rename(nativeOldFileName, nativeNewFileName);
 }
@@ -478,7 +501,10 @@ void compat_resolve_path(char* path)
 int compat_access(const char* path, int mode)
 {
     char nativePath[COMPAT_MAX_PATH];
-    compat_prepare_native_path(nativePath, path);
+    if (!compat_prepare_native_path(nativePath, path)) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
     return access(nativePath, mode);
 }
 

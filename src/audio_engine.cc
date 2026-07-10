@@ -84,7 +84,12 @@ static void audioEngineMixin(void* userData, Uint8* stream, int length)
 
                 if (soundBuffer->pos >= soundBuffer->size) {
                     if (soundBuffer->looping) {
-                        soundBuffer->pos %= soundBuffer->size;
+                        if (soundBuffer->size > 0) {
+                            soundBuffer->pos %= soundBuffer->size;
+                        } else {
+                            soundBuffer->playing = false;
+                            break;
+                        }
                     } else {
                         soundBuffer->playing = false;
                         break;
@@ -167,6 +172,12 @@ int audioEngineCreateSoundBuffer(unsigned int size, int bitsPerSample, int chann
                 return -1;
             }
             soundBuffer->stream = SDL_NewAudioStream(bitsPerSample == 16 ? AUDIO_S16 : AUDIO_S8, channels, rate, gAudioEngineSpec.format, gAudioEngineSpec.channels, gAudioEngineSpec.freq);
+            if (soundBuffer->stream == nullptr) {
+                free(soundBuffer->data);
+                soundBuffer->data = nullptr;
+                soundBuffer->active = false;
+                return -1;
+            }
             return index;
         }
     }
@@ -345,7 +356,11 @@ bool audioEngineSoundBufferGetCurrentPosition(int soundBufferIndex, unsigned int
             // 15 ms lead
             // See: https://docs.microsoft.com/en-us/previous-versions/windows/desktop/mt708925(v=vs.85)#remarks
             *writePosPtr += soundBuffer->rate / 150;
-            *writePosPtr %= soundBuffer->size;
+            if (soundBuffer->size > 0) {
+                *writePosPtr %= soundBuffer->size;
+            } else {
+                *writePosPtr = 0;
+            }
         }
     }
 
@@ -369,7 +384,11 @@ bool audioEngineSoundBufferSetCurrentPosition(int soundBufferIndex, unsigned int
         return false;
     }
 
-    soundBuffer->pos = pos % soundBuffer->size;
+    if (soundBuffer->size > 0) {
+        soundBuffer->pos = pos % soundBuffer->size;
+    } else {
+        soundBuffer->pos = 0;
+    }
 
     return true;
 }

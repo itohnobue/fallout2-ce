@@ -29,7 +29,7 @@ typedef struct PcxHeader {
 extern unsigned char gPcxLastRunLength;
 extern unsigned char gPcxLastValue;
 
-void pcxReadHeader(PcxHeader* pcxHeader, File* stream);
+int pcxReadHeader(PcxHeader* pcxHeader, File* stream);
 int pcxReadLine(unsigned char* data, int size, File* stream);
 int pcxReadPalette(PcxHeader* pcxHeader, unsigned char* palette, File* stream);
 unsigned char* pcxRead(const char* path, int* widthPtr, int* heightPtr, unsigned char* palette);

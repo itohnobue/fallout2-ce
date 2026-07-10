@@ -1237,6 +1237,11 @@ int wmWorldMap_reset()
     gMapEnterPositionElevation = -1;
     gCanRestOnTiles.clear();
 
+    // CE/SFALL: Reset script world map multiplier to default (1.0).
+    // Without this, a script-set multiplier from a previous game session
+    // would bleed into a new game started within the same process lifetime.
+    gScriptWorldMapMulti = 1.0f;
+
     wmWorldMapLoadTempData();
     wmMarkAllSubTiles(0);
 
@@ -1337,6 +1342,28 @@ int wmWorldMap_save(File* stream)
     }
 
     if (fileWriteInt32(stream, gHorriganEncounterDay) == -1) return -1;
+
+    // Save walking state (UC-07). Without this, saving while the party
+    // is walking across the world map and reloading leaves the party at
+    // its last position but without the walk in progress — the destination
+    // and Bresenham line-drawing state are lost.
+    if (fileWriteBool(stream, wmGenData.isWalking) == -1) return -1;
+    if (fileWriteInt32(stream, wmGenData.walkDestinationX) == -1) return -1;
+    if (fileWriteInt32(stream, wmGenData.walkDestinationY) == -1) return -1;
+    if (fileWriteInt32(stream, wmGenData.walkDistance) == -1) return -1;
+    if (fileWriteInt32(stream, wmGenData.walkLineDelta) == -1) return -1;
+    if (fileWriteInt32(stream, wmGenData.walkLineDeltaMainAxisStep) == -1) return -1;
+    if (fileWriteInt32(stream, wmGenData.walkLineDeltaCrossAxisStep) == -1) return -1;
+    if (fileWriteInt32(stream, wmGenData.walkWorldPosMainAxisStepX) == -1) return -1;
+    if (fileWriteInt32(stream, wmGenData.walkWorldPosCrossAxisStepX) == -1) return -1;
+    if (fileWriteInt32(stream, wmGenData.walkWorldPosMainAxisStepY) == -1) return -1;
+    if (fileWriteInt32(stream, wmGenData.walkWorldPosCrossAxisStepY) == -1) return -1;
+
+    // Save force encounter state (UH-32). Without this, a force encounter
+    // set via wmForceEncounter() but not yet consumed (e.g., script call
+    // just before save) would be lost on reload.
+    if (fileWriteInt32(stream, wmForceEncounterMapId) == -1) return -1;
+    if (fileWriteUInt32(stream, wmForceEncounterFlags) == -1) return -1;
 
     return 0;
 }
@@ -1521,6 +1548,37 @@ int wmWorldMap_load(File* stream)
     // for EOF; if EOF, use default value -1.
     if (fileReadInt32(stream, &gHorriganEncounterDay) == -1) {
         gHorriganEncounterDay = -1; // backward compat: old saves don't have this field
+    }
+
+    // Load walking state (UC-07). Backward compatible via EOF detection:
+    // older saves don't include this data; walking stays at its default
+    // (false, reset by wmGenDataInit/wmGenDataReset).
+    {
+        bool walkingBool;
+        if (fileReadBool(stream, &walkingBool) != -1) {
+            wmGenData.isWalking = walkingBool;
+            if (fileReadInt32(stream, &(wmGenData.walkDestinationX)) == -1) return -1;
+            if (fileReadInt32(stream, &(wmGenData.walkDestinationY)) == -1) return -1;
+            if (fileReadInt32(stream, &(wmGenData.walkDistance)) == -1) return -1;
+            if (fileReadInt32(stream, &(wmGenData.walkLineDelta)) == -1) return -1;
+            if (fileReadInt32(stream, &(wmGenData.walkLineDeltaMainAxisStep)) == -1) return -1;
+            if (fileReadInt32(stream, &(wmGenData.walkLineDeltaCrossAxisStep)) == -1) return -1;
+            if (fileReadInt32(stream, &(wmGenData.walkWorldPosMainAxisStepX)) == -1) return -1;
+            if (fileReadInt32(stream, &(wmGenData.walkWorldPosCrossAxisStepX)) == -1) return -1;
+            if (fileReadInt32(stream, &(wmGenData.walkWorldPosMainAxisStepY)) == -1) return -1;
+            if (fileReadInt32(stream, &(wmGenData.walkWorldPosCrossAxisStepY)) == -1) return -1;
+        }
+        // EOF is fine — older saves don't have walking state data.
+    }
+
+    // Load force encounter state (UH-32). Backward compatible via EOF detection.
+    {
+        int forceMapId;
+        if (fileReadInt32(stream, &forceMapId) != -1) {
+            wmForceEncounterMapId = forceMapId;
+            if (fileReadUInt32(stream, &wmForceEncounterFlags) == -1) return -1;
+        }
+        // EOF is fine — older saves don't have force encounter state.
     }
 
     wmInterfaceCenterOnParty();
@@ -4003,6 +4061,14 @@ static int wmPartyFindCurSubTile()
 static int wmFindCurSubTileFromPos(int x, int y, SubtileInfo** subtilePtr)
 {
     int tileIndex = y / WM_TILE_HEIGHT * wmNumHorizontalTiles + x / WM_TILE_WIDTH % wmNumHorizontalTiles;
+
+    if (tileIndex < 0 || tileIndex >= wmMaxTileNum) {
+        if (subtilePtr != nullptr) {
+            *subtilePtr = nullptr;
+        }
+        return -1;
+    }
+
     TileInfo* tile = &(wmTileInfoList[tileIndex]);
 
     int column = y % WM_TILE_HEIGHT / WM_SUBTILE_SIZE;
@@ -4018,6 +4084,14 @@ static int wmFindCurSubTileFromPos(int x, int y, SubtileInfo** subtilePtr)
 static int wmFindCurTileFromPos(int x, int y, TileInfo** tilePtr)
 {
     int tileIndex = y / WM_TILE_HEIGHT * wmNumHorizontalTiles + x / WM_TILE_WIDTH % wmNumHorizontalTiles;
+
+    if (tileIndex < 0 || tileIndex >= wmMaxTileNum) {
+        if (tilePtr != nullptr) {
+            *tilePtr = nullptr;
+        }
+        return -1;
+    }
+
     *tilePtr = &(wmTileInfoList[tileIndex]);
 
     return 0;

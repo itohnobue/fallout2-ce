@@ -510,6 +510,8 @@ void programFree(Program* program)
 
     if (program->data != nullptr) {
         internal_free_safe(program->data, __FILE__, __LINE__); // "..\\int\\INTRPRET.C", 430
+        program->data = nullptr;
+        program->procedures = nullptr;
     }
 
     if (program->name != nullptr) {
@@ -2794,8 +2796,6 @@ static void opExec(Program* program)
     program->parent = nullptr;
     program->flags |= PROGRAM_FLAG_EXITED;
 
-    // probably inlining due to check for null
-    parent = program->parent;
     if (parent != nullptr) {
         if ((parent->flags & PROGRAM_FLAG_CHILD_SPAWN) != 0) {
             parent->flags &= ~PROGRAM_FLAG_CHILD_SPAWN;
@@ -3210,6 +3210,10 @@ void programExecuteProcedure(Program* program, int procedureIndex)
     int procedureFlags;
     char err[256];
     jmp_buf env;
+
+    if (program == nullptr || program->procedures == nullptr) {
+        return;
+    }
 
     procedurePtr = program->procedures + 4 + sizeof(Procedure) * procedureIndex;
     procedureFlags = stackReadInt32(procedurePtr, offsetof(Procedure, flags));

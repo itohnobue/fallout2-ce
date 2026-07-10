@@ -31,6 +31,7 @@
 #include "input.h"
 #include "interface.h"
 #include "item.h"
+#include "light.h"
 #include "kb.h"
 #include "map.h"
 #include "memory.h"
@@ -55,6 +56,7 @@
 #include "sfall_global_scripts.h"
 #include "sfall_global_vars.h"
 #include "sfall_metarules.h"
+#include "sfall_opcodes.h"
 #include "skill.h"
 #include "stat.h"
 #include "svga.h"
@@ -73,7 +75,7 @@ namespace fallout {
 
 #define LOAD_SAVE_SIGNATURE "FALLOUT SAVE FILE"
 #define LOAD_SAVE_DESCRIPTION_LENGTH 30
-#define LOAD_SAVE_HANDLER_COUNT 27
+#define LOAD_SAVE_HANDLER_COUNT 28
 
 // SFALL: Minimum save file version that includes CRC32 checksums on each
 // handler chunk. Version 1.3+ saves have a 4-byte CRC prefix per handler
@@ -298,6 +300,7 @@ static SaveGameHandler* _master_save_list[LOAD_SAVE_HANDLER_COUNT] = {
     partyMembersSave,
     queueSave,
     interfaceSave,
+    lightSave,
     _DummyFunc,
 };
 
@@ -329,6 +332,7 @@ static LoadGameHandler* _master_load_list[LOAD_SAVE_HANDLER_COUNT] = {
     partyMembersLoad,
     queueLoad,
     interfaceLoad,
+    lightLoad,
     _EndLoad,
 };
 
@@ -2302,15 +2306,20 @@ static int lsgLoadGameInSlot(int slot)
         if (!loaded) {
             // sfallgv.sav exists but is corrupt. sfallLoadGameData() may
             // have partially loaded state (globals, arrays, metarules)
-            // before failing. Re-clear all three sfall state domains so
+            // before failing. Re-clear all four sfall state domains so
             // no partial state survives — matching the state after a
             // missing sfallgv.sav where _PrepLoad's gameReset() clears
             // everything. Without this re-clear, partial globals, arrays,
-            // or metarule overrides from the corrupt save persist into the
-            // game session and would be serialized on next save.
+            // metarule overrides, or opcode state from the corrupt save
+            // persist into the game session and would be serialized on
+            // next save.
+            // UM-57: Also reset opcode state (hit chance mods, perk/trait
+            // overrides, XP modifier, etc.) that sfallLoadGameData may
+            // have partially initialized before failing.
             sfall_gl_vars_reset();
             sfallArraysReset();
             sfall_metarules_reset();
+            sfallOpcodesReset();
             debugPrint("\nLOADSAVE: ** sfallgv.sav corrupt — sfall state not loaded (using defaults) **\n");
             displayMonitorAddMessage("sfallgv.sav corrupt — sfall data not restored.");
         }

@@ -547,8 +547,17 @@ void _doButtonOn(int btn, int keyCode)
 // 0x4B6F68
 void scriptWindowDispatchButtonMouseEvent(int btn, int mouseEvent)
 {
+    // Reentrancy guard: button callbacks can synchronously add/remove buttons,
+    // which invalidates the buttons array pointer and length mid-iteration.
+    static bool _dispatching = false;
+    if (_dispatching) {
+        return;
+    }
+    _dispatching = true;
+
     int win = _win_last_button_winID();
     if (win == -1) {
+        _dispatching = false;
         return;
     }
 
@@ -573,6 +582,8 @@ void scriptWindowDispatchButtonMouseEvent(int btn, int mouseEvent)
             }
         }
     }
+
+    _dispatching = false;
 }
 
 // 0x4B7028
@@ -1400,6 +1411,10 @@ bool scriptWindowFormatMessage(char* string, int x, int y, int width, int height
 // 0x4B8A60
 bool scriptWindowPrint(char* string, int width, int x, int y, int color)
 {
+    if (gCurrentManagedWindowIndex == -1) {
+        return false;
+    }
+
     ManagedWindow* managedWindow = &(gManagedWindows[gCurrentManagedWindowIndex]);
     x = (int)(x * managedWindow->scaleX);
     y = (int)(y * managedWindow->scaleY);
@@ -1429,23 +1444,29 @@ void _displayInWindow(unsigned char* data, int width, int height, int pitch)
         if (pitch == scriptWindowWidth() && height == scriptWindowHeight()) {
             // NOTE: Uninline.
             unsigned char* windowBuffer = scriptWindowGetBuffer();
-            memcpy(windowBuffer, data, height * width);
+            if (windowBuffer != nullptr) {
+                memcpy(windowBuffer, data, height * width);
+            }
         } else {
             // NOTE: Uninline.
             unsigned char* windowBuffer = scriptWindowGetBuffer();
-            _drawScaledBuf(windowBuffer, scriptWindowWidth(), scriptWindowHeight(), data, width, height);
+            if (windowBuffer != nullptr) {
+                _drawScaledBuf(windowBuffer, scriptWindowWidth(), scriptWindowHeight(), data, width, height);
+            }
         }
     } else {
         // NOTE: Uninline.
         unsigned char* windowBuffer = scriptWindowGetBuffer();
-        _drawScaled(windowBuffer,
-            scriptWindowWidth(),
-            scriptWindowHeight(),
-            scriptWindowWidth(),
-            data,
-            width,
-            height,
-            pitch);
+        if (windowBuffer != nullptr) {
+            _drawScaled(windowBuffer,
+                scriptWindowWidth(),
+                scriptWindowHeight(),
+                scriptWindowWidth(),
+                data,
+                width,
+                height,
+                pitch);
+        }
     }
 }
 
@@ -2300,7 +2321,9 @@ void scriptWindowEndRegion()
 
     ManagedWindow* managedWindow = &(gManagedWindows[gCurrentManagedWindowIndex]);
     Region* region = managedWindow->regions[managedWindow->currentRegionIndex];
-    scriptWindowAddRegionPoint(region->points->x, region->points->y, false);
+    if (region->points != nullptr) {
+        scriptWindowAddRegionPoint(region->points->x, region->points->y, false);
+    }
     _regionSetBound(region);
 }
 

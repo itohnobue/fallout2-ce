@@ -202,7 +202,15 @@ bool configGetString(Config* config, const char* sectionKey, const char* key, ch
         return false;
     }
     if (!configGetString(config, sectionKey, key, valuePtr) || (*valuePtr)[0] == '\0') {
-        *valuePtr = const_cast<char*>(defaultValue);
+        if (defaultValue != nullptr) {
+            // Return defaultValue directly. No copy is performed to avoid the
+            // static-buffer sharing issue where consecutive calls corrupt prior
+            // results (e.g. art.cc:220-229 holds 4 pointers across 4 sequential
+            // calls to load model names). Callers must treat the returned pointer
+            // as read-only when it originates from defaultValue (typically a
+            // string literal or global constant).
+            *valuePtr = const_cast<char*>(defaultValue);
+        }
     }
     return true;
 }

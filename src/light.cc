@@ -2,6 +2,7 @@
 
 #include <algorithm>
 
+#include "db.h"
 #include "map_defs.h"
 #include "object.h"
 #include "perk.h"
@@ -148,6 +149,34 @@ void lightDecreaseAmbient(int val)
 void lightIncreaseAmbient(int val)
 {
     lightSetAmbientIntensity(gAmbientIntensity + val, true);
+}
+
+// 0x000000 light_save — persist ambient + tile light state to save file
+int lightSave(File* stream)
+{
+    if (fileWriteInt32(stream, gAmbientIntensity) == -1) return -1;
+
+    for (int elevation = 0; elevation < ELEVATION_COUNT; elevation++) {
+        for (int tile = 0; tile < HEX_GRID_SIZE; tile++) {
+            if (fileWriteInt32(stream, gTileIntensity[elevation][tile]) == -1) return -1;
+        }
+    }
+
+    return 0;
+}
+
+// 0x000000 light_load — restore ambient + tile light state from save file
+int lightLoad(File* stream)
+{
+    if (fileReadInt32(stream, &gAmbientIntensity) == -1) return -1;
+
+    for (int elevation = 0; elevation < ELEVATION_COUNT; elevation++) {
+        for (int tile = 0; tile < HEX_GRID_SIZE; tile++) {
+            if (fileReadInt32(stream, &gTileIntensity[elevation][tile]) == -1) return -1;
+        }
+    }
+
+    return 0;
 }
 
 } // namespace fallout

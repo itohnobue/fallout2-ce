@@ -306,7 +306,7 @@ int audioClose(int handle)
         fileClose(audioFile->stream);
     }
 
-    if ((audioFile->flags & AUDIO_COMPRESSED) != 0) {
+    if ((audioFile->flags & AUDIO_COMPRESSED) != 0 && audioFile->soundDecoder != nullptr) {
         soundDecoderFree(audioFile->soundDecoder);
     }
 
@@ -383,6 +383,7 @@ long audioSeek(int handle, long offset, int origin)
             if (audioFile->soundDecoder == nullptr) {
                 fileClose(audioFile->stream);
                 audioFile->stream = nullptr;
+                audioFile->flags &= ~AUDIO_COMPRESSED;
                 return -1;
             }
             audioFile->position = 0;

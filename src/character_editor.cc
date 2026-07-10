@@ -5483,12 +5483,17 @@ static void characterEditorToggleTaggedSkill(int skill)
         if (skill == gCharacterEditorTempTaggedSkills[0]) {
             gCharacterEditorTempTaggedSkills[0] = gCharacterEditorTempTaggedSkills[1];
             gCharacterEditorTempTaggedSkills[1] = gCharacterEditorTempTaggedSkills[2];
-            gCharacterEditorTempTaggedSkills[2] = -1;
+            gCharacterEditorTempTaggedSkills[2] = gCharacterEditorTempTaggedSkills[3];
+            gCharacterEditorTempTaggedSkills[3] = -1;
         } else if (skill == gCharacterEditorTempTaggedSkills[1]) {
             gCharacterEditorTempTaggedSkills[1] = gCharacterEditorTempTaggedSkills[2];
-            gCharacterEditorTempTaggedSkills[2] = -1;
+            gCharacterEditorTempTaggedSkills[2] = gCharacterEditorTempTaggedSkills[3];
+            gCharacterEditorTempTaggedSkills[3] = -1;
+        } else if (skill == gCharacterEditorTempTaggedSkills[2]) {
+            gCharacterEditorTempTaggedSkills[2] = gCharacterEditorTempTaggedSkills[3];
+            gCharacterEditorTempTaggedSkills[3] = -1;
         } else {
-            gCharacterEditorTempTaggedSkills[2] = -1;
+            gCharacterEditorTempTaggedSkills[3] = -1;
         }
     } else {
         if (gCharacterEditorTaggedSkillCount > 0) {

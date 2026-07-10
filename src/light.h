@@ -1,6 +1,8 @@
 #ifndef LIGHT_H
 #define LIGHT_H
 
+#include "db.h"
+
 namespace fallout {
 
 #define LIGHT_INTENSITY_MIN (65536 / 4)
@@ -21,6 +23,8 @@ void lightDecreaseTileIntensity(int elevation, int tile, int intensity);
 void lightResetTileIntensity();
 void lightDecreaseAmbient(int val);
 void lightIncreaseAmbient(int val);
+int lightSave(File* stream);
+int lightLoad(File* stream);
 
 } // namespace fallout
 

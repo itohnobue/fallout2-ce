@@ -1099,11 +1099,17 @@ int globalVarsRead(const char* path, const char* section, int* variablesListLeng
     }
 
     char string[260];
+    bool sectionFound = false;
     if (section != nullptr) {
         while (fileReadString(string, 258, stream)) {
             if (strncmp(string, section, 16) == 0) {
+                sectionFound = true;
                 break;
             }
+        }
+        if (!sectionFound) {
+            fileClose(stream);
+            return -1;
         }
     }
 

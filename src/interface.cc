@@ -775,6 +775,12 @@ void interfaceFree()
     interfaceBarFree();
 }
 
+// UM-98: Magic number prepended to custom interface tag data in save files.
+// Distinguishes new saves (with tag persistence) from old saves (without).
+// If the magic is absent on load, the tag section is skipped and tags
+// remain at their defaults.
+static constexpr int kInterfaceCustomTagMagic = 0x49435447; // "ICTG"
+
 // 0x45E860 intface_load
 int interfaceLoad(File* stream)
 {
@@ -829,6 +835,43 @@ int interfaceLoad(File* stream)
         interfaceBarDisable();
     }
 
+    // UM-98: Restore custom interface tag state. Use a magic-number check
+    // for backward compatibility with old saves that don't have this data.
+    long savedPos = fileTell(stream);
+    int magic;
+    if (fileReadInt32(stream, &magic) != -1 && magic == kInterfaceCustomTagMagic) {
+        int savedTagCount;
+        if (fileReadInt32(stream, &savedTagCount) != -1
+            && savedTagCount >= 0
+            && savedTagCount <= kCustomIndicatorMaxCount) {
+            // Restore tags added via interfaceTagAdd().
+            while (availableCustomIndicatorCount < savedTagCount) {
+                if (interfaceTagAdd() == -1) {
+                    break;
+                }
+            }
+            int tagCount = (savedTagCount < availableCustomIndicatorCount)
+                ? savedTagCount : availableCustomIndicatorCount;
+            for (int i = 0; i < tagCount; i++) {
+                int tag = kCustomIndicatorMinTag + i;
+                CustomIndicatorDescription* indicator = indicatorBarGetCustomTag(tag);
+                if (indicator == nullptr) {
+                    continue;
+                }
+                if (fileReadBool(stream, &indicator->isActive) == -1) break;
+                if (fileReadInt32(stream, &indicator->textColor) == -1) break;
+                if (fileReadInt32(stream, &indicator->configColor) == -1) break;
+                if (fileReadFixedLengthString(stream, indicator->text, kCustomIndicatorTextBufferSize) == -1) break;
+                indicator->text[kCustomIndicatorTextLength] = '\0';
+                indicatorBarRefreshCustomTag(tag);
+            }
+        }
+    } else {
+        // Old save — no custom tag section. Seek back to keep stream
+        // aligned for subsequent loaders that follow interfaceLoad.
+        fileSeek(stream, savedPos, SEEK_SET);
+    }
+
     indicatorBarRefresh();
 
     windowRefresh(gInterfaceBarWindow);
@@ -847,6 +890,23 @@ int interfaceSave(File* stream)
     if (fileWriteBool(stream, gInterfaceBarHidden) == -1) return -1;
     if (fileWriteInt32(stream, gInterfaceCurrentHand) == -1) return -1;
     if (fileWriteBool(stream, gInterfaceBarEndButtonsIsVisible) == -1) return -1;
+
+    // UM-98: Persist custom interface tag state so that tags created via
+    // interfaceTagAdd() and modified via interfaceTagShow/Hide/SetText
+    // survive save/load cycles.  Format: magic + tagCount + per-tag
+    // (isActive, textColor, configColor, text[20]).
+    if (fileWriteInt32(stream, kInterfaceCustomTagMagic) == -1) return -1;
+    if (fileWriteInt32(stream, availableCustomIndicatorCount) == -1) return -1;
+    for (int tag = kCustomIndicatorMinTag; tag <= indicatorBarMaxCustomTag(); tag++) {
+        CustomIndicatorDescription* indicator = indicatorBarGetCustomTag(tag);
+        if (indicator == nullptr) {
+            continue;
+        }
+        if (fileWriteBool(stream, indicator->isActive) == -1) return -1;
+        if (fileWriteInt32(stream, indicator->textColor) == -1) return -1;
+        if (fileWriteInt32(stream, indicator->configColor) == -1) return -1;
+        if (fileWriteFixedLengthString(stream, indicator->text, kCustomIndicatorTextBufferSize) == -1) return -1;
+    }
 
     return 0;
 }

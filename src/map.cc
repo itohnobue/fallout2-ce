@@ -1520,7 +1520,6 @@ static int _map_save_file(File* stream)
 
     gMapHeader.localVariablesCount = gMapLocalVarsLength;
     gMapHeader.globalVariablesCount = gMapGlobalVarsLength;
-    gMapHeader.darkness = 1;
 
     int rc = mapHeaderWrite(&gMapHeader, stream);
 

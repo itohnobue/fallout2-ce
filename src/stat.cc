@@ -653,7 +653,7 @@ void critterUpdateDerivedStats(Object* critter)
     protoGetProto(critter->pid, &proto);
     CritterProtoData* data = &(proto->critter.data);
 
-    data->baseStats[STAT_MAXIMUM_HIT_POINTS] = critterGetBaseStatWithTraitModifier(critter, STAT_STRENGTH) + critterGetBaseStatWithTraitModifier(critter, STAT_ENDURANCE) * 2 + 15;
+    data->baseStats[STAT_MAXIMUM_HIT_POINTS] = strength + endurance * 2 + 15;
     data->baseStats[STAT_MAXIMUM_ACTION_POINTS] = agility / 2 + 5;
     data->baseStats[STAT_ARMOR_CLASS] = agility;
     data->baseStats[STAT_MELEE_DAMAGE] = std::max(strength - 5, 1);

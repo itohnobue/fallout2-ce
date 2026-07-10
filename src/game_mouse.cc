@@ -1411,6 +1411,10 @@ void gameMouseSetMode(int mode)
         return;
     }
 
+    if (mode < 0 || mode >= GAME_MOUSE_MODE_COUNT) {
+        return;
+    }
+
     int fid = buildFid(OBJ_TYPE_INTERFACE, 0, 0, 0, 0);
     gameMouseSetBouncingCursorFid(fid);
 

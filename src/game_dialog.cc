@@ -2351,6 +2351,12 @@ int _gdProcessChoice(int optionIndex)
 
     mouseShowCursor();
 
+    // Re-check gGameDialogSpeaker after procedure execution —
+    // the script may have terminated the dialog via opEndGameDialog.
+    if (gGameDialogSpeaker == nullptr) {
+        return -1;
+    }
+
     if (gGameDialogOptionEntriesLength == 0) {
         return -1;
     }
@@ -4607,6 +4613,10 @@ void _gdCustomUpdateSetting(int option, int value)
 // 0x44A52C
 void gameDialogBarterButtonUpMouseUp(int btn, int keyCode)
 {
+    if (gGameDialogSpeaker == nullptr) {
+        return;
+    }
+
     if (PID_TYPE(gGameDialogSpeaker->pid) != OBJ_TYPE_CRITTER) {
         return;
     }

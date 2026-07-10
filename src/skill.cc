@@ -1079,11 +1079,9 @@ int skillUse(Object* obj, Object* target, int skill, int skillBonus)
 // 0x4ABBE4
 SkillStealResult skillsPerformStealing(Object* thief, Object* target, Object* item, int quantity, bool isPlanting, int* xpOverride)
 {
-    assert(thief != nullptr);
-    assert(target != nullptr);
-    assert(item != nullptr);
-    assert(quantity >= 0);
-    assert(xpOverride != nullptr);
+    if (thief == nullptr || target == nullptr || item == nullptr || quantity < 0 || xpOverride == nullptr) {
+        return SkillStealResult::Fail;
+    }
 
     *xpOverride = -1;
 

@@ -429,6 +429,11 @@ bool heapBlockDeallocate(Heap* heap, int* handleIndexPtr)
 
     int handleIndex = *handleIndexPtr;
 
+    if (handleIndex < 0 || handleIndex >= heap->handlesLength) {
+        debugPrint("Heap Error: Could not deallocate block — handle index out of bounds.\n");
+        return false;
+    }
+
     HeapHandle* handle = &(heap->handles[handleIndex]);
 
     HeapBlockHeader* blockHeader = (HeapBlockHeader*)handle->data;
@@ -498,6 +503,11 @@ bool heapLock(Heap* heap, int handleIndex, unsigned char** bufferPtr)
         return false;
     }
 
+    if (handleIndex < 0 || handleIndex >= heap->handlesLength) {
+        debugPrint("Heap Error: Could not lock block — handle index out of bounds.\n");
+        return false;
+    }
+
     HeapHandle* handle = &(heap->handles[handleIndex]);
 
     HeapBlockHeader* blockHeader = (HeapBlockHeader*)handle->data;
@@ -556,6 +566,11 @@ bool heapUnlock(Heap* heap, int handleIndex)
 {
     if (heap == nullptr) {
         debugPrint("Heap Error: Could not unlock block.\n");
+        return false;
+    }
+
+    if (handleIndex < 0 || handleIndex >= heap->handlesLength) {
+        debugPrint("Heap Error: Could not unlock block — handle index out of bounds.\n");
         return false;
     }
 

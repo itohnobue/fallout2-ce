@@ -134,7 +134,8 @@ int _nevs_addevent(const char* name, Program* program, int proc, int type)
     }
 
     nevs->used = true;
-    strcpy(nevs->name, name);
+    strncpy(nevs->name, name, sizeof(nevs->name) - 1);
+    nevs->name[sizeof(nevs->name) - 1] = '\0';
     nevs->program = program;
     nevs->proc = proc;
     nevs->type = type;

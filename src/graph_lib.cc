@@ -217,9 +217,9 @@ int graphCompress(unsigned char* a1, unsigned char* a2, int a3)
 
     // NOTE: Original code is slightly different, it uses deep nesting or a
     // bunch of gotos.
-    _lson = (int*)internal_malloc(sizeof(*_lson) * 4104);
+    _lson = (int*)internal_malloc(sizeof(*_lson) * 4376);
     _rson = (int*)internal_malloc(sizeof(*_rson) * 4376);
-    _dad_2 = (int*)internal_malloc(sizeof(*_dad_2) * 4104);
+    _dad_2 = (int*)internal_malloc(sizeof(*_dad_2) * 4376);
     _text_buf = (unsigned char*)internal_malloc(sizeof(*_text_buf) * 4122);
 
     if (_lson == nullptr || _rson == nullptr || _dad_2 == nullptr || _text_buf == nullptr) {

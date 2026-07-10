@@ -573,6 +573,11 @@ static void op_set_sfall_global(Program* program)
         // Float values use parallel float storage to preserve precision.
         if ((variable.opcode & VALUE_TYPE_MASK) == VALUE_TYPE_STRING) {
             const char* key = programGetString(program, variable.opcode, variable.integerValue);
+            // UM-06: Reject script keys starting with "SF" (see int path).
+            if (key != nullptr && key[0] == 'S' && key[1] == 'F') {
+                programPrintError("set_sfall_global_float: key \"%s\" uses reserved 'SF' prefix", key);
+                return;
+            }
             sfall_gl_vars_store_float(key, value.asFloat());
         } else if (variable.opcode == VALUE_TYPE_INT) {
             sfall_gl_vars_store_float(variable.integerValue, value.asFloat());
@@ -584,6 +589,15 @@ static void op_set_sfall_global(Program* program)
         // causes data corruption that persists through save/load.
         if ((variable.opcode & VALUE_TYPE_MASK) == VALUE_TYPE_STRING) {
             const char* key = programGetString(program, variable.opcode, variable.integerValue);
+            // UM-06: Reject script keys starting with "SF" to prevent
+            // collision with 40+ CE-internal sfall global var keys
+            // (e.g., "SFXpMod%", "SFSkillM"). All internal keys use
+            // exactly 8-char names beginning with "SF"; script keys
+            // matching this pattern would overwrite internal state.
+            if (key != nullptr && key[0] == 'S' && key[1] == 'F') {
+                programPrintError("set_sfall_global: key \"%s\" uses reserved 'SF' prefix", key);
+                return;
+            }
             sfall_gl_vars_store(key, value.integerValue);
         } else if (variable.opcode == VALUE_TYPE_INT) {
             // Fire HOOK_SETGLOBALVAR to let registered scripts inspect/override
@@ -1251,25 +1265,28 @@ static void op_get_mouse_y(Program* program)
 }
 
 // get_mouse_buttons
+// Returns mouse button state as a bitmask matching sfall convention:
+//   bit 0 (1) = left button  (MOUSE_STATE_LEFT_BUTTON_DOWN  = 0x01)
+//   bit 1 (2) = right button (MOUSE_STATE_RIGHT_BUTTON_DOWN = 0x02)
+//   bit 2 (4) = middle button — NOT SUPPORTED (CE MouseData has only
+//               buttons[2]; dinput.cc does not check SDL_BUTTON_MIDDLE)
 static void op_get_mouse_buttons(Program* program)
 {
-    // CE: Implementation is slightly different - it does not handle middle
-    // mouse button.
     programStackPushInteger(program, mouse_get_last_buttons());
 }
 
 static void op_get_window_under_mouse(Program* program)
 {
-    // NOTE: _win_last_button_winID() returns the window that received the last
-    // button interaction (click/enter/exit), NOT the window currently under the
-    // mouse cursor. After mouse movement without button interaction, the returned
-    // value is stale. A proper fix would require a window_manager function that
-    // calls mouseGetPosition() and iterates gWindows[] (topmost-to-bottommost)
-    // to find the window whose rect contains the current mouse coordinates.
-    // Such a function needs to be implemented in window_manager.cc/.h and is
-    // outside the scope of this change (sfall_opcodes.cc cannot access the
-    // file-static gWindows array directly).
-    programStackPushInteger(program, _win_last_button_winID());
+    // FIXED (UH-04): Use windowGetAtPoint() which iterates gWindows[]
+    // topmost-to-bottommost and returns the window whose rect contains
+    // the given coordinates. Previously used _win_last_button_winID()
+    // which returns the last button-interaction window (stale after
+    // mouse move without click).
+    int x;
+    int y;
+    mouseGetPosition(&x, &y);
+    int win = windowGetAtPoint(x, y);
+    programStackPushInteger(program, win >= 0 ? win : -1);
 }
 
 // get_screen_width
@@ -6190,6 +6207,16 @@ static constexpr const char kGlVarDMaleModel[] = "SFDMale ";
 static constexpr const char kGlVarDFemaleModel[] = "SFDFmale";
 static constexpr const char kGlVarLastTrgCnt[] = "SFLTcnt ";
 static constexpr const char kGlVarLastAtkCnt[] = "SFLAcnt ";
+// UM-17: sfall animation callback serialization.
+// sfallAnimCallbackProgram is a Program* pointer (non-serializable);
+// only the procedure index and active flag survive save/load.
+// On load, the procedure index is restored but the program pointer
+// remains nullptr — op_reg_anim_callback must be called again after
+// load to re-establish the callback.
+static constexpr const char kGlVarAnimCbAct[]  = "SFCBAct ";
+static constexpr const char kGlVarAnimCbProc[] = "SFCBPrc ";
+static constexpr const char kGlVarInvApCost[] = "SFInvApC";
+static constexpr const char kGlVarInvQPRed[] = "SFQPApRd";
 
 // Persist all opcode-related global state into the sfall global vars map
 // before sfall_gl_vars_save() writes to sfallgv.sav.
@@ -6216,6 +6243,14 @@ void sfallOpcodeStateSave()
 
     // Pipboy availability override.
     sfall_gl_vars_store(kGlVarPipboy, gPipboyAvailableOverride);
+
+    // UM-17: Persist sfall animation callback state.
+    // The Program* pointer is non-serializable; only the active flag and
+    // procedure index are saved. On load, the procedure index is restored
+    // but the program pointer must be re-established by a subsequent
+    // reg_anim_callback call.
+    sfall_gl_vars_store(kGlVarAnimCbAct, sfallAnimCallbackProgram != nullptr ? 1 : 0);
+    sfall_gl_vars_store(kGlVarAnimCbProc, sfallAnimCallbackProcedureIndex);
 
     // Perk/trait modifier opcodes — storage-only globals.
     sfall_gl_vars_store(kGlVarPerkAddMode, sfallPerkAddMode);
@@ -6262,6 +6297,12 @@ void sfallOpcodeStateSave()
     // must be serialized or they reset to default (4) on game load.
     sfall_gl_vars_store(kGlVarUnApBn, statGetUnspentApBonus());
     sfall_gl_vars_store(kGlVarUnApPk, statGetUnspentApPerkBonus());
+
+    // F-59: Save inventory AP cost and Quick Pockets reduction.
+    // These are modified at runtime via op_set_inven_ap_cost (0x8172)
+    // and must survive save/load.
+    sfall_gl_vars_store(kGlVarInvApCost, inventoryGetRawApCost());
+    sfall_gl_vars_store(kGlVarInvQPRed, inventoryGetQuickPocketsApCostReduction());
 
     // F-008: Save perk min level overrides set by set_perk_level (0x817A).
     // Store count + per-index (perk ID, current override value) pairs.
@@ -6433,20 +6474,14 @@ void sfallOpcodeStateSave()
         idx++;
     }
 
-    // Per-critter hit chance overrides.
-    int hcCount = static_cast<int>(gCritterHitChanceOverrides.size());
-    sfall_gl_vars_store(kGlVarHitChCtrCnt, hcCount);
-    idx = 0;
-    for (const auto& entry : gCritterHitChanceOverrides) {
-        char key[16] = {};
-        sprintf(key, "SFHCk%03d", idx);
-        sfall_gl_vars_store(key, entry.first);           // critter Object::id
-        sprintf(key, "SFHCv%03d", idx);
-        sfall_gl_vars_store(key, entry.second.mod);      // mod value
-        sprintf(key, "SFHCx%03d", idx);
-        sfall_gl_vars_store(key, entry.second.max);      // max value
-        idx++;
-    }
+    // UH-13: Per-critter hit chance overrides are NOT serialized.
+    // The map is keyed by Object::id (a runtime counter from
+    // scriptsNewObjectId()), which is unstable across save/load.
+    // Restoring by Object::id silently loses all data — the saved keys
+    // never match post-load object IDs. This is a fundamental
+    // limitation of CE's object ID scheme; original sfall used stable
+    // game-local IDs. Scripts must re-apply hit chance overrides after
+    // loading a save.
 
     // F-001: Per-critter pickpocket mod map.
     int cpmCount = static_cast<int>(gCritterPickpocketModMap.size());
@@ -6519,33 +6554,13 @@ void sfallOpcodeStateSave()
         idx++;
     }
 
-    // Per-critter last target/attacker maps (F-011 / F-S4-M15).
-    // Format: entry count + indexed key/value pairs (prefix "SFLT" / "SFLA").
-    // Key = critter Object::id, value = target/attacker Object::id.
-    // These maps were previously cleared on reset but never saved, so
-    // get_last_target/get_last_attacker returned nullptr after load.
-    int ltCount = static_cast<int>(gCritterLastTarget.size());
-    sfall_gl_vars_store(kGlVarLastTrgCnt, ltCount);
-    idx = 0;
-    for (const auto& entry : gCritterLastTarget) {
-        char key[16] = {};
-        sprintf(key, "SFLTk%03d", idx);
-        sfall_gl_vars_store(key, entry.first);
-        sprintf(key, "SFLTv%03d", idx);
-        sfall_gl_vars_store(key, entry.second);
-        idx++;
-    }
-    int laCount = static_cast<int>(gCritterLastAttacker.size());
-    sfall_gl_vars_store(kGlVarLastAtkCnt, laCount);
-    idx = 0;
-    for (const auto& entry : gCritterLastAttacker) {
-        char key[16] = {};
-        sprintf(key, "SFLAk%03d", idx);
-        sfall_gl_vars_store(key, entry.first);
-        sprintf(key, "SFLAv%03d", idx);
-        sfall_gl_vars_store(key, entry.second);
-        idx++;
-    }
+    // UH-14: Per-critter last target/attacker maps are NOT serialized.
+    // Both the key (critter Object::id) AND the value (target/attacker
+    // Object::id) are runtime counters from scriptsNewObjectId(), unstable
+    // across save/load. After reload, the saved keys never match post-load
+    // object IDs, and even if they did, the stored target/attacker IDs
+    // would be dangling references. Scripts must re-populate these maps
+    // after loading a save.
 
     // F-003/F-004/I2F-001/I2F-002: Persist string state using the string
     // global vars API (added in sfall_gl_vars version 2). Strings are stored
@@ -6726,6 +6741,25 @@ void sfallOpcodeStateLoad()
         gPipboyAvailableOverride = val;
     }
 
+    // UM-17: Restore sfall animation callback state.
+    // The Program* cannot be restored (old program is dead after load);
+    // only the procedure index is preserved as a hint. The script must
+    // call reg_anim_callback again to re-establish the callback.
+    bool animCbWasActive = false;
+    if (sfall_gl_vars_fetch(kGlVarAnimCbAct, val)) {
+        animCbWasActive = (val != 0);
+    }
+    if (sfall_gl_vars_fetch(kGlVarAnimCbProc, val)) {
+        sfallAnimCallbackProcedureIndex = val;
+    }
+    if (animCbWasActive && sfallAnimCallbackProcedureIndex >= 0) {
+        // Keep the procedure index but leave program nullptr —
+        // it must be re-registered after load.
+        sfallAnimCallbackProgram = nullptr;
+        debugPrint("sfallOpcodeStateLoad: anim callback was active (proc=%d); re-register after load\n",
+                   sfallAnimCallbackProcedureIndex);
+    }
+
     // Perk/trait modifier opcodes.
     if (sfall_gl_vars_fetch(kGlVarPerkAddMode, val)) {
         sfallPerkAddMode = val;
@@ -6828,6 +6862,16 @@ void sfallOpcodeStateLoad()
     }
     if (sfall_gl_vars_fetch(kGlVarUnApPk, val)) {
         statSetUnspentApPerkBonus(val);
+    }
+
+    // F-59: Restore inventory AP cost and Quick Pockets reduction.
+    if (sfall_gl_vars_fetch(kGlVarInvApCost, val)) {
+        if (val < 0) val = 0;
+        inventorySetInvenApCost(val);
+    }
+    if (sfall_gl_vars_fetch(kGlVarInvQPRed, val)) {
+        if (val < 0) val = 0;
+        inventorySetQuickPocketsApCostReduction(val);
     }
 
     // F-008: Restore perk min level overrides set by set_perk_level (0x817A).
@@ -7087,30 +7131,10 @@ void sfallOpcodeStateLoad()
         }
     }
 
-    // Per-critter hit chance overrides.
-    {
-        int hcCount = 0;
-        if (sfall_gl_vars_fetch(kGlVarHitChCtrCnt, hcCount) && hcCount <= kMaxHitChanceOverrides) {
-            gCritterHitChanceOverrides.clear();
-            for (int idx2 = 0; idx2 < hcCount; idx2++) {
-                char key[16] = {};
-                sprintf(key, "SFHCk%03d", idx2);
-                int critterId = 0;
-                if (sfall_gl_vars_fetch(key, critterId)) {
-                    CritterHitChanceEntry entry;
-                    int ival = 0;
-                    sprintf(key, "SFHCv%03d", idx2);
-                    sfall_gl_vars_fetch(key, ival);
-                    entry.mod = ival;
-                    ival = 0;
-                    sprintf(key, "SFHCx%03d", idx2);
-                    sfall_gl_vars_fetch(key, ival);
-                    entry.max = ival;
-                    gCritterHitChanceOverrides[critterId] = entry;
-                }
-            }
-        }
-    }
+    // UH-13: Per-critter hit chance overrides are NOT restored on load.
+    // The map uses Object::id keys (unstable across save/load) —
+    // restored entries would never match post-load object lookups.
+    // Scripts must re-apply overrides after loading a save.
 
     // F-001: Per-critter pickpocket mod map.
     {
@@ -7214,43 +7238,9 @@ void sfallOpcodeStateLoad()
         }
     }
 
-    // Per-critter last target map (F-011 / F-S4-M15).
-    {
-        int ltCount = 0;
-        if (sfall_gl_vars_fetch(kGlVarLastTrgCnt, ltCount) && ltCount <= kMaxLastTargetEntries) {
-            gCritterLastTarget.clear();
-            for (int idx2 = 0; idx2 < ltCount; idx2++) {
-                char key[16] = {};
-                sprintf(key, "SFLTk%03d", idx2);
-                int critterId = 0;
-                if (sfall_gl_vars_fetch(key, critterId)) {
-                    sprintf(key, "SFLTv%03d", idx2);
-                    int targetId = 0;
-                    sfall_gl_vars_fetch(key, targetId);
-                    gCritterLastTarget[critterId] = targetId;
-                }
-            }
-        }
-    }
-
-    // Per-critter last attacker map (F-011 / F-S4-M15).
-    {
-        int laCount = 0;
-        if (sfall_gl_vars_fetch(kGlVarLastAtkCnt, laCount) && laCount <= kMaxLastTargetEntries) {
-            gCritterLastAttacker.clear();
-            for (int idx2 = 0; idx2 < laCount; idx2++) {
-                char key[16] = {};
-                sprintf(key, "SFLAk%03d", idx2);
-                int critterId = 0;
-                if (sfall_gl_vars_fetch(key, critterId)) {
-                    sprintf(key, "SFLAv%03d", idx2);
-                    int attackerId = 0;
-                    sfall_gl_vars_fetch(key, attackerId);
-                    gCritterLastAttacker[critterId] = attackerId;
-                }
-            }
-        }
-    }
+    // UH-14: Per-critter last target/attacker maps are NOT restored on
+    // load. Both key and value are Object::id (unstable across save/load).
+    // See UH-14 comment in sfallOpcodeStateSave for details.
 
     // F-003/F-004/I2F-001/I2F-002: Restore string state from the string
     // global vars (added in sfall_gl_vars version 2). String data was
@@ -7727,14 +7717,19 @@ static void op_set_palette(Program* program)
 
 // ============================================================
 // mark_movie_played(int id) — 0x8240
-// Marks a movie as played so it won't play again. CE engine tracks
-// movies via gGameMoviesSeen[] (game_movie.cc:81, persisted on save).
-// However, the array is file-static and there is no public setter;
-// movies are only marked as seen when gameMoviePlay() completes
-// (game_movie.cc:277). Without a public setter API, this opcode
-// cannot directly write to the seen list. If a script needs to
-// pre-mark a movie as played to suppress it, that capability
-// would require adding a gameMovieMarkSeen() public function.
+// Marks a movie as played so it won't play again.
+//
+// UH-60 FIX: gGameMoviesSeen[] is file-static in game_movie.cc and has no
+// public setter. Until gameMovieMarkSeen() is added to game_movie.h/cc,
+// this opcode persists marked movies via sfall_gl_vars under the
+// "MvSeen%03d" key pattern. These survive save/load (global vars are
+// saved to sfallgv.sav).
+//
+// Integration gap: gameMovieIsSeen() in game_movie.cc does NOT check
+// these sfall-side marks. Scripts using mark_movie_played must also
+// query get_sfall_global_int("MvSeen%03d", movieId) to check marks.
+// Full integration requires adding gameMovieMarkSeen() and modifying
+// gameMovieIsSeen() to check both sources.
 // ============================================================
 static void op_mark_movie_played(Program* program)
 {
@@ -7743,7 +7738,12 @@ static void op_mark_movie_played(Program* program)
         programPrintError("mark_movie_played: movie ID %d out of range [0, %d)", movieId, MOVIE_COUNT);
         return;
     }
-    debugPrint("mark_movie_played: movie %d — gGameMoviesSeen is engine-private (game_movie.cc:81); movies are automatically marked as seen when gameMoviePlay() completes (game_movie.cc:277)", movieId);
+    // UH-60: Persist the mark via sfall_gl_vars so it survives save/load.
+    // gameMovieMarkSeen() in game_movie.h/cc would be the ideal fix.
+    char key[16] = {};
+    sprintf(key, "SFMvSeen%03d", movieId);
+    sfall_gl_vars_store(key, 1);
+    debugPrint("mark_movie_played: movie %d marked as seen (sfall_gl_vars)", movieId);
 }
 
 // ============================================================

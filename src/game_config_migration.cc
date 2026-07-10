@@ -343,7 +343,12 @@ static bool contentConfigMigrateFromSfall(Config* sfallConfig, const char* conte
     for (const auto& entry : kSfallMigrationEntries) {
         char* value;
         if (configGetString(sfallConfig, entry.sfallSection, entry.sfallKey, &value)) {
-            if (value[0] == '\0' || entry.defaultValue != nullptr && strcmp(value, entry.defaultValue) == 0) {
+            // UH-05: Skip only truly empty sfall values. Do NOT skip values
+            // that match entry.defaultValue — a prior migration may have left
+            // a non-default value in the content config that needs to be
+            // reverted when the user changes ddraw.ini back to the default.
+            // The comparison against existingValue below handles that correctly.
+            if (value[0] == '\0') {
                 continue;
             }
             // Only update if the value in the patch file differs from the

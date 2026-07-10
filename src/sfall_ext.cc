@@ -333,7 +333,11 @@ bool sfallLoadGameData(File* stream)
     for (int32_t i = 0; i < 4; i++) {
         if (fileRead(&ignored, sizeof(ignored), 1, stream) != 1) {
             scriptsRestoreUniqueObjectIdCounter(nextObjectId);
-            return true; // old save, stop gracefully
+            // UH-06: nextObjectId was read, so this is a new-format save.
+            // A failed read on the extension header fields means the save
+            // is corrupt — report the failure so the caller can reset
+            // sfall state rather than masking the corruption.
+            return false;
         }
     }
 

@@ -112,8 +112,11 @@ int _gzdecompress_file(const char* existingFilePath, const char* newFilePath)
     magic[1] = fgetc(stream);
     fclose(stream);
 
-    // TODO: Is it broken?
-    if (magic[0] != 0x1F || magic[1] != 0x8B) {
+    // Check for gzip magic bytes (0x1F 0x8B). If found, decompress;
+    // otherwise, simple copy.
+    bool isGzip = (magic[0] == 0x1F && magic[1] == 0x8B);
+
+    if (isGzip) {
         gzFile gzstream = compat_gzopen(existingFilePath, "rb");
         if (gzstream == nullptr) {
             return -1;

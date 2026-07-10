@@ -575,6 +575,10 @@ static int objectLoadAllInternal(File* stream)
 
             Inventory* inventory = &(objectListNode->obj->data.inventory);
             if (inventory->length != 0) {
+                if (inventory->capacity <= 0 || inventory->capacity > 99999) {
+                    debugPrint("Invalid inventory capacity %d\n", inventory->capacity);
+                    return -1;
+                }
                 inventory->items = (InventoryItem*)internal_malloc(sizeof(InventoryItem) * inventory->capacity);
                 if (inventory->items == nullptr) {
                     return -1;
@@ -2998,7 +3002,9 @@ int _obj_intersects_with(Object* object, int x, int y)
                             int type = FID_TYPE(object->fid);
                             if (type == OBJ_TYPE_SCENERY || type == OBJ_TYPE_WALL) {
                                 Proto* proto;
-                                protoGetProto(object->pid, &proto);
+                                if (protoGetProto(object->pid, &proto) == -1) {
+                                    return flags;
+                                }
 
                                 bool v20;
                                 int extendedFlags = proto->scenery.extendedFlags;
@@ -4620,7 +4626,10 @@ static int _obj_adjust_light(Object* obj, int a2, Rect* rect)
                                     if (FID_TYPE(objectListNode->obj->fid) == OBJ_TYPE_WALL) {
                                         if ((objectListNode->obj->flags & OBJECT_FLAT) == 0) {
                                             Proto* proto;
-                                            protoGetProto(objectListNode->obj->pid, &proto);
+                                            if (protoGetProto(objectListNode->obj->pid, &proto) == -1) {
+                                                objectListNode = objectListNode->next;
+                                                continue;
+                                            }
                                             if ((proto->wall.extendedFlags & PROTO_EXT_FLAG_HIDDEN) != 0 || (proto->wall.extendedFlags & PROTO_EXT_FLAG_EAST_CORNER) != 0) {
                                                 if (rotation != ROTATION_W
                                                     && rotation != ROTATION_NW
@@ -5017,7 +5026,10 @@ static void _obj_render_object(Object* object, Rect* rect, int light)
     if (type == 2 || type == 3) {
         if ((gDude->flags & OBJECT_HIDDEN) == 0 && (object->flags & OBJECT_FLAG_0xFC000) == 0) {
             Proto* proto;
-            protoGetProto(object->pid, &proto);
+            if (protoGetProto(object->pid, &proto) == -1) {
+                artUnlock(cacheEntry);
+                return;
+            }
 
             bool v17;
             int extendedFlags = proto->critter.extendedFlags;

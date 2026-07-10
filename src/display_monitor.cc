@@ -237,6 +237,15 @@ void displayMonitorAddMessage(const char* str)
         return;
     }
 
+    // Reentrancy guard: scriptHooks_Message fires HOOK_MESSAGE which can
+    // synchronously call back into displayMonitorAddMessage from any of its
+    // 100+ call sites, causing unbounded recursion or state corruption.
+    static bool _reentrancyGuard = false;
+    if (_reentrancyGuard) {
+        return;
+    }
+    _reentrancyGuard = true;
+
     // SFALL
     consoleFileAddMessage(str);
     scriptHooks_Message(str);
@@ -284,6 +293,7 @@ void displayMonitorAddMessage(const char* str)
                 fontSetCurrent(oldFont);
                 _disp_curr = _disp_start;
                 displayMonitorRefresh();
+                _reentrancyGuard = false;
                 return;
             }
 
@@ -325,6 +335,7 @@ void displayMonitorAddMessage(const char* str)
     fontSetCurrent(oldFont);
     _disp_curr = _disp_start;
     displayMonitorRefresh();
+    _reentrancyGuard = false;
 }
 
 // NOTE: Inlined.

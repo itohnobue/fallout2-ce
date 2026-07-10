@@ -383,8 +383,8 @@ void scriptHooksExit()
 /*
 Runs once every time when the game mode was changed, like opening/closing the inventory, character screen, pipboy, etc.
 
-int arg0 - event type: 1 - when the player exits the game, 0 - otherwise
-int arg1 - the previous game mode
+int arg0 - the current (new) game mode bitmask (0 = game exiting / no mode)
+int arg1 - the previous game mode bitmask
 */
 void scriptHooks_GameModeChange(int exit, int previousGameMode)
 {
@@ -436,8 +436,14 @@ void scriptHooks_GameModeChange(int exit, int previousGameMode)
         return;
     }
 
+    // UC-04: Pass the current (new) game mode as arg0 to match sfall
+    // contract. Previously CE passed the exit flag (0/1) as arg0.
+    // On exit (exit=1), arg0 is 0 (no mode active). On mode change,
+    // arg0 is the new mode bitmask from GameMode::getCurrentGameMode().
+    int newGameMode = exit ? 0 : GameMode::getCurrentGameMode();
+
     GameModeChangeGuard guard;
-    ScriptHookCall(HOOK_GAMEMODECHANGE, 0, { exit, previousGameMode }).call();
+    ScriptHookCall(HOOK_GAMEMODECHANGE, 0, { newGameMode, previousGameMode }).call();
 }
 
 /*
@@ -1304,6 +1310,7 @@ int scriptHooks_UseItemOn(Object* user, Object* target, Object* objUsed)
         return -1;
     }
 
+    // arg0 = target, arg1 = user, arg2 = objUsed (sfall convention)
     ScriptHookCall hook(HOOK_USEOBJON, 1, { target, user, objUsed });
     hook.call();
 
@@ -1380,7 +1387,12 @@ void scriptHooks_ComputeDamage(Attack* attack, int numRounds, int baseDmgMult)
     constexpr int DAMAGE_FIELDS[] = {0, 1};          // defenderDamage, attackerDamage
     constexpr int FLAGS_FIELDS[] = {2, 3};           // defenderFlags, attackerFlags
     constexpr int KNOCKBACK_FIELD = 4;               // defenderKnockback
-    constexpr int COMBAT_DAMAGE_MIN = 0;
+    // UM-94: sfall allows negative damage values for healing effects
+    // (e.g., stimpak scripts returning -15 to heal). CE previously
+    // clamped to COMBAT_DAMAGE_MIN=0, breaking healing scripts.
+    // Negative values are bounded to a reasonable minimum to prevent
+    // integer underflow in downstream calculations.
+    constexpr int COMBAT_DAMAGE_MIN = -9999;
     constexpr int COMBAT_DAMAGE_MAX = 9999;
     // Mask matching _set_new_results (combat.cc:5192-5199): only these
     // flags persist into critter->data.critter.combat.results.
@@ -1604,7 +1616,10 @@ void scriptHooks_UseAnimObj(Object* object, int animId, int delay)
         return;
     }
 
-    ScriptHookCall(HOOK_USEANIMOBJ, 0, { object, animId, delay }).call();
+    // UH-10: maxReturnValues=1 to allow scripts to override the animation
+    // (previously 0, which prevented any return value — the opcode guard
+    // at sfall_opcodes.cc blocks at maxReturnValues==0).
+    ScriptHookCall(HOOK_USEANIMOBJ, 1, { object, animId, delay }).call();
 }
 
 /*
@@ -1741,10 +1756,28 @@ int scriptHooks_SetGlobalVar(int varIndex, int value)
         return value;
     }
 
+    // UH-09: Set reentrancy flag to block nested HOOK_SETGLOBALVAR
+    // dispatch (matching sfall behavior).  The RAII guard handles
+    // normal return; the explicit drain after hook.call() handles the
+    // case where longjmp from programFatalError skips the destructor,
+    // leaving the flag stuck.  (C++ does not unwind stack objects
+    // across longjmp — the destructor never runs.)
+    struct SetGlobalVarGuard {
+        bool& flag;
+        ~SetGlobalVarGuard() { flag = false; }
+    };
+    SetGlobalVarGuard guard{_setGlobalVarInProgress};
     _setGlobalVarInProgress = true;
+
     ScriptHookCall hook(HOOK_SETGLOBALVAR, 1, { varIndex, value });
     hook.call();
-    _setGlobalVarInProgress = false;
+
+    // F-M04: Drain stale _setGlobalVarInProgress flag if longjmp
+    // skipped the RAII destructor above.  Mirrors the
+    // _gameModeChangeInProgress recovery at lines 408-433.
+    if (_setGlobalVarInProgress) {
+        _setGlobalVarInProgress = false;
+    }
 
     if (hook.numReturnValues() <= 0) {
         return value;

@@ -833,6 +833,7 @@ static void _script_chk_critters()
             scriptListExtent = scriptListExtent->next;
         }
 
+        int prevIndex = gCritterProcessingIndex;
         gCritterProcessingIndex += 1;
         if (gCritterProcessingIndex >= scriptsCount) {
             gCritterProcessingIndex = 0;
@@ -853,6 +854,21 @@ static void _script_chk_critters()
             if (scriptListExtent != nullptr) {
                 Script* script = &(scriptListExtent->scripts[scriptIndex]);
                 scriptExecProc(script->sid, proc);
+
+                // After scriptExecProc, a scriptRemove may have been triggered
+                // via swap-and-pop. If the total count decreased, the script that
+                // was swapped into a previously processed slot would be skipped
+                // on the next call. Reset to the pre-increment index so the
+                // next call re-processes from the correct position.
+                int countAfter = 0;
+                scriptListExtent = scriptList->head;
+                while (scriptListExtent != nullptr) {
+                    countAfter += scriptListExtent->length;
+                    scriptListExtent = scriptListExtent->next;
+                }
+                if (countAfter < scriptsCount) {
+                    gCritterProcessingIndex = prevIndex;
+                }
             }
         }
     }
@@ -1392,10 +1408,22 @@ int scriptExecProc(int sid, int proc)
     if (programLoaded) {
         scriptLocateProcs(script);
 
+        int cachedSid = script->sid;
+
         script->action = 0;
         // NOTE: Uninline.
         runProgram(program);
         programInterpret(program, -1);
+
+        // Re-validate script pointer after programInterpret, which may have
+        // triggered scriptRemove (e.g., via the script's load procedure).
+        // The swap-and-pop removal in scriptRemove can invalidate the
+        // script pointer, causing stale reads of script->procs[] below.
+        Script* rechecked;
+        if (scriptGetScript(cachedSid, &rechecked) == -1) {
+            return -1;
+        }
+        script = rechecked;
     }
 
     // CE: Fix for the start procedure not being called correctly if the required standard script procedure is missing.
@@ -2496,10 +2524,8 @@ int scriptRemove(int sid)
         scriptHooksUnregisterProgram(script->program);
     }
 
-    if ((script->flags & SCRIPT_FLAG_NO_SPATIAL) != 0) {
-        if (script->program != nullptr) {
-            script->program = nullptr;
-        }
+    if (script->program != nullptr) {
+        script->program = nullptr;
     }
 
     if ((script->flags & SCRIPT_FLAG_NO_REMOVE) == 0) {
@@ -3014,6 +3040,12 @@ int scriptGetLocalVar(int sid, int variable, ProgramValue& value)
     if (script->localVarsCount > 0) {
         if (script->localVarsOffset == -1) {
             script->localVarsOffset = mapAllocLocalVars(script->localVarsCount);
+        }
+
+        if (variable < 0 || variable >= script->localVarsCount) {
+            value.opcode = VALUE_TYPE_INT;
+            value.integerValue = -1;
+            return -1;
         }
 
         if (mapGetLocalVar(script->localVarsOffset + variable, value) == -1) {

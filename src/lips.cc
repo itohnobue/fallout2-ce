@@ -159,6 +159,10 @@ int lipsStart()
     while (1) {
         _head_marker_current = v2;
 
+        if (v2 >= gLipsData.field_2C) {
+            break;
+        }
+
         SpeechMarker* speechEntry = &(gLipsData.markers[v2]);
         if (gLipsData.field_20 <= speechEntry->position) {
             break;
@@ -179,7 +183,7 @@ int lipsStart()
         _head_marker_current = 0;
 
         soundStop(gLipsData.sound);
-        gLipsData.flags |= ~(LIPS_FLAG_0x01 | LIPS_FLAG_0x02);
+        gLipsData.flags &= ~(LIPS_FLAG_0x01 | LIPS_FLAG_0x02);
     }
 
     return 0;

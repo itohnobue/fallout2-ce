@@ -650,6 +650,10 @@ void windowFill(int win, int x, int y, int width, int height, int color)
 void windowShow(int win)
 {
     Window* window = windowGetWindow(win);
+    if (window == nullptr) {
+        return;
+    }
+
     int index = gWindowIndexes[window->id];
 
     if (!gWindowSystemInitialized) {

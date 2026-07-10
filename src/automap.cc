@@ -328,6 +328,9 @@ void automapShow(bool isInGame, bool isUsingScanner)
     int automapWindowY = (screenGetHeight() - AUTOMAP_WINDOW_HEIGHT) / 2;
     // adding WINDOW_TRANSPARENT and WINDOW_DRAGGABLE_BY_BACKGROUND for testing temporarily
     int window = windowCreate(automapWindowX, automapWindowY, AUTOMAP_WINDOW_WIDTH, AUTOMAP_WINDOW_HEIGHT, color, WINDOW_MODAL | WINDOW_MOVE_ON_TOP | WINDOW_TRANSPARENT | WINDOW_DRAGGABLE_BY_BACKGROUND);
+    if (window == -1) {
+        return -1;
+    }
     gAutomapWindow = window;
 
     int scannerBtn = buttonCreate(window,
@@ -732,8 +735,8 @@ int automapSaveCurrent()
     }
 
     // NOTE: Not sure about the size.
-    char path[256];
-    snprintf(path, sizeof(path), "%s\\%s", "MAPS", AUTOMAP_DB);
+    char path[512];
+    snprintf(path, sizeof(path), "%s\\%s\\%s", settings.system.master_patches_path.c_str(), "MAPS", AUTOMAP_DB);
 
     File* stream1 = fileOpen(path, "r+b");
     if (stream1 == nullptr) {
@@ -764,7 +767,7 @@ int automapSaveCurrent()
     }
 
     if (entryOffset != 0) {
-        snprintf(path, sizeof(path), "%s\\%s", "MAPS", AUTOMAP_TMP);
+        snprintf(path, sizeof(path), "%s\\%s\\%s", settings.system.master_patches_path.c_str(), "MAPS", AUTOMAP_TMP);
 
         File* stream2 = fileOpen(path, "wb");
         if (stream2 == nullptr) {
@@ -948,7 +951,6 @@ static int automapSaveEntry(File* stream)
 err:
 
     debugPrint("\nAUTOMAP: Error writing automap database entry data!\n");
-    fileClose(stream);
 
     return -1;
 }
@@ -1011,8 +1013,8 @@ static int automapLoadEntry(int map, int elevation)
 
         if (graphDecompress(gAutomapEntry.compressedData, gAutomapEntry.data, 10000) == -1) {
             debugPrint("\nAUTOMAP: Error decompressing DB entry!\n");
-            fileClose(stream);
-            return -1;
+            success = false;
+            goto out;
         }
     } else {
         if (fileReadUInt8List(stream, gAutomapEntry.data, gAutomapEntry.dataSize) == -1) {
@@ -1027,6 +1029,14 @@ out:
 
     if (!success) {
         debugPrint("\nAUTOMAP: Error reading automap database entry data!\n");
+
+        // Free compressedData on early return to prevent memory leak.
+        // The allocated buffer is not freed by the normal cleanup path
+        // at line 1034-1036 which is only reached on success.
+        if (gAutomapEntry.compressedData != nullptr) {
+            internal_free(gAutomapEntry.compressedData);
+            gAutomapEntry.compressedData = nullptr;
+        }
 
         return -1;
     }
@@ -1062,8 +1072,6 @@ static int automapSaveHeader(File* stream)
 err:
 
     debugPrint("\nAUTOMAP: Error writing automap database header!\n");
-
-    fileClose(stream);
 
     return -1;
 }
@@ -1143,6 +1151,7 @@ static int automapCreate()
     }
 
     if (automapSaveHeader(stream) == -1) {
+        fileClose(stream);
         return -1;
     }
 

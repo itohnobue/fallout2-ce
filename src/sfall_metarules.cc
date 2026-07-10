@@ -3400,6 +3400,11 @@ void mf_add_trait(OpcodeContext& ctx)
         if (critter != nullptr && critter != gDude && critter->cid > 0) {
             // Per-critter trait storage, keyed by CID for save/load stability.
             gAddedTraitsNpc[critter->cid][traitType] = rank;
+            // UH-71: Recalculate derived stats (HP, AP, AC, etc.) after
+            // adding a trait like Gifted (+1 to all SPECIAL). Without this
+            // call, derived stats remain stale until next level-up or
+            // character editor interaction.
+            critterUpdateDerivedStats(critter);
             ctx.setReturn(1);
             return;
         }
@@ -3415,6 +3420,8 @@ void mf_add_trait(OpcodeContext& ctx)
     }
 
     gAddedTraits[traitType] = rank;
+    // UH-71: Recalculate derived stats for the player after adding a trait.
+    critterUpdateDerivedStats(gDude);
     ctx.setReturn(1);
 }
 

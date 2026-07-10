@@ -12,66 +12,92 @@ unsigned char gPcxLastValue = 0;
 
 // NOTE: The reading method in this function is a little bit odd. It does not
 // use high level reading functions, which can read right into struct. Instead
-// they read everything into temporary variables. There are no error checks.
+// they read everything into temporary variables.
+//
+// Returns 0 on success, -1 on any I/O error.
 //
 // 0x4961D4 readPcxHeader
-void pcxReadHeader(PcxHeader* pcxHeader, File* stream)
+int pcxReadHeader(PcxHeader* pcxHeader, File* stream)
 {
-    pcxHeader->identifier = fileReadChar(stream);
-    pcxHeader->version = fileReadChar(stream);
-    pcxHeader->encoding = fileReadChar(stream);
-    pcxHeader->bitsPerPixel = fileReadChar(stream);
+    int ch;
+
+    ch = fileReadChar(stream);
+    if (ch == -1) return -1;
+    pcxHeader->identifier = (unsigned char)ch;
+
+    ch = fileReadChar(stream);
+    if (ch == -1) return -1;
+    pcxHeader->version = (unsigned char)ch;
+
+    ch = fileReadChar(stream);
+    if (ch == -1) return -1;
+    pcxHeader->encoding = (unsigned char)ch;
+
+    ch = fileReadChar(stream);
+    if (ch == -1) return -1;
+    pcxHeader->bitsPerPixel = (unsigned char)ch;
 
     short minX;
-    fileRead(&minX, 2, 1, stream);
+    if (fileRead(&minX, 2, 1, stream) != 1) return -1;
     pcxHeader->minX = minX;
 
     short minY;
-    fileRead(&minY, 2, 1, stream);
+    if (fileRead(&minY, 2, 1, stream) != 1) return -1;
     pcxHeader->minY = minY;
 
     short maxX;
-    fileRead(&maxX, 2, 1, stream);
+    if (fileRead(&maxX, 2, 1, stream) != 1) return -1;
     pcxHeader->maxX = maxX;
 
     short maxY;
-    fileRead(&maxY, 2, 1, stream);
+    if (fileRead(&maxY, 2, 1, stream) != 1) return -1;
     pcxHeader->maxY = maxY;
 
     short horizontalResolution;
-    fileRead(&horizontalResolution, 2, 1, stream);
+    if (fileRead(&horizontalResolution, 2, 1, stream) != 1) return -1;
     pcxHeader->horizontalResolution = horizontalResolution;
 
     short verticalResolution;
-    fileRead(&verticalResolution, 2, 1, stream);
+    if (fileRead(&verticalResolution, 2, 1, stream) != 1) return -1;
     pcxHeader->verticalResolution = verticalResolution;
 
     for (int index = 0; index < 48; index++) {
-        pcxHeader->palette[index] = fileReadChar(stream);
+        ch = fileReadChar(stream);
+        if (ch == -1) return -1;
+        pcxHeader->palette[index] = (unsigned char)ch;
     }
 
-    pcxHeader->reserved1 = fileReadChar(stream);
-    pcxHeader->planeCount = fileReadChar(stream);
+    ch = fileReadChar(stream);
+    if (ch == -1) return -1;
+    pcxHeader->reserved1 = (unsigned char)ch;
+
+    ch = fileReadChar(stream);
+    if (ch == -1) return -1;
+    pcxHeader->planeCount = (unsigned char)ch;
 
     short bytesPerLine;
-    fileRead(&bytesPerLine, 2, 1, stream);
+    if (fileRead(&bytesPerLine, 2, 1, stream) != 1) return -1;
     pcxHeader->bytesPerLine = bytesPerLine;
 
     short paletteType;
-    fileRead(&paletteType, 2, 1, stream);
+    if (fileRead(&paletteType, 2, 1, stream) != 1) return -1;
     pcxHeader->paletteType = paletteType;
 
     short horizontalScreenSize;
-    fileRead(&horizontalScreenSize, 2, 1, stream);
+    if (fileRead(&horizontalScreenSize, 2, 1, stream) != 1) return -1;
     pcxHeader->horizontalScreenSize = horizontalScreenSize;
 
     short verticalScreenSize;
-    fileRead(&verticalScreenSize, 2, 1, stream);
+    if (fileRead(&verticalScreenSize, 2, 1, stream) != 1) return -1;
     pcxHeader->verticalScreenSize = verticalScreenSize;
 
     for (int index = 0; index < 54; index++) {
-        pcxHeader->reserved2[index] = fileReadChar(stream);
+        ch = fileReadChar(stream);
+        if (ch == -1) return -1;
+        pcxHeader->reserved2[index] = (unsigned char)ch;
     }
+
+    return 0;
 }
 
 // 0x49636C pcxDecodeScanline
@@ -147,7 +173,10 @@ unsigned char* pcxRead(const char* path, int* widthPtr, int* heightPtr, unsigned
     }
 
     PcxHeader pcxHeader;
-    pcxReadHeader(&pcxHeader, stream);
+    if (pcxReadHeader(&pcxHeader, stream) != 0) {
+        fileClose(stream);
+        return nullptr;
+    }
 
     int width = pcxHeader.maxX - pcxHeader.minX + 1;
     int height = pcxHeader.maxY - pcxHeader.minY + 1;

@@ -321,6 +321,10 @@ static bool fontManagerFind(int font, FontManager** fontManagerPtr)
 // 0x4D59B0 GNW_text_to_buf
 static void textFontDrawImpl(unsigned char* buf, const char* string, int length, int pitch, int color)
 {
+    if (gCurrentTextFontDescriptor == nullptr) {
+        return;
+    }
+
     if ((color & FONT_SHADOW) != 0) {
         color &= ~FONT_SHADOW;
         fontDrawText(buf + pitch + 1, string, length, pitch, _colorTable[0]);

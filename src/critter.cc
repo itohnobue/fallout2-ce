@@ -760,7 +760,9 @@ int critterGetKillType(Object* obj)
     }
 
     Proto* proto;
-    protoGetProto(obj->pid, &proto);
+    if (protoGetProto(obj->pid, &proto) == -1) {
+        return -1;
+    }
 
     return proto->critter.data.killType;
 }

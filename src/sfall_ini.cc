@@ -615,9 +615,28 @@ void op_get_ini_string(Program* program)
 {
     const char* string = programStackPopString(program);
 
+    // Parse the triplet to identify section and key for fallback lookup.
+    // UM-01: Mirror the op_get_ini_setting pattern — try sfall INI first,
+    // then fall back to contentConfigLookupSfallString for migrated keys.
+    char fileName[kFileNameMaxSize];
+    char section[kSectionMaxSize];
+    const char* keyPtr = parse_ini_triplet(string, fileName, section);
+
     char value[256];
     if (sfall_ini_get_string(string, value, sizeof(value))) {
         programStackPushString(program, value);
+    } else if (keyPtr != nullptr) {
+        // Config bridge: when a ddraw.ini key is not found, fall back to
+        // gContentConfig (game.cfg). This enables RPU/Et Tu scripts that
+        // call get_ini_string("ddraw.ini|Misc|SomeKey") to receive the
+        // correct value from the migrated config even when ddraw.ini does
+        // not exist on disk.
+        const char* fallbackValue = contentConfigLookupSfallString(section, keyPtr);
+        if (fallbackValue != nullptr) {
+            programStackPushString(program, fallbackValue);
+        } else {
+            programStackPushString(program, "");
+        }
     } else {
         // Return an empty string for not-found (consistent with the name
         // "get_ini_string"). Returning -1 as integer would cause a type

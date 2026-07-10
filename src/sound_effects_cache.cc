@@ -397,7 +397,7 @@ static void soundEffectsCacheFreeHandles()
     if (_sfxc_files_open) {
         for (int index = 0; index < SOUND_EFFECTS_MAX_COUNT; index++) {
             SoundEffect* soundEffect = &(gSoundEffects[index]);
-            if (!soundEffect->used) {
+            if (soundEffect->used) {
                 soundEffectsCacheFileClose(index);
             }
         }

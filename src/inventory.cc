@@ -1069,9 +1069,19 @@ void inventoryResetInvenApCost()
     gInventoryApCost = kDefaultInventoryApCost;
 }
 
+int inventoryGetRawApCost()
+{
+    return gInventoryApCost;
+}
+
 void inventorySetQuickPocketsApCostReduction(int reduction)
 {
     kQuickPocketsApCostReduction = reduction;
+}
+
+int inventoryGetQuickPocketsApCostReduction()
+{
+    return kQuickPocketsApCostReduction;
 }
 
 // inven_set_dude

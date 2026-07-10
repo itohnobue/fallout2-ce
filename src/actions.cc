@@ -484,7 +484,7 @@ int _show_death(Object* obj, int anim)
     int fid;
 
     objectGetRect(obj, &dirtyRect);
-    if (anim < 48 && anim > 63) {
+    if (anim < 48 || anim > 63) {
         fid = buildFid(OBJ_TYPE_CRITTER, obj->fid & 0xFFF, anim + 28, (obj->fid & 0xF000) >> 12, obj->rotation + 1);
         if (objectSetFid(obj, fid, &tempRect) == 0) {
             rectUnion(&dirtyRect, &tempRect, &dirtyRect);
@@ -878,6 +878,25 @@ int _action_ranged(Attack* attack, int anim)
                         int startRotation;
                         int endRotation;
                         explosionGetPattern(&startRotation, &endRotation);
+
+                        // Clamp pattern values to valid rotation range
+                        // to prevent OOB on adjacentObjects[ROTATION_COUNT].
+                        if (startRotation < 0) {
+                            startRotation = 0;
+                        }
+                        if (endRotation < 0) {
+                            endRotation = 0;
+                        }
+                        if (startRotation > ROTATION_COUNT) {
+                            startRotation = ROTATION_COUNT;
+                        }
+                        if (endRotation > ROTATION_COUNT) {
+                            endRotation = ROTATION_COUNT;
+                        }
+                        if (startRotation > endRotation) {
+                            startRotation = 0;
+                            endRotation = 0;
+                        }
 
                         for (int rotation = startRotation; rotation < endRotation; rotation++) {
                             if (objectCreateWithFidPid(&(adjacentObjects[rotation]), explosionFid, -1) != -1) {

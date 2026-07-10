@@ -358,8 +358,15 @@ int elevatorSelectLevel(int elevator, int* mapPtr, int* elevationPtr, int* tileP
     }
 
     if (index < ELEVATOR_LEVEL_MAX) {
-        if (elevatorDescription[*elevationPtr + index].tile != -1) {
-            *elevationPtr += index;
+        int targetLevel = *elevationPtr + index;
+
+        // Validate that target level is within bounds before indexing
+        // elevatorDescription. The sum could exceed ELEVATOR_LEVEL_MAX - 1,
+        // causing an OOB read on the 4-element array.
+        if (targetLevel >= 0 && targetLevel < ELEVATOR_LEVEL_MAX) {
+            if (elevatorDescription[targetLevel].tile != -1) {
+                *elevationPtr += index;
+            }
         }
     }
 
