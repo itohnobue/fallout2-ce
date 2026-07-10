@@ -541,9 +541,9 @@ Program* programCreateByPath(const char* path)
     fileRead(data, 1, fileSize, stream);
     fileClose(stream);
 
-    if (fileSize < 46) {
+    if (fileSize < 118) {
         internal_free_safe(data, __FILE__, __LINE__);
-        programFatalError("Invalid .int file '%s': size %d is too small (minimum 46 bytes)\n", path, fileSize);
+        programFatalError("Invalid .int file '%s': size %d is too small (minimum 118 bytes)\n", path, fileSize);
         return nullptr;
     }
 
@@ -562,8 +562,36 @@ Program* programCreateByPath(const char* path)
     program->data = data;
     program->dataSize = fileSize;
     program->procedures = data + 42;
-    program->identifiers = 24 * stackReadInt32(program->procedures, 0) + program->procedures + 4;
-    program->staticStrings = program->identifiers + stackReadInt32(program->identifiers, 0) + 4;
+
+    const int procedureCount = stackReadInt32(program->procedures, 0);
+    // Guard against integer overflow in procedure-table size computation.
+    // Check BEFORE computing procedureTableSize — signed multiplication of
+    // large values is undefined behavior (C++17 [expr.mul]/4).  INT_MAX/24
+    // (89,478,485) is the largest procedureCount for which 24*procedureCount
+    // cannot overflow a signed 32-bit int.
+    if (procedureCount < 0 || procedureCount > INT_MAX / 24) {
+        programFree(program);
+        programFatalError("Invalid .int file '%s': procedure count %d causes overflow\n", path, procedureCount);
+        return nullptr;
+    }
+    const int procedureTableSize = 24 * procedureCount;
+
+    program->identifiers = procedureTableSize + program->procedures + 4;
+    // Validate identifiers pointer is within the data buffer with room for the size header
+    if (program->identifiers + 4 > program->data + program->dataSize) {
+        programFree(program);
+        programFatalError("Invalid .int file '%s': procedure table extends past end of data\n", path);
+        return nullptr;
+    }
+
+    const int identifierTableSize = stackReadInt32(program->identifiers, 0);
+    program->staticStrings = program->identifiers + 4 + identifierTableSize;
+    // Validate staticStrings pointer is within the data buffer with room for the size header
+    if (program->staticStrings + 4 > program->data + program->dataSize) {
+        programFree(program);
+        programFatalError("Invalid .int file '%s': identifier table extends past end of data\n", path);
+        return nullptr;
+    }
 
     program->stackValues = new ProgramStack();
     program->returnStackValues = new ProgramStack();
@@ -582,7 +610,11 @@ opcode_t programGetNextOpcode(Program* program)
         programFatalError("programGetNextOpcode: negative instruction pointer %d", instructionPointer);
     }
 
-    if (instructionPointer + 2 > program->dataSize) {
+    // Use unsigned comparison to avoid signed integer overflow when
+    // instructionPointer is near INT_MAX. If instructionPointer is
+    // INT_MAX - 1, signed addition would wrap negative and bypass
+    // the bounds check.
+    if (static_cast<size_t>(instructionPointer) + 2 > static_cast<size_t>(program->dataSize)) {
         programFatalError("programGetNextOpcode: bytecode read out of bounds (instructionPointer=%d, dataSize=%d)", instructionPointer, program->dataSize);
     }
 
@@ -612,6 +644,13 @@ char* programGetString(Program* program, opcode_t opcode, int offset)
 // 0x46790C
 char* programGetIdentifier(Program* program, int offset)
 {
+    // Validate offset is within the identifiers table bounds.
+    // identifiers points to the start of the identifier section
+    // (with a 4-byte size header), and staticStrings points just
+    // past the end. The offset is relative to identifiers.
+    if (offset < 0 || program->identifiers + offset >= program->staticStrings) {
+        return nullptr;
+    }
     return (char*)(program->identifiers + offset);
 }
 
@@ -2976,7 +3015,26 @@ void programInterpret(Program* program, int numInstructions)
     if (setjmp(program->env)) {
         // longjmp from programFatalError()
         gInterpreterCurrentProgram = oldCurrentProgram;
-        program->flags |= PROGRAM_FLAG_EXITED | PROGRAM_FLAG_FATAL_ERROR;
+
+        // If this program is a child call, clear the parent's
+        // CHILD_CALL/CHILD_SPAWN flags. The normal exit path at
+        // lines 3066-3074 does this, but the longjmp path returns
+        // before reaching that code, permanently blocking the
+        // parent from future execution.
+        Program* parent = program->parent;
+        if (parent != nullptr) {
+            parent->flags &= ~(PROGRAM_FLAG_CHILD_CALL | PROGRAM_FLAG_CHILD_SPAWN);
+            if (parent->child == program) {
+                parent->child = nullptr;
+            }
+            program->parent = nullptr;
+        }
+
+        // Clear all transient flags, keeping only EXITED and FATAL_ERROR.
+        // Stale flags (RUNNING, WAITING, CHILD_CALL, CHILD_SPAWN,
+        // CRITICAL_SECTION, FINISHED, STOPPED) would permanently block
+        // future execution if left set after error recovery.
+        program->flags = PROGRAM_FLAG_EXITED | PROGRAM_FLAG_FATAL_ERROR;
         program->exited = true;
         return;
     }
@@ -3130,6 +3188,12 @@ void programExecuteProcedureAsync(Program* program, int procedureIndex)
     int procedureFlags;
     char err[256];
 
+    if (procedureIndex < 0 || procedureIndex >= program->procedureCount()) {
+        snprintf(err, sizeof(err), "programExecuteProcedureAsync: procedureIndex %d out of bounds (count: %d)\n", procedureIndex, program->procedureCount());
+        _interpretOutput(err);
+        return;
+    }
+
     procedurePtr = program->procedures + 4 + sizeof(Procedure) * procedureIndex;
     procedureFlags = stackReadInt32(procedurePtr, offsetof(Procedure, flags));
     if ((procedureFlags & PROCEDURE_FLAG_IMPORTED) != 0) {
@@ -3185,6 +3249,12 @@ int programFindProcedure(Program* program, const char* name)
 {
     int procedureCount = program->procedureCount();
 
+    // Guard against corrupted procedure count in .int file.
+    if (procedureCount < 0
+        || static_cast<size_t>(4) + static_cast<size_t>(procedureCount) * sizeof(Procedure) > static_cast<size_t>(program->dataSize) - 42) {
+        return -1;
+    }
+
     unsigned char* ptr = program->procedures + 4;
     for (int index = 0; index < procedureCount; index++) {
         int identifierOffset = stackReadInt32(ptr, offsetof(Procedure, nameOffset));
@@ -3213,6 +3283,11 @@ void programExecuteProcedure(Program* program, int procedureIndex)
 
     if (program == nullptr || program->procedures == nullptr) {
         return;
+    }
+
+    if (procedureIndex < 0 || procedureIndex >= program->procedureCount()) {
+        snprintf(err, sizeof(err), "programExecuteProcedure: procedureIndex %d out of bounds (count: %d)\n", procedureIndex, program->procedureCount());
+        programFatalError(err);
     }
 
     procedurePtr = program->procedures + 4 + sizeof(Procedure) * procedureIndex;
@@ -3270,6 +3345,14 @@ static void doEvents()
 
     while (programListNode != nullptr) {
         procedureCount = stackReadInt32(programListNode->program->procedures, 0);
+
+        // Guard against corrupted procedure count in .int file.
+        // Equivalent to: 4 + procedureCount * sizeof(Procedure) <= dataSize - 42
+        if (procedureCount < 0
+            || static_cast<size_t>(4) + static_cast<size_t>(procedureCount) * sizeof(Procedure) > static_cast<size_t>(programListNode->program->dataSize) - 42) {
+            programListNode = programListNode->next;
+            continue;
+        }
 
         procedurePtr = programListNode->program->procedures + 4;
         for (procedureIndex = 0; procedureIndex < procedureCount; procedureIndex++) {

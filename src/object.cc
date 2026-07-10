@@ -513,10 +513,10 @@ static int objectLoadAllInternal(File* stream)
 
     if (objectCount != 0) {
         gObjectFids = (int*)internal_malloc(sizeof(*gObjectFids) * objectCount);
-        memset(gObjectFids, 0, sizeof(*gObjectFids) * objectCount);
         if (gObjectFids == nullptr) {
             return -1;
         }
+        memset(gObjectFids, 0, sizeof(*gObjectFids) * objectCount);
         gObjectFidsLength = 0;
     }
 
@@ -575,8 +575,8 @@ static int objectLoadAllInternal(File* stream)
 
             Inventory* inventory = &(objectListNode->obj->data.inventory);
             if (inventory->length != 0) {
-                if (inventory->capacity <= 0 || inventory->capacity > 99999) {
-                    debugPrint("Invalid inventory capacity %d\n", inventory->capacity);
+                if (inventory->capacity <= 0 || inventory->capacity > 99999 || inventory->length > inventory->capacity) {
+                    debugPrint("Invalid inventory: capacity %d, length %d\n", inventory->capacity, inventory->length);
                     return -1;
                 }
                 inventory->items = (InventoryItem*)internal_malloc(sizeof(InventoryItem) * inventory->capacity);
@@ -3616,6 +3616,7 @@ static int _obj_load_obj(File* stream, Object** objectPtr, int elevation, Object
         debugPrint("\nError: invalid object art fid: %u\n", obj->fid);
         // NOTE: Uninline.
         objectDeallocate(&obj);
+        *objectPtr = nullptr;
         return -2;
     }
 
@@ -3633,6 +3634,13 @@ static int _obj_load_obj(File* stream, Object** objectPtr, int elevation, Object
         inventory->items = nullptr;
         *objectPtr = obj;
         return 0;
+    }
+
+    if (inventory->length > inventory->capacity) {
+        debugPrint("Invalid inventory: length %d exceeds capacity %d\n", inventory->length, inventory->capacity);
+        objectDeallocate(&obj);
+        *objectPtr = nullptr;
+        return -1;
     }
 
     InventoryItem* inventoryItems = inventory->items = (InventoryItem*)internal_malloc(sizeof(*inventoryItems) * inventory->capacity);
@@ -3699,6 +3707,9 @@ int _obj_load_dude(File* stream)
 
     Object* temp;
     int rc = _obj_load_obj(stream, &temp, -1, nullptr);
+    if (rc != 0) {
+        return rc;
+    }
 
     memcpy(gDude, temp, sizeof(*gDude));
 

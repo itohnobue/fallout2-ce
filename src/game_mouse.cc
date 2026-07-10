@@ -488,7 +488,7 @@ int _gmouse_is_scrolling()
         int x;
         int y;
         mouseGetPosition(&x, &y);
-        if (x == _scr_size.left || x == _scr_size.right || y == _scr_size.top || y == _scr_size.bottom) {
+        if (x <= _scr_size.left || x >= _scr_size.right || y <= _scr_size.top || y >= _scr_size.bottom) {
             switch (gGameMouseCursor) {
             case MOUSE_CURSOR_SCROLL_NW:
             case MOUSE_CURSOR_SCROLL_N:
@@ -1729,8 +1729,7 @@ int gameMouseRenderPrimaryAction(int x, int y, int menuItem, int width, int heig
     Art* arrowFrm = artLock(arrowFid, &arrowFrmHandle);
     if (arrowFrm == nullptr) {
         artUnlock(menuItemFrmHandle);
-        // FIXME: Why this is success?
-        return 0;
+        return -1;
     }
 
     unsigned char* arrowFrmData = artGetFrameData(arrowFrm, 0, 0);

@@ -569,6 +569,18 @@ static void op_set_sfall_global(Program* program)
     ProgramValue value = programStackPopValue(program);
     ProgramValue variable = programStackPopValue(program);
 
+    // F-647: Reject float/pointer variable keys — set_sfall_global only
+    // supports int or string keys. Float keys silently consumed in the old
+    // code (the float-value branch checks STRING/INT, the int-value branch
+    // falls through to the "unsupported value type" error at line ~613).
+    // String keys with pointer-value payloads would similarly be dropped
+    // without any diagnostic, making debugging nearly impossible.
+    if (!variable.isInt() && (variable.opcode & VALUE_TYPE_MASK) != VALUE_TYPE_STRING) {
+        programPrintError("set_sfall_global: variable key must be int or string, got %s",
+            variable.typeDebugString());
+        return;
+    }
+
     if (value.isFloat()) {
         // Float values use parallel float storage to preserve precision.
         if ((variable.opcode & VALUE_TYPE_MASK) == VALUE_TYPE_STRING) {
@@ -1935,8 +1947,11 @@ static void op_get_array(Program* program)
             programStackPushString(program, buf);
         }
     } else {
-        // Unsupported type combination (e.g. float arrayId or non-int key on
-        // string arrayId). Push 0 to maintain stack balance.
+        // F-648: Float/pointer arrayId silently pushed 0 with no diagnostic.
+        // Scripts cannot distinguish "empty element" from "invalid arrayId type".
+        // Log the error so mod authors can diagnose the crash.
+        programPrintError("get_array: arrayId must be int or string, got %s",
+            arrayId.typeDebugString());
         programStackPushInteger(program, 0);
     }
 }
@@ -3302,6 +3317,21 @@ static void op_div(Program* program)
 {
     ProgramValue divisorValue = programStackPopValue(program);
     ProgramValue dividendValue = programStackPopValue(program);
+
+    // F-633: Reject non-numeric operands (string, pointer, dynamic string).
+    // Vanilla opDivide calls programFatalError for non-numeric types; CE's
+    // op_div must do the same to prevent silent nonsense results when scripts
+    // accidentally push strings onto the stack before calling div.
+    if (!dividendValue.isInt() && !dividendValue.isFloat()) {
+        programFatalError("%s: div: dividend operand must be numeric, got %s",
+            program->name, dividendValue.typeDebugString());
+        return;
+    }
+    if (!divisorValue.isInt() && !divisorValue.isFloat()) {
+        programFatalError("%s: div: divisor operand must be numeric, got %s",
+            program->name, divisorValue.typeDebugString());
+        return;
+    }
 
     // Zero-division check: for float values, compare as float to catch -0.0f
     // (IEEE 754 bit pattern 0x80000000 ≠ 0 integer, bypassing the integer check).
@@ -6484,18 +6514,27 @@ void sfallOpcodeStateSave()
     // Per-critter hit chance overrides — serialized as indexed key/value pairs.
     // Format: kGlVarHitChCtrCnt stores entry count, "SFHCkNNN" stores key
     // (Object::id), "SFHCmNNN" stores mod, "SFHCxNNN" stores max for entry NNN.
-    // NOTE: Object::id is a runtime counter from scriptsNewObjectId() and is
-    // unstable across save/load — restored entries will not match post-load
-    // object IDs. The data is persisted so that scripts which re-establish
-    // overrides via set_critter_hit_chance_mod after load can verify they
-    // were correctly applied. See matching comment in sfallOpcodeStateLoad().
+    //
+    // F-388: Object::id is a runtime counter from scriptsNewObjectId() and is
+    // unstable across save/load — restored entries WILL NOT match post-load
+    // object IDs. The data is persisted ONLY so that scripts which re-establish
+    // overrides via set_critter_hit_chance_mod after load can verify they were
+    // correctly applied.  Scripts MUST NOT rely on auto-restoration of
+    // per-critter hit-chance overrides across save/load cycles; they must
+    // re-apply them in a global script's "load" handler via hs_glob.int.
+    // See matching comment in sfallOpcodeStateLoad().
+    //
+    // WARNING: These keys are NOT stable.  If a critter is destroyed and
+    // re-created, its Object::id changes.  Use the critter's PID (proto ID)
+    // or a string key derived from script-owned stable identifiers for
+    // persistent per-critter state.
     int hcCount = static_cast<int>(gCritterHitChanceOverrides.size());
     sfall_gl_vars_store(kGlVarHitChCtrCnt, hcCount);
     idx = 0;
     for (const auto& entry : gCritterHitChanceOverrides) {
         char key[16] = {};
         sprintf(key, "SFHCk%03d", idx);
-        sfall_gl_vars_store(key, entry.first);           // critter Object::id
+        sfall_gl_vars_store(key, entry.first);           // critter Object::id (UNSTABLE — see F-388 above)
         sprintf(key, "SFHCm%03d", idx);
         sfall_gl_vars_store(key, entry.second.mod);      // mod value
         sprintf(key, "SFHCx%03d", idx);

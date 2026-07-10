@@ -4511,9 +4511,14 @@ static int attackComputeCriticalHit(Attack* attack)
     else
         effect = 5;
 
+    int defenderHitLocation = attack->defenderHitLocation;
+    if (defenderHitLocation < 0 || defenderHitLocation >= HIT_LOCATION_COUNT) {
+        defenderHitLocation = HIT_LOCATION_UNCALLED;
+    }
+
     CriticalHitDescription* criticalHitDescription;
     if (defender == gDude) {
-        criticalHitDescription = &(gPlayerCriticalHitTable[attack->defenderHitLocation][effect]);
+        criticalHitDescription = &(gPlayerCriticalHitTable[defenderHitLocation][effect]);
     } else {
         int killType = critterGetKillType(defender);
         // SFALL: Fix I2-M035 — bounds check killType before using as
@@ -4523,7 +4528,7 @@ static int attackComputeCriticalHit(Attack* attack)
         if (killType < 0 || killType >= SFALL_KILL_TYPE_COUNT) {
             killType = 0;
         }
-        criticalHitDescription = &(gCriticalHitTables[killType][attack->defenderHitLocation][effect]);
+        criticalHitDescription = &(gCriticalHitTables[killType][defenderHitLocation][effect]);
     }
 
     attack->defenderFlags |= criticalHitDescription->flags;
@@ -5330,8 +5335,12 @@ void _apply_damage(Attack* attack, bool animated)
 // 0x424EE8
 static void _check_for_death(Object* object, int damage, int* flags)
 {
-    if (object == nullptr || !critterFlagCheck(object->pid, CRITTER_INVULNERABLE)) {
-        if (object == nullptr || PID_TYPE(object->pid) == OBJ_TYPE_CRITTER) {
+    if (object == nullptr) {
+        return;
+    }
+
+    if (!critterFlagCheck(object->pid, CRITTER_INVULNERABLE)) {
+        if (PID_TYPE(object->pid) == OBJ_TYPE_CRITTER) {
             if (damage > 0) {
                 if (critterGetHitPoints(object) - damage <= 0) {
                     *flags |= DAM_DEAD;
@@ -7191,6 +7200,12 @@ static void unarmedInitCustom()
 
 int unarmedGetDamage(int hitMode, int* minDamagePtr, int* maxDamagePtr)
 {
+    if (hitMode < 0 || hitMode >= HIT_MODE_COUNT) {
+        if (minDamagePtr != nullptr) *minDamagePtr = 0;
+        if (maxDamagePtr != nullptr) *maxDamagePtr = 0;
+        return 0;
+    }
+
     UnarmedHitDescription* hitDescription = &(gUnarmedHitDescriptions[hitMode]);
     *minDamagePtr = hitDescription->minDamage;
     *maxDamagePtr = hitDescription->maxDamage;
@@ -7199,18 +7214,30 @@ int unarmedGetDamage(int hitMode, int* minDamagePtr, int* maxDamagePtr)
 
 int unarmedGetBonusCriticalChance(int hitMode)
 {
+    if (hitMode < 0 || hitMode >= HIT_MODE_COUNT) {
+        return 0;
+    }
+
     UnarmedHitDescription* hitDescription = &(gUnarmedHitDescriptions[hitMode]);
     return hitDescription->bonusCriticalChance;
 }
 
 int unarmedGetActionPointCost(int hitMode)
 {
+    if (hitMode < 0 || hitMode >= HIT_MODE_COUNT) {
+        return 0;
+    }
+
     UnarmedHitDescription* hitDescription = &(gUnarmedHitDescriptions[hitMode]);
     return hitDescription->actionPointCost;
 }
 
 bool unarmedIsPenetrating(int hitMode)
 {
+    if (hitMode < 0 || hitMode >= HIT_MODE_COUNT) {
+        return false;
+    }
+
     UnarmedHitDescription* hitDescription = &(gUnarmedHitDescriptions[hitMode]);
     return hitDescription->isPenetrate;
 }

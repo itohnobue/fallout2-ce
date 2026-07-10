@@ -1061,7 +1061,7 @@ static void opDisplayMsg(Program* program)
 
     if (settings.debug.show_script_messages) {
         debugPrint("\n");
-        debugPrint(string);
+        debugPrint("%s", string);
     }
 }
 
@@ -4694,7 +4694,12 @@ static void opSfxBuildCharName(Program* program)
 
     if (obj != nullptr) {
         char soundEffectName[16];
-        strcpy(soundEffectName, sfxBuildCharName(obj, anim, extra));
+        const char* sndName = sfxBuildCharName(obj, anim, extra);
+        if (sndName != nullptr) {
+            strcpy(soundEffectName, sndName);
+        } else {
+            soundEffectName[0] = '\0';
+        }
         programStackPushString(program, soundEffectName);
     } else {
         scriptPredefinedError(program, "sfx_build_char_name", SCRIPT_ERROR_OBJECT_IS_NULL);
@@ -5184,7 +5189,7 @@ static void opDebugMessage(Program* program)
     if (string != nullptr) {
         if (settings.debug.show_script_messages) {
             debugPrint("\n");
-            debugPrint(string);
+            debugPrint("%s", string);
         }
     }
 }

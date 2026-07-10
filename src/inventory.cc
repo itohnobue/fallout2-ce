@@ -2600,7 +2600,10 @@ static void _switch_hand(Object* sourceItem, Object** targetSlot, Object** sourc
 
             Object* existingItem = *targetSlot;
             *targetSlot = nullptr;
-            if (itemAdd(_inven_dude, existingItem, 1) != 0) {
+            // When browsing container contents, add displaced hand item to
+            // player's base inventory, not the container being browsed.
+            Object* addTarget = (_curr_stack > 0) ? _stack[0] : _inven_dude;
+            if (itemAdd(addTarget, existingItem, 1) != 0) {
                 itemAdd(_inven_dude, sourceItem, 1);
                 return;
             }

@@ -1130,7 +1130,6 @@ void interfaceBarRefresh()
         interfaceOverlayRender();
         windowRefresh(gInterfaceBarWindow);
     }
-    indicatorBarRefresh();
 }
 
 static int counterAnimationBaseDelayMs()

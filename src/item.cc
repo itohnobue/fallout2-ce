@@ -699,7 +699,9 @@ static bool _item_identical(Object* item1, Object* item2)
     }
 
     Proto* proto;
-    protoGetProto(item1->pid, &proto);
+    if (protoGetProto(item1->pid, &proto) == -1) {
+        return false;
+    }
     if (proto->item.type == ITEM_TYPE_CONTAINER) {
         return false;
     }
@@ -765,7 +767,9 @@ int itemGetType(Object* item)
     }
 
     Proto* proto;
-    protoGetProto(item->pid, &proto);
+    if (protoGetProto(item->pid, &proto) == -1) {
+        return ITEM_TYPE_MISC;
+    }
 
     return proto->item.type;
 }
@@ -789,7 +793,9 @@ int itemGetSize(Object* item)
     }
 
     Proto* proto;
-    protoGetProto(item->pid, &proto);
+    if (protoGetProto(item->pid, &proto) == -1) {
+        return 0;
+    }
 
     return proto->item.size;
 }
@@ -802,7 +808,9 @@ int itemGetWeight(Object* item)
     }
 
     Proto* proto;
-    protoGetProto(item->pid, &proto);
+    if (protoGetProto(item->pid, &proto) == -1) {
+        return 0;
+    }
     int weight = proto->item.weight;
 
     // NOTE: Uninline.
@@ -863,7 +871,9 @@ int itemGetCost(Object* obj)
     }
 
     Proto* proto;
-    protoGetProto(obj->pid, &proto);
+    if (protoGetProto(obj->pid, &proto) == -1) {
+        return 0;
+    }
 
     int cost = proto->item.cost;
 
@@ -880,9 +890,9 @@ int itemGetCost(Object* obj)
                 int ammoTypePid = weaponGetAmmoTypePid(obj);
                 if (ammoTypePid != -1) {
                     Proto* ammoProto;
-                    protoGetProto(ammoTypePid, &ammoProto);
-
-                    cost += ammoQuantity * ammoProto->item.cost / ammoProto->item.data.ammo.quantity;
+                    if (protoGetProto(ammoTypePid, &ammoProto) != -1) {
+                        cost += ammoQuantity * ammoProto->item.cost / ammoProto->item.data.ammo.quantity;
+                    }
                 }
             }
         }
@@ -918,7 +928,9 @@ int objectGetCost(Object* obj)
         InventoryItem* inventoryItem = &(inventory->items[index]);
         if (itemGetType(inventoryItem->item) == ITEM_TYPE_AMMO) {
             Proto* proto;
-            protoGetProto(inventoryItem->item->pid, &proto);
+            if (protoGetProto(inventoryItem->item->pid, &proto) == -1) {
+                continue;
+            }
 
             // Ammo stack in inventory is a bit special. It is counted in clips,
             // `inventoryItem->quantity` is the number of clips. The ammo object
@@ -3055,6 +3067,12 @@ int drugEffectEventRead(File* stream, void** dataPtr)
 
     if (fileReadInt32List(stream, drugEffectEvent->stats, 3) == -1) goto err;
     if (fileReadInt32List(stream, drugEffectEvent->modifiers, 3) == -1) goto err;
+    // drugPid is NOT serialized — the original save format only has 6 int32s per event
+    // (stats[3] + modifiers[3]). Serializing it as a 7th int32 shifts stream position
+    // by 4 bytes on old saves (1.2R/1.3R), corrupting the entire event queue.
+    // drugPid is set at runtime via _insert_drug_effect() and only needed during
+    // _drug_effect_allowed() — it does not need to survive save/load.
+    drugEffectEvent->drugPid = 0;
 
     *dataPtr = drugEffectEvent;
     return 0;
@@ -3072,6 +3090,7 @@ int drugEffectEventWrite(File* stream, void* data)
 
     if (fileWriteInt32List(stream, drugEffectEvent->stats, 3) == -1) return -1;
     if (fileWriteInt32List(stream, drugEffectEvent->modifiers, 3) == -1) return -1;
+    // drugPid intentionally NOT serialized — see drugEffectEventRead for rationale.
 
     return 0;
 }

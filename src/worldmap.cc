@@ -1862,6 +1862,9 @@ static int wmParseEncounterSubEncStr(EncounterTableEntry* encounterTableEntry, c
     }
 
     while (string != nullptr) {
+        if (encounterTableEntry->subEntiesLength >= 6) {
+            return -1;
+        }
         EncounterTableSubEntry* encounterTableSubEntry = &(encounterTableEntry->subEntries[encounterTableEntry->subEntiesLength]);
 
         // NOTE: Uninline.
@@ -3883,6 +3886,10 @@ static int wmRndEncounterOccurred(int* mapToLoadPtr)
         dayPart = DAY_PART_MORNING;
     }
 
+    if (wmGenData.currentSubtile == nullptr) {
+        return 0;
+    }
+
     int frequency = wmFreqValues[wmGenData.currentSubtile->encounterChance[dayPart]];
     if (frequency > 0 && frequency < 100) {
         int modifier = frequency / 15;
@@ -5368,11 +5375,11 @@ static int wmInterfaceExit()
             artUnlock(tile->handle);
             tile->handle = INVALID_CACHE_ENTRY;
             tile->data = nullptr;
+        }
 
-            if (tile->walkMaskData != nullptr) {
-                internal_free(tile->walkMaskData);
-                tile->walkMaskData = nullptr;
-            }
+        if (tile->walkMaskData != nullptr) {
+            internal_free(tile->walkMaskData);
+            tile->walkMaskData = nullptr;
         }
     }
 

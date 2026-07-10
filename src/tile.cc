@@ -1305,9 +1305,24 @@ void tileRenderRoofsInRect(Rect* rect, int elevation)
         minY = 0;
     }
 
-    // FIXME: Probably a bug - testing X, then changing Y.
-    if (minX >= gSquareGridHeight) {
+    if (minY >= gSquareGridHeight) {
         minY = gSquareGridHeight - 1;
+    }
+
+    if (maxX < 0) {
+        maxX = 0;
+    }
+
+    if (maxX >= gSquareGridWidth) {
+        maxX = gSquareGridWidth - 1;
+    }
+
+    if (maxY < 0) {
+        maxY = 0;
+    }
+
+    if (maxY >= gSquareGridHeight) {
+        maxY = gSquareGridHeight - 1;
     }
 
     int light = lightGetAmbientIntensity();

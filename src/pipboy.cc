@@ -2566,6 +2566,7 @@ static int pipboyRenderScreensaver()
 
     unsigned char* buf = (unsigned char*)internal_malloc(412 * 374);
     if (buf == nullptr) {
+        _gmouse_enable();
         return -1;
     }
 

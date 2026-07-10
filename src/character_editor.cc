@@ -1335,7 +1335,6 @@ static int characterEditorWindowInit()
         while (--i >= 0) {
             _editorFrmImages[i].unlock();
         }
-        return -1;
 
         _editorBackgroundFrmImage.unlock();
 
@@ -6743,9 +6742,31 @@ static void perkDialogRefreshTraits()
 
     perkDialogDrawTraits(gPerkDialogOptionCount);
 
+    int trait = gPerkDialogOptionList[gPerkDialogTopLine + gPerkDialogCurrentLine].value;
     char* traitName = gPerkDialogOptionList[gPerkDialogTopLine + gPerkDialogCurrentLine].name;
-    char* tratDescription = traitGetDescription(gPerkDialogOptionList[gPerkDialogTopLine + gPerkDialogCurrentLine].value);
-    int frmId = traitGetFrmId(gPerkDialogOptionList[gPerkDialogTopLine + gPerkDialogCurrentLine].value);
+    char* tratDescription;
+    int frmId;
+
+    // F-038 + F-043: Handle fake traits (negative value) in card refresh,
+    // following the same pattern as perkDialogRefreshPerks for fake perks.
+    if (trait < 0) {
+        int fakeIdx = -(trait + 1);
+        int fakeTraitCount;
+        const FakeTraitEntry* fakeTraits = sfallGetFakeTraits(&fakeTraitCount);
+        if (fakeIdx >= 0 && fakeIdx < fakeTraitCount) {
+            const FakeTraitEntry& ft = fakeTraits[fakeIdx];
+            frmId = ft.image;
+            traitName = ft.name ? ft.name : const_cast<char*>("(unknown)");
+            tratDescription = ft.desc;
+        } else {
+            frmId = 0;
+            tratDescription = nullptr;
+        }
+    } else {
+        tratDescription = traitGetDescription(trait);
+        frmId = traitGetFrmId(trait);
+    }
+
     perkDialogDrawCard(frmId, traitName, nullptr, tratDescription);
 
     windowRefresh(gPerkDialogWindow);

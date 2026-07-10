@@ -497,6 +497,11 @@ public:
         } else {
             if (idxIt == keyIndex.end()) {
                 if (size() >= ARRAY_MAX_SIZE) {
+                    // F-342: Silently rejecting new elements at capacity makes
+                    // debugging nearly impossible — log the diagnostic so
+                    // mod authors can see why their array writes are dropped.
+                    debugPrint("SFallArrayAssoc::SetArray: array at max capacity %d, rejecting new key\n",
+                               ARRAY_MAX_SIZE);
                     return;
                 }
                 int newIndex = static_cast<int>(pairs.size());
@@ -832,9 +837,17 @@ void SetArrayFromExpression(const ProgramValue& key, const ProgramValue& val, Pr
         // Resize to key+1 so the element at key can be stored.
         // Previous code grew by only 1 (size+1), which silently
         // dropped non-sequential key assignments where key > size.
-        int newSize = targetIndex + 1;
-        if (newSize > ARRAY_MAX_SIZE) {
+        // F-341: Guard against integer overflow when targetIndex == INT_MAX.
+        // targetIndex+1 wraps to INT_MIN, producing a negative newSize that
+        // would be silently rejected or cause UB in ResizeArray.
+        int newSize;
+        if (targetIndex >= INT_MAX) {
             newSize = ARRAY_MAX_SIZE;
+        } else {
+            newSize = targetIndex + 1;
+            if (newSize > ARRAY_MAX_SIZE) {
+                newSize = ARRAY_MAX_SIZE;
+            }
         }
         arr->ResizeArray(newSize);
     }

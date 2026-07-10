@@ -433,10 +433,14 @@ void mf_set_ini_setting(OpcodeContext& ctx)
         // SpeedMulti, InventoryApCost) see the new value without waiting for
         // a game reset. Without this, gameReset() re-reads stale values from
         // gSfallConfig and overwrites script-set values.
+        //
+        // F-363: Only sync to gSfallConfig for ddraw.ini keys. Previously ALL
+        // ini files (custom mod configs, etc.) were written to gSfallConfig,
+        // polluting the sfall default-config namespace with arbitrary keys.
         char cfgFileName[kFileNameMaxSize];
         char cfgSection[kSectionMaxSize];
         const char* cfgKey = parse_ini_triplet(triplet, cfgFileName, cfgSection);
-        if (cfgKey != nullptr) {
+        if (cfgKey != nullptr && compat_stricmp(cfgFileName, "ddraw.ini") == 0) {
             if (value.isString()) {
                 const char* strVal = value.asString(ctx.program());
                 configSetString(&gSfallConfig, cfgSection, cfgKey, strVal);
@@ -599,9 +603,30 @@ void op_get_ini_setting(Program* program)
         int fallbackValue = contentConfigLookupSfallInt(section, keyPtr);
         if (fallbackValue >= 0) {
             programStackPushInteger(program, fallbackValue);
-        } else {
-            programStackPushInteger(program, -1);
+            return;
         }
+
+        // F-356: AllowUnsafeScripting is not in the static content config
+        // migration table. Fall back to the CE global directly.
+        if (compat_stricmp(fileName, "ddraw.ini") == 0
+            && compat_stricmp(section, "Debugging") == 0
+            && compat_stricmp(keyPtr, "AllowUnsafeScripting") == 0) {
+            programStackPushInteger(program, gAllowUnsafeScripting ? 1 : 0);
+            return;
+        }
+
+        // F-362: When ddraw.ini doesn't exist on disk and the content config
+        // bridge didn't have the key, fall back to gSfallConfig defaults.
+        // Scripts querying ddraw.ini keys expect to receive the default values
+        // that were parsed at startup even when the file is absent.
+        if (compat_stricmp(fileName, "ddraw.ini") == 0) {
+            if (configGetInt(&gSfallConfig, section, keyPtr, &fallbackValue)) {
+                programStackPushInteger(program, fallbackValue);
+                return;
+            }
+        }
+
+        programStackPushInteger(program, -1);
     } else {
         // Return -1 for ALL error conditions (key not found, file not found,
         // parse error). Returning distinct codes (-2, -3) collides with valid

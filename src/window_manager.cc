@@ -1180,9 +1180,22 @@ int windowGetAtPoint(int x, int y)
 {
     for (int index = gWindowsLength - 1; index >= 0; index--) {
         Window* window = gWindows[index];
+
+        // Skip hidden windows — they should not receive mouse input.
+        if ((window->flags & WINDOW_HIDDEN) != 0) {
+            continue;
+        }
+
         if (x >= window->rect.left && x <= window->rect.right
             && y >= window->rect.top && y <= window->rect.bottom) {
             return window->id;
+        }
+
+        // If this visible window is modal, it blocks all windows below it.
+        // The point was not inside this modal window, so nothing below it
+        // should receive the event.
+        if ((window->flags & WINDOW_MODAL) != 0) {
+            return -1;
         }
     }
 
@@ -1253,7 +1266,11 @@ int _win_check_all_buttons()
             break;
         }
 
-        if ((gWindows[index]->flags & WINDOW_MODAL) != 0) {
+        // A visible modal window blocks all windows below it, but a hidden
+        // one should not — otherwise a hidden modal window permanently
+        // prevents all button input.
+        if ((gWindows[index]->flags & WINDOW_MODAL) != 0
+            && (gWindows[index]->flags & WINDOW_HIDDEN) == 0) {
             break;
         }
     }
@@ -1850,8 +1867,14 @@ int _GNW_check_buttons(Window* window, int* keyCodePtr)
 
                 if (!(prevHoveredButton->flags & BUTTON_FLAG_DISABLED)) {
                     if (prevHoveredButton->mouseExitProc != nullptr) {
-                        prevHoveredButton->mouseExitProc(prevHoveredButton->id, *keyCodePtr);
-                        if (!(prevHoveredButton->flags & BUTTON_FLAG_0x40)) {
+                        // Save button ID and flags before callback: the
+                        // callback may destroy the button (e.g. via
+                        // scriptWindowDeleteButton), making prevHoveredButton
+                        // a dangling pointer.
+                        int savedBtnId = prevHoveredButton->id;
+                        int savedFlags = prevHoveredButton->flags;
+                        prevHoveredButton->mouseExitProc(savedBtnId, *keyCodePtr);
+                        if (buttonGetButton(savedBtnId, nullptr) != nullptr && !(savedFlags & BUTTON_FLAG_0x40)) {
                             *keyCodePtr = -1;
                         }
                     }

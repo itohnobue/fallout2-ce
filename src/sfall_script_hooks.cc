@@ -16,6 +16,7 @@
 #include "game.h"
 #include "interface.h"
 #include "interpreter_extra.h"
+#include "light.h"
 #include "queue.h"
 #include "random.h"
 #include "scripts.h"
@@ -219,7 +220,9 @@ void ScriptHookCall::call()
     // leakage (R-05: if _numRetVals were only reset once before the loop,
     // a later handler setting fewer return values than an earlier handler
     // would leave stale values at higher indices, creating mixed return sets).
-    for (int i = hooksOfType.size() - 1; i >= 0; --i) {
+    // F-650: Use explicit int cast before subtraction to avoid
+    // size_t→int narrowing UB when hooksOfType is empty.
+    for (int i = static_cast<int>(hooksOfType.size()) - 1; i >= 0; --i) {
         const auto& hook = hooksOfType[i];
         _scriptArgs = 0;
         _scriptRetVals = 0;
@@ -1282,6 +1285,16 @@ int scriptHooks_UseItem(Object* user, Object* objUsed)
     // F-07: Validate return value — valid codes are -1 (engine handler),
     // 0 (place back), 1 (remove), or 2 (drop).
     if (overrideResult >= -1 && overrideResult <= 2) {
+        // F-624: Post-hook liveness check. The hook script may have destroyed
+        // the item (e.g., via destroy_object) and returned -1, which tells the
+        // caller (proto_instance.cc) to use the engine handler — but the caller
+        // dereferences objUsed after receiving -1, causing use-after-free.
+        // If the object was destroyed, override to 0 (place back) to prevent
+        // the caller from touching freed memory.
+        if (overrideResult == -1 && objUsed != nullptr && objectFindById(objUsed->id) == nullptr) {
+            debugPrint("HOOK_USEOBJ: item %d destroyed during hook — replacing -1 with 0\n", objUsed->id);
+            return 0;
+        }
         return overrideResult;
     }
     debugPrint("HOOK_USEOBJ: ignoring invalid return value %d (expected -1..2)\n", overrideResult);
@@ -1321,6 +1334,13 @@ int scriptHooks_UseItemOn(Object* user, Object* target, Object* objUsed)
     // F-07: Validate return value — valid codes are -1 (engine handler),
     // 0 (place back), 1 (remove), or 2 (drop).
     if (overrideResult >= -1 && overrideResult <= 2) {
+        // F-624: Post-hook liveness check (mirrors HOOK_USEOBJ). The hook
+        // script may destroy objUsed and return -1; the caller dereferences
+        // it after receiving -1. If destroyed, return 0 to prevent UAF.
+        if (overrideResult == -1 && objUsed != nullptr && objectFindById(objUsed->id) == nullptr) {
+            debugPrint("HOOK_USEOBJON: item %d destroyed during hook — replacing -1 with 0\n", objUsed->id);
+            return 0;
+        }
         return overrideResult;
     }
     debugPrint("HOOK_USEOBJON: ignoring invalid return value %d (expected -1..2)\n", overrideResult);
@@ -1623,7 +1643,14 @@ int scriptHooks_UseAnimObj(Object* object, int animId, int delay)
     hook.call();
 
     if (hook.numReturnValues() > 0) {
-        return hook.getReturnValueAt(0).asInt();
+        int overrideAnim = hook.getReturnValueAt(0).asInt();
+        // F-651: Validate the animation ID is within the valid AnimationType
+        // range [0, ANIM_COUNT-1]. Unvalidated anim IDs can cause OOB array
+        // accesses in the animation registry.
+        if (overrideAnim >= 0 && overrideAnim < ANIM_COUNT) {
+            return overrideAnim;
+        }
+        debugPrint("HOOK_USEANIMOBJ: ignoring invalid anim ID %d (expected 0..%d)\n", overrideAnim, ANIM_COUNT - 1);
     }
 
     return animId;
@@ -1692,7 +1719,10 @@ void scriptHooks_SetLighting(Object* object, int* lightIntensityPtr, int* lightD
     if (lightIntensityPtr != nullptr && hook.numReturnValues() >= 1) {
         const int overrideIntensity = hook.getReturnValueAt(0).asInt();
         if (overrideIntensity != -1) {
-            *lightIntensityPtr = overrideIntensity;
+            // F-651: Clamp intensity to the engine's documented light range.
+            // Negative or exceptionally large values can cause rendering artifacts
+            // or integer overflow in downstream light calculations.
+            *lightIntensityPtr = std::clamp(overrideIntensity, LIGHT_INTENSITY_MIN, LIGHT_INTENSITY_MAX);
         }
     }
 
@@ -1731,13 +1761,21 @@ void scriptHooks_CarTravel(int* speedPtr, int* fuelConsumptionPtr)
 
     int speedOverride = hook.getReturnValueAt(0).asInt();
     if (speedOverride >= 0) {
-        *speedPtr = speedOverride;
+        // F-651: Clamp car speed to a reasonable range. Negative values
+        // are rejected; extreme values can cause starvation or infinite
+        // loops in the world-map travel tick handler.
+        constexpr int CAR_SPEED_MAX = 100;
+        *speedPtr = std::min(speedOverride, CAR_SPEED_MAX);
     }
 
     if (hook.numReturnValues() > 1) {
         int fuelOverride = hook.getReturnValueAt(1).asInt();
         if (fuelOverride >= 0) {
-            *fuelConsumptionPtr = fuelOverride;
+            // F-651: Cap fuel consumption to prevent scripts from
+            // injecting arbitrarily high values that overflow the fuel
+            // tracking counter.
+            constexpr int CAR_FUEL_MAX = 1000;
+            *fuelConsumptionPtr = std::min(fuelOverride, CAR_FUEL_MAX);
         }
     }
 }
@@ -1833,13 +1871,23 @@ void scriptHooks_Sneak(int* resultPtr, int* durationPtr, Object* critter)
 
     const int overrideResult = hook.getReturnValueAt(0).asInt();
     if (overrideResult != -1) {
-        *resultPtr = overrideResult;
+        // F-651: Clamp result to valid sneak-check outcomes (0=fail, 1=success).
+        // Arbitrary integer values could feed bogus state into the sneak system.
+        if (overrideResult == 0 || overrideResult == 1) {
+            *resultPtr = overrideResult;
+        } else {
+            debugPrint("HOOK_SNEAK: ignoring invalid result override %d (expected 0 or 1)\n", overrideResult);
+        }
     }
 
     if (hook.numReturnValues() > 1) {
         const int overrideDuration = hook.getReturnValueAt(1).asInt();
         if (overrideDuration >= 0) {
-            *durationPtr = overrideDuration;
+            // F-651: Cap duration to a reasonable maximum (60 game minutes
+            // = 600 ticks).  Arbitrarily large durations lock the sneak state
+            // permanently and break save/load round-trips.
+            constexpr int SNEAK_DURATION_MAX = 600;
+            *durationPtr = std::min(overrideDuration, SNEAK_DURATION_MAX);
         }
     }
 }

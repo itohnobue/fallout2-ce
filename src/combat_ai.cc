@@ -262,13 +262,14 @@ static const int _rmatchHurtVals[5] = {
 // Hit points in percent to choose run away mode.
 //
 // 0x518138 hp_run_away_value
-static const int _hp_run_away_value[6] = {
-    0,
-    25,
-    40,
-    60,
-    75,
-    100,
+static const int _hp_run_away_value[RUN_AWAY_MODE_COUNT] = {
+    0,   // none
+    25,  // coward
+    40,  // finger_hurts
+    60,  // bleeding
+    75,  // not_feeling_good
+    100, // tourniquet
+    0,   // never — never run away (0% HP threshold)
 };
 
 // 0x518150 attackerTeamObj
@@ -805,7 +806,10 @@ char* combat_ai_name(int packet_num)
 {
     int index;
 
-    if (packet_num < 0 || packet_num >= gAiPacketsLength) {
+    // packet_num is a semantic identifier (AiPacket::packet_num),
+    // not an array index. Only reject negative values here; the
+    // search loop naturally returns nullptr for non-existent packets.
+    if (packet_num < 0) {
         return nullptr;
     }
 
@@ -3723,12 +3727,13 @@ int critterSetAiPacket(Object* object, int aiPacket)
         return -1;
     }
 
-    // Validate AI packet number against known packet range.
-    // Unvalidated packet numbers are the root cause of nullptr crashes
-    // at all aiGetPacket dereference sites — a script can pass any
-    // integer via critter_add_trait(CRITTER_TRAIT_OBJECT_AI_PACKET, N).
-    if (aiPacket < 0 || aiPacket >= gAiPacketsLength) {
-        debugPrint("critterSetAiPacket: AI packet %d out of bounds [0, %d)\n", aiPacket, gAiPacketsLength);
+    // Validate AI packet number is non-negative. aiGetPacketByNum
+    // below handles existence checking — aiPacket is a semantic
+    // packet_num identifier, not an array index, so comparing it
+    // against gAiPacketsLength would reject valid packets whose
+    // packet_num happens to be >= the array length.
+    if (aiPacket < 0) {
+        debugPrint("critterSetAiPacket: AI packet %d is negative\n", aiPacket);
         return -1;
     }
 

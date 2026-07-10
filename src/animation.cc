@@ -475,7 +475,7 @@ int reg_anim_clear(Object* a1)
         int animationDescriptionIndex;
         for (animationDescriptionIndex = 0; animationDescriptionIndex < animationSequence->length; animationDescriptionIndex++) {
             AnimationDescription* animationDescription = &(animationSequence->animations[animationDescriptionIndex]);
-            if (a1 != animationDescription->owner || animationDescription->kind == 11) {
+            if (a1 != animationDescription->owner || animationDescription->kind == ANIM_KIND_CALLBACK || animationDescription->kind == ANIM_KIND_CALLBACK3) {
                 continue;
             }
 
@@ -589,7 +589,7 @@ static int _check_registry(Object* obj)
         if (animationSequenceIndex != gAnimationSequenceCurrentIndex && animationSequence->step != ANIM_COMPLETE) {
             for (int animationDescriptionIndex = 0; animationDescriptionIndex < animationSequence->length; animationDescriptionIndex++) {
                 AnimationDescription* animationDescription = &(animationSequence->animations[animationDescriptionIndex]);
-                if (obj == animationDescription->owner && animationDescription->kind != 11) {
+                if (obj == animationDescription->owner && animationDescription->kind != ANIM_KIND_CALLBACK && animationDescription->kind != ANIM_KIND_CALLBACK3) {
                     if ((animationSequence->flags & ANIM_SEQ_INSIGNIFICANT) == 0) {
                         return -1;
                     }
@@ -3386,6 +3386,9 @@ static unsigned int animationComputeTicksPerFrame(Object* object, int fid)
         int speedMulti = 100;
         sfall_gl_vars_fetch(0, speedMulti);
         if (speedMulti != 100) {
+            if (speedMulti > 1000) {
+                speedMulti = 1000;
+            }
             fps = (fps * speedMulti) / 100;
         }
     }

@@ -1963,7 +1963,10 @@ static int lsgPerformSaveGame()
     compat_mkdir(_gmpath);
 
     if (_SaveBackup() == -1) {
-        debugPrint("\nLOADSAVE: Warning, can't backup save file!\n");
+        debugPrint("\nLOADSAVE: ** Error: can't backup save file! Aborting save. **\n");
+        _partyMemberUnPrepSave();
+        backgroundSoundResume();
+        return -1;
     }
 
     snprintf(_gmpath, sizeof(_gmpath), "%s\\%s%.2d\\", "SAVEGAME", "SLOT", _slot_cursor + 1);

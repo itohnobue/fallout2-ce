@@ -216,12 +216,49 @@ static int gEndgameEndingOverlay;
 // causing it to fire again after completion. This guard prevents that.
 static bool gEndgameInProgress = false;
 
+// F-E13: Liveness flag for longjmp recovery.  Set after successful init,
+// before scriptHooks_SlideshowStart().  If a programFatalError longjmp
+// fires during the slideshow body, this flag stays stuck at true.  The
+// recovery guard (F-E13 block below) uses ScriptHookCall::current() as
+// a liveness signal (I2-M35 pattern) to distinguish stuck-from-longjmp
+// from legitimate reentrancy.
+static bool gEndgameSlideshowInBody = false;
+
 // 0x43F788 endgame_slideshow
 void endgamePlaySlideshow()
 {
     // I2-096: Prevent re-entrant entry via script hooks that re-set ENDGAME.
+    // F-631: Auto-recover stale flag left by longjmp during previous
+    // slideshow attempt. If the flag is stuck but the slideshow window
+    // is no longer active, the previous attempt was aborted and we can
+    // safely reset and proceed (similar to _gameModeChangeInProgress
+    // auto-recovery in scriptHooks_GameModeChange).
     if (gEndgameInProgress) {
-        return;
+        if (gEndgameEndingSlideshowWindow == -1 || gEndgameEndingSlideshowWindowBuffer == nullptr) {
+            // F-631: Init failed or slideshow was never started — recover.
+            gEndgameInProgress = false;
+        } else if (gEndgameSlideshowInBody) {
+            // F-E13: In-body flag is stuck, which means a previous
+            // invocation was interrupted after init succeeded (e.g.,
+            // programFatalError longjmp during scriptHooks_SlideshowStart).
+            // Use ScriptHookCall::current() as a liveness signal (I2-M35
+            // pattern) to distinguish stuck-from-longjmp from legitimate
+            // reentrancy: if a hook is actively dispatching, the flag is
+            // legitimate; if no hook is dispatching, the flag is stuck.
+            int stackAnchor = 0;
+            ScriptHookCall::drainStaleEntries(reinterpret_cast<uintptr_t>(&stackAnchor));
+            if (ScriptHookCall::current() == nullptr) {
+                // F-E13: In-body flag is stuck from longjmp. Clean up previous
+                // invocation's windows before re-initializing.
+                endgameEndingSlideshowWindowFree();
+                gEndgameInProgress = false;
+                gEndgameSlideshowInBody = false;
+            } else {
+                return;
+            }
+        } else {
+            return;
+        }
     }
     gEndgameInProgress = true;
 
@@ -229,6 +266,11 @@ void endgamePlaySlideshow()
         gEndgameInProgress = false;
         return;
     }
+
+    // F-E13: Mark that we are past successful init and entering the
+    // slideshow body.  If programFatalError longjmps during slideshow,
+    // this flag stays true and the recovery guard above will detect it.
+    gEndgameSlideshowInBody = true;
 
     // Notify scripts that the game is entering the slideshow mode.
     scriptHooks_SlideshowStart();
@@ -253,6 +295,7 @@ void endgamePlaySlideshow()
 
     // I2-096: Reset re-entrancy guard when slideshow completes normally.
     gEndgameInProgress = false;
+    gEndgameSlideshowInBody = false;
 }
 
 // 0x43F810 endgame_movie

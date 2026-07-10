@@ -905,7 +905,9 @@ int _proto_dude_init(const char* path)
         return -1;
     }
 
-    protoGetProto(gDude->pid, &proto);
+    if (protoGetProto(gDude->pid, &proto) == -1) {
+        return -1;
+    }
 
     _proto_update_init(gDude);
     gDude->data.critter.combat.aiPacket = 0;
@@ -2219,7 +2221,12 @@ int protoGetProto(int pid, Proto** protoPtr)
         return 0;
     }
 
-    ProtoList* protoList = &(_protoLists[PID_TYPE(pid)]);
+    int type = PID_TYPE(pid);
+    if (type < 0 || type >= OBJ_TYPE_COUNT) {
+        return -1;
+    }
+
+    ProtoList* protoList = &(_protoLists[type]);
     ProtoListExtent* protoListExtent = protoList->head;
     while (protoListExtent != nullptr) {
         for (int index = 0; index < protoListExtent->length; index++) {

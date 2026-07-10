@@ -59,7 +59,13 @@ static void audioEngineMixin(void* userData, Uint8* stream, int length)
         std::lock_guard<std::recursive_mutex> lock(soundBuffer->mutex);
 
         if (soundBuffer->active && soundBuffer->playing) {
+            if (soundBuffer->bitsPerSample <= 0 || soundBuffer->channels <= 0) {
+                continue;
+            }
             int srcFrameSize = soundBuffer->bitsPerSample / 8 * soundBuffer->channels;
+            if (srcFrameSize <= 0) {
+                continue;
+            }
 
             unsigned char buffer[1024];
             int pos = 0;

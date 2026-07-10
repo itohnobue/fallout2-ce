@@ -874,10 +874,10 @@ static bool configParseLine(Config* config, char* string)
     char* pch;
 
     // Find comment marker and truncate the string.
+    // NOTE: Only ';' is treated as a comment marker, matching sfall's INI
+    // parser behavior. '#' is NOT treated as a comment marker because sfall
+    // uses '#' in valid INI values (e.g., color values like #FF0000).
     pch = strchr(string, ';');
-    if (pch == nullptr) {
-        pch = strchr(string, '#');
-    }
 
     if (pch != nullptr) {
         *pch = '\0';

@@ -1186,21 +1186,30 @@ int _win_input_str(int win, char* dest, int maxLength, int x, int y, int textCol
                     cursorPos = maxLength - 1;
                 } else {
                     if (keyCode > 0 && keyCode < 256) {
-                        dest[cursorPos] = keyCode;
-                        dest[cursorPos + 1] = '_';
-                        dest[cursorPos + 2] = '\0';
+                        // Guard against buffer overflow: writing dest[cursorPos+2]
+                        // (character + underscore + null terminator) must not
+                        // exceed the buffer. When cursorPos is at maxLength-1,
+                        // only one byte remains — reject the key to prevent
+                        // writing past the buffer.
+                        if (cursorPos + 2 >= maxLength) {
+                            cursorPos--;
+                        } else {
+                            dest[cursorPos] = (char)keyCode;
+                            dest[cursorPos + 1] = '_';
+                            dest[cursorPos + 2] = '\0';
 
-                        int stringWidth = fontGetStringWidth(dest);
-                        bufferFill(buffer, stringWidth, lineHeight, window->width, backgroundColor);
-                        fontDrawText(buffer, dest, stringWidth, window->width, textColor);
+                            int stringWidth = fontGetStringWidth(dest);
+                            bufferFill(buffer, stringWidth, lineHeight, window->width, backgroundColor);
+                            fontDrawText(buffer, dest, stringWidth, window->width, textColor);
 
-                        dirtyRect.left = window->rect.left + x;
-                        dirtyRect.top = window->rect.top + y;
-                        dirtyRect.right = dirtyRect.left + stringWidth;
-                        dirtyRect.bottom = dirtyRect.top + lineHeight;
-                        _GNW_win_refresh(window, &dirtyRect, nullptr);
+                            dirtyRect.left = window->rect.left + x;
+                            dirtyRect.top = window->rect.top + y;
+                            dirtyRect.right = dirtyRect.left + stringWidth;
+                            dirtyRect.bottom = dirtyRect.top + lineHeight;
+                            _GNW_win_refresh(window, &dirtyRect, nullptr);
 
-                        isFirstKey = false;
+                            isFirstKey = false;
+                        }
                     } else {
                         cursorPos--;
                     }

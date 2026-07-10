@@ -379,11 +379,14 @@ long audioSeek(int handle, long offset, int origin)
         if (pos < audioFile->position) {
             soundDecoderFree(audioFile->soundDecoder);
             fileSeek(audioFile->stream, 0, SEEK_SET);
+            int savedFileSize = audioFile->fileSize;
             audioFile->soundDecoder = soundDecoderInit(audioSoundDecoderReadHandler, audioFile->stream, &(audioFile->channels), &(audioFile->sampleRate), &(audioFile->fileSize));
             if (audioFile->soundDecoder == nullptr) {
                 fileClose(audioFile->stream);
                 audioFile->stream = nullptr;
                 audioFile->flags &= ~AUDIO_COMPRESSED;
+                audioFile->fileSize = savedFileSize;
+                audioFile->position = 0;
                 return -1;
             }
             audioFile->position = 0;

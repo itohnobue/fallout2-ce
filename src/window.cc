@@ -657,6 +657,13 @@ void _doRightButtonRelease(int btn, int keyCode)
 // 0x4B7118
 void _setButtonGFX(int width, int height, unsigned char* normal, unsigned char* pressed)
 {
+    // Minimum safe dimensions: the line-drawing operations below use offsets
+    // up to width-4 and height-4. Smaller dimensions cause out-of-bounds
+    // buffer writes.
+    if (width < 5 || height < 5) {
+        return;
+    }
+
     if (normal != nullptr) {
         bufferFill(normal, width, height, width, _colorTable[0]);
         bufferFill(normal + width + 1, width - 2, height - 2, width, intensityColorTable[_colorTable[32767]][89]);
@@ -897,13 +904,6 @@ int scriptWindowResize(const char* windowName, int x, int y, int width, int heig
     // Destroy the old window (but retain the managed window slot).
     windowDestroy(oldWindow);
 
-    // Invalidate stale button IDs: the old window's Button objects were
-    // destroyed along with the window, so any ManagedButton.btn references
-    // now point to freed buttons. Reset to -1 (no-button sentinel).
-    for (int i = 0; i < managedWindow->buttonsLength; i++) {
-        managedWindow->buttons[i].btn = -1;
-    }
-
     // Recreate the window with new dimensions.
     managedWindow->width = width;
     managedWindow->height = height;
@@ -913,6 +913,27 @@ int scriptWindowResize(const char* windowName, int x, int y, int width, int heig
         // Creation failed — mark the slot as empty.
         managedWindow->name[0] = '\0';
         return -1;
+    }
+
+    // Recreate buttons in the new window. The Button objects were destroyed
+    // along with the old window, but the ManagedButton image buffers
+    // (normal, pressed, hover) are independently allocated and survive.
+    for (int i = 0; i < managedWindow->buttonsLength; i++) {
+        ManagedButton* button = &(managedWindow->buttons[i]);
+        button->btn = buttonCreate(
+            managedWindow->window,
+            button->x, button->y,
+            button->width, button->height,
+            -1, -1, -1, -1,
+            button->normal, button->pressed, button->hover,
+            button->field_18);
+        buttonSetMouseCallbacks(button->btn, _doButtonOn, _doButtonOff, _doButtonPress, _doButtonRelease);
+        if (off_672D98 != nullptr || off_672D9C != nullptr) {
+            buttonSetCallbacks(button->btn, off_672D98, off_672D9C);
+        }
+        if ((button->field_18 & BUTTON_FLAG_TRANSPARENT) != 0) {
+            buttonSetMask(button->btn, button->normal);
+        }
     }
 
     return 0;
@@ -947,13 +968,6 @@ int scriptWindowScale(const char* windowName, int x, int y, int width, int heigh
     // Destroy the old window (but retain the managed window slot).
     windowDestroy(oldWindow);
 
-    // Invalidate stale button IDs: the old window's Button objects were
-    // destroyed along with the window, so any ManagedButton.btn references
-    // now point to freed buttons. Reset to -1 (no-button sentinel).
-    for (int i = 0; i < managedWindow->buttonsLength; i++) {
-        managedWindow->buttons[i].btn = -1;
-    }
-
     // Recreate the window with new dimensions and reset scale to 1.0.
     managedWindow->width = width;
     managedWindow->height = height;
@@ -965,6 +979,27 @@ int scriptWindowScale(const char* windowName, int x, int y, int width, int heigh
         // Creation failed — mark the slot as empty.
         managedWindow->name[0] = '\0';
         return -1;
+    }
+
+    // Recreate buttons in the new window. The Button objects were destroyed
+    // along with the old window, but the ManagedButton image buffers
+    // (normal, pressed, hover) are independently allocated and survive.
+    for (int i = 0; i < managedWindow->buttonsLength; i++) {
+        ManagedButton* button = &(managedWindow->buttons[i]);
+        button->btn = buttonCreate(
+            managedWindow->window,
+            button->x, button->y,
+            button->width, button->height,
+            -1, -1, -1, -1,
+            button->normal, button->pressed, button->hover,
+            button->field_18);
+        buttonSetMouseCallbacks(button->btn, _doButtonOn, _doButtonOff, _doButtonPress, _doButtonRelease);
+        if (off_672D98 != nullptr || off_672D9C != nullptr) {
+            buttonSetCallbacks(button->btn, off_672D98, off_672D9C);
+        }
+        if ((button->field_18 & BUTTON_FLAG_TRANSPARENT) != 0) {
+            buttonSetMask(button->btn, button->normal);
+        }
     }
 
     return 0;
@@ -1057,8 +1092,25 @@ bool scriptWindowGotoXY(int x, int y)
     }
 
     ManagedWindow* managedWindow = &(gManagedWindows[gCurrentManagedWindowIndex]);
-    managedWindow->cursorX = (int)(x * managedWindow->scaleX);
-    managedWindow->cursorY = (int)(y * managedWindow->scaleY);
+    int cursorX = (int)(x * managedWindow->scaleX);
+    int cursorY = (int)(y * managedWindow->scaleY);
+
+    // Clamp cursor to window bounds.
+    if (cursorX < 0) {
+        cursorX = 0;
+    }
+    if (cursorX >= managedWindow->width) {
+        cursorX = managedWindow->width - 1;
+    }
+    if (cursorY < 0) {
+        cursorY = 0;
+    }
+    if (cursorY >= managedWindow->height) {
+        cursorY = managedWindow->height - 1;
+    }
+
+    managedWindow->cursorX = cursorX;
+    managedWindow->cursorY = cursorY;
 
     return true;
 }
@@ -1259,6 +1311,20 @@ void windowPrintBuf(int win, char* string, int stringLength, int width, int maxY
 
     if (stringHeight + y > windowGetHeight(win)) {
         stringHeight = windowGetHeight(win) - y;
+    }
+
+    int winWidth = windowGetWidth(win);
+    if (x < 0) {
+        width += x;
+        x = 0;
+    }
+    if (x + width > winWidth) {
+        width = winWidth - x;
+    }
+    if (width <= 0) {
+        internal_free_safe(backgroundBuffer, __FILE__, __LINE__);
+        internal_free_safe(stringCopy, __FILE__, __LINE__);
+        return;
     }
 
     if ((flags & 0x2000000) != 0) {
@@ -1534,12 +1600,17 @@ bool scriptWindowDisplayBuf(unsigned char* src, int srcWidth, int srcHeight, int
 
     ManagedWindow* managedWindow = &(gManagedWindows[gCurrentManagedWindowIndex]);
 
+    int srcOffsetX = 0;
+    int srcOffsetY = 0;
+
     if (destX < 0) {
+        srcOffsetX = -destX;
         destWidth += destX;
         destX = 0;
     }
 
     if (destY < 0) {
+        srcOffsetY = -destY;
         destHeight += destY;
         destY = 0;
     }
@@ -1562,7 +1633,7 @@ bool scriptWindowDisplayBuf(unsigned char* src, int srcWidth, int srcHeight, int
 
     unsigned char* windowBuffer = windowGetBuffer(managedWindow->window);
 
-    blitBufferToBuffer(src,
+    blitBufferToBuffer(src + srcOffsetY * srcWidth + srcOffsetX,
         destWidth,
         destHeight,
         srcWidth,
@@ -2683,7 +2754,7 @@ void _drawScaled(unsigned char* dest, int destWidth, int destHeight, int destPit
                 *dest++ = src[offset];
                 offset += stepX;
 
-                srcPosX += stepX;
+                srcPosX += incrementX;
                 if (srcPosX >= 0x10000) {
                     offset++;
                     srcPosX &= 0xFFFF;
@@ -2760,7 +2831,7 @@ void _drawScaledBuf(unsigned char* dest, int destWidth, int destHeight, unsigned
                 *dest++ = src[offset];
                 offset += stepX;
 
-                srcPosX += stepX;
+                srcPosX += incrementX;
                 if (srcPosX >= 0x10000) {
                     offset++;
                     srcPosX &= 0xFFFF;
