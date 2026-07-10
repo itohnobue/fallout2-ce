@@ -202,6 +202,7 @@ bool configGetString(Config* config, const char* sectionKey, const char* key, ch
         return false;
     }
     if (!configGetString(config, sectionKey, key, valuePtr) || (*valuePtr)[0] == '\0') {
+        *valuePtr = nullptr;
         if (defaultValue != nullptr) {
             // Return defaultValue directly. No copy is performed to avoid the
             // static-buffer sharing issue where consecutive calls corrupt prior

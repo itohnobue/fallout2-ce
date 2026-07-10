@@ -41,7 +41,7 @@ static void ListSort(std::vector<T>& arr, int type, Compare cmp)
         std::sort(arr.rbegin(), arr.rend(), cmp);
         break;
     case ARRAY_ACTION_REVERSE: // reverse elements
-        std::reverse(arr.rbegin(), arr.rend());
+        std::reverse(arr.begin(), arr.end());
         break;
     case ARRAY_ACTION_SHUFFLE: // shuffle elements
         std::random_device rd;
@@ -1188,11 +1188,24 @@ bool sfallArraysLoad(File* stream)
 
         // For non-associative arrays, use the actual element count as the
         // initial size so CreateArray creates a list (not a map). CreateArray
-        // forces ASSOC for len<=0 per sfall convention.
-        int initLen = isAssoc ? -1 : static_cast<int>(elements.size());
+        // forces ASSOC for len<=0 per sfall convention.  When the list is
+        // empty, pass count=1 to force list type, then immediately resize to 0
+        // — the same workaround used by ListAsArray (line 881).
+        int initLen;
+        if (isAssoc) {
+            initLen = -1;
+        } else {
+            initLen = static_cast<int>(elements.size());
+            if (initLen == 0) {
+                initLen = 1; // CreateArray forces ASSOC for len<=0; use 1 then resize
+            }
+        }
         ArrayId id = CreateArray(initLen, safeFlags);
         SFallArray* arr = get_array_by_id(id);
         if (arr == nullptr) return false;
+        if (!isAssoc && elements.empty()) {
+            arr->ResizeArray(0);
+        }
         arr->loadFlatElements(std::move(elements));
 
         _state->savedArrays.emplace(std::move(key), id);

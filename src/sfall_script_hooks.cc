@@ -1610,16 +1610,23 @@ Obj     arg0 - the object being animated
 int     arg1 - the animation ID (ANIM_STAND or other)
 int     arg2 - the animation delay (0 for immediate)
 */
-void scriptHooks_UseAnimObj(Object* object, int animId, int delay)
+int scriptHooks_UseAnimObj(Object* object, int animId, int delay)
 {
     if (scriptHooks[HOOK_USEANIMOBJ].empty()) {
-        return;
+        return animId;
     }
 
     // UH-10: maxReturnValues=1 to allow scripts to override the animation
     // (previously 0, which prevented any return value — the opcode guard
     // at sfall_opcodes.cc blocks at maxReturnValues==0).
-    ScriptHookCall(HOOK_USEANIMOBJ, 1, { object, animId, delay }).call();
+    ScriptHookCall hook(HOOK_USEANIMOBJ, 1, { object, animId, delay });
+    hook.call();
+
+    if (hook.numReturnValues() > 0) {
+        return hook.getReturnValueAt(0).asInt();
+    }
+
+    return animId;
 }
 
 /*

@@ -651,7 +651,7 @@ bool messageListRepositoryInit()
         return false;
     }
 
-    char* fileList;
+    char* fileList = nullptr;
     configGetString(&gContentConfig, CONTENT_CONFIG_TEXT_SECTION, "extra_msg_file_list", &fileList, nullptr);
 
     char path[COMPAT_MAX_PATH];

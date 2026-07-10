@@ -2166,13 +2166,12 @@ void mf_r_get_ini_string(OpcodeContext& ctx)
         return;
     }
 
-    // Try string value. sfall_ini_get_string returns true even for missing keys
-    // (because the parser handles the triplet format correctly), so we must
-    // additionally check that the returned string is non-empty to confirm the
-    // key was actually found. An empty result means the key doesn't exist.
+    // Try string value. Use 'found' parameter to distinguish key-found
+    // from key-not-found (empty default is returned for missing keys).
     char stringValue[256];
-    if (sfall_ini_get_string(triplet, stringValue, sizeof(stringValue))
-        && stringValue[0] != '\0') {
+    bool found = false;
+    if (sfall_ini_get_string(triplet, stringValue, sizeof(stringValue), &found)
+        && found) {
         ctx.setReturn(stringValue);
         return;
     }
@@ -3820,6 +3819,8 @@ void sfall_metarules_reset()
     gTalkingHeadMood = -1;
     gDrugDataOverrides.clear();
     gInterfaceOverlayState = {};
+    // F-M17: Reset party cooperative combat flag — clean state on new game / load.
+    gPartyCooperativeCombat = false;
 
     // Forward reset state to the worldmap runtime consumer layer.
     // Without this, worldmap.cc's gWorldmapHealTime / gRestHealTime /
@@ -3835,7 +3836,7 @@ void sfall_metarules_reset()
 //
 // Persistence format (simple tagged binary):
 // Persistence format (simple tagged binary):
-//   Version int32 (currently 8)
+//   Version int32 (currently 9)
 //   For each scalar: int32 value
 //   For each map: int32 count, then (key, value) pairs
 //   For each set: int32 count, then values
@@ -3845,7 +3846,7 @@ void sfall_metarules_reset()
 // On load, if the version marker doesn't match, the function returns early
 // (sfall_metarules_reset() has already restored defaults) — forward compatibility.
 
-#define METARULES_SAVE_VERSION 8
+#define METARULES_SAVE_VERSION 9
 
 // F-41: Maximum entries for save/load metarule collections.
 // Prevents infinite loops on corrupt save data with absurd count values.
@@ -4197,6 +4198,24 @@ bool sfall_metarules_save(File* stream)
     // Version 7 addition: talking head mood override (F-011 fix).
     if (fileWriteInt32(stream, gTalkingHeadMood) == -1) return false;
 
+    // Version 9: serialize pending timer events so remove_timer_event state
+    // survives save/load round-trips (F-M20). Without this, timers removed
+    // before saving re-appear after loading because gPendingTimerEvents was
+    // not persisted.
+    {
+        int timerCount = static_cast<int>(gPendingTimerEvents.size());
+        if (fileWriteInt32(stream, timerCount) == -1) return false;
+        for (const auto& event : gPendingTimerEvents) {
+            if (fileWriteInt32(stream, event.opcode) == -1) return false;
+            if (fileWriteInt32(stream, event.delay) == -1) return false;
+            if (fileWriteInt32(stream, event.timerId) == -1) return false;
+        }
+        if (fileWriteInt32(stream, gNextTimerId) == -1) return false;
+    }
+
+    // F-M17: Persist gPartyCooperativeCombat
+    if (fileWriteInt32(stream, gPartyCooperativeCombat ? 1 : 0) == -1) return false;
+
     return true;
 }
 
@@ -4357,6 +4376,30 @@ bool sfall_metarules_load(File* stream)
         if (fileReadInt32(stream, &gTalkingHeadMood) == -1) return false;
     }
 
+    // Version 9: restore pending timer events so remove_timer_event correctly
+    // cancels timers that were removed before the save (F-M20). For version ≤8
+    // saves, gPendingTimerEvents stays empty (sfall_metarules_reset already
+    // cleared it), which matches the pre-persistence behavior — timers queued
+    // at save time survive (no double-persistence).
+    if (version >= 9) {
+        int timerCount;
+        if (fileReadInt32(stream, &timerCount) == -1) return false;
+        if (timerCount < 0 || timerCount > MAX_TIMER_EVENTS) return false;
+        gPendingTimerEvents.clear();
+        for (int i = 0; i < timerCount; i++) {
+            PendingTimerEvent event;
+            if (fileReadInt32(stream, &event.opcode) == -1) return false;
+            if (fileReadInt32(stream, &event.delay) == -1) return false;
+            if (fileReadInt32(stream, &event.timerId) == -1) return false;
+            gPendingTimerEvents.push_back(event);
+        }
+        if (fileReadInt32(stream, &gNextTimerId) == -1) return false;
+        // F-M17: Load gPartyCooperativeCombat
+        int partyCoop;
+        if (fileReadInt32(stream, &partyCoop) == -1) return false;
+        gPartyCooperativeCombat = (partyCoop != 0);
+    }
+
     return true;
 }
 
@@ -4385,6 +4428,40 @@ bool sfallGetExplosiveOverrideDelay(int pid, int* outDelay)
         return false;
     }
     if (outDelay) *outDelay = it->second.delay;
+    return true;
+}
+
+// Public accessor: returns true if the given PID has an explosive override
+// with a positive radius, populating outRadius. Used by explosiveGetDamage()
+// to wire per-item radius into the global gExplosionRadius setting.
+bool sfallGetExplosiveOverrideRadius(int pid, int* outRadius)
+{
+    auto it = gExplosiveOverrides.find(pid);
+    if (it == gExplosiveOverrides.end()) {
+        return false;
+    }
+    if (it->second.radius <= 0) {
+        return false;
+    }
+    if (outRadius) *outRadius = it->second.radius;
+    return true;
+}
+
+// Public accessor: returns true if the given PID has an explosive override
+// with a non-zero pattern, populating outStartRotation (0) and outEndRotation
+// from the stored pattern value. Used by explosiveGetDamage() to wire per-item
+// pattern into the global gExplosionStartRotation/gExplosionEndRotation settings.
+bool sfallGetExplosiveOverridePattern(int pid, int* outStartRotation, int* outEndRotation)
+{
+    auto it = gExplosiveOverrides.find(pid);
+    if (it == gExplosiveOverrides.end()) {
+        return false;
+    }
+    if (it->second.pattern <= 0) {
+        return false;
+    }
+    if (outStartRotation) *outStartRotation = 0;
+    if (outEndRotation) *outEndRotation = it->second.pattern;
     return true;
 }
 

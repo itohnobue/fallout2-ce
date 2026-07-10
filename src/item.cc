@@ -3695,8 +3695,24 @@ bool explosiveGetDamage(int pid, int* minDamagePtr, int* maxDamagePtr)
 
     // SFALL: Check gExplosiveOverrides for custom explosives set via
     // item_make_explosive metarule. If an override exists, return its
-    // configured damage values directly.
+    // configured damage values and apply per-item radius/pattern to the
+    // global explosion settings so the engine's explosion code consumes them.
     if (sfallGetExplosiveOverrideDamage(pid, minDamagePtr, maxDamagePtr)) {
+        // F-M18: Consume per-item radius override — apply to the global
+        // gExplosionRadius so weaponGetGrenadeExplosionRadius /
+        // weaponGetRocketExplosionRadius pick it up during combat targeting.
+        int overrideRadius;
+        if (sfallGetExplosiveOverrideRadius(pid, &overrideRadius)) {
+            explosionSetRadius(overrideRadius);
+        }
+        // F-M18: Consume per-item pattern override — apply to the global
+        // gExplosionStartRotation / gExplosionEndRotation so the projectile
+        // explosion code in actionExplode (actions.cc:880) uses it.
+        int overrideStartRotation;
+        int overrideEndRotation;
+        if (sfallGetExplosiveOverridePattern(pid, &overrideStartRotation, &overrideEndRotation)) {
+            explosionSetPattern(overrideStartRotation, overrideEndRotation);
+        }
         return true;
     }
 

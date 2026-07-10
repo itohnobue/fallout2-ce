@@ -511,7 +511,7 @@ bool scriptHooks_InvenWield(Object* critter, Object* item, InvenSlot slot, int i
 bool scriptHooks_CanUseWeapon(bool result, Object* critter, Object* weapon, int hitMode);
 
 // Hook fire functions for Phase 2
-void scriptHooks_UseAnimObj(Object* object, int animId, int delay);
+int scriptHooks_UseAnimObj(Object* object, int animId, int delay);
 void scriptHooks_DescriptionObj(Object* examiner, Object* target, std::string& description);
 void scriptHooks_SetLighting(Object* object, int* lightIntensityPtr, int* lightDistancePtr);
 

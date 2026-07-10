@@ -303,10 +303,10 @@ static int mirrorAsIntSafe(float val) {
         return 0;
     }
     // F-M019 fix: range checks for out-of-range
-    if (val > static_cast<float>(INT_MAX)) {
+    if (val >= static_cast<float>(INT_MAX)) {
         return INT_MAX;
     }
-    if (val < static_cast<float>(INT_MIN)) {
+    if (val <= static_cast<float>(INT_MIN)) {
         return INT_MIN;
     }
     return static_cast<int>(val);
@@ -519,10 +519,10 @@ static int mirrorOpFloorNanGuard(float val) {
     if (std::isnan(floored)) {
         return 0;
     }
-    if (floored < static_cast<float>(INT_MIN)) {
+    if (floored <= static_cast<float>(INT_MIN)) {
         return INT_MIN;
     }
-    if (floored > static_cast<float>(INT_MAX)) {
+    if (floored >= static_cast<float>(INT_MAX)) {
         return INT_MAX;
     }
     return static_cast<int>(floored);

@@ -558,9 +558,10 @@ static constexpr SDL_Scancode kVkToSdl[256] = {
 // UF-H-050: Reverse lookup table — maps SDL_Scancode → VK code.
 // Built lazily from kVkToSdl on first use (see get_vk_from_scancode()).
 // When a scancode maps to multiple VK codes (kVkToSdl has duplicate
-// scancodes, e.g. LSHIFT/RSHIFT both map to their respective scan codes),
-// the first mapping found is used — these are physical-layout duplicates
-// where any VK variant is acceptable for script key identification.
+// scancodes, e.g. VK_SHIFT/VK_LSHIFT both → SDL_SCANCODE_LSHIFT),
+// the LAST mapping found is used — the higher-index VK code (e.g.
+// VK_LSHIFT 0xA0) preserves the left/right modifier distinction
+// that the generic VK code (e.g. VK_SHIFT 0x10) loses.
 static std::unordered_map<SDL_Scancode, int> kSdlScancodeToVk;
 
 /// Returns the VK (Virtual Key) code corresponding to the given SDL scancode,
@@ -571,9 +572,10 @@ static int get_vk_from_scancode(SDL_Scancode sc)
         for (int vk = 0; vk < 256; ++vk) {
             SDL_Scancode mapped = kVkToSdl[vk];
             if (mapped != SDL_SCANCODE_UNKNOWN) {
-                // Insert only the first mapping per scancode (most
-                // significant — duplicate scancodes are physical variants).
-                kSdlScancodeToVk.try_emplace(mapped, vk);
+                // Last-wins: higher-index VK codes (e.g. VK_LSHIFT 0xA0)
+                // overwrite generic ones (e.g. VK_SHIFT 0x10) to preserve
+                // left/right modifier distinction.
+                kSdlScancodeToVk[mapped] = vk;
             }
         }
     }

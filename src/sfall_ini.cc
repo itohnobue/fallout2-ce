@@ -296,9 +296,9 @@ bool sfall_ini_get_int(const char* triplet, int* value)
     return sfall_ini_get_int_detailed(triplet, value) == SFALL_INI_OK;
 }
 
-bool sfall_ini_get_string(const char* triplet, char* value, size_t size)
+bool sfall_ini_get_string(const char* triplet, char* value, size_t size, bool* found)
 {
-    return sfall_ini_get_string_internal(triplet, value, size, nullptr);
+    return sfall_ini_get_string_internal(triplet, value, size, found);
 }
 
 bool sfall_ini_set_int(const char* triplet, int value)
@@ -623,7 +623,8 @@ void op_get_ini_string(Program* program)
     const char* keyPtr = parse_ini_triplet(string, fileName, section);
 
     char value[256];
-    if (sfall_ini_get_string(string, value, sizeof(value))) {
+    bool found = false;
+    if (sfall_ini_get_string(string, value, sizeof(value), &found) && found) {
         programStackPushString(program, value);
     } else if (keyPtr != nullptr) {
         // Config bridge: when a ddraw.ini key is not found, fall back to

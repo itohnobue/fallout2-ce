@@ -826,6 +826,10 @@ bool scriptWindowDelete(const char* windowName)
     managedWindow->window = -1;
     managedWindow->name[0] = '\0';
 
+    if (gCurrentManagedWindowIndex == index) {
+        gCurrentManagedWindowIndex = -1;
+    }
+
     if (managedWindow->buttons != nullptr) {
         for (int index = 0; index < managedWindow->buttonsLength; index++) {
             ManagedButton* button = &(managedWindow->buttons[index]);
@@ -1013,6 +1017,12 @@ int scriptWindowCreate(const char* windowName, int x, int y, int width, int heig
     flags |= WINDOW_MANAGED | WINDOW_USE_DEFAULTS;
 
     managedWindow->window = windowCreate(x, y, width, height, a6, flags);
+
+    if (managedWindow->window == -1) {
+        managedWindow->name[0] = '\0';
+        return -1;
+    }
+
     managedWindow->cursorY = 0;
     managedWindow->cursorX = 0;
     managedWindow->field_4C = a6;

@@ -2129,7 +2129,7 @@ static int floatToIntSafe(float value)
 {
     if (std::isnan(value)) return 0;
     if (std::isinf(value)) return (value > 0) ? INT_MAX : INT_MIN;
-    if (value > static_cast<float>(INT_MAX)) return INT_MAX;
+    if (value >= static_cast<float>(INT_MAX)) return INT_MAX;
     if (value < static_cast<float>(INT_MIN)) return INT_MIN;
     return static_cast<int>(value);
 }

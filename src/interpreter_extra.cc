@@ -1401,9 +1401,9 @@ static void opAnimateStand(Program* program)
     }
 
     if (!animationCheckCombatMode()) {
-        scriptHooks_UseAnimObj(object, ANIM_STAND, 0);
+        int animId = scriptHooks_UseAnimObj(object, ANIM_STAND, 0);
         reg_anim_begin(ANIMATION_REQUEST_UNRESERVED);
-        animationRegisterAnimate(object, ANIM_STAND, 0);
+        animationRegisterAnimate(object, animId, 0);
         reg_anim_end();
     }
 }
@@ -1430,9 +1430,9 @@ static void opAnimateStandReverse(Program* program)
     }
 
     if (!animationCheckCombatMode()) {
-        scriptHooks_UseAnimObj(object, ANIM_STAND, 0);
+        int animId = scriptHooks_UseAnimObj(object, ANIM_STAND, 0);
         reg_anim_begin(ANIMATION_REQUEST_UNRESERVED);
-        animationRegisterAnimateReversed(object, ANIM_STAND, 0);
+        animationRegisterAnimateReversed(object, animId, 0);
         reg_anim_end();
     }
 }
@@ -2290,6 +2290,7 @@ static void opMetarule3(Program* program)
         break;
     default:
         debugPrint("\nIntextra: Error: metarule3: unknown rule %d", rule);
+        result.integerValue = -1;
         break;
     }
 
@@ -3690,6 +3691,7 @@ static void opMetarule(Program* program)
         break;
     default:
         debugPrint("\nIntextra: Error: metarule: unknown rule %d", rule);
+        result = -1;
         break;
     }
 

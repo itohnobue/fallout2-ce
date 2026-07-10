@@ -7004,6 +7004,19 @@ static int perkDialogDrawTraits(int a1)
             }
         }
 
+        // Append fake traits from sfall opcodes (set_fake_trait, opcode 0x81BE).
+        // Use negative indices (-(i + 1)) to distinguish fake traits from
+        // real trait IDs, following the same pattern used for fake perks.
+        int fakeTraitCount;
+        const FakeTraitEntry* fakeTraits = sfallGetFakeTraits(&fakeTraitCount);
+        for (int i = 0; i < fakeTraitCount && count < DIALOG_PICKER_NUM_OPTIONS; i++) {
+            if (fakeTraits[i].active) {
+                gPerkDialogOptionList[count].value = -(i + 1);
+                gPerkDialogOptionList[count].name = fakeTraits[i].name;
+                count++;
+            }
+        }
+
         qsort(gPerkDialogOptionList, count, sizeof(*gPerkDialogOptionList), perkDialogOptionCompare);
 
         for (int index = gPerkDialogTopLine; index < gPerkDialogTopLine + 11; index++) {

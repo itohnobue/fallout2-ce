@@ -338,6 +338,31 @@ TEST_CASE("GetArrayKey — list arrays") {
         CHECK(pv.asInt() == 0);
     }
 
+    SUBCASE("empty list array after resize to 0 still reports list type") {
+        // F-M43: An empty non-associative list array must report as list (0),
+        // not associative (1). This edge case previously broke on save/load
+        // round-trip because CreateArray forces ASSOC for len<=0.
+        ArrayId id = CreateArray(3, 0);
+        ResizeArray(id, 0);
+        CHECK(LenArray(id) == 0);
+        CHECK(GetArrayKey(id, -1, nullptr).asInt() == 0);
+    }
+
+    SUBCASE("CreateArray with len=0 forces associative (documents F-M01 workaround)") {
+        // Documents the engine behavior that F-M01's load path works around:
+        // CreateArray(0, ...) at sfall_arrays.cc:672 forces SFALL_ARRAYFLAG_ASSOC.
+        // The F-M01 fix in sfallArraysLoad uses CreateArray(1, ...) then
+        // ResizeArray(0) to get an empty list array.
+        ArrayId assocId = CreateArray(0, 0); // len=0 -> forced ASSOC
+        CHECK(GetArrayKey(assocId, -1, nullptr).asInt() == 1); // IS associative
+
+        // Verify the workaround pattern produces correct list type:
+        ArrayId listId = CreateArray(1, 0); // len=1 -> NOT forced ASSOC
+        ResizeArray(listId, 0);
+        CHECK(LenArray(listId) == 0);
+        CHECK(GetArrayKey(listId, -1, nullptr).asInt() == 0); // IS list type
+    }
+
 }
 
 TEST_CASE("GetArrayKey — associative arrays") {

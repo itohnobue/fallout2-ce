@@ -3455,6 +3455,11 @@ static int wmWorldMapFunc(int a1)
                 // HOOK_CARTRAVEL: allow mods to override speed and fuel.
                 scriptHooks_CarTravel(&carSteps, &carFuel);
 
+                // Clamp carSteps to prevent near-hang from excessively large
+                // script return values. Natural maximum is 8 (3 base + 5 from
+                // car upgrades); 20 gives scripts generous headroom.
+                carSteps = std::clamp(carSteps, 0, 20);
+
                 for (int i = 0; i < carSteps; i++) {
                     wmPartyWalkingStep();
                 }

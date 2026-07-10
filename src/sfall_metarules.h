@@ -131,6 +131,22 @@ bool sfallGetExplosiveOverrideDamage(int pid, int* outMinDamage, int* outMaxDama
 // timer delay stored via the item_make_explosive metarule.
 bool sfallGetExplosiveOverrideDelay(int pid, int* outDelay);
 
+// Returns true if the given PID has an explosive override with a positive
+// radius, populating outRadius with the override's radius value.
+// Returns false if no override exists or radius is <= 0 (outRadius unchanged).
+// Used by explosiveGetDamage() in item.cc to wire per-item explosion radius
+// into the engine's global explosion settings (gExplosionRadius).
+bool sfallGetExplosiveOverrideRadius(int pid, int* outRadius);
+
+// Returns true if the given PID has an explosive override with a non-zero
+// pattern, populating outStartRotation and outEndRotation from the stored
+// pattern value. The pattern is mapped as: start=0, end=pattern.
+// Returns false if no override exists or pattern is <= 0.
+// Used by explosiveGetDamage() in item.cc to wire per-item explosion pattern
+// into the engine's global explosion settings (gExplosionStartRotation/
+// gExplosionEndRotation).
+bool sfallGetExplosiveOverridePattern(int pid, int* outStartRotation, int* outEndRotation);
+
 // F-9 (FIX): Returns the talking head mood override set by the
 // talking_head_mood metarule. -1 = no override (use engine default).
 // Consumer: game_dialog.cc _gdSetupFidget() for FO1 mood animation selection.

@@ -19,7 +19,9 @@ void sfall_ini_cache_clear();
 bool sfall_ini_get_int(const char* triplet, int* value);
 
 // Reads string key identified by "fileName|section|key" triplet into `value`.
-bool sfall_ini_get_string(const char* triplet, char* value, size_t size);
+// Returns true if the triplet was parsed successfully; sets *found (if non-null)
+// to indicate whether the key was actually present in the INI/file.
+bool sfall_ini_get_string(const char* triplet, char* value, size_t size, bool* found = nullptr);
 
 // Writes integer key identified by "fileName|section|key" triplet.
 bool sfall_ini_set_int(const char* triplet, int value);

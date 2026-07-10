@@ -1785,7 +1785,15 @@ static Object* _ai_danger_source(Object* a1)
                         // Without this check, a script can return a
                         // teammate and force friendly fire.
                         if (hookCandidate->data.critter.combat.team != a1->data.critter.combat.team) {
-                            return hookCandidate;
+                            // SFALL: Fix F-M12 — validate that the hook
+                            // didn't return a dead or knocked-out critter.
+                            // Without this check, a script can force the AI
+                            // to waste turns on dead targets (10 loop iterations
+                            // in _ai_try_attack before COMBAT_BAD_SHOT_ALREADY_DEAD
+                            // rejects).
+                            if (!critterIsDead(hookCandidate)) {
+                                return hookCandidate;
+                            }
                         }
                     } else if (hookCandidate != nullptr) {
                         debugPrint("HOOK_FINDTARGET: script returned non-critter object (pid=%d), ignoring override",
@@ -1885,7 +1893,13 @@ static Object* _ai_danger_source(Object* a1)
                             // all validation. Without this check, a script
                             // can return a teammate and force friendly fire.
                             if (hookCandidate->data.critter.combat.team != a1->data.critter.combat.team) {
-                                candidate = hookCandidate;
+                                // SFALL: Fix F-M12 — validate that the hook
+                                // didn't return a dead critter, which would
+                                // waste AI turns (10 loop iterations before
+                                // COMBAT_BAD_SHOT_ALREADY_DEAD rejects).
+                                if (!critterIsDead(hookCandidate)) {
+                                    candidate = hookCandidate;
+                                }
                             } else {
                                 debugPrint("HOOK_FINDTARGET: script returned same-team critter (pid=%d), ignoring override",
                                     hookCandidate->pid);
@@ -1928,7 +1942,13 @@ static Object* _ai_danger_source(Object* a1)
                         // dead-path team check at line 1924 shows the expected
                         // pattern, but the alive-path hook bypasses it.
                         if (hookCandidate->data.critter.combat.team != a1->data.critter.combat.team) {
-                            whoHitMe = hookCandidate;
+                            // SFALL: Fix F-M12 — validate that the hook
+                            // didn't return a dead critter, which would
+                            // waste AI turns (10 loop iterations before
+                            // COMBAT_BAD_SHOT_ALREADY_DEAD rejects).
+                            if (!critterIsDead(hookCandidate)) {
+                                whoHitMe = hookCandidate;
+                            }
                         } else {
                             debugPrint("HOOK_FINDTARGET: script returned same-team critter (pid=%d), ignoring override",
                                 hookCandidate->pid);
@@ -1999,7 +2019,13 @@ static Object* _ai_danger_source(Object* a1)
                 // validation. This is the broadest-scope fallback — applies
                 // to ALL critter types, not just party members.
                 if (hookCandidate->data.critter.combat.team != a1->data.critter.combat.team) {
-                    result = hookCandidate;
+                    // SFALL: Fix F-M12 — validate that the hook didn't
+                    // return a dead critter, which would waste AI turns
+                    // (10 loop iterations before the downstream dead check
+                    // in _combat_check_bad_shot rejects).
+                    if (!critterIsDead(hookCandidate)) {
+                        result = hookCandidate;
+                    }
                 } else {
                     debugPrint("HOOK_FINDTARGET: script returned same-team critter (pid=%d), ignoring override",
                         hookCandidate->pid);

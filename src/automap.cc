@@ -329,7 +329,7 @@ void automapShow(bool isInGame, bool isUsingScanner)
     // adding WINDOW_TRANSPARENT and WINDOW_DRAGGABLE_BY_BACKGROUND for testing temporarily
     int window = windowCreate(automapWindowX, automapWindowY, AUTOMAP_WINDOW_WIDTH, AUTOMAP_WINDOW_HEIGHT, color, WINDOW_MODAL | WINDOW_MOVE_ON_TOP | WINDOW_TRANSPARENT | WINDOW_DRAGGABLE_BY_BACKGROUND);
     if (window == -1) {
-        return -1;
+        return;
     }
     gAutomapWindow = window;
 

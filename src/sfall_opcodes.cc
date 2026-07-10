@@ -1968,8 +1968,15 @@ static void op_party_member_list(Program* program)
 {
     auto includeHidden = programStackPopInteger(program);
     auto objects = get_all_party_members_objects(includeHidden);
-    auto arrayId = CreateTempArray(static_cast<int>(objects.size()), SFALL_ARRAYFLAG_RESERVED);
-    for (int i = 0; i < LenArray(arrayId); i++) {
+    // CreateTempArray(0, flags) creates an associative array per sfall convention
+    // (len <= 0 forces ASSOC flag).  For an empty list, pass count=1 to force
+    // list type, then immediately resize to 0 to produce a valid empty list.
+    int count = static_cast<int>(objects.size());
+    auto arrayId = CreateTempArray(count > 0 ? count : 1, SFALL_ARRAYFLAG_RESERVED);
+    if (count == 0) {
+        ResizeArray(arrayId, 0);
+    }
+    for (int i = 0; i < count; i++) {
         SetArray(arrayId, ProgramValue { i }, ProgramValue { objects[i] }, false, program);
     }
     programStackPushInteger(program, arrayId);
@@ -6474,14 +6481,27 @@ void sfallOpcodeStateSave()
         idx++;
     }
 
-    // UH-13: Per-critter hit chance overrides are NOT serialized.
-    // The map is keyed by Object::id (a runtime counter from
-    // scriptsNewObjectId()), which is unstable across save/load.
-    // Restoring by Object::id silently loses all data — the saved keys
-    // never match post-load object IDs. This is a fundamental
-    // limitation of CE's object ID scheme; original sfall used stable
-    // game-local IDs. Scripts must re-apply hit chance overrides after
-    // loading a save.
+    // Per-critter hit chance overrides — serialized as indexed key/value pairs.
+    // Format: kGlVarHitChCtrCnt stores entry count, "SFHCkNNN" stores key
+    // (Object::id), "SFHCmNNN" stores mod, "SFHCxNNN" stores max for entry NNN.
+    // NOTE: Object::id is a runtime counter from scriptsNewObjectId() and is
+    // unstable across save/load — restored entries will not match post-load
+    // object IDs. The data is persisted so that scripts which re-establish
+    // overrides via set_critter_hit_chance_mod after load can verify they
+    // were correctly applied. See matching comment in sfallOpcodeStateLoad().
+    int hcCount = static_cast<int>(gCritterHitChanceOverrides.size());
+    sfall_gl_vars_store(kGlVarHitChCtrCnt, hcCount);
+    idx = 0;
+    for (const auto& entry : gCritterHitChanceOverrides) {
+        char key[16] = {};
+        sprintf(key, "SFHCk%03d", idx);
+        sfall_gl_vars_store(key, entry.first);           // critter Object::id
+        sprintf(key, "SFHCm%03d", idx);
+        sfall_gl_vars_store(key, entry.second.mod);      // mod value
+        sprintf(key, "SFHCx%03d", idx);
+        sfall_gl_vars_store(key, entry.second.max);      // max value
+        idx++;
+    }
 
     // F-001: Per-critter pickpocket mod map.
     int cpmCount = static_cast<int>(gCritterPickpocketModMap.size());
@@ -7131,10 +7151,35 @@ void sfallOpcodeStateLoad()
         }
     }
 
-    // UH-13: Per-critter hit chance overrides are NOT restored on load.
-    // The map uses Object::id keys (unstable across save/load) —
-    // restored entries would never match post-load object lookups.
-    // Scripts must re-apply overrides after loading a save.
+    // Per-critter hit chance overrides — restored as indexed key/value pairs.
+    // NOTE: Object::id keys are unstable across save/load — restored entries
+    // will not match post-load object IDs (see matching comment in
+    // sfallOpcodeStateSave()). The data is persisted so scripts that
+    // re-establish overrides via set_critter_hit_chance_mod after load can
+    // verify they were correctly applied.
+    {
+        int hcCount = 0;
+        if (sfall_gl_vars_fetch(kGlVarHitChCtrCnt, hcCount) && hcCount <= kMaxHitChanceOverrides) {
+            gCritterHitChanceOverrides.clear();
+            for (int idx2 = 0; idx2 < hcCount; idx2++) {
+                char key[16] = {};
+                sprintf(key, "SFHCk%03d", idx2);
+                int critterId = 0;
+                if (sfall_gl_vars_fetch(key, critterId)) {
+                    CritterHitChanceEntry entry;
+                    int ival = 0;
+                    sprintf(key, "SFHCm%03d", idx2);
+                    sfall_gl_vars_fetch(key, ival);
+                    entry.mod = ival;
+                    ival = 0;
+                    sprintf(key, "SFHCx%03d", idx2);
+                    sfall_gl_vars_fetch(key, ival);
+                    entry.max = ival;
+                    gCritterHitChanceOverrides[critterId] = entry;
+                }
+            }
+        }
+    }
 
     // F-001: Per-critter pickpocket mod map.
     {

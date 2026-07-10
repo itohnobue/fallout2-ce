@@ -908,10 +908,10 @@ static bool characterSelectorWindowFatalError(bool result)
 
 void premadeCharactersInit()
 {
-    char* fileNamesString;
+    char* fileNamesString = nullptr;
     configGetString(&gContentConfig, CONTENT_CONFIG_CHARACTERS_SECTION, "premade_paths", &fileNamesString, nullptr);
 
-    char* faceFidsString;
+    char* faceFidsString = nullptr;
     configGetString(&gContentConfig, CONTENT_CONFIG_CHARACTERS_SECTION, "premade_fids", &faceFidsString, nullptr);
 
     if (fileNamesString != nullptr && faceFidsString != nullptr) {

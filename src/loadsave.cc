@@ -2605,7 +2605,7 @@ static int lsgLoadHeaderInSlot(int slot)
                 fileSeek(_flptr, headerStart, SEEK_SET);
                 if (fileRead(headerBuf, 1, headerSize, _flptr) != headerSize) {
                     internal_free(headerBuf);
-                    _ls_error_code = 1;
+                    _ls_error_code = 2;
                     return -1;
                 }
                 unsigned int computedCrc = _crc32Compute(headerBuf, headerSize);
@@ -2613,7 +2613,7 @@ static int lsgLoadHeaderInSlot(int slot)
                 if (computedCrc != storedHeaderCrc) {
                     debugPrint("\nLOADSAVE: ** Header CRC mismatch! (stored=%08x, computed=%08x) **\n",
                         storedHeaderCrc, computedCrc);
-                    _ls_error_code = 1;
+                    _ls_error_code = 2;
                     return -1;
                 }
             }
