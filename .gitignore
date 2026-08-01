@@ -66,8 +66,9 @@ CLAUDE.md
 GEMINI.md
 opencode.json
 session.md
-knowledge.md
 MEMORY.md
+loop-tasks.txt
+loop-tasks-run.sh
 
 # Test/CI artifacts
 *.log
