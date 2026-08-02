@@ -1188,6 +1188,14 @@ SoundDecoder* soundDecoderInit(SoundDecoderReadProc* readProc, void* data, int* 
     soundDecoder->file_cnt |= (soundDecoder->hold & 0xFFFF) << 16;
     soundDecoderDropBits(soundDecoder, 16);
 
+    // M-129: file_cnt is a signed 32-bit sample count read from the header.
+    // A crafted ACM with bit 31 set becomes negative here, which later drives
+    // samp_cnt negative in soundDecoderFill and makes the decode loop read
+    // past the samples buffer. Reject negative sample counts outright.
+    if (soundDecoder->file_cnt < 0) {
+        goto L66;
+    }
+
     soundDecoderRequireBits(soundDecoder, 16);
     soundDecoder->channels = soundDecoder->hold & 0xFFFF;
     soundDecoderDropBits(soundDecoder, 16);
@@ -1205,6 +1213,14 @@ SoundDecoder* soundDecoderInit(SoundDecoderReadProc* readProc, void* data, int* 
     soundDecoder->samples_per_subband = soundDecoder->hold & 0x0FFF;
     soundDecoder->total_samples = soundDecoder->samples_per_subband * soundDecoder->subbands;
     soundDecoderDropBits(soundDecoder, 12);
+
+    // M-130: samples_per_subband == 0 yields total_samples == 0, so the
+    // samples buffer is a 0-byte malloc(0) allocation (non-null on the target
+    // platforms) and the decode loop reads 4 bytes from it. Reject zero (and
+    // defensively reject a non-positive total).
+    if (soundDecoder->samples_per_subband == 0 || soundDecoder->total_samples <= 0) {
+        goto L66;
+    }
 
     if (soundDecoder->levels != 0) {
         v73 = 3 * soundDecoder->subbands / 2 - 2;

@@ -168,11 +168,24 @@ int lightSave(File* stream)
 // 0x000000 light_load — restore ambient + tile light state from save file
 int lightLoad(File* stream)
 {
-    if (fileReadInt32(stream, &gAmbientIntensity) == -1) return -1;
+    // P-03 (MEDIUM): Clamp the restored ambient intensity to the same range
+    // the setter enforces (lightSetAmbientIntensity, light.cc:52). A crafted
+    // save can carry any int32; an unclamped value (e.g. INT_MAX) flows into
+    // intensityColorTable[intensity / 512] via objectGetLightIntensity /
+    // tile render paths → ~4 MB OOB read. Legit max 65536 → index 128, safe.
+    int ambientIntensity;
+    if (fileReadInt32(stream, &ambientIntensity) == -1) return -1;
+    gAmbientIntensity = std::clamp(ambientIntensity, LIGHT_INTENSITY_MIN, LIGHT_INTENSITY_MAX);
 
     for (int elevation = 0; elevation < ELEVATION_COUNT; elevation++) {
         for (int tile = 0; tile < HEX_GRID_SIZE; tile++) {
-            if (fileReadInt32(stream, &gTileIntensity[elevation][tile]) == -1) return -1;
+            // P-03 (MEDIUM): Clamp per-tile intensities to the same upper
+            // bound used by lightGetTileIntensity (light.cc:75). Crafted-save
+            // tile values above LIGHT_INTENSITY_MAX would also index the
+            // intensityColorTable out of bounds via the tile render path.
+            int tileIntensity;
+            if (fileReadInt32(stream, &tileIntensity) == -1) return -1;
+            gTileIntensity[elevation][tile] = std::clamp(tileIntensity, 0, LIGHT_INTENSITY_MAX);
         }
     }
 

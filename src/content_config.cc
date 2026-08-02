@@ -108,9 +108,12 @@ static const SfallContentMapping kSfallContentMappings[] = {
     { "Interface", "WorldMapTravelMarkers", CONTENT_CONFIG_WORLDMAP_SECTION, "trail_markers" },
     { "Misc", "StartXPos", CONTENT_CONFIG_WORLDMAP_SECTION, "start_x_pos" },
     { "Misc", "StartYPos", CONTENT_CONFIG_WORLDMAP_SECTION, "start_y_pos" },
-    { "Misc", "ViewXPos", CONTENT_CONFIG_WORLDMAP_SECTION, "view_x_pos" },
-    { "Misc", "ViewYPos", CONTENT_CONFIG_WORLDMAP_SECTION, "view_y_pos" },
-    { "Misc", "WorldMapSlots", CONTENT_CONFIG_WORLDMAP_SECTION, "encounter_slots" },
+    // P-19: ViewXPos/ViewYPos/WorldMapSlots migration rows removed — the
+    // targets (worldmap view_x_pos/view_y_pos/encounter_slots) have zero
+    // consumers anywhere in src/ (verified by grep) and the WorldMapSlots
+    // target semantically mismatches sfall's WorldMapSlots (cities-list
+    // scroll height). WorldMapSlots is now served by the gSfallConfig
+    // default (21, H-06) via the op_get_ini_setting fallback tier.
     { "Misc", "ElevatorsFile", CONTENT_CONFIG_WORLDMAP_SECTION, "elevators_file" },
     { "Misc", "PremadePaths", CONTENT_CONFIG_CHARACTERS_SECTION, "premade_paths" },
     { "Misc", "PremadeFIDs", CONTENT_CONFIG_CHARACTERS_SECTION, "premade_fids" },

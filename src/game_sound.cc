@@ -1397,7 +1397,10 @@ char* sfxBuildWeaponName(int effectType, Object* weapon, int hitMode, Object* ta
     Proto* proto;
 
     weaponSoundCode = weaponGetSoundId(weapon);
-    effectTypeCode = _snd_lookup_weapon_type[effectType];
+    // M-139: effectType is script-controlled (opSfxBuildWeaponName passes the
+    // stack value raw); the lookup table has WEAPON_SOUND_EFFECT_COUNT entries,
+    // so clamp out-of-range values to the hit code ('H').
+    effectTypeCode = (effectType >= 0 && effectType < WEAPON_SOUND_EFFECT_COUNT) ? _snd_lookup_weapon_type[effectType] : 'H';
 
     if (effectType != WEAPON_SOUND_EFFECT_READY
         && effectType != WEAPON_SOUND_EFFECT_OUT_OF_AMMO) {
@@ -1468,7 +1471,10 @@ char* sfxBuildWeaponName(int effectType, Object* weapon, int hitMode, Object* ta
 char* sfxBuildSceneryName(int actionType, int action, const char* name)
 {
     char actionTypeCode = actionType == SOUND_EFFECT_ACTION_TYPE_PASSIVE ? 'P' : 'A';
-    char actionCode = _snd_lookup_scenery_action[action];
+    // M-139: action is script-controlled (opSfxBuildSceneryName/opSfxBuildOpenName
+    // pass stack values raw); the lookup table has SCENERY_SOUND_EFFECT_COUNT
+    // entries, so clamp out-of-range values to the open code ('O').
+    char actionCode = (action >= 0 && action < SCENERY_SOUND_EFFECT_COUNT) ? _snd_lookup_scenery_action[action] : 'O';
 
     snprintf(_sfx_file_name, sizeof(_sfx_file_name), "S%c%c%4s%1d", actionTypeCode, actionCode, name, 1);
     compat_strupr(_sfx_file_name);
@@ -1488,7 +1494,8 @@ char* sfxBuildOpenName(Object* object, int action)
         } else {
             scenerySoundId = 'A';
         }
-        snprintf(_sfx_file_name, sizeof(_sfx_file_name), "S%cDOORS%c", _snd_lookup_scenery_action[action], scenerySoundId);
+        // M-139: same out-of-range clamp for the script-controlled action.
+        snprintf(_sfx_file_name, sizeof(_sfx_file_name), "S%cDOORS%c", (action >= 0 && action < SCENERY_SOUND_EFFECT_COUNT) ? _snd_lookup_scenery_action[action] : 'O', scenerySoundId);
     } else {
         Proto* proto;
         char containerSoundId;
@@ -1497,7 +1504,7 @@ char* sfxBuildOpenName(Object* object, int action)
         } else {
             containerSoundId = 'A';
         }
-        snprintf(_sfx_file_name, sizeof(_sfx_file_name), "I%cCNTNR%c", _snd_lookup_scenery_action[action], containerSoundId);
+        snprintf(_sfx_file_name, sizeof(_sfx_file_name), "I%cCNTNR%c", (action >= 0 && action < SCENERY_SOUND_EFFECT_COUNT) ? _snd_lookup_scenery_action[action] : 'O', containerSoundId);
     }
     compat_strupr(_sfx_file_name);
     return _sfx_file_name;

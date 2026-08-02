@@ -362,6 +362,14 @@ int _movieScaleSubRect(int win, unsigned char* data, int width, int height, int 
         return 0;
     }
 
+    // M-193: height is the MVE frame height, which can exceed the rect height
+    // (_movieH). The guard above only bounds _movieY + _movieH, so writing
+    // `height` rows here would run past the window buffer. Clamp to the rows
+    // that actually fit inside the window.
+    if (height > windowHeight - _movieY) {
+        height = windowHeight - _movieY;
+    }
+
     int tripletCount = width / 3;
     for (int y = 0; y < height; y++) {
         int x;
@@ -395,6 +403,15 @@ int _movieScaleWindow(int win, unsigned char* data, int width, int height, int p
     if (width != 3 * windowWidth / 4) {
         gMovieFlags |= MOVIE_EXTENDED_FLAG_ERROR;
         return 0;
+    }
+
+    // M-193: this blitter never queried the window height — it writes `height`
+    // rows of windowWidth bytes from the window buffer. A frame taller than
+    // the window (small managed window + standard/tall MVE frame) would run
+    // past the buffer. Clamp to the window height.
+    int windowHeight = windowGetHeight(win);
+    if (height > windowHeight) {
+        height = windowHeight;
     }
 
     unsigned char* windowBuffer = windowGetBuffer(win);

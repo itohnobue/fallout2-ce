@@ -833,7 +833,14 @@ static bool characterSelectorWindowRenderStats()
     for (int index = 0; index < DEFAULT_TAGGED_SKILLS; index++) {
         y += vh;
 
+        // C-07: skillGetName returns nullptr for invalid skill ids (e.g. -1
+        // from a custom/broken .gcd or a save made before tag skills were
+        // selected). strcpy(text, nullptr) is UB — skip the line instead.
         str = skillGetName(skills[index]);
+        if (str == nullptr) {
+            continue;
+        }
+
         strcpy(text, str);
 
         length = fontGetStringWidth(text);
@@ -856,7 +863,15 @@ static bool characterSelectorWindowRenderStats()
     for (int index = 0; index < traitGetMaxSelectedCount(); index++) {
         y += vh;
 
+        // C-07: traitGetName returns nullptr for invalid trait ids (the -1
+        // sentinel slot in FO2 mode, or any out-of-range id from a custom/
+        // broken .gcd). strcpy(text, nullptr) is UB — skip the line instead.
+        // This also covers the FO1 3-trait sentinel (traits[2] == -1).
         str = traitGetName(traits[index]);
+        if (str == nullptr) {
+            continue;
+        }
+
         strcpy(text, str);
 
         length = fontGetStringWidth(text);

@@ -672,9 +672,14 @@ ArrayId CreateArray(int len, unsigned int flags)
 {
     flags = (flags & ~1); // reset 1 bit
 
-    // F-12: len <= 0 creates an associative array (map), matching sfall 4.x
-    // convention. create_array(0, 2) now creates a map, not a list.
-    if (len <= 0) {
+    // M-30: match sfall's convention exactly — only len < 0 creates an
+    // associative array (Arrays.cpp:416 `if (len < 0) flags |= ARRAYFLAG_ASSOC`).
+    // create_array(0) must create an EMPTY LIST, not a map: RPU's wsterm4b.ssl
+    // does create_array(0,0) + array_push, and observable semantics differ
+    // (get_array_key(-1) returns 0 for a list vs 1 for a map; resize_array
+    // sorts a map by KEY but a list by VALUE). The previous `len <= 0` (F-12)
+    // was based on a factually wrong reading of sfall.
+    if (len < 0) {
         flags |= SFALL_ARRAYFLAG_ASSOC;
     } else if (len > ARRAY_MAX_SIZE) {
         len = ARRAY_MAX_SIZE; // safecheck
@@ -885,18 +890,13 @@ ArrayId ListAsArray(int type)
     sfall_lists_fill(type, objects);
 
     int count = static_cast<int>(objects.size());
-    // CreateTempArray(0, 0) creates an associative array per sfall convention
-    // (len <= 0 forces ASSOC flag).  For an empty list, pass count=1 to force
-    // list type, then immediately resize to 0 to produce a valid empty list.
-    // This ensures scripts iterating with get_array_key(-1) always see a list
-    // (returns 0) rather than an associative array (returns 1), regardless of
-    // whether the list is empty or populated.
-    ArrayId arrayId = CreateTempArray(count > 0 ? count : 1, 0);
+    // M-30: CreateArray now matches sfall — len==0 creates an empty LIST
+    // (only len<0 creates an associative array), so empty lists are native
+    // here; no size-1-then-resize workaround is needed. Scripts iterating
+    // with get_array_key(-1) always see a list (returns 0) for empty and
+    // populated lists alike.
+    ArrayId arrayId = CreateTempArray(count, 0);
     auto arr = get_array_by_id(arrayId);
-
-    if (count == 0) {
-        arr->ResizeArray(0);
-    }
 
     // A little bit ugly and likely inefficient.
     for (int index = 0; index < count; index++) {
@@ -1088,10 +1088,10 @@ ArrayId LoadArray(const ProgramValue& key, Program* program)
     if (keyEl.getType() == ArrayElementType::STRING
         && strcmp(keyEl.getString(), kAllArraysSpecialKey) == 0) {
         int count = static_cast<int>(_state->savedArrays.size());
-        // CreateTempArray(0, 0) forces ASSOC flag per CreateArray len<=0
-        // convention. When count==0, create with len=1 to get a list,
-        // then resize to 0 to produce an empty list. Same workaround
-        // established in ListAsArray() and StringSplit().
+        // M-30: CreateArray only forces ASSOC for len<0 (sfall convention);
+        // len==0 creates an empty LIST. This size-1-then-resize workaround
+        // is retained as a vestige of the old len<=0 behavior and remains
+        // correct: it still produces an empty list.
         ArrayId tmpId = CreateTempArray(count > 0 ? count : 1, 0);
         auto* tmpArr = get_array_by_id(tmpId);
         if (tmpArr != nullptr) {
@@ -1200,17 +1200,17 @@ bool sfallArraysLoad(File* stream)
         }
 
         // For non-associative arrays, use the actual element count as the
-        // initial size so CreateArray creates a list (not a map). CreateArray
-        // forces ASSOC for len<=0 per sfall convention.  When the list is
-        // empty, pass count=1 to force list type, then immediately resize to 0
-        // — the same workaround used by ListAsArray (line 881).
+        // initial size so CreateArray creates a list (not a map). M-30:
+        // CreateArray forces ASSOC only for len<0 (sfall convention).  When
+        // the list is empty, pass count=1 and immediately resize to 0 — a
+        // vestigial workaround (len==0 now natively creates an empty list).
         int initLen;
         if (isAssoc) {
             initLen = -1;
         } else {
             initLen = static_cast<int>(elements.size());
             if (initLen == 0) {
-                initLen = 1; // CreateArray forces ASSOC for len<=0; use 1 then resize
+                initLen = 1; // vestigial: M-30 len==0 natively creates an empty list
             }
         }
         ArrayId id = CreateArray(initLen, safeFlags);
@@ -1290,10 +1290,10 @@ ArrayId ArrayFilter(ArrayId arrayId, Program* program, int procedureIndex)
     // GetArrayKey(-1) returns 0 for list arrays, 1 for associative arrays.
     bool isAssoc = (src->GetArrayKey(-1, program).integerValue == 1);
 
-    // CreateTempArray(0, 0) forces ASSOC flag per CreateArray len<=0
-    // convention. For list sources, create with len=1 to get a list,
-    // then resize to 0 for an empty starting point. Same workaround
-    // established in ListAsArray() and StringSplit().
+    // M-30: CreateArray forces ASSOC only for len<0 (sfall convention);
+    // len==0 natively creates an empty LIST. The len=1-then-resize pattern
+    // below is a vestigial workaround from the old len<=0 behavior and
+    // remains correct.
     ArrayId resultId = CreateTempArray(isAssoc ? -1 : 1, 0);
     SFallArray* dst = get_array_by_id(resultId);
     if (dst == nullptr) {
@@ -1364,10 +1364,10 @@ ArrayId ArrayTransform(ArrayId arrayId, Program* program, int procedureIndex)
     // GetArrayKey(-1) returns 0 for list arrays, 1 for associative arrays.
     bool isAssoc = (src->GetArrayKey(-1, program).integerValue == 1);
 
-    // CreateTempArray(0, 0) forces ASSOC flag per CreateArray len<=0
-    // convention. For list sources, create with len=1 to get a list,
-    // then resize to 0 for an empty starting point. Same workaround
-    // established in ListAsArray() and StringSplit().
+    // M-30: CreateArray forces ASSOC only for len<0 (sfall convention);
+    // len==0 natively creates an empty LIST. The len=1-then-resize pattern
+    // below is a vestigial workaround from the old len<=0 behavior and
+    // remains correct.
     ArrayId resultId = CreateTempArray(isAssoc ? -1 : 1, 0);
     SFallArray* dst = get_array_by_id(resultId);
     if (dst == nullptr) {

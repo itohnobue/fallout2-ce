@@ -307,11 +307,18 @@ bool heapBlockAllocate(Heap* heap, int* handleIndexPtr, int size, int disallowSy
     int blockSize;
     HeapHandle* handle;
 
-    size += 4 - size % 4;
-
-    if (heap == nullptr || handleIndexPtr == nullptr || size == 0) {
+    // M-187: Reject non-positive sizes BEFORE the 4-byte alignment below.
+    // The old code aligned first and only guarded `size == 0`: a negative
+    // size like -8 became -4 after alignment and survived the guard, then
+    // flowed into heapFindFreeBlock which writes the negative value into
+    // blockHeader->size — corrupting the heap metadata (guards, free-size
+    // accounting, block traversal). cacheEnsureSize also accepts negative
+    // sizes, so the rejection must live at this choke point.
+    if (heap == nullptr || handleIndexPtr == nullptr || size <= 0) {
         goto err;
     }
+
+    size += 4 - size % 4;
 
     if (disallowSystemAllocation != 0 && disallowSystemAllocation != 1) {
         disallowSystemAllocation = 0;

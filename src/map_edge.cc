@@ -256,6 +256,14 @@ static bool mapEdgeLoadFromStream(File* stream)
             data.zones.push_back(zone);
 
             if (fileReadInt32(stream, &levelIndicator) == -1) {
+                // H-18: Real .edg files (HRP 120/120 verified) end right after
+                // the last zone of the last elevation — there is no trailing
+                // level indicator. EOF at the final elevation is a successful
+                // load, not an error. On any earlier elevation, EOF means the
+                // file is truncated and the load must fail.
+                if (elev == ELEVATION_COUNT - 1) {
+                    break;
+                }
                 return false;
             }
 
@@ -373,6 +381,11 @@ void mapEdgeFree()
         data = EdgeElevationData {};
     }
     edgeDataLoaded = false;
+    // M-141: edgeVersion2 must be reset here. Previously it survived
+    // mapEdgeFree, so a map saved after a previous v2 map (or a square-mode
+    // mapper edit) was written as v2 with a degenerate squareRect {0,0,0,0}
+    // — a black overlay on reload.
+    edgeVersion2 = false;
     currentEdgeZone = nullptr;
     currentTileXAlignment = 0;
     currentTileYAlignment = 0;

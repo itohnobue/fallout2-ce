@@ -274,7 +274,7 @@ static constexpr bool kTestHookImplemented[] = {
     true,  // 42: HOOK_TARGETOBJECT
     true,  // 43: HOOK_ENCOUNTER
     false, // 44: HOOK_ADJUSTPOISON (not implemented)
-    false, // 45: HOOK_ADJUSTRADS (not implemented)
+    true,  // 45: HOOK_ADJUSTRADS (M-26: fires from critterAdjustRadiation)
     false, // 46: HOOK_ROLLCHECK (not implemented)
     false, // 47: HOOK_BESTWEAPON (not implemented)
     true,  // 48: HOOK_CANUSEWEAPON
@@ -312,9 +312,10 @@ TEST_CASE("Hook implementation table has correct number of implemented hooks")
             implementedCount++;
         }
     }
-    // 43 of 62 hooks have active fire-site implementations
+    // 44 of 62 hooks have active fire-site implementations
+    // (M-26 enabled HOOK_ADJUSTRADS with a fire site in critterAdjustRadiation)
     CHECK(implementedCount == HOOK_IMPLEMENTED_COUNT);
-    CHECK(implementedCount == 43);
+    CHECK(implementedCount == 44);
 }
 
 TEST_CASE("Specific implemented hooks are marked true")
@@ -355,7 +356,6 @@ TEST_CASE("Specifically unimplemented hooks are marked false")
     CHECK(kTestHookImplemented[15] == false); // HOOK_HEXSIGHTBLOCKING
     CHECK(kTestHookImplemented[37] == false); // HOOK_SUBCOMBATDAMAGE
     CHECK(kTestHookImplemented[44] == false); // HOOK_ADJUSTPOISON
-    CHECK(kTestHookImplemented[45] == false); // HOOK_ADJUSTRADS
     CHECK(kTestHookImplemented[46] == false); // HOOK_ROLLCHECK
     CHECK(kTestHookImplemented[47] == false); // HOOK_BESTWEAPON
     CHECK(kTestHookImplemented[61] == false); // HOOK_BUILDSFXWEAPON

@@ -158,6 +158,8 @@ static int gTestPcStatValues[TEST_PC_STAT_COUNT];
 
 // Mirror of extern globals referenced by stat.cc.
 static int gTestXPTableMode = 0;
+static int gTestXPTable[TEST_PC_LEVEL_MAX] = {};
+static int gTestXPTableCount = 0;
 static int gTestXpModPercentage = 100;
 
 // Mock Object type for perkGetRank / gDude.
@@ -177,18 +179,40 @@ static inline bool testStatIsValid(int stat)
     return stat >= 0 && stat < TEST_STAT_COUNT;
 }
 
-// Mirror of stat.cc:700-720 pcGetExperienceForLevel.
+// Mirror of stat.cc:762-772 statGetLevelCap.
+// The mirror models FO2 mode (gFallout1Behavior=false, cap TEST_PC_LEVEL_MAX);
+// the FO1-mode 21 branch is not mirrored (pre-existing mirror limitation).
+// F4: table-aware cap — with gTestXPTableMode >= 1 the cap is bounded by
+// gTestXPTableCount + 1 (sfall cap-write parity), so short tables stop at
+// table length + 1 instead of running away to the FO2 cap.
+static int testStatGetLevelCap()
+{
+    int cap = TEST_PC_LEVEL_MAX;
+    if (gTestXPTableMode >= 1) {
+        cap = std::min(cap, gTestXPTableCount + 1);
+    }
+    return cap;
+}
+
+// Mirror of stat.cc:763-796 pcGetExperienceForLevel.
 // Exact copy of the production logic: returns XP required to reach given level.
 static int testPcGetExperienceForLevel(int level)
 {
-    if (level >= TEST_PC_LEVEL_MAX) {
+    if (level >= testStatGetLevelCap()) {
         return -1;
     }
 
-    // gXPTableMode >= 1: external table loading (TODO, not yet implemented).
-    // Falls through to hardcoded formula in all cases.
+    // M-54/R-06: apply the XP table parsed by combat.cc's combatInit() when
+    // gXPTableMode is set. gXPTable[i] holds the XP required to reach level
+    // i+2, so the threshold for `level` is gXPTable[level - 2]. A level that
+    // falls outside the table (including level 1 and levels beyond the last
+    // table entry) is unreachable (-1).
     if (gTestXPTableMode >= 1) {
-        // Fall through — file-based table not yet implemented.
+        int index = level - 2;
+        if (index >= 0 && index < gTestXPTableCount) {
+            return gTestXPTable[index];
+        }
+        return -1; // beyond the table -> level unreachable
     }
 
     int halfLevel = level / 2;
@@ -329,7 +353,12 @@ static int testCritterSetBaseStat(int pid, int stat, int value, bool isDude)
     return 0;
 }
 
-// Mirror of critterSetBonusStat (stat.cc:547-580) — includes fork's PID_TYPE guard.
+// Mirror of critterSetBonusStat (stat.cc:577-625) — C-05 fixed semantics.
+// bonusStats[stat] is a SIGNED DELTA stored with NO write-side min/max clamp;
+// the effective stat is bounded by the read-side display clamp in
+// critterGetStat (stat.cc:423-426). This mirror previously DIVERGED from
+// production (it omitted the UF-H-020 write clamp); production now matches
+// it. Keep this mirror clamp-free — adding a clamp here documents the bug.
 static int testCritterSetBonusStat(int pid, int stat, int value)
 {
     if (stat < 0 || stat >= TEST_STAT_COUNT) {
@@ -347,6 +376,18 @@ static int testCritterSetBonusStat(int pid, int stat, int value)
     }
 
     return -1;
+}
+
+// Mirror of the read-side display clamp in critterGetStat (stat.cc:423-426):
+// effective = base + bonus, clamped to [min, max] when min <= max.
+static int testCritterGetStatEffective(int baseValue, int bonusValue,
+                                       const TestStatDescription& desc)
+{
+    int value = baseValue + bonusValue;
+    if (desc.minimumValue <= desc.maximumValue) {
+        value = std::clamp(value, desc.minimumValue, desc.maximumValue);
+    }
+    return value;
 }
 
 // Mirror of pcAddExperienceWithOptions full production path (stat.cc:795-868).
@@ -543,32 +584,195 @@ TEST_CASE("pcGetExperienceForLevel — odd/even branch equivalence at boundary")
 }
 
 // ===========================================================================
-// XP table mode (gXPTableMode) — currently no-op fallthrough
+// XP table mode (gXPTableMode / gXPTable / gXPTableCount) — M-54/R-06
 // ===========================================================================
 
-TEST_CASE("pcGetExperienceForLevel — gXPTableMode >= 1 does not change formula")
+TEST_CASE("pcGetExperienceForLevel — gXPTableMode >= 1 applies parsed XP table")
 {
-    int saved = gTestXPTableMode;
-    gTestXPTableMode = 0;
+    int savedMode = gTestXPTableMode;
+    int savedCount = gTestXPTableCount;
 
-    // Record values at mode 0
+    // Mode 0: hardcoded formula baseline.
+    gTestXPTableMode = 0;
     int xp10_mode0 = testPcGetExperienceForLevel(10);
     int xp21_mode0 = testPcGetExperienceForLevel(21);
+    CHECK(xp10_mode0 == 45000);
+    CHECK(xp21_mode0 == 210000);
 
-    // Set mode to 1 — should produce same results (fallthrough)
+    // Populate a table mirroring the M-54 parse: gXPTable[i] holds the XP
+    // required to reach level i+2 (sfall semantics). XPTable=1000,3000,6000,10000
     gTestXPTableMode = 1;
-    CHECK(testPcGetExperienceForLevel(10) == xp10_mode0);
-    CHECK(testPcGetExperienceForLevel(21) == xp21_mode0);
+    gTestXPTableCount = 4;
+    gTestXPTable[0] = 1000;   // level 2
+    gTestXPTable[1] = 3000;   // level 3
+    gTestXPTable[2] = 6000;   // level 4
+    gTestXPTable[3] = 10000;  // level 5
 
-    // Set mode to 2
-    gTestXPTableMode = 2;
-    CHECK(testPcGetExperienceForLevel(10) == xp10_mode0);
-    CHECK(testPcGetExperienceForLevel(21) == xp21_mode0);
+    // Table values are applied for in-range levels.
+    CHECK(testPcGetExperienceForLevel(2) == 1000);
+    CHECK(testPcGetExperienceForLevel(3) == 3000);
+    CHECK(testPcGetExperienceForLevel(4) == 6000);
 
-    // Level 99 still returns -1 regardless of mode
+    // F4: with a 4-entry table the table-aware cap is gXPTableCount + 1 = 5,
+    // so level 5 (== cap) is unreachable via query (-1), not 10000. The last
+    // table entry is only reached by the level-up loop granting level 5.
+    CHECK(testPcGetExperienceForLevel(5) == -1);
+
+    // Level 1 is below the first table entry (index -1) -> unreachable (-1).
+    CHECK(testPcGetExperienceForLevel(1) == -1);
+
+    // Levels at/after the table-aware cap are unreachable (-1).
+    CHECK(testPcGetExperienceForLevel(6) == -1);
+    CHECK(testPcGetExperienceForLevel(10) == -1);
+    CHECK(testPcGetExperienceForLevel(98) == -1);
+
+    // Level >= FO2 cap still returns -1 regardless of mode.
     CHECK(testPcGetExperienceForLevel(99) == -1);
 
-    gTestXPTableMode = saved;
+    // Restore mode 0: formula applies again (table path not taken).
+    gTestXPTableMode = 0;
+    CHECK(testPcGetExperienceForLevel(10) == xp10_mode0);
+    CHECK(testPcGetExperienceForLevel(21) == xp21_mode0);
+
+    // Table mode with a populated table no longer returns formula values.
+    gTestXPTableMode = 1;
+    CHECK_FALSE(testPcGetExperienceForLevel(10) == xp10_mode0);
+
+    // Cleanup: restore saved state.
+    gTestXPTableCount = savedCount;
+    gTestXPTableMode = savedMode;
+}
+
+TEST_CASE("pcGetExperienceForLevel — empty XP table (mode set, no entries)")
+{
+    int savedMode = gTestXPTableMode;
+    int savedCount = gTestXPTableCount;
+
+    // combat.cc only sets gXPTableMode=1 when gXPTableCount > 0, but the
+    // lookup must be safe for the degenerate empty-table state: all levels
+    // except those in the table are unreachable (-1).
+    gTestXPTableMode = 1;
+    gTestXPTableCount = 0;
+    CHECK(testPcGetExperienceForLevel(2) == -1);
+    CHECK(testPcGetExperienceForLevel(10) == -1);
+
+    gTestXPTableCount = savedCount;
+    gTestXPTableMode = savedMode;
+}
+
+// ===========================================================================
+// F4 — table-aware level cap: short XP tables must not run away to the FO2 cap.
+// Reference: sfall writes the engine level-cap byte to numLevels + 1
+// (SafeWrite8(0x4AFB1B, numLevels + 1), sfall Modules/Stats.cpp:323).
+// ===========================================================================
+
+// Mirror of the pcAddExperienceWithOptions level-up loop gate (stat.cc:920-923):
+//   while (gPcStatValues[PC_STAT_LEVEL] < statGetLevelCap()) {
+//       if (newXp < pcGetExperienceForNextLevel()) break;
+//       ... grant level, add per-level HP bonus ...
+//   }
+// Beyond-table levels make pcGetExperienceForLevel return -1, for which the
+// `newXp < -1` break is never true (newXp is clamped >= 0), so the loop can
+// only stop on the cap bound. Returns the level the loop stops at.
+static int testLevelUpLoopStopsAt(int startLevel, int newXp)
+{
+    int level = startLevel;
+    while (level < testStatGetLevelCap()) {
+        if (newXp < testPcGetExperienceForLevel(level + 1)) {
+            break;
+        }
+        level += 1;
+    }
+    return level;
+}
+
+TEST_CASE("statGetLevelCap — table-aware for short XP tables (F4 regression)")
+{
+    int savedMode = gTestXPTableMode;
+    int savedCount = gTestXPTableCount;
+
+    // Mode 0 (no table): FO2 cap unchanged.
+    gTestXPTableMode = 0;
+    gTestXPTableCount = 0;
+    CHECK(testStatGetLevelCap() == TEST_PC_LEVEL_MAX);
+
+    // A realistic FO1-oriented 20-entry table in FO2 mode (the F4 trigger):
+    // cap must be gXPTableCount + 1 = 21, not 99 — sfall parity.
+    gTestXPTableMode = 1;
+    gTestXPTableCount = 20;
+    CHECK(testStatGetLevelCap() == 21);
+    CHECK(testStatGetLevelCap() == gTestXPTableCount + 1);
+
+    // Full table (PC_LEVEL_MAX - 1 = 98 entries): cap stays at FO2 max.
+    gTestXPTableCount = TEST_PC_LEVEL_MAX - 1;
+    CHECK(testStatGetLevelCap() == TEST_PC_LEVEL_MAX);
+
+    // Degenerate empty table (mode set, no entries): cap 1 — every level is
+    // beyond-reach. (combat.cc only sets mode when count > 0; defensive.)
+    gTestXPTableCount = 0;
+    CHECK(testStatGetLevelCap() == 1);
+
+    gTestXPTableCount = savedCount;
+    gTestXPTableMode = savedMode;
+}
+
+TEST_CASE("pcGetExperienceForLevel — short table: beyond-table levels are capped, not 99 (F4)")
+{
+    int savedMode = gTestXPTableMode;
+    int savedCount = gTestXPTableCount;
+
+    gTestXPTableMode = 1;
+    gTestXPTableCount = 20;
+    for (int i = 0; i < gTestXPTableCount; i++) {
+        gTestXPTable[i] = (i + 2) * 1000; // threshold for level i+2
+    }
+
+    // In-table thresholds still applied (levels 2..20, below cap 21).
+    CHECK(testPcGetExperienceForLevel(2) == 2000);
+    CHECK(testPcGetExperienceForLevel(20) == 20000);
+
+    // Level 21 == cap (gXPTableCount + 1): unreachable via query.
+    CHECK(testPcGetExperienceForLevel(21) == -1);
+    // Beyond the table / beyond the cap: -1, never a reachable formula level.
+    CHECK(testPcGetExperienceForLevel(22) == -1);
+    CHECK(testPcGetExperienceForLevel(50) == -1);
+    CHECK(testPcGetExperienceForLevel(99) == -1);
+
+    gTestXPTableCount = savedCount;
+    gTestXPTableMode = savedMode;
+}
+
+TEST_CASE("level-up loop — short table stops at table length + 1, no runaway (F4 regression)")
+{
+    int savedMode = gTestXPTableMode;
+    int savedCount = gTestXPTableCount;
+
+    // 20-entry table in FO2 mode with XP far beyond the last entry. Pre-fix the
+    // loop free-ran to the FO2 cap (99), granting the per-level HP bonus on
+    // every level-up (stat.cc:950-951); with the table-aware cap the loop must
+    // stop at gXPTableCount + 1 = 21.
+    gTestXPTableMode = 1;
+    gTestXPTableCount = 20;
+    for (int i = 0; i < gTestXPTableCount; i++) {
+        gTestXPTable[i] = (i + 2) * 1000;
+    }
+
+    int level = testLevelUpLoopStopsAt(1, 100000000);
+    CHECK(level == 21);
+    CHECK(level == gTestXPTableCount + 1);
+    CHECK(level < TEST_PC_LEVEL_MAX); // no runaway to 99
+
+    // Same table, XP just over the last in-table threshold: still stops at 21
+    // (the final 20->21 grant is the loop reaching the cap, not an XP gate).
+    level = testLevelUpLoopStopsAt(1, 21000);
+    CHECK(level == 21);
+
+    // XP below the first threshold: no level-ups.
+    level = testLevelUpLoopStopsAt(1, 1000);
+    CHECK(level == 1);
+
+    gTestXPTableCount = savedCount;
+    gTestXPTableMode = savedMode;
 }
 
 // ===========================================================================
@@ -1543,11 +1747,14 @@ TEST_CASE("I2-01: critterGetStat clamp guard — min > max does not reach std::c
 // These tests validate the corrected behavior.
 
 namespace {
-    // Mirror of the F-002 fixed statGetLevelCap logic
+    // Mirror of the F-002 fixed statGetLevelCap logic — FO-mode model only.
+    // Production statGetLevelCap() is now also table-aware (F4); the exact
+    // production copy (FO2 model) is testStatGetLevelCap() above. This model
+    // is used only by the F-050 FO1/FO2 mode tests, which never set a table.
     static constexpr int kFO1LevelCap = 21;
     static constexpr int kFO2LevelCap = 99;
 
-    static int testStatGetLevelCap(bool fallout1Behavior)
+    static int testFOStatGetLevelCap(bool fallout1Behavior)
     {
         return fallout1Behavior ? kFO1LevelCap : kFO2LevelCap;
     }
@@ -1556,19 +1763,19 @@ namespace {
 TEST_CASE("F-050: FO1 mode level cap is 21")
 {
     // In FO1 mode (gFallout1Behavior=true), max level is 21
-    CHECK(testStatGetLevelCap(true) == 21);
+    CHECK(testFOStatGetLevelCap(true) == 21);
 }
 
 TEST_CASE("F-050: FO2 mode level cap is 99")
 {
     // In FO2 mode (gFallout1Behavior=false), max level is 99
-    CHECK(testStatGetLevelCap(false) == 99);
+    CHECK(testFOStatGetLevelCap(false) == 99);
 }
 
 TEST_CASE("F-050: FO1 level cap — level 21 is allowed in FO1 mode")
 {
     // At exactly the cap level, the player should be allowed to be at level 21
-    int cap = testStatGetLevelCap(true);
+    int cap = testFOStatGetLevelCap(true);
     int level = 21;
     CHECK(level <= cap);
 }
@@ -1576,7 +1783,7 @@ TEST_CASE("F-050: FO1 level cap — level 21 is allowed in FO1 mode")
 TEST_CASE("F-050: FO1 level cap — level 22 is blocked in FO1 mode")
 {
     // One level above the cap should be blocked
-    int cap = testStatGetLevelCap(true);
+    int cap = testFOStatGetLevelCap(true);
     int level = 22;
     CHECK_FALSE(level <= cap);
 }
@@ -1584,7 +1791,7 @@ TEST_CASE("F-050: FO1 level cap — level 22 is blocked in FO1 mode")
 TEST_CASE("F-050: FO1 level cap — level 98 is allowed in FO2 mode")
 {
     // FO2 mode allows up to level 99
-    int cap = testStatGetLevelCap(false);
+    int cap = testFOStatGetLevelCap(false);
     int level = 98;
     CHECK(level <= cap);
 }
@@ -1592,7 +1799,7 @@ TEST_CASE("F-050: FO1 level cap — level 98 is allowed in FO2 mode")
 TEST_CASE("F-050: FO1 level cap — level 100 is blocked in FO2 mode")
 {
     // Above 99 should still be blocked in FO2 mode
-    int cap = testStatGetLevelCap(false);
+    int cap = testFOStatGetLevelCap(false);
     int level = 100;
     CHECK_FALSE(level <= cap);
 }
@@ -1613,12 +1820,118 @@ TEST_CASE("F-050: FO1 level cap — experience calc uses correct cap")
     // In FO2 mode, it stops at level 99.
 
     // FO1: level 20 can gain XP to reach 21, but cannot exceed 21
-    int cap = testStatGetLevelCap(true);
+    int cap = testFOStatGetLevelCap(true);
     CHECK(20 < cap);  // can still level up
     CHECK_FALSE(21 < cap); // cannot go past cap
 
     // FO2: level 98 can gain XP to reach 99
-    cap = testStatGetLevelCap(false);
+    cap = testFOStatGetLevelCap(false);
     CHECK(98 < cap);
     CHECK_FALSE(99 < cap);
+}
+
+// ===========================================================================
+// C-05: critterSetBonusStat signed-delta semantics (stat.cc:577-625)
+// ===========================================================================
+// The pre-fix write-side clamp (added 7f58356, removed by this pass) rejected
+// bonus 0 and all negatives for primary stats (min = PRIMARY_STAT_MIN = 1),
+// breaking radiation drain/heal, drug wear-off, addiction penalties, the
+// editor GCD reset, armor removal, and level-down HP. Bonus stats are signed
+// deltas; the effective stat is clamped at READ time in critterGetStat.
+
+TEST_CASE("C-05: critterSetBonusStat accepts zero and negative bonus deltas")
+{
+    int critterPid = (TEST_OBJ_TYPE_CRITTER << 24) | 1;
+
+    SUBCASE("zero bonus accepted (editor GCD reset loop, character_editor.cc:4205)")
+    {
+        CHECK(testCritterSetBonusStat(critterPid, TEST_STAT_STRENGTH, 0) == 0);
+    }
+
+    SUBCASE("negative bonus accepted (radiation/addiction penalties)")
+    {
+        CHECK(testCritterSetBonusStat(critterPid, TEST_STAT_STRENGTH, -2) == 0);
+        CHECK(testCritterSetBonusStat(critterPid, TEST_STAT_CRITICAL_CHANCE, -61) == 0);
+    }
+
+    SUBCASE("above-max bonus accepted (raw delta; read side clamps display)")
+    {
+        CHECK(testCritterSetBonusStat(critterPid, TEST_STAT_STRENGTH, 11) == 0);
+    }
+
+    SUBCASE("non-critter PID still rejected (PID_TYPE guard)")
+    {
+        int itemPid = (0 << 24) | 5;
+        CHECK(testCritterSetBonusStat(itemPid, TEST_STAT_STRENGTH, 1) == -5);
+    }
+}
+
+TEST_CASE("C-05: read-side clamp bounds the effective stat value")
+{
+    // Mirror of critterGetStat display clamp (stat.cc:423-426).
+    SUBCASE("STR base 5 — negative bonus clamps to PRIMARY_STAT_MIN")
+    {
+        CHECK(testCritterGetStatEffective(5, -10, gTestStatDescriptions[TEST_STAT_STRENGTH]) == 1);
+        CHECK(testCritterGetStatEffective(5, -2, gTestStatDescriptions[TEST_STAT_STRENGTH]) == 3);
+    }
+
+    SUBCASE("STR base 5 — positive bonus clamps to PRIMARY_STAT_MAX")
+    {
+        CHECK(testCritterGetStatEffective(5, 100, gTestStatDescriptions[TEST_STAT_STRENGTH]) == 10);
+        CHECK(testCritterGetStatEffective(5, 2, gTestStatDescriptions[TEST_STAT_STRENGTH]) == 7);
+    }
+
+    SUBCASE("zero bonus yields the base stat")
+    {
+        CHECK(testCritterGetStatEffective(5, 0, gTestStatDescriptions[TEST_STAT_STRENGTH]) == 5);
+    }
+}
+
+// ===========================================================================
+// M-176: MAX_HP derived from BASE stats only (stat.cc:658)
+// ===========================================================================
+// Commit 104f461 regressed the MAX_HP formula from base-only
+// (critterGetBaseStatWithTraitModifier) to bonus-inclusive (critterGetStat).
+// With the C-05 clamp removed, a temporary STR/END bonus (drugs, radiation)
+// would otherwise inflate base MAX_HP, and a later debuff recalc would leave
+// current HP above max → permanent HP loss on the next heal/clamp. sfall's
+// default HPDependOnBonusStats=0 matches base-only.
+
+// Mirror of the fixed MAX_HP line: base stats + traits only, no bonus stats.
+static int testMaxHpBaseOnly(int baseStrength, int baseEndurance)
+{
+    return baseStrength + baseEndurance * 2 + 15;
+}
+
+// Mirror of the regressed 104f461 behavior (bonus-inclusive) — kept only to
+// demonstrate the difference the fix removes; NOT called by production.
+static int testMaxHpBonusInclusive(int baseStrength, int baseEndurance,
+                                   int bonusStrength, int bonusEndurance)
+{
+    return (baseStrength + bonusStrength) + (baseEndurance + bonusEndurance) * 2 + 15;
+}
+
+TEST_CASE("M-176: MAX_HP formula ignores transient bonus stats")
+{
+    SUBCASE("base-only formula matches vanilla for clean critter (5 STR, 5 END)")
+    {
+        CHECK(testMaxHpBaseOnly(5, 5) == 30); // 5 + 5*2 + 15
+    }
+
+    SUBCASE("radiation STR penalty does not deflate base MAX_HP")
+    {
+        // Radiation drains STR by -6 (gRadiationEffectPenalties). Base-only
+        // keeps MAX_HP at 30; the regressed bonus-inclusive formula would
+        // drop it to 24, leaving current HP above max after the recalc.
+        CHECK(testMaxHpBaseOnly(5, 5) == 30);
+        CHECK(testMaxHpBonusInclusive(5, 5, -6, 0) == 24); // regressed behavior
+        CHECK(testMaxHpBonusInclusive(5, 5, -6, 0) != testMaxHpBaseOnly(5, 5));
+    }
+
+    SUBCASE("drug STR bonus does not inflate base MAX_HP")
+    {
+        // Mentats-style +2 STR bonus. Base-only keeps MAX_HP at 30.
+        CHECK(testMaxHpBaseOnly(5, 5) == 30);
+        CHECK(testMaxHpBonusInclusive(5, 5, 2, 0) == 32); // regressed behavior
+    }
 }

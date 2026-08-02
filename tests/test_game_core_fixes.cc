@@ -1,11 +1,16 @@
 // Unit tests for game core fixes (Stage 4 Implementation).
 //
-// Covers: UF-H-008, UF-H-014, UF-H-017, UF-H-018, UF-004, UF-010, UF-H-044
+// Covers: UF-H-008, UF-H-014, UF-H-017, UF-H-018, UF-004/M-75, UF-010, UF-H-044
 //
 // These are self-contained mirror tests that validate the logic patterns
 // of the fixes without linking the production .cc files (60+ engine deps each).
 // Each test mirrors the fixed logic in a test-local function and validates
 // the behavior against edge cases and pre-fix crash scenarios.
+//
+// M-75: the UF-004 oracle was rewritten in Stage 6 to model the full ammo
+// stack state (clip count + top-clip rounds) — the original test only
+// modeled the top clip's quantity and never exercised the quantity++ side
+// effect, giving false confidence on round preservation.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest.h"
@@ -244,76 +249,126 @@ TEST_CASE("UF-H-018: characterSelectorWindowRefresh dead code revived") {
 }
 
 // =============================================================
-// UF-004: Ammo overflow stacking round preservation
+// UF-004 / M-75: Ammo overflow merge round preservation
 //
-// Before: ammoSetQuantity(itemToAdd, ammoQuantity - capacity)
-//         → sets only excess, loses capacity rounds when old item destroyed
-// After:  ammoSetQuantity(itemToAdd, ammoQuantity)
-//         → preserves all combined rounds on new item
+// M-75: pass-13 (7f58356) changed the overflow merge to set the new
+// clip's rounds to the full combined amount (clamped to capacity) and
+// then quantity++ — but quantity++ already adds a full clip, so the
+// merge created rounds. Concrete trace: a stack of 2×10-round clips
+// (entry quantity=2, top clip 10 rounds) plus a 5-round pickup gives
+// combined=15 > capacity=10; the buggy code set the new clip to 10 and
+// quantity++ → 3 clips × 10 = 30 rounds owned from 25 (+5 created).
 //
-// Test validates round preservation after overflow merge.
+// Correct (upstream excess-only): ammoSetQuantity(itemToAdd, combined -
+// capacity) keeps only the overflow on the new clip; quantity++ accounts
+// for the new clip itself. Total = capacity×(N-1) + excess + newRounds.
+//
+// The oracle models the full inventory state (clip count + top-clip
+// rounds), NOT just the top clip's quantity — the old test (testAmmoMergeOverflow)
+// only modeled the top clip and never exercised the quantity++ side
+// effect, giving false confidence.
 // =============================================================
 
 namespace {
-int testAmmoMergeOverflow(int existingAmmo, int newAmmo, int capacity) {
-    int combined = existingAmmo + newAmmo;
+struct AmmoStack {
+    int clipCount;    // inventory entry quantity (number of clips)
+    int topRounds;    // rounds in the current/top clip
+    int capacity;     // rounds per full clip
+};
+
+// Total rounds owned by an ammo stack entry:
+// every clip except the top is full at capacity; the top holds topRounds.
+int testAmmoStackTotal(const AmmoStack& stack) {
+    return stack.capacity * (stack.clipCount - 1) + stack.topRounds;
+}
+
+// Mirrors the fixed production merge (item.cc itemAdd ammo branch):
+// existing stack + a new clip of [newRounds] rounds, capacity [capacity].
+AmmoStack testAmmoMergeExcessOnly(const AmmoStack& existing, int newRounds) {
+    int capacity = existing.capacity;
+    int combined = existing.topRounds + newRounds;
+    AmmoStack result = existing;
     if (combined > capacity) {
-        // Production ammoSetQuantity clamps to capacity (item.cc:1485-1487)
-        return capacity;
+        // Excess-only: the new clip carries only the overflow; the
+        // clip-count increment below accounts for the new clip.
+        result.topRounds = combined - capacity;
+        result.clipCount += 1;
+    } else {
+        // No overflow: rounds fold into the existing top clip.
+        result.topRounds = combined;
     }
-    return combined;
+    return result;
+}
+
+// Mirrors the buggy pass-13 behavior (the regression M-75 fixed).
+AmmoStack testAmmoMergeBuggy(const AmmoStack& existing, int newRounds) {
+    int capacity = existing.capacity;
+    int combined = existing.topRounds + newRounds;
+    AmmoStack result = existing;
+    if (combined > capacity) {
+        // ammoSetQuantity clamps to capacity, then quantity++ adds a
+        // full clip → rounds created.
+        result.topRounds = capacity;
+        result.clipCount += 1;
+    } else {
+        result.topRounds = combined;
+    }
+    return result;
 }
 } // namespace
 
-TEST_CASE("UF-004: Ammo overflow clamps to capacity") {
-    // Existing: 10 rounds, New: 8 rounds, Capacity: 12
-    // Combined: 18 > 12 → overflow → clamped to capacity
-    CHECK(testAmmoMergeOverflow(10, 8, 12) == 12);
+TEST_CASE("M-75: Ammo overflow merge preserves total rounds (excess-only)") {
+    // Concrete adversarial trace: 2×10 clips + 5-round pickup = 25 rounds.
+    AmmoStack stack = { 2, 10, 10 };
+    CHECK(testAmmoStackTotal(stack) == 20);
 
-    // Edge: combined exactly at capacity → no overflow
-    CHECK(testAmmoMergeOverflow(6, 6, 12) == 12);
+    AmmoStack fixed = testAmmoMergeExcessOnly(stack, 5);
+    CHECK(fixed.clipCount == 3);
+    CHECK(fixed.topRounds == 5);            // excess only
+    CHECK(testAmmoStackTotal(fixed) == 25); // total preserved
 
-    // Edge: combined just over capacity → clamped
-    CHECK(testAmmoMergeOverflow(10, 3, 12) == 12);
-
-    // Edge: existing is at capacity, adding small amount → clamped
-    CHECK(testAmmoMergeOverflow(12, 1, 12) == 12);
-
-    // Edge: large overflow → clamped
-    CHECK(testAmmoMergeOverflow(12, 100, 12) == 12);
-
-    // Under capacity: no change needed
-    CHECK(testAmmoMergeOverflow(3, 5, 12) == 8);
+    AmmoStack buggy = testAmmoMergeBuggy(stack, 5);
+    CHECK(buggy.clipCount == 3);
+    CHECK(buggy.topRounds == 10);           // clamped to capacity
+    CHECK(testAmmoStackTotal(buggy) == 30); // +5 rounds created
+    CHECK(testAmmoStackTotal(buggy) > testAmmoStackTotal(fixed));
 }
 
-TEST_CASE("UF-004: Ammo overflow preserves rounds vs old lossy behavior") {
-    // Old behavior: would return only (combined - capacity) = excess
-    auto oldBehavior = [](int existing, int newAmmo, int cap) {
-        int combined = existing + newAmmo;
-        if (combined > cap) {
-            return combined - cap; // LOSSY: loses capacity rounds
-        }
-        return combined;
-    };
-    auto newBehavior = [](int existing, int newAmmo, int cap) {
-        int combined = existing + newAmmo;
-        if (combined > cap) {
-            return combined; // FIXED: preserves all rounds
-        }
-        return combined;
-    };
+TEST_CASE("M-75: Ammo merge never creates rounds across the range") {
+    for (int existingClips = 1; existingClips <= 5; existingClips++) {
+        for (int topRounds = 1; topRounds <= 12; topRounds++) {
+            for (int newRounds = 1; newRounds <= 12; newRounds++) {
+                AmmoStack stack = { existingClips, topRounds, 12 };
+                int beforeTotal = testAmmoStackTotal(stack);
 
-    // Verify the fix is strictly better (preserves more rounds)
-    for (int existing = 1; existing <= 30; existing++) {
-        for (int newAmmo = 1; newAmmo <= 30; newAmmo++) {
-            int capacity = 12;
-            int oldResult = oldBehavior(existing, newAmmo, capacity);
-            int newResult = newBehavior(existing, newAmmo, capacity);
-            INFO("existing=", existing, " new=", newAmmo);
-            CHECK(newResult >= oldResult); // never lose more rounds than before
-            CHECK(newResult == existing + newAmmo); // total rounds always preserved
+                AmmoStack fixed = testAmmoMergeExcessOnly(stack, newRounds);
+                INFO("clips=", existingClips, " top=", topRounds, " new=", newRounds);
+                // Round-trip invariant: merging must preserve the exact total.
+                CHECK(testAmmoStackTotal(fixed) == beforeTotal + newRounds);
+
+                AmmoStack buggy = testAmmoMergeBuggy(stack, newRounds);
+                // The buggy behavior never preserves fewer than the correct
+                // total for this case (it can only create rounds) — but it
+                // must never be the round-preserving implementation.
+                // Buggy creates rounds iff combined < 2*capacity (the clamp
+                // to capacity loses the overflow remainder); at exactly
+                // combined == 2*capacity the clamped result coincides with
+                // the excess-only result (both topRounds = capacity), so the
+                // strict > assertion only holds below that boundary.
+                if (topRounds + newRounds > 12 && topRounds + newRounds < 24) {
+                    CHECK(testAmmoStackTotal(buggy) > beforeTotal + newRounds);
+                }
+            }
         }
     }
+}
+
+TEST_CASE("M-75: No-overflow merge folds into the top clip") {
+    AmmoStack stack = { 1, 3, 12 };
+    AmmoStack fixed = testAmmoMergeExcessOnly(stack, 5);
+    CHECK(fixed.clipCount == 1);
+    CHECK(fixed.topRounds == 8);            // 3 + 5, no new clip
+    CHECK(testAmmoStackTotal(fixed) == 8);
 }
 
 // =============================================================

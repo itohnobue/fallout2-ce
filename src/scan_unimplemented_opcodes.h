@@ -191,8 +191,18 @@ void check_int_data(
             printf("ERROR: Wrong opcode %x in file %s at pos=0x%lx\n", opcode, fName.c_str(), i);
             return;
         };
-        unsigned int opcodeIndex = opcode & 0x3FFF;
-        fallout::OpcodeHandler* handler = fallout::gInterpreterOpcodeHandlers[opcodeIndex];
+        // M-124/C-01: use the same 10-bit decode mask as the runtime dispatch
+        // (interpreter.cc:3082). Under the old 14-bit 0x3FFF mask, value-type
+        // words (0x9001 PUSH_STR etc.) mapped to indices >= OPCODE_MAX_COUNT
+        // and were indexed into the 768-entry gInterpreterOpcodeHandlers with
+        // no bounds check — an OOB read. With 0x3FF they resolve to opPush
+        // (index 1) exactly like the engine. The bounds check below keeps
+        // malformed 0x8300-0x83FF words from indexing out of range.
+        unsigned int opcodeIndex = opcode & 0x3FF;
+        fallout::OpcodeHandler* handler = nullptr;
+        if (opcodeIndex < OPCODE_MAX_COUNT) {
+            handler = fallout::gInterpreterOpcodeHandlers[opcodeIndex];
+        }
         if (handler == NULL) {
             auto& set = unknown_opcodes[opcode];
             set.insert(fName);
@@ -207,7 +217,9 @@ void check_int_data(
                 }
             } else {
                 printf("ERROR: Unknown usage of register_hook in file %s at pos=0x%lx\n", fName.c_str(), i);
-                exit(1);
+                // M-126: continue scanning other files instead of hard-aborting
+                // the whole multi-file scan.
+                return;
             }
         } else if (opcodeIndex == 0x262 || opcodeIndex == 0x27d) { // register_hook_proc / register_hook_proc_spec
             if (
@@ -219,7 +231,8 @@ void check_int_data(
                 }
             } else {
                 printf("ERROR: Unknown usage of register_hook_proc in file %s at pos=0x%lx\n", fName.c_str(), i);
-                exit(1);
+                // M-126: continue scanning other files instead of hard-aborting.
+                return;
             }
         }
 
@@ -227,7 +240,7 @@ void check_int_data(
 
         i += 2;
 
-        if (opcodeIndex == (fallout::OPCODE_PUSH & 0x3FFF)) {
+        if (opcodeIndex == (fallout::OPCODE_PUSH & 0x3FF)) {
             i += 4;
             isPreviousPush = true;
         } else {
@@ -310,7 +323,9 @@ void check_file(std::string fName)
     fallout::File* stream = fallout::fileOpen(fName.c_str(), "rb");
     if (stream == NULL) {
         printf("Error opening %s\n", fName.c_str());
-        exit(1);
+        // M-126: continue scanning other files instead of hard-aborting the
+        // whole multi-file scan.
+        return;
     }
 
     check_file_stream(stream, fName);
@@ -323,6 +338,11 @@ void check_database(std::string dbFileName)
     std::cout << "Checking database file: " << dbFileName << std::endl;
 
     fallout::File* stream = fallout::fileOpen(dbFileName.c_str(), "rb");
+    if (stream == nullptr) {
+        // M-125: fileGetSize(null) is a null deref.
+        std::cout << "  - Failed to open database file, skipping" << std::endl;
+        return;
+    }
     auto sizeOfFile = fallout::fileGetSize(stream);
     if (sizeOfFile <= 8) {
         std::cout << "  - File is too small, skipping" << std::endl;
@@ -341,6 +361,12 @@ void check_database(std::string dbFileName)
     }
 
     auto db = fallout::dbaseOpen(dbFileName.c_str());
+    if (db == nullptr) {
+        // M-125: dbaseOpen can return null (e.g. bad header); the entries loop
+        // below would null-deref db->entriesLength.
+        std::cout << "  - Failed to open database (dbaseOpen returned null), skipping" << std::endl;
+        return;
+    }
     int intCount = 0;
     for (int i = 0; i < db->entriesLength; i++) {
         auto entryPath = std::string(db->entries[i].path);

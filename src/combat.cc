@@ -58,6 +58,15 @@ namespace fallout {
 // These are initialized to defaults; ddraw.ini values override at config parse time.
 int gFastShotFix = 0;
 int gXPTableMode = 0;
+
+// M-54: parsed XPTable values from ddraw.ini [Misc] XPTable=50,100,200...
+// configGetInt (strtol) truncates at the first comma, so the list is parsed
+// with configGetIntList in combatInit(). gXPTable[i] holds the XP required
+// to reach level i+2 (sfall semantics: xpTable[level] with level 1 = 0).
+// stat.cc's pcGetExperienceForLevel() applies the table when gXPTableMode >= 1.
+int gXPTable[PC_LEVEL_MAX] = {};
+int gXPTableCount = 0;
+
 int gWorldMapFPSPatch = 0;
 int gDisableSpecialMapIDs = 0;
 
@@ -2072,8 +2081,43 @@ int combatInit()
     configGetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, "FastShotFix", &gFastShotFix, 0);
 
     // SFALL: Read XPTable from ddraw.ini.
-    // 0 = use hardcoded formula, 1+ = use external table (TODO: load table file).
-    configGetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, "XPTable", &gXPTableMode, 0);
+    // 0 = use hardcoded formula, 1+ = use external table.
+    // M-54: configGetInt uses strtol which stops at the first comma, so
+    // "1000,3000,..." only parsed the first value and the mode flag was set
+    // without any table data. Parse the full comma-separated list here and
+    // let stat.cc's pcGetExperienceForLevel() apply it (see stat.cc:770).
+    // configGetIntList cannot be used directly: it returns false when the
+    // list is shorter than the requested count (the common case), so we
+    // tokenize the raw string ourselves.
+    gXPTableMode = 0;
+    gXPTableCount = 0;
+    char* xpTableString = nullptr;
+    if (configGetString(&gSfallConfig, SFALL_CONFIG_MISC_KEY, "XPTable", &xpTableString) && xpTableString != nullptr) {
+        // CONFIG_FILE_MAX_LINE_LENGTH (config.cc) bounds ini line lengths.
+        char xpTableCopy[1024];
+        strncpy(xpTableCopy, xpTableString, sizeof(xpTableCopy) - 1);
+        xpTableCopy[sizeof(xpTableCopy) - 1] = '\0';
+
+        char* token = xpTableCopy;
+        while (token != nullptr && gXPTableCount < PC_LEVEL_MAX - 1) {
+            char* comma = strchr(token, ',');
+            if (comma != nullptr) {
+                *comma = '\0';
+            }
+
+            char* end = nullptr;
+            long value = strtol(token, &end, 10);
+            if (end != token) {
+                gXPTable[gXPTableCount++] = static_cast<int>(value);
+            }
+
+            token = (comma != nullptr) ? comma + 1 : nullptr;
+        }
+
+        if (gXPTableCount > 0) {
+            gXPTableMode = 1;
+        }
+    }
 
     return 0;
 }
@@ -3839,7 +3883,14 @@ static bool _check_ranged_miss(Attack* attack)
 
     attack->defenderHitLocation = HIT_LOCATION_TORSO;
 
-    if (roll < ROLL_SUCCESS || critter == nullptr || (critter->flags & OBJECT_SHOOT_THRU) == 0) {
+    // M-55: the third disjunct was polarity-inverted. `roll` is only ever set
+    // to ROLL_SUCCESS inside the `(flags & OBJECT_SHOOT_THRU) == 0` (solid)
+    // branch above, so whenever roll==ROLL_SUCCESS the old `== 0` test was
+    // TRUE → the function always returned false and the interposed-hit path
+    // (attack->defender = critter, below) was unreachable. A miss could never
+    // hit an interposed target. The correct test is `!= 0`: a shoot-through
+    // object does not stop the bullet (return false), a solid object does.
+    if (roll < ROLL_SUCCESS || critter == nullptr || (critter->flags & OBJECT_SHOOT_THRU) != 0) {
         return false;
     }
 
@@ -4775,7 +4826,17 @@ static int attackDetermineToHit(Object* attacker, int tile, Object* defender, in
             }
 
             if (distanceMod >= minEffectiveDist) {
-                int perceptionBonus = attacker == gDude
+                // H-04: the FO2 (PE-2) player nerf — subtracting 2 from the
+                // player's perception before computing the ranged to-hit
+                // bonus — must be gated on FO2 behavior, mirroring the
+                // sibling FO1 gates at 4890/5035. In FO1 mode the player
+                // uses the full perception (sfall's set_fo1_hit_chance /
+                // write_byte 0x4244ED 0xEB skips the branch entirely).
+                // R-04: consume the sfall set_fo1_hit_chance metarule state
+                // too — when a mod enables it (Et Tu's FO1 combat), the
+                // (PE-2) nerf is removed regardless of gFallout1Behavior.
+                int perceptionBonus = (attacker == gDude
+                    && !(gFallout1Behavior || sfallGetFo1HitChance()))
                     ? perceptionBonusMult * (perception - 2)
                     : perceptionBonusMult * perception;
 
@@ -6226,7 +6287,12 @@ static int calledShotSelectHitLocation(Object* critter, int* hitLocation, int hi
             break;
         }
 
-        if (eventCode >= 0 && eventCode < HIT_LOCATION_COUNT) {
+        // combat N-04: only event codes 0-7 are valid called-shot
+        // selections (4 left slots + 4 right slots). HIT_LOCATION_COUNT is 9,
+        // so the old `< HIT_LOCATION_COUNT` guard let KEY_BACKSPACE (logical
+        // 8) through, indexing the 4-element _hit_loc_right[eventCode - 4]
+        // out of bounds. Backspace now falls through to the loop (cancel).
+        if (eventCode >= 0 && eventCode < 8) {
             break;
         }
 

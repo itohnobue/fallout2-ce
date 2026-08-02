@@ -43,7 +43,9 @@
 #include "random.h"
 #include "scripts.h"
 #include "settings.h"
+#include "sfall_config.h"
 #include "sfall_global_scripts.h"
+#include "sfall_metarules.h"
 #include "sfall_script_hooks.h"
 #include "skill.h"
 #include "stat.h"
@@ -60,6 +62,22 @@ extern bool gFallout1Behavior;
 // SFALL: WorldMapFPSPatch controls the worldmap frame rate independent of
 // the global FPS limiter. When > 0, applies an additional delay per frame.
 extern int gWorldMapFPSPatch;
+
+// M-64: sfall WorldMapDelay2 — per-frame delay (ms) applied on the worldmap
+// when WorldMapFPSPatch is enabled. sfall semantics: WorldMapFPSPatch is a
+// boolean enable and WorldMapDelay2 (default 66, clamp [1,150]) is the delay.
+// Read from ddraw.ini [Misc] at wmWorldMap_init.
+static int gWorldMapDelay2 = 66;
+
+// M-62: Version gate for the gScriptWorldMapMulti save field. versionMajor
+// stores VERSION_MINOR (2 = upstream/v1.x, 3 = fork 1.3R, 4 = fork 1.4R+);
+// the float is a fork addition present only in fork saves (versionMajor >= 3).
+// Defined here with the fork default so the worldmap.dat temp-data path (which
+// bypasses the save-game handler and is always fork-format) reads the float
+// correctly on a fresh boot. The save-format pass (loadsave.cc) must SET this
+// (via `extern int gLoadedSaveVersionMajor;` — do NOT redefine it) to the
+// loaded save's versionMajor so upstream/vanilla v2 saves skip the float.
+int gLoadedSaveVersionMajor = 3;
 
 // SFALL: DisableSpecialMapIDs suppresses special encounter entries in
 // the random encounter table. When != 0, ENCOUNTER_ENTRY_SPECIAL flagged
@@ -1037,6 +1055,18 @@ int wmWorldMap_init()
     configGetBool(&gContentConfig, CONTENT_CONFIG_WORLDMAP_SECTION, "town_map_hotkeys_fix", &gTownMapHotkeysFix, true);
     configGetInt(&gContentConfig, CONTENT_CONFIG_WORLDMAP_SECTION, "trail_markers", &worldmapTrailMarkers, 0);
 
+    // M-64: sfall treats WorldMapFPSPatch as a boolean enable and uses
+    // WorldMapDelay2 (ms, default 66, clamped [1,150]) for the actual delay.
+    // The previous code treated WorldMapFPSPatch as an FPS number, so the
+    // sfall/Et Tu shipped default WorldMapFPSPatch=1 computed 1000ms/frame
+    // (~1 FPS worldmap). Match sfall Worldmap.cpp:400-407.
+    configGetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, "WorldMapDelay2", &gWorldMapDelay2, 66);
+    if (gWorldMapDelay2 < 1) {
+        gWorldMapDelay2 = 1;
+    } else if (gWorldMapDelay2 > 150) {
+        gWorldMapDelay2 = 150;
+    }
+
     // CE: City size fids should be initialized during startup. They are used
     // during |wmTeleportToArea| to calculate worldmap position when jumping
     // from Temple to Arroyo - before giving a chance to |wmInterfaceInit| to
@@ -1441,11 +1471,29 @@ int wmWorldMap_load(File* stream)
             numCities, wmMaxAreaNum);
     }
 
+    // M-63: The save was written with MORE cities than the current config
+    // (mod worldmap.txt drift). The clamp caps the loop bound, but the
+    // surplus city blocks would stay in the stream and desynchronize the
+    // subsequent numTiles read. They are skipped AFTER the city loop (see
+    // below) — the write layout is [numCities][float][city blocks][numTiles]
+    // (wmWorldMap_save:1300-1317), so the skip must run after the city data
+    // and immediately before the numTiles read to keep the stream aligned.
+    int surplusCities = 0;
     if (numCities > wmMaxAreaNum) {
+        surplusCities = numCities - wmMaxAreaNum;
         numCities = wmMaxAreaNum;
     }
 
-    if (fileReadFloat(stream, &gScriptWorldMapMulti) == -1) return -1;
+    // M-62: gScriptWorldMapMulti is a fork addition present only in fork
+    // saves (versionMajor >= 3). Version-gate the read — upstream/vanilla v2
+    // saves jump straight from numCities to the city data; reading the float
+    // there would consume the first city's x as a float and misalign the
+    // whole city/tile stream. gLoadedSaveVersionMajor is set by loadsave.cc.
+    if (gLoadedSaveVersionMajor >= 3) {
+        if (fileReadFloat(stream, &gScriptWorldMapMulti) == -1) return -1;
+    } else {
+        gScriptWorldMapMulti = 1.0f;
+    }
 
     for (int areaIdx = 0; areaIdx < numCities; areaIdx++) {
         CityInfo* city = &(wmAreaInfoList[areaIdx]);
@@ -1460,16 +1508,55 @@ int wmWorldMap_load(File* stream)
             return -1;
         }
 
-        if (entranceCount > city->entrancesLength) {
-            entranceCount = city->entrancesLength;
+        // R-24: entrance-level surplus (same mod-drift class as M-63). The
+        // write side emits entranceCount entrance-state ints per city
+        // (wmWorldMap_save:1309-1314). Consume ALL of them (bounded by
+        // ENTRANCE_LIST_CAPACITY — the maximum the write side can produce,
+        // since entrances[] is sized to that) so the stream stays aligned for
+        // the next city block / numTiles read, but store only the first
+        // city->entrancesLength (the current config's entrance slots).
+        if (entranceCount > ENTRANCE_LIST_CAPACITY) {
+            entranceCount = ENTRANCE_LIST_CAPACITY;
         }
 
         for (int entranceIdx = 0; entranceIdx < entranceCount; entranceIdx++) {
-            EntranceInfo* entrance = &(city->entrances[entranceIdx]);
-
-            if (fileReadInt32(stream, &(entrance->state)) == -1) {
+            int entranceState;
+            if (fileReadInt32(stream, &entranceState) == -1) {
                 return -1;
             }
+            if (entranceIdx < city->entrancesLength) {
+                city->entrances[entranceIdx].state = entranceState;
+            }
+        }
+    }
+
+    // M-63 (R-10): skip the surplus city blocks AFTER the city loop, BEFORE
+    // the numTiles read. Each block = 5 ints (x, y, state, visitedState,
+    // entrancesLength) + entrancesLength entrance-state ints, per the write
+    // side (wmWorldMap_save:1300-1315).
+    for (int skipIdx = 0; skipIdx < surplusCities; skipIdx++) {
+        int skipX;
+        int skipY;
+        int skipState;
+        int skipVisitedState;
+        int skipEntranceCount;
+        if (fileReadInt32(stream, &skipX) == -1) return -1;
+        if (fileReadInt32(stream, &skipY) == -1) return -1;
+        if (fileReadInt32(stream, &skipState) == -1) return -1;
+        if (fileReadInt32(stream, &skipVisitedState) == -1) return -1;
+        if (fileReadInt32(stream, &skipEntranceCount) == -1) return -1;
+        if (skipEntranceCount < 0) return -1;
+        // R-26: clamp the skip count — the write side never emits more than
+        // ENTRANCE_LIST_CAPACITY entrance states per city, so a corrupt save
+        // with a huge surplus-city entrancesLength cannot cause a long read
+        // loop (EOF-bounded reads would otherwise make it slow on crafted
+        // input).
+        if (skipEntranceCount > ENTRANCE_LIST_CAPACITY) {
+            skipEntranceCount = ENTRANCE_LIST_CAPACITY;
+        }
+        for (int skipEntranceIdx = 0; skipEntranceIdx < skipEntranceCount; skipEntranceIdx++) {
+            int skipEntranceState;
+            if (fileReadInt32(stream, &skipEntranceState) == -1) return -1;
         }
     }
 
@@ -1611,6 +1698,12 @@ static int wmWorldMapLoadTempData()
     if (stream == nullptr) {
         return -1;
     }
+
+    // worldmap.dat is always written by this fork in the current format
+    // (which includes the gScriptWorldMapMulti float), regardless of which
+    // save-game version was loaded last. Force the fork format for the
+    // version-gated float read (M-62).
+    gLoadedSaveVersionMajor = 3;
 
     int rc = 0;
     if (wmWorldMap_load(stream) == -1) {
@@ -2993,6 +3086,7 @@ static int wmMapInit()
             wmMapSlotInit(map);
 
             strncpy(map->lookupName, str, 40);
+            map->lookupName[39] = '\0'; // M-192: strncpy may omit the NUL for >= 40-char input
 
             if (!configGetString(&config, section, "map_name", &str)) {
                 showMessageBox("\nwmConfigInit::Error loading maps!");
@@ -3001,14 +3095,27 @@ static int wmMapInit()
 
             compat_strlwr(str);
             strncpy(map->mapFileName, str, 40);
+            map->mapFileName[39] = '\0'; // M-192: ensure NUL termination
 
             if (configGetString(&config, section, "music", &str)) {
                 strncpy(map->music, str, 40);
+                map->music[39] = '\0'; // M-192: ensure NUL termination (pattern: wmSetMapMusic:7439-7440)
             }
 
             if (configGetString(&config, section, "ambient_sfx", &str)) {
                 while (str) {
                     MapAmbientSoundEffectInfo* sfx = &(map->ambientSoundEffects[map->ambientSoundEffectsLength]);
+                    // M-191: strParseKeyValue copies the key segment into
+                    // sfx->name (char[40]) with an unbounded strcpy
+                    // (string_parsers.cc:255 — bounded by the misc agent).
+                    // A config key >= 40 chars would overflow the destination;
+                    // skip the remaining ambient sfx entries for this map
+                    // (degrading like the "Too many" path below).
+                    if (strcspn(str, ":") >= sizeof(sfx->name)) {
+                        debugPrint("\nwmMapInit::Error reading ambient sfx.  Name too long!  MapIdx: %d", mapIdx);
+                        str = nullptr;
+                        break;
+                    }
                     if (strParseKeyValue(&str, sfx->name, &(sfx->chance), ":") == -1) {
                         return -1;
                     }
@@ -3726,9 +3833,13 @@ static int wmWorldMapFunc(int a1)
         // FPS cap. The shared limiter is fixed at construction; when
         // gWorldMapFPSPatch is lower than the global cap, we add a
         // compensating delay here.
+        // M-64: sfall semantics — WorldMapFPSPatch is a boolean enable and
+        // WorldMapDelay2 (ms, default 66, clamped [1,150]) is the delay.
+        // Treating the config value as an FPS number made the sfall/Et Tu
+        // shipped WorldMapFPSPatch=1 compute 1000ms/frame (~1 FPS).
         if (gWorldMapFPSPatch > 0) {
             unsigned int elapsed = getTicks() - now;
-            unsigned int target = 1000 / gWorldMapFPSPatch;
+            unsigned int target = static_cast<unsigned int>(gWorldMapDelay2);
             if (target > elapsed) {
                 SDL_Delay(target - elapsed);
             }
@@ -3858,7 +3969,11 @@ static int wmRndEncounterOccurred(int* mapToLoadPtr)
             if (didFadeOut) {
                 wmFadeIn();
             }
-            return 1;
+            // M-66: return 0 (not 1) so the caller (wmWorldMapFunc:3543) keeps
+            // walking instead of breaking the while(true) worldmap loop and
+            // exiting the screen. Matches the sibling RandomEncounter
+            // ContinueTravel path (line 3925).
+            return 0;
         }
         default:
             break;
@@ -4684,7 +4799,13 @@ static bool wmEvalConditional(EncounterCondition* condition, int* critterCountPt
             }
             break;
         case ENCOUNTER_CONDITION_TYPE_NUMBER_OF_CRITTERS:
-            if (!wmEvalSubConditional(*critterCountPtr, conditionEntry->conditionalOperator, conditionEntry->value)) {
+            // M-65: wmRndEncounterPick calls wmEvalConditional with a null
+            // critter count pointer (worldmap.cc:4136). Treat a null pointer
+            // as "no constraint" (the entry remains a candidate) instead of
+            // dereferencing nullptr. The critter-entry caller (worldmap.cc:4368)
+            // passes a valid pointer and keeps the full check.
+            if (critterCountPtr != nullptr
+                && !wmEvalSubConditional(*critterCountPtr, conditionEntry->conditionalOperator, conditionEntry->value)) {
                 matches = false;
             }
             break;
@@ -4829,34 +4950,46 @@ static int wmGrabTileWalkMask(int tileIdx)
 // 0x4C1D9C wmWorldPosInvalid
 static bool wmWorldPosInvalid(int x, int y)
 {
-    // Validate coordinates to prevent OOB access via negative/invalid values.
+    // map N-01 (PRIOR_FIX f874424): the guards were added INVERTED. The
+    // callers (wmPartyWalkingStep:4932/4952) treat TRUE as "stop walking —
+    // position invalid", so returning FALSE for out-of-range coordinates made
+    // the party keep walking into OOB territory (null currentSubtile deref at
+    // wmPartyWalkingStep:4923). Return TRUE for every invalid condition.
     if (wmNumHorizontalTiles <= 0 || wmMaxTileNum <= 0) {
-        return false;
+        return true; // config-broken: cannot validate any position
     }
     if (x < 0 || x >= WM_TILE_WIDTH * wmNumHorizontalTiles) {
-        return false;
+        return true; // x out of bounds
     }
     if (y < 0 || y >= WM_TILE_HEIGHT * (wmMaxTileNum / wmNumHorizontalTiles)) {
-        return false;
+        return true; // y out of bounds
     }
 
     int tileIdx = y / WM_TILE_HEIGHT * wmNumHorizontalTiles + x / WM_TILE_WIDTH % wmNumHorizontalTiles;
     if (wmGrabTileWalkMask(tileIdx) == -1) {
-        return false;
+        return true;
     }
 
     TileInfo* tileDescription = &(wmTileInfoList[tileIdx]);
     unsigned char* mask = tileDescription->walkMaskData;
     if (mask == nullptr) {
-        return false;
+        return true;
     }
 
     // Mask length is 13200, which is 300 * 44
     // 44 * 8 is 352, which is probably left 2 bytes intact
     // TODO: Check math.
+    //
+    // R-02: the walk mask bit convention is bit SET = BLOCKED. Upstream CE
+    // (worldmap.cc:4262) returns `(mask[pos] & bit) != 0` — TRUE means the
+    // position is blocked -> invalid, matching the "TRUE = stop" polarity of
+    // the callers. The pass-1 map N-01 fix over-applied the polarity flip and
+    // inverted THIS return to `== 0`; with real .msk data (FO1 WRLDMP01.msk
+    // has 0/52800 set bits = fully walkable) `== 0` reported every position
+    // invalid and the party stopped after the first step. Restored to `!= 0`.
     int pos = (y % WM_TILE_HEIGHT) * 44 + (x % WM_TILE_WIDTH) / 8;
     int bit = 1 << (((x % WM_TILE_WIDTH) / 8) & 3);
-    return (mask[pos] & bit) != 0;
+    return (mask[pos] & bit) != 0; // walk mask bit SET = blocked -> invalid
 }
 
 // 0x4C1E54 wmPartyInitWalking
@@ -4919,6 +5052,19 @@ static void wmPartyWalkingStep()
 
     // NOTE: Uninline.
     wmPartyFindCurSubTile();
+
+    // M-70: wmPartyFindCurSubTile leaves currentSubtile null when the current
+    // position is outside the tile grid (wmFindCurSubTileFromPos:4077-4082).
+    // The map N-01 guard polarity fix stops OOB walking before it reaches
+    // here; this null guard is defense-in-depth and mirrors the invalid-
+    // position reset used at wmPartyWalkingStep:4933-4938.
+    if (wmGenData.currentSubtile == nullptr) {
+        wmGenData.walkDestinationX = 0;
+        wmGenData.walkDestinationY = 0;
+        wmGenData.isWalking = false;
+        wmGenData.walkDistance = 0;
+        return;
+    }
 
     Terrain* terrain = &(wmTerrainTypeList[wmGenData.currentSubtile->terrain]);
     // SFALL: Fix Pathfinder perk.
@@ -6127,7 +6273,16 @@ static int wmInterfaceDrawCircleOverlaySafe(CityInfo* city, CitySizeDescription*
     }
 
     // Draw text onto offscreen buffer
-    if (textDrawAbsX >= 0 && textDrawAbsY >= 0 && textDrawAbsX + textWidth <= WM_OVERLAY_BUFFER_SIZE && textDrawAbsY + textHeight <= WM_OVERLAY_BUFFER_SIZE) {
+    // H-05/F-026 + R-04: FO1 mode (gFallout1Behavior, e.g. Et Tu) does not
+    // draw city circle labels on the worldmap — sfall's
+    // remove_wm_town_names(true) (gl_classic_wm.ssl:30) disables them. The
+    // sfall metarule flag must ALSO be consulted (sfall_metarules.h:166-167):
+    // in FO2 mode (Fallout1Behavior=0) a mod calling remove_wm_town_names(true)
+    // must still hide the labels. The live path uses this Safe variant; gate
+    // the label the same way wmInterfaceDrawCircleOverlay does.
+    if (!gFallout1Behavior
+        && !sfallGetRemoveWmTownNames()
+        && textDrawAbsX >= 0 && textDrawAbsY >= 0 && textDrawAbsX + textWidth <= WM_OVERLAY_BUFFER_SIZE && textDrawAbsY + textHeight <= WM_OVERLAY_BUFFER_SIZE) {
         fontDrawText(
             wmOverlayOffscreenBuf + textDrawAbsY * WM_OVERLAY_BUFFER_SIZE + textDrawAbsX,
             name, textWidth, WM_OVERLAY_BUFFER_SIZE,
@@ -6281,7 +6436,11 @@ static int wmDrawCursorStopped()
     int width;
     int height;
 
-    bool isWalkingNow = (wmGenData.walkDestinationX != 0 || wmGenData.walkDestinationY != 0);
+    // M-68: restore upstream semantics — walk destinations are >= 1 while
+    // walking; the idle sentinel is -1 (wmGenDataInit/wmGenDataReset). The
+    // fork's "!= 0" test misclassified the idle -1 sentinel as walking,
+    // drawing the moving-cursor marker and dropping trail dots while idle.
+    bool isWalkingNow = (wmGenData.walkDestinationX >= 1 || wmGenData.walkDestinationY >= 1);
 
     if (isWalkingNow) {
         // moving cursor

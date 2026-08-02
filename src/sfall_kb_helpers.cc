@@ -721,14 +721,32 @@ int sfall_kb_handle_key_pressed(int sdlScanCode, bool pressed, SDL_Keycode keysy
     }
 
     int overrideDxCode = hook.getReturnValueAt(0).asInt();
-    // F-27: ret0=1 means "block/consume the key" per sfall spec.
-    // Return -1 as a sentinel to signal to the caller that the key
-    // should be fully consumed (no further processing).
-    // Other values remap to the corresponding DIK scancode as before.
-    if (overrideDxCode == 1) {
-        return -1;
+    // M-29: Match sfall HOOK_KEYPRESS ret0 semantics (Common.cpp:194-197
+    // KeyPressHook — `if (retKey > 0 && retKey < 264) *dxKey = retKey;`):
+    //   ret0 in [1, 263]  → remap the pressed key to DIK code ret0
+    //                        (this INCLUDES 1 = DIK_ESCAPE — sfall does NOT
+    //                        treat ret0=1 as "block/consume", contrary to the
+    //                        old F-27 comment; it remaps to ESCAPE).
+    //   ret0 == 0         → no override (key passes through unchanged).
+    //   ret0 == 255       → the documented "swallow" idiom: Et Tu's
+    //                        gl_tma.ssl:205 uses set_sfall_return(255) to eat
+    //                        the "1,2,3,4" keys while the TMA box is open.
+    //                        sfall writes dxKey=255, an invalid DIK no engine
+    //                        handler binds → key swallowed. CE must return the
+    //                        -1 block sentinel so input.cc consumes the key.
+    //   any other value   → no override (sfall's range condition fails).
+    // The old behavior mapped ret0=255 to SDL_SCANCODE_UNKNOWN (kDiks[255]),
+    // which input.cc treated as "no override" → the key passed through and
+    // advanced dialogue while Et Tu's TMA box was open.
+    if (overrideDxCode == 255) {
+        return -1; // 255-swallow idiom: fully consume the key
     }
-    return get_scancode_from_key(overrideDxCode);
+    if (overrideDxCode > 0 && overrideDxCode < 264) {
+        // Valid DIK remap (1 = DIK_ESCAPE, matching sfall exactly).
+        return get_scancode_from_key(overrideDxCode);
+    }
+    // 0 or any out-of-range value: no override.
+    return SDL_SCANCODE_UNKNOWN;
 }
 
 } // namespace fallout

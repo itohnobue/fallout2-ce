@@ -63,7 +63,7 @@ TEST_CASE("HookType enum values are correct")
     // 42 = HOOK_TARGETOBJECT
     CHECK(static_cast<int>(HOOK_ENCOUNTER) == 43);
     // 44 = HOOK_ADJUSTPOISON (absent)
-    // 45 = HOOK_ADJUSTRADS (absent)
+    CHECK(static_cast<int>(HOOK_ADJUSTRADS) == 45); // M-26: implemented, fires from critterAdjustRadiation
     // 46 = HOOK_ROLLCHECK (absent)
     // 47 = HOOK_BESTWEAPON (absent)
     CHECK(static_cast<int>(HOOK_CANUSEWEAPON) == 48);
@@ -119,7 +119,9 @@ TEST_CASE("Hook sub-enum values are correct")
 
     // EncounterHookEventType
     CHECK(static_cast<int>(EncounterHookEventType::RandomEncounter) == 0);
-    CHECK(static_cast<int>(EncounterHookEventType::LocalMapEnter) == 2);
+    // H-03/P-05: LocalMapEnter == 1 matches sfall's arg0 (enter-from-worldmap);
+    // the 86e6c4d value 2 inverted the contract and broke Et Tu gl_worldmap.
+    CHECK(static_cast<int>(EncounterHookEventType::LocalMapEnter) == 1);
 }
 
 TEST_CASE("HOOKS constants are reasonable")

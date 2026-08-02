@@ -340,27 +340,27 @@ TEST_CASE("GetArrayKey — list arrays") {
 
     SUBCASE("empty list array after resize to 0 still reports list type") {
         // F-M43: An empty non-associative list array must report as list (0),
-        // not associative (1). This edge case previously broke on save/load
-        // round-trip because CreateArray forces ASSOC for len<=0.
+        // not associative (1).
         ArrayId id = CreateArray(3, 0);
         ResizeArray(id, 0);
         CHECK(LenArray(id) == 0);
         CHECK(GetArrayKey(id, -1, nullptr).asInt() == 0);
     }
 
-    SUBCASE("CreateArray with len=0 forces associative (documents F-M01 workaround)") {
-        // Documents the engine behavior that F-M01's load path works around:
-        // CreateArray(0, ...) at sfall_arrays.cc:672 forces SFALL_ARRAYFLAG_ASSOC.
-        // The F-M01 fix in sfallArraysLoad uses CreateArray(1, ...) then
-        // ResizeArray(0) to get an empty list array.
-        ArrayId assocId = CreateArray(0, 0); // len=0 -> forced ASSOC
-        CHECK(GetArrayKey(assocId, -1, nullptr).asInt() == 1); // IS associative
-
-        // Verify the workaround pattern produces correct list type:
-        ArrayId listId = CreateArray(1, 0); // len=1 -> NOT forced ASSOC
-        ResizeArray(listId, 0);
-        CHECK(LenArray(listId) == 0);
+    SUBCASE("M-30: CreateArray with len=0 creates an empty LIST") {
+        // M-30: sfall's convention is len < 0 → associative, len == 0 → empty
+        // LIST (Arrays.cpp:416). The old F-12 behavior (len <= 0 → ASSOC)
+        // was a misreading of sfall; create_array(0) must be a list so
+        // get_array_key(-1) returns 0 and resize_array sorts by value.
+        ArrayId listId = CreateArray(0, 0); // len=0 -> LIST, not ASSOC
         CHECK(GetArrayKey(listId, -1, nullptr).asInt() == 0); // IS list type
+
+        // The old F-M01 workaround pattern (CreateArray(1, ...) + ResizeArray(0))
+        // still produces a list as well.
+        ArrayId workaroundId = CreateArray(1, 0);
+        ResizeArray(workaroundId, 0);
+        CHECK(LenArray(workaroundId) == 0);
+        CHECK(GetArrayKey(workaroundId, -1, nullptr).asInt() == 0); // IS list type
     }
 
 }
@@ -1633,52 +1633,49 @@ TEST_CASE("I2F-037: sfallArraysLoad — nullptr stream returns false")
 }
 
 // =================================================================
-// F-12 (MEDIUM, FIXED): create_array(0, 2) now creates a map
+// M-30 (MEDIUM, FIXED): create_array(0) creates an empty LIST
 // =================================================================
 //
-// Finding F-12: CreateArray used len < 0 for associative arrays, but
-// sfall 4.x uses len <= 0. This meant create_array(0, 2) created a list
-// instead of a map — breaking et tu's create_array_map macro.
+// Finding M-30: CreateArray used len <= 0 for associative arrays, but
+// sfall 4.x uses len < 0 (Arrays.cpp:416). This meant create_array(0)
+// created an empty MAP instead of an empty LIST — a silent type-semantics
+// deviation: get_array_key(-1) returns 1 instead of 0, and resize_array
+// sorts a map by KEY but a list by VALUE. RPU's wsterm4b.ssl does
+// create_array(0,0) + array_push.
 //
-// Fix at sfall_arrays.cc:672: changed `if (len < 0)` to `if (len <= 0)`.
+// Fix at sfall_arrays.cc CreateArray: changed `if (len <= 0)` to `if (len < 0)`.
 
-TEST_CASE("F-12: create_array(0, 2) creates associative array (map)")
+TEST_CASE("M-30: create_array(0, 2) creates an empty LIST (sfall convention)")
 {
     REQUIRE(sfallArraysInit());
 
-    // len=0 with flags=2 (SFALL_ARRAYFLAG_ASSOC in sfall convention)
-    // should now create an associative array, not a list.
+    // len=0 with flags=2 (SFALL_ARRAYFLAG_CONSTVAL) — len==0 does NOT set
+    // ASSOC per sfall; an empty list is created.
     ArrayId id = CreateArray(0, 2);
     CHECK(ArrayExists(id));
 
-    // Verify it's associative — GetArrayKey(id, -1) returns 1 for associative
+    // Verify it's a list — GetArrayKey(id, -1) returns 0 for a list
     ProgramValue pv = GetArrayKey(id, -1, nullptr);
-    CHECK(pv.asInt() == 1); // 1 = associative
+    CHECK(pv.asInt() == 0); // 0 = list
 
-    // Length of an empty associative map should be 0
+    // Length of an empty list should be 0
     CHECK(LenArray(id) == 0);
-
-    // Should support arbitrary key access (not just sequential indices)
-    SetArray(id, ProgramValue(100), ProgramValue(42), false, nullptr);
-    CHECK(LenArray(id) == 1);
-    CHECK(GetArray(id, ProgramValue(100), nullptr).asInt() == 42);
 
     sfallArraysExit();
     REQUIRE(sfallArraysInit());
 }
 
-TEST_CASE("F-12: create_array(0, 0) creates associative array (map, no flags)")
+TEST_CASE("M-30: create_array(0, 0) creates an empty LIST (no flags)")
 {
     REQUIRE(sfallArraysInit());
 
-    // len=0 with flags=0 — no flags set, but len <= 0 triggers ASSOC
-    // per sfall 4.x convention. create_array(0) creates a map.
+    // len=0 with flags=0 — no ASSOC flag, list semantics (sfall Arrays.cpp:416).
     ArrayId id = CreateArray(0, 0);
     CHECK(ArrayExists(id));
 
-    // Verify it's associative — GetArrayKey(id, -1) returns 1 for associative
+    // Verify it's a list
     ProgramValue pv = GetArrayKey(id, -1, nullptr);
-    CHECK(pv.asInt() == 1); // 1 = associative
+    CHECK(pv.asInt() == 0); // 0 = list
 
     CHECK(LenArray(id) == 0);
 
@@ -1686,11 +1683,11 @@ TEST_CASE("F-12: create_array(0, 0) creates associative array (map, no flags)")
     REQUIRE(sfallArraysInit());
 }
 
-TEST_CASE("F-12: create_array(-1, 0) still creates associative (backward compat)")
+TEST_CASE("M-30: create_array(-1, 0) still creates associative (backward compat)")
 {
     REQUIRE(sfallArraysInit());
 
-    // Negative len should still create associative arrays (backward compatible)
+    // Negative len should still create associative arrays (sfall convention)
     ArrayId id = CreateArray(-1, 0);
     CHECK(ArrayExists(id));
 

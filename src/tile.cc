@@ -1533,8 +1533,30 @@ void tileRenderFloorsInRect(Rect* rect, int elevation)
         minY = 0;
     }
 
-    if (minX >= gSquareGridHeight) {
+    // M-142 (PRIOR_FIX 2fabd98): the floor function retained the typo the
+    // roof sibling (tileRenderRoofsInRect) had fixed — testing X here while
+    // clamping Y. Test Y and clamp Y.
+    if (minY >= gSquareGridHeight) {
         minY = gSquareGridHeight - 1;
+    }
+
+    // M-142: maxX/maxY were never clamped (the roof sibling clamps all four
+    // corners). With EDG inactive the rect can map beyond [0, gSquareGrid-1],
+    // indexing gTileSquares[] past the array end. Port the roof clamps.
+    if (maxX < 0) {
+        maxX = 0;
+    }
+
+    if (maxX >= gSquareGridWidth) {
+        maxX = gSquareGridWidth - 1;
+    }
+
+    if (maxY < 0) {
+        maxY = 0;
+    }
+
+    if (maxY >= gSquareGridHeight) {
+        maxY = gSquareGridHeight - 1;
     }
 
     lightGetAmbientIntensity();
@@ -1617,6 +1639,16 @@ bool _square_roof_intersect(int x, int y, int elevation)
     int tileX;
     int tileY;
     squareTileScreenToCoordRoof(x, y, elevation, &tileX, &tileY);
+
+    // M-143: squareTileScreenToCoordRoof performs no clamping and can return
+    // coordinates outside [0, gSquareGridWidth/Height) for mouse positions
+    // near the grid edge. The idx below is used to index field_0 before any
+    // validity check. Bail out for out-of-range coordinates (this also
+    // guarantees squareTileToRoofScreenXY at line 1635 receives an in-bounds
+    // index and writes its outputs, avoiding the uninitialized v17/v18 use).
+    if (tileX < 0 || tileX >= gSquareGridWidth || tileY < 0 || tileY >= gSquareGridHeight) {
+        return false;
+    }
 
     TileData* ptr = gTileSquares[elevation];
     int idx = gSquareGridWidth * tileY + tileX;

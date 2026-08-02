@@ -13,7 +13,7 @@
 
 namespace fallout {
 
-static void fileCopy(const char* existingFilePath, const char* newFilePath);
+static bool fileCopy(const char* existingFilePath, const char* newFilePath);
 static bool copyGzToFile(gzFile inStream, FILE* outStream);
 static bool copyFileToGz(FILE* inStream, gzFile outStream);
 
@@ -55,7 +55,9 @@ int fileCopyDecompressed(const char* existingFilePath, const char* newFilePath)
             return -1;
         }
     } else {
-        fileCopy(existingFilePath, newFilePath);
+        if (!fileCopy(existingFilePath, newFilePath)) {
+            return -1;
+        }
     }
 
     return 0;
@@ -78,7 +80,9 @@ int fileCopyCompressed(const char* existingFilePath, const char* newFilePath)
         // Source file is already gzipped, there is no need to do anything
         // besides copying.
         fclose(inStream);
-        fileCopy(existingFilePath, newFilePath);
+        if (!fileCopy(existingFilePath, newFilePath)) {
+            return -1;
+        }
     } else {
         gzFile outStream = compat_gzopen(newFilePath, "wb");
         if (outStream == nullptr) {
@@ -137,42 +141,52 @@ int _gzdecompress_file(const char* existingFilePath, const char* newFilePath)
         gzclose(gzstream);
         fclose(stream);
     } else {
-        fileCopy(existingFilePath, newFilePath);
+        if (!fileCopy(existingFilePath, newFilePath)) {
+            return -1;
+        }
     }
 
     return 0;
 }
 
-static void fileCopy(const char* existingFilePath, const char* newFilePath)
+static bool fileCopy(const char* existingFilePath, const char* newFilePath)
 {
     FILE* in = compat_fopen(existingFilePath, "rb");
     FILE* out = compat_fopen(newFilePath, "wb");
-    if (in != nullptr && out != nullptr) {
-        std::vector<unsigned char> buffer(0xFFFF);
+    if (in == nullptr || out == nullptr) {
+        if (in != nullptr) {
+            fclose(in);
+        }
+        if (out != nullptr) {
+            fclose(out);
+        }
+        return false;
+    }
 
-        size_t bytesRead;
-        while ((bytesRead = fread(buffer.data(), sizeof(*buffer.data()), buffer.size(), in)) > 0) {
-            size_t bytesWritten;
-            size_t offset = 0;
-            while ((bytesWritten = fwrite(buffer.data() + offset, sizeof(*buffer.data()), bytesRead, out)) > 0) {
-                bytesRead -= bytesWritten;
-                offset += bytesWritten;
-            }
+    bool success = true;
+    std::vector<unsigned char> buffer(0xFFFF);
 
-            if (bytesWritten < 0) {
-                bytesRead = -1;
+    size_t bytesRead;
+    while (success && (bytesRead = fread(buffer.data(), sizeof(*buffer.data()), buffer.size(), in)) > 0) {
+        size_t offset = 0;
+        while (offset < bytesRead) {
+            size_t bytesWritten = fwrite(buffer.data() + offset, sizeof(*buffer.data()), bytesRead - offset, out);
+            if (bytesWritten == 0) {
+                // M-169: fwrite failed (or wrote nothing). The old code's
+                // `bytesWritten < 0` check was dead (size_t is unsigned) and
+                // the outer fread loop continued, so a truncated output was
+                // reported as a successful copy. Abort and propagate failure.
+                success = false;
                 break;
             }
+            offset += bytesWritten;
         }
     }
 
-    if (in != nullptr) {
-        fclose(in);
-    }
+    fclose(in);
+    fclose(out);
 
-    if (out != nullptr) {
-        fclose(out);
-    }
+    return success;
 }
 
 static bool copyGzToFile(gzFile inStream, FILE* outStream)

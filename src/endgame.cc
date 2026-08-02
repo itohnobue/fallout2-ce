@@ -303,7 +303,16 @@ void endgamePlayMovie()
 {
     // I2-096: Prevent re-entrant entry via script hooks that re-set ENDGAME.
     if (gEndgameInProgress) {
-        return;
+        // M-147: auto-recover a stale flag left by a programFatalError longjmp
+        // during a previous slideshow/movie attempt (the flag is only cleared
+        // on the normal-completion path below). endgameEndingSlideshowWindowFree
+        // now resets the window globals, so "no active slideshow" is reliably
+        // detectable. Mirror the F-631 recovery in endgameEndingSlideshow.
+        if (gEndgameEndingSlideshowWindow == -1 || gEndgameEndingSlideshowWindowBuffer == nullptr) {
+            gEndgameInProgress = false;
+        } else {
+            return;
+        }
     }
     gEndgameInProgress = true;
 
@@ -754,6 +763,16 @@ static void endgameEndingSlideshowWindowFree()
     windowDestroy(gEndgameEndingSlideshowWindow);
     windowDestroy(gEndgameEndingOverlay);
 
+    // M-147: reset the slideshow window globals after destroying them. The
+    // F-631 recovery guard in endgameEndingSlideshow treats
+    // (gEndgameEndingSlideshowWindow == -1 || buffer == nullptr) as "no active
+    // slideshow", so stale destroyed ids/pointers here would make that guard
+    // miss a stuck gEndgameInProgress left by a programFatalError longjmp and
+    // permanently wedge all subsequent ENDGAME requests.
+    gEndgameEndingSlideshowWindow = -1;
+    gEndgameEndingOverlay = -1;
+    gEndgameEndingSlideshowWindowBuffer = nullptr;
+
     if (!_endgame_mouse_state) {
         mouseHideCursor();
     }
@@ -1183,13 +1202,18 @@ int endgameDeathEndingInit()
         }
 
         // this code is slightly different from the original, but does the same thing
-        narratorFileNameLength = strlen(tok);
         strncpy(entry.voiceOverBaseName, tok, sizeof(entry.voiceOverBaseName) - 1);
         entry.voiceOverBaseName[sizeof(entry.voiceOverBaseName) - 1] = '\0';
 
         entry.enabled = false;
 
-        if (isspace(entry.voiceOverBaseName[narratorFileNameLength - 1])) {
+        // M-146: mirror the slideshow sibling (endgameEndingInit): compute the
+        // length AFTER truncation and guard > 0. The previous code measured
+        // strlen(tok) before truncation, so a narrator name >= 17 chars read
+        // past the char[16] array (and could write '\0' out of bounds when the
+        // stale byte was whitespace).
+        narratorFileNameLength = strlen(entry.voiceOverBaseName);
+        if (narratorFileNameLength > 0 && isspace(entry.voiceOverBaseName[narratorFileNameLength - 1])) {
             entry.voiceOverBaseName[narratorFileNameLength - 1] = '\0';
         }
 

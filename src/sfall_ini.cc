@@ -351,7 +351,15 @@ bool sfall_ini_set_string(const char* triplet, const char* value)
 
     configSetString(config.get(), section, key, value);
 
-    bool saved = configWrite(config.get(), path, false);
+    // M-36: Use configWriteEx with CONFIG_RETAIN_ALL so the write preserves
+    // comments, blank lines and unknown keys instead of re-serializing the
+    // whole file from the parsed Config (configWriteStandard drops comments,
+    // blank lines and section order). sfall's set_ini_setting updates only
+    // the one key in place (WritePrivateProfileStringA); RETAIN_ALL routes to
+    // configWriteSideBySide, which edits in place and keeps every other line
+    // verbatim. When the file does not exist, configWriteSideBySide falls
+    // back to configWriteStandard and creates it fresh — same as before.
+    bool saved = configWriteEx(config.get(), path, CONFIG_RETAIN_ALL);
 
     return saved;
 }
@@ -410,12 +418,22 @@ void mf_set_ini_setting(OpcodeContext& ctx)
         }
     }
 
+    // M-35: sfall returns -1 when the write fails (IniFiles.cpp:131-141);
+    // callers use the return value to detect failed writes. CE previously
+    // never called setReturn, so the OpcodeContext default (0 = success)
+    // masked every failure as success.
+    if (!wrote) {
+        ctx.setReturn(-1);
+        return;
+    }
+
     // After writing to disk, update in-memory globals so they reflect
     // the current config value. Note: opcode registration gating is a
     // one-time init operation that runs before any script executes, so
     // runtime toggles for those globals only take effect after a restart.
-    // See sfall_config.cc for key definitions.
-    if (wrote) {
+    // See sfall_config.cc for key definitions. (Reached only when wrote==true
+    // — the failure path returned -1 above.)
+    {
         int intVal = value.isString() ? atoi(value.asString(ctx.program())) : value.asInt();
 
         if (compat_stricmp(triplet, "ddraw.ini|Debugging|AllowUnsafeScripting") == 0) {
@@ -600,10 +618,21 @@ void op_get_ini_setting(Program* program)
         // call get_ini_setting("ddraw.ini|Misc|BoostScriptDialogLimit") to
         // receive the correct value from the migrated config even when
         // ddraw.ini does not exist on disk.
-        int fallbackValue = contentConfigLookupSfallInt(section, keyPtr);
-        if (fallbackValue >= 0) {
-            programStackPushInteger(program, fallbackValue);
-            return;
+        //
+        // H-06/M-33: the bridge is gated on the requested file being
+        // ddraw.ini, matching the AllowUnsafeScripting (below) and
+        // gSfallConfig (further below) fallbacks. Previously the lookup
+        // ignored fileName entirely, so a script reading
+        // get_ini_setting("custom.ini|Misc|WorldMapSlots") received the
+        // game.cfg-migrated ddraw.ini value — a contract violation for
+        // third-party mods using their own ini files.
+        int fallbackValue = 0;
+        if (compat_stricmp(fileName, "ddraw.ini") == 0) {
+            fallbackValue = contentConfigLookupSfallInt(section, keyPtr);
+            if (fallbackValue >= 0) {
+                programStackPushInteger(program, fallbackValue);
+                return;
+            }
         }
 
         // F-356: AllowUnsafeScripting is not in the static content config
@@ -657,12 +686,19 @@ void op_get_ini_string(Program* program)
         // call get_ini_string("ddraw.ini|Misc|SomeKey") to receive the
         // correct value from the migrated config even when ddraw.ini does
         // not exist on disk.
-        const char* fallbackValue = contentConfigLookupSfallString(section, keyPtr);
-        if (fallbackValue != nullptr) {
-            programStackPushString(program, fallbackValue);
-        } else {
-            programStackPushString(program, "");
+        //
+        // M-33: gated on the requested file being ddraw.ini, mirroring the
+        // int-side bridge in op_get_ini_setting. Previously the lookup
+        // ignored fileName, so a script reading a non-ddraw.ini file with a
+        // colliding key received the game.cfg-migrated ddraw.ini value.
+        if (compat_stricmp(fileName, "ddraw.ini") == 0) {
+            const char* fallbackValue = contentConfigLookupSfallString(section, keyPtr);
+            if (fallbackValue != nullptr) {
+                programStackPushString(program, fallbackValue);
+                return;
+            }
         }
+        programStackPushString(program, "");
     } else {
         // Return an empty string for not-found (consistent with the name
         // "get_ini_string"). Returning -1 as integer would cause a type

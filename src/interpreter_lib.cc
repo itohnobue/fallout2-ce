@@ -2147,10 +2147,15 @@ static void opSoundPlay(Program* program)
 static void opSoundPause(Program* program)
 {
     int data = programStackPopInteger(program);
-    // F-M023: Push return value to stack so scripts can detect failure
-    // (e.g. invalid sound handle). Matches opSoundPlay behavior (line 2124).
-    int rc = intLibSoundPause(data);
-    programStackPushInteger(program, rc);
+    // H-09: void contract. The sslc compiler emits these five ops via the
+    // `EXP` macro (parselib.c:400-409) with NO O_POP — they are statement
+    // ops, and writeLibExpression (parselib.c:421-431) excludes them from
+    // expression context, so no compiled script can ever read a pushed value.
+    // The pass-12 (be8dcbe) push of `rc` accumulated one unbalanced stack
+    // entry per execution; a persistent while(1)+wait sound-control script
+    // overflowed the 0x1000 stack cap (~4096 executions) and was killed.
+    // opSoundPlay keeps its push (the compiler emits O_POP for it).
+    intLibSoundPause(data);
 }
 
 // soundresume
@@ -2158,8 +2163,7 @@ static void opSoundPause(Program* program)
 static void opSoundResume(Program* program)
 {
     int data = programStackPopInteger(program);
-    int rc = intLibSoundResume(data);
-    programStackPushInteger(program, rc);
+    intLibSoundResume(data);
 }
 
 // soundstop
@@ -2167,8 +2171,7 @@ static void opSoundResume(Program* program)
 static void opSoundStop(Program* program)
 {
     int data = programStackPopInteger(program);
-    int rc = intLibSoundStop(data);
-    programStackPushInteger(program, rc);
+    intLibSoundStop(data);
 }
 
 // soundrewind
@@ -2176,8 +2179,7 @@ static void opSoundStop(Program* program)
 static void opSoundRewind(Program* program)
 {
     int data = programStackPopInteger(program);
-    int rc = intLibSoundRewind(data);
-    programStackPushInteger(program, rc);
+    intLibSoundRewind(data);
 }
 
 // sounddelete
@@ -2185,8 +2187,7 @@ static void opSoundRewind(Program* program)
 static void opSoundDelete(Program* program)
 {
     int data = programStackPopInteger(program);
-    int rc = intLibSoundDelete(data);
-    programStackPushInteger(program, rc);
+    intLibSoundDelete(data);
 }
 
 // SetOneOptPause

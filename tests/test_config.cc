@@ -256,3 +256,32 @@ TEST_CASE("configGetDouble")
 
     configFree(&cfg);
 }
+
+TEST_CASE("M-40: configGetDouble rejects NaN/Inf (wild-write prevention)")
+{
+    Config cfg;
+    configInit(&cfg);
+
+    // strtod("nan") parses successfully with errno untouched. Downstream
+    // consumers cast the result with (int) — (int)NaN is UB (INT_MIN on
+    // x86-64) and was used as a buffer offset in the preferences window
+    // (preferences.cc:709 brightness knob → wild heap write). The config
+    // choke point must reject non-finite values.
+    configSetString(&cfg, "Physics", "Gravity", "nan");
+    double val = 123.0;
+    CHECK_FALSE(configGetDouble(&cfg, "Physics", "Gravity", &val));
+    CHECK(val == 123.0); // unchanged on rejection
+
+    configSetString(&cfg, "Physics", "Gravity", "inf");
+    CHECK_FALSE(configGetDouble(&cfg, "Physics", "Gravity", &val));
+
+    configSetString(&cfg, "Physics", "Gravity", "-inf");
+    CHECK_FALSE(configGetDouble(&cfg, "Physics", "Gravity", &val));
+
+    // Finite values still parse.
+    configSetString(&cfg, "Physics", "Gravity", "2.5");
+    CHECK(configGetDouble(&cfg, "Physics", "Gravity", &val));
+    CHECK(val == doctest::Approx(2.5));
+
+    configFree(&cfg);
+}

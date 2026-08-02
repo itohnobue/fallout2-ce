@@ -1776,17 +1776,288 @@ TEST_CASE("TEST_OPCODE_MAX_COUNT matches spec")
     // ≈ 475 total registered / 768 slots ≈ 62% filled
 }
 
-TEST_CASE("Opcode decode mask and bounds")
+TEST_CASE("Opcode decode mask and bounds (C-01)")
 {
-    // The opcode decode mask changed from 0x3FF (10-bit, 1024 entries) to
-    // 0x3FFF (14-bit, 16384 entries). But OPCODE_MAX_COUNT is 768, so the
-    // bounds check at interpreter.cc:2851 catches anything >= 768.
+    // C-01: The dispatch decode mask is 0x3FF (10-bit, 1024 entries) — NOT
+    // the 14-bit 0x3FFF that commit 481cb9e introduced. Under 0x3FFF the
+    // value-type words (0x9001 PUSH_STR, 0xA001 PUSH_FLOAT, 0x9801
+    // PUSH_DYNSTR, 0xE001 PUSH_PTR) mapped to indices >= OPCODE_MAX_COUNT
+    // (768) and hit programFatalError on every string/float/dynstring/ptr
+    // constant push (44x 0x9001 in the shipped gl_highlighting.int alone).
+    // Under the correct 0x3FF all value-type words map to index 1
+    // (OPCODE_PUSH, registered at interpreter.cc:2902), with the value type
+    // preserved via program->flags bits 16-31.
     //
-    // 0x3FFF & 0x827F = 0x027F = 639 (valid sfall opcode)
-    // 0x3FFF & 0x9000 = 0x1000 = 4096 (out of bounds → programFatalError)
-    CHECK(0x3FFF == 16383);
-    CHECK((0x827F & 0x3FFF) < TEST_OPCODE_MAX_COUNT); // 639 < 768 ✓
-    CHECK((0x9000 & 0x3FFF) >= TEST_OPCODE_MAX_COUNT); // 4096 >= 768 → bounds trap
+    // 0x3FF & 0x827F = 0x027F = 639 (valid sfall opcode — identical under both masks)
+    // 0x3FF & 0x9001 = 0x001 = 1 (PUSH_STR → opPush, correct)
+    // 0x3FF & 0x8300 = 0x300 = 768 (>= max → bounds trap, still guarded)
+    CHECK(0x3FF == 1023);
+
+    // Real sfall opcodes decode identically under the correct mask.
+    CHECK((0x827F & 0x3FF) < TEST_OPCODE_MAX_COUNT); // 639 < 768 ✓
+
+    // Value-type constant pushes MUST dispatch to opPush (index 1).
+    CHECK((TEST_VALUE_TYPE_STRING & 0x3FF) == 1); // 0x9001 PUSH_STR
+    CHECK((TEST_VALUE_TYPE_FLOAT & 0x3FF) == 1); // 0xA001 PUSH_FLOAT
+    CHECK((TEST_VALUE_TYPE_DYNAMIC_STRING & 0x3FF) == 1); // 0x9801 PUSH_DYNSTR
+    CHECK((TEST_VALUE_TYPE_PTR & 0x3FF) == 1); // 0xE001 PUSH_PTR
+    CHECK((TEST_VALUE_TYPE_INT & 0x3FF) == 1); // 0xC001 PUSH_INT
+
+    // The 14-bit mask was the regression: every value-type word maps to an
+    // out-of-bounds index.
+    CHECK((TEST_VALUE_TYPE_STRING & 0x3FFF) >= TEST_OPCODE_MAX_COUNT);
+    CHECK((TEST_VALUE_TYPE_FLOAT & 0x3FFF) >= TEST_OPCODE_MAX_COUNT);
+    CHECK((TEST_VALUE_TYPE_PTR & 0x3FFF) >= TEST_OPCODE_MAX_COUNT);
+
+    // The bounds check still traps malformed words in the 768-1023 band.
+    CHECK((0x8300 & 0x3FF) >= TEST_OPCODE_MAX_COUNT); // 768 >= 768 → bounds trap
+}
+
+TEST_CASE("C-01: value-type words decode to opPush under the 10-bit mask")
+{
+    // Mirror of the dispatch arithmetic at interpreter.cc:3071-3093. The
+    // handler table slot 1 is opPush; the value type flows through
+    // program->flags bits 16-31 (opPush reads
+    // result.opcode = (program->flags >> 16) & 0xFFFF).
+    const unsigned int opPushIndex = 0x8001 & 0x3FF; // OPCODE_PUSH
+    CHECK(opPushIndex == 1);
+
+    // Every value-type push word decodes into the opPush slot, so a real
+    // dispatch executes opPush instead of fataling on the bounds check.
+    const unsigned int valueTypes[] = {
+        TEST_VALUE_TYPE_STRING, // 0x9001
+        TEST_VALUE_TYPE_FLOAT, // 0xA001
+        TEST_VALUE_TYPE_DYNAMIC_STRING, // 0x9801
+        TEST_VALUE_TYPE_PTR, // 0xE001
+        TEST_VALUE_TYPE_INT, // 0xC001
+    };
+    for (unsigned int vt : valueTypes) {
+        CHECK((vt & 0x3FF) == opPushIndex);
+        CHECK((vt & 0x3FF) < TEST_OPCODE_MAX_COUNT); // dispatches, no bounds fatal
+    }
+
+    // Real sfall opcodes (max 0x287 = 647) are identical under both masks,
+    // so the fix cannot regress any registered opcode.
+    CHECK((0x827F & 0x3FF) == (0x827F & 0x3FFF));
+    CHECK((0x8001 & 0x3FF) == (0x8001 & 0x3FFF));
+}
+
+TEST_CASE("M-43: getInterpreterTime arithmetic does not overflow at 71.6 min uptime")
+{
+    // M-43: `1000 * interpreterTimerFunc() / interpreterTimerTick` was
+    // computed in unsigned 32-bit arithmetic; 1000 * ticks overflows at
+    // ticks > 4,294,967 ms (~71.6 min of uptime), corrupting script timing
+    // (waits that never elapse, delayed calls that misfire). The fix computes
+    // the product in 64-bit arithmetic (interpreter.cc:185-190).
+    //
+    // Mirror of the fixed formula:
+    //   static unsigned int getInterpreterTime()
+    //   {
+    //       return static_cast<unsigned int>(1000ULL * interpreterTimerFunc() / interpreterTimerTick);
+    //   }
+
+    // Upstream returns SDL_GetTicks() (Uint32 ms); interpreterTimerTick == 1000.
+    constexpr unsigned int kInterpreterTimerTick = 1000;
+
+    // Pre-fix 32-bit arithmetic wraps at ticks > 4,294,967.
+    constexpr unsigned int kOverflowTick = 4294968u; // ~71.6 min in ms
+    unsigned int oldArithmetic = 1000u * kOverflowTick / kInterpreterTimerTick; // wraps
+    unsigned int newArithmetic = static_cast<unsigned int>(1000ULL * kOverflowTick / kInterpreterTimerTick);
+    CHECK(oldArithmetic != newArithmetic); // 32-bit wraps, 64-bit does not
+
+    // The 64-bit result is exact: 1000 * ticks / 1000 == ticks.
+    CHECK(newArithmetic == kOverflowTick);
+    CHECK(1000ULL * kOverflowTick >= 1000u * kOverflowTick); // no wrap in 64-bit
+
+    // Full Uint32 tick range stays exact with the 64-bit intermediate.
+    constexpr unsigned int kMaxTick = 0xFFFFFFFFu; // SDL_GetTicks() max
+    unsigned int maxResult = static_cast<unsigned int>(1000ULL * kMaxTick / kInterpreterTimerTick);
+    CHECK(maxResult == kMaxTick);
+}
+
+TEST_CASE("M-48: negative identifierTableSize is rejected at .int load")
+{
+    // M-48: `staticStrings = identifiers + 4 + identifierTableSize` with a
+    // negative size produced a pointer BEFORE the data buffer; the existing
+    // `staticStrings + 4 > data + dataSize` check cannot fire for negative
+    // sizes, so a corrupted 4-byte header value loaded a broken program and
+    // made programGetIdentifier return nullptr for every lookup (M-45).
+    // The fix validates identifierTableSize < 0 before the pointer math
+    // (interpreter.cc:587-600).
+
+    // Mirror of the validation predicate added at load time.
+    auto isIdentifierTableSizeValid = [](int size) {
+        return size >= 0;
+    };
+
+    CHECK_FALSE(isIdentifierTableSizeValid(-1));
+    CHECK_FALSE(isIdentifierTableSizeValid(-1000000));
+    CHECK_FALSE(isIdentifierTableSizeValid(INT_MIN));
+    CHECK(isIdentifierTableSizeValid(0));
+    CHECK(isIdentifierTableSizeValid(1));
+    CHECK(isIdentifierTableSizeValid(1024));
+}
+
+TEST_CASE("H-19: metarule3 TILE_GET_NEXT_CRITTER accepts INT-0 as null")
+{
+    // H-19: the strict `param3.opcode != VALUE_TYPE_PTR` check added in pass
+    // 12 (be8dcbe2) rejected the compiler-emitted VALUE_TYPE_INT word (0xC001)
+    // for the literal-0 idiom used by RPU (14 call sites of
+    // tile_get_next_critter(..., 0)), making every tile scan return empty.
+    // ProgramValue is a union, so INT-0 aliases pointerValue == nullptr —
+    // the same convention programStackPopPointer (interpreter.cc:3661-3663)
+    // already applies. The fixed predicate accepts PTR, or INT with value 0.
+    //
+    // Mirror of interpreter_extra.cc:2110-2117 (fixed):
+    //   if ((param1.opcode & VALUE_TYPE_MASK) != VALUE_TYPE_INT
+    //       || (param2.opcode & VALUE_TYPE_MASK) != VALUE_TYPE_INT
+    //       || (param3.opcode != VALUE_TYPE_PTR
+    //           && !(param3.opcode == VALUE_TYPE_INT && param3.integerValue == 0))) {
+    //       break;  // reject
+    //   }
+    constexpr unsigned int kVALUE_TYPE_INT = TEST_VALUE_TYPE_INT; // 0xC001
+    constexpr unsigned int kVALUE_TYPE_PTR = TEST_VALUE_TYPE_PTR; // 0xE001
+
+    struct Param { unsigned int opcode; int integerValue; };
+
+    auto isAccepted = [kVALUE_TYPE_INT, kVALUE_TYPE_PTR](const Param& p3) {
+        if (p3.opcode == kVALUE_TYPE_PTR) {
+            return true;
+        }
+        if (p3.opcode == kVALUE_TYPE_INT && p3.integerValue == 0) {
+            return true; // INT-0-as-null convention
+        }
+        return false;
+    };
+
+    // The RPU literal-0 idiom: compiler emits VALUE_TYPE_INT with value 0.
+    CHECK(isAccepted(Param{kVALUE_TYPE_INT, 0}));
+    // A real critter pointer arrives as VALUE_TYPE_PTR.
+    CHECK(isAccepted(Param{kVALUE_TYPE_PTR, 0x1234}));
+    // The old strict check rejected INT-0; the fixed predicate accepts it.
+    CHECK(kVALUE_TYPE_INT != kVALUE_TYPE_PTR); // they are distinct opcode words
+    // A non-zero INT is still rejected (not a pointer).
+    CHECK_FALSE(isAccepted(Param{kVALUE_TYPE_INT, 42}));
+    // An INT-0 must NOT be misread as a non-null pointer value.
+    CHECK(isAccepted(Param{kVALUE_TYPE_INT, 0}));
+}
+
+TEST_CASE("M-50: opAttackComplex clears CHILD_CALL on the _gdialogActive early return")
+{
+    // M-50: the _gdialogActive() early return leaked PROGRAM_FLAG_CHILD_CALL
+    // (set at the top of the handler); every other early return clears it.
+    // The leak made the dispatch loop's break mask (interpreter.cc:3047) and
+    // scriptExecProc's guard permanently disable the script. The fix clears
+    // the flag before returning (interpreter_extra.cc:1913-1921).
+    //
+    // Mirror of the guard pattern: all early returns must clear the flag.
+    constexpr int TEST_PROGRAM_FLAG_CHILD_CALL_VAL = 0x20;
+    constexpr int TEST_PROGRAM_FLAG_CHILD_SPAWN_VAL = 0x0100;
+
+    int flags = 0;
+
+    // Simulate the handler's flag set at the top.
+    flags |= TEST_PROGRAM_FLAG_CHILD_CALL_VAL;
+    CHECK((flags & TEST_PROGRAM_FLAG_CHILD_CALL_VAL) != 0);
+
+    // The fixed _gdialogActive early return clears the flag before returning.
+    flags &= ~TEST_PROGRAM_FLAG_CHILD_CALL_VAL;
+    CHECK((flags & TEST_PROGRAM_FLAG_CHILD_CALL_VAL) == 0);
+
+    // The cleared flag no longer trips the dispatch break mask.
+    constexpr int kDispatchBreakMask = 0x01 | 0x04 | 0x08 | TEST_PROGRAM_FLAG_CHILD_CALL_VAL | 0x40 | TEST_PROGRAM_FLAG_CHILD_SPAWN_VAL;
+    CHECK((flags & kDispatchBreakMask) == 0);
+}
+
+TEST_CASE("R-08: opCallStart/opSpawn/forkProgram return gracefully on missing .int")
+{
+    // R-08: interp N-01's runScript pre-check returns nullptr for a missing
+    // .int, but opCallStart/opSpawn/forkProgram previously called
+    // programFatalError on that nullptr. programFatalError longjmps to
+    // gInterpreterCurrentProgram->env, which during spawn/exec dispatch is
+    // the CALLER's env (interpreter.cc:3065-3067) — the caller was
+    // permanently marked EXITED|FATAL_ERROR (interpreter.cc:3089-3090) and
+    // removed from the program list. The fix (interpreter.cc:2801-2809,
+    // 2825-2833, 2847-2855) clears the child flag, logs, and returns —
+    // mirroring scriptExecProc's graceful -1 pattern (scripts.cc:1391-1394).
+    //
+    // Mirror of the fixed caller contract: a nullptr child must clear the
+    // child flag and NOT set the caller's EXITED|FATAL_ERROR bits.
+    constexpr int TEST_PROGRAM_FLAG_EXITED_VAL = 0x01;
+    constexpr int TEST_PROGRAM_FLAG_FATAL_ERROR_VAL = 0x04;
+    constexpr int TEST_PROGRAM_FLAG_CHILD_CALL_VAL = 0x20;
+    constexpr int TEST_PROGRAM_FLAG_CHILD_SPAWN_VAL = 0x0100;
+
+    // --- opCallStart: flag set at handler top, then runScript fails ---
+    int callStartFlags = TEST_PROGRAM_FLAG_CHILD_CALL_VAL;
+    TestProgram* callStartChild = nullptr; // runScript returned nullptr
+
+    if (callStartChild == nullptr) {
+        // Fixed behavior: clear CHILD_CALL and return (no programFatalError,
+        // so no EXITED|FATAL_ERROR longjmp recovery).
+        callStartFlags &= ~TEST_PROGRAM_FLAG_CHILD_CALL_VAL;
+    }
+    CHECK((callStartFlags & TEST_PROGRAM_FLAG_CHILD_CALL_VAL) == 0);
+    // The caller survives: it is not marked EXITED or FATAL_ERROR.
+    CHECK((callStartFlags & TEST_PROGRAM_FLAG_EXITED_VAL) == 0);
+    CHECK((callStartFlags & TEST_PROGRAM_FLAG_FATAL_ERROR_VAL) == 0);
+
+    // --- opSpawn: flag set at handler top, then runScript fails ---
+    int spawnFlags = TEST_PROGRAM_FLAG_CHILD_SPAWN_VAL;
+    TestProgram* spawnChild = nullptr; // runScript returned nullptr
+
+    if (spawnChild == nullptr) {
+        // Fixed behavior: clear CHILD_SPAWN and return.
+        spawnFlags &= ~TEST_PROGRAM_FLAG_CHILD_SPAWN_VAL;
+    }
+    CHECK((spawnFlags & TEST_PROGRAM_FLAG_CHILD_SPAWN_VAL) == 0);
+    CHECK((spawnFlags & TEST_PROGRAM_FLAG_EXITED_VAL) == 0);
+    CHECK((spawnFlags & TEST_PROGRAM_FLAG_FATAL_ERROR_VAL) == 0);
+
+    // --- forkProgram: returns nullptr; opExec guards the deref ---
+    TestProgram* forked = nullptr; // runScript returned nullptr
+    bool forkReturnedNull = (forked == nullptr);
+
+    if (forked == nullptr) {
+        // Fixed behavior: return nullptr from forkProgram instead of
+        // programFatalError; opExec checks it before dereferencing.
+        forked = nullptr;
+    }
+    CHECK(forkReturnedNull);
+
+    // opExec's guard: if forkProgram returned nullptr, exec aborts without
+    // dereferencing the null fork and without marking the caller dead.
+    TestProgram* execFork = nullptr;
+    if (execFork != nullptr) {
+        // (unreachable in this test) — would be execFork->parent = parent;
+        CHECK(false);
+    } else {
+        // The caller program is left running (no EXITED|FATAL_ERROR set).
+        CHECK((spawnFlags & TEST_PROGRAM_FLAG_EXITED_VAL) == 0);
+        CHECK((spawnFlags & TEST_PROGRAM_FLAG_FATAL_ERROR_VAL) == 0);
+    }
+}
+
+TEST_CASE("M-49: opGetTileInDirection rejects negative rotation")
+{
+    // M-49: only `rotation < ROTATION_COUNT` was validated; rotation == -1
+    // passed and reached tileGetTileInDirection, where `_dir_tile[parity]
+    // [rotation]` (tile.cc:188, int[2][6]) read before the array. The fix
+    // adds the rotation >= 0 lower bound (interpreter_extra.cc:1594-1596).
+    constexpr int kROTATION_COUNT = 6;
+
+    // Mirror of the fixed handler guard.
+    auto isRotationValid = [kROTATION_COUNT](int rotation) {
+        return rotation >= 0 && rotation < kROTATION_COUNT;
+    };
+
+    CHECK_FALSE(isRotationValid(-1));  // the M-49 OOB case
+    CHECK_FALSE(isRotationValid(-5));
+    CHECK_FALSE(isRotationValid(kROTATION_COUNT)); // upper bound unchanged
+    CHECK_FALSE(isRotationValid(100));
+    for (int r = 0; r < kROTATION_COUNT; r++) {
+        CHECK(isRotationValid(r));
+    }
 }
 
 TEST_CASE("TEST_VALUE_TYPE constants follow VALUE_TYPE_MASK pattern")

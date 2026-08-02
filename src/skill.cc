@@ -1,5 +1,6 @@
 #include "skill.h"
 
+#include <algorithm>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -230,6 +231,20 @@ bool skillIsTagged(int skill)
         || skill == gTaggedSkills[3];
 }
 
+// R-13 (H-23): effective skill max cap for a critter. A per-critter cap set
+// via set_critter_skill_mod (0x81C7) takes precedence; otherwise the global
+// cap set via set_skill_max / set_base_skill_mod (gSkillMaxCap); otherwise
+// the engine default of 300. Mirrors sfall's CheckSkillMax (Skills.cpp:102-109,
+// 267-281). sfallGetCritterSkillMax returns -1 when no per-critter cap is set.
+static int skillGetMaxSkill(Object* critter)
+{
+    int perCritterMaxSkill = sfallGetCritterSkillMax(critter);
+    if (perCritterMaxSkill >= 0) {
+        return perCritterMaxSkill;
+    }
+    return (gSkillMaxCap > 0) ? gSkillMaxCap : 300;
+}
+
 // 0x4AA558
 int skillGetValue(Object* critter, int skill)
 {
@@ -253,7 +268,13 @@ int skillGetValue(Object* critter, int skill)
 
     if (critter == gDude) {
         if (skillIsTagged(skill)) {
-            value += (baseValue + sfallGetBaseSkillMod(skill)) * skillDescription->baseValueMult;
+            // M-173: the tagged-skill "base again" term must double only the
+            // proto baseValue, NOT the script-controlled base skill mod.
+            // sfallGetBaseSkillMod is already applied once in the base term
+            // above; inserting it here too gave tagged skills +2N instead of
+            // +N for mods set via set_base_skill_mod (0x81C8). Upstream CE
+            // uses plain baseValue in both terms.
+            value += baseValue * skillDescription->baseValueMult;
 
             if (!perkGetRank(critter, PERK_TAG) || skill != gTaggedSkills[3]) {
                 value += 20;
@@ -282,9 +303,10 @@ int skillGetValue(Object* critter, int skill)
         }
     }
 
-    // Use gSkillMaxCap if set by set_skill_max metarule;
-    // otherwise fall back to engine default of 300.
-    int maxSkill = (gSkillMaxCap > 0) ? gSkillMaxCap : 300;
+    // R-13 (H-23): per-critter skill max cap (set_critter_skill_mod) takes
+    // precedence over the global gSkillMaxCap (set_skill_max / set_base_skill_mod),
+    // then the engine default of 300.
+    int maxSkill = skillGetMaxSkill(critter);
 
     // Clamp negative values to 0 to match the existing max clamp pattern.
     // Guards against negative modifier combinations, hex-edited saves, etc.
@@ -338,7 +360,7 @@ int skillAdd(Object* obj, int skill)
     }
 
     int skillValue = skillGetValue(obj, skill);
-    int maxSkill = (gSkillMaxCap > 0) ? gSkillMaxCap : 300;
+    int maxSkill = skillGetMaxSkill(obj);
     if (skillValue >= maxSkill) {
         return -3;
     }
@@ -372,7 +394,7 @@ int skillAddForce(Object* obj, int skill)
     Proto* proto;
     protoGetProto(obj->pid, &proto);
 
-    int maxSkill = (gSkillMaxCap > 0) ? gSkillMaxCap : 300;
+    int maxSkill = skillGetMaxSkill(obj);
     if (skillGetValue(obj, skill) >= maxSkill) {
         return -3;
     }
@@ -1186,6 +1208,14 @@ SkillStealResult skillsPerformStealing(Object* thief, Object* target, Object* it
         } else {
             catchChance = 30 - stealModifier;
         }
+
+        // M-174: clamp catchChance to [0, 100] like stealChance above.
+        // stealModifier includes unbounded sfall pickpocket mods
+        // (sfallGetBasePickpocketMod / per-critter ppMod); a large positive
+        // mod drove catchChance deeply negative → randomRoll(negative) always
+        // returns ROLL_FAILURE → the thief is never caught. Mirror the
+        // steal-side clamp for symmetric roll semantics.
+        catchChance = std::clamp(catchChance, 0, 100);
 
         catchRoll = randomRoll(catchChance, 0, &howMuch);
     }

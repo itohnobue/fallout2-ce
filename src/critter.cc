@@ -473,6 +473,15 @@ int critterAdjustRadiation(Object* obj, int amount)
         }
     }
 
+    // M-26: Fire HOOK_ADJUSTRADS before applying the radiation delta so
+    // scripts can override the amount (Et Tu's rads-2000 failsafe in
+    // gl_fo1mechanics.ssl:474-481 checks (dude_rads + amount) >= 2000 and
+    // kills the player). Matches sfall's AdjustRads_Script
+    // (ObjectHs.cpp:362-385), which fires on critter_adjust_rads with
+    // critter == dude (guaranteed here by the obj != gDude early return).
+    // ret0 replaces the amount being added/removed.
+    amount = scriptHooks_AdjustRads(obj, amount);
+
     obj->data.critter.radiation += amount;
     if (obj->data.critter.radiation < 0) {
         obj->data.critter.radiation = 0;
@@ -657,6 +666,26 @@ int radiationEventRead(File* stream, void** dataPtr)
     if (fileReadInt32(stream, &(radiationEvent->radiationLevel)) == -1) goto err;
     if (fileReadInt32(stream, &(radiationEvent->isHealing)) == -1) goto err;
 
+    // N-01: radiationLevel comes from the save file unvalidated. A crafted
+    // save can put any int32 here; radiationProcess() computes
+    // radiationLevelIndex = radiationLevel - 1 and indexes the static
+    // gRadiationEffectPenalties[RADIATION_LEVEL_COUNT] table (critter.cc:128)
+    // with it → OOB read of adjacent statics + garbage stat/HP writes.
+    // Clamp to the valid indexing range [MINOR, RADIATION_LEVEL_COUNT]:
+    //   MINOR (1)   → index 0
+    //   ...
+    //   FATAL (5)   → index 4
+    //   FATAL+1 (6) → index 5 — legitimately produced by critterCheckRadiationEvent
+    //                 when the endurance roll fails at radiation > 999 (critter.cc:524).
+    // Anything outside is clamped to the nearest valid level (never NONE:
+    // a queued event at NONE is a no-op anyway, and clamping keeps the
+    // event functional instead of silently dropping radiation).
+    if (radiationEvent->radiationLevel < RADIATION_LEVEL_MINOR) {
+        radiationEvent->radiationLevel = RADIATION_LEVEL_MINOR;
+    } else if (radiationEvent->radiationLevel > RADIATION_LEVEL_COUNT) {
+        radiationEvent->radiationLevel = RADIATION_LEVEL_COUNT;
+    }
+
     *dataPtr = radiationEvent;
     return 0;
 
@@ -704,7 +733,10 @@ static int critter_kill_count_clear()
 // 0x42D878 critter_kill_count_inc
 int killsIncByType(int killType)
 {
-    if (killType != -1 && killType < KILL_TYPE_COUNT) {
+    // M-81: guard must reject ALL negative indices. The old
+    // `killType != -1 && killType < KILL_TYPE_COUNT` accepted killType < -1
+    // (e.g. -2 from metarule3(104, -2)) → gKillsByType[-2] OOB write.
+    if (killType >= 0 && killType < KILL_TYPE_COUNT) {
         gKillsByType[killType]++;
         return 0;
     }
@@ -715,7 +747,10 @@ int killsIncByType(int killType)
 // 0x42D8A8 critter_kill_count
 int killsGetByType(int killType)
 {
-    if (killType != -1 && killType < KILL_TYPE_COUNT) {
+    // M-81: same fix as killsIncByType — reject killType < -1 to prevent
+    // gKillsByType[killType] OOB read. Caller METARULE3_GET_KILL_COUNT
+    // (interpreter_extra.cc:2073-2077) passes an unvalidated script int.
+    if (killType >= 0 && killType < KILL_TYPE_COUNT) {
         return gKillsByType[killType];
     }
 

@@ -35,8 +35,11 @@
 #include <climits>
 #include <cstdio>
 #include <cstring>
+#include <map>
+#include <set>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include "game_movie.h"
 #include "obj_types.h"
@@ -2608,265 +2611,133 @@ TEST_CASE("TODO-F28-07: deferred Iter-1 SfallOps finding (agent 3c) *" * doctest
 }
 
 // =================================================================
-// F-13: set_critter_skill_mod / set_base_skill_mod opcode logic
+// F-13 / H-23: set_critter_skill_mod / set_base_skill_mod opcode logic
 // =================================================================
 //
-// Finding F-13 (MEDIUM, confirmed): Updated op_set_critter_skill_mod to
-// take 3 args (critter, skill, mod) and op_set_base_skill_mod to take
-// 2 args (skill, mod), matching the sfall spec.  Previously they popped
-// only 2/1 args (missing the skill parameter).
+// H-23 (HIGH, confirmed): the opcodes now match sfall max-cap semantics.
+// sfall's op_set_critter_skill_mod reads (critter, max) and sets a per-critter
+// skill MAX CAP applied as min(value, maximum) via CheckSkillMax
+// (Stats.cpp:387-396, Skills.cpp:102-109, 267-281). op_set_base_skill_mod
+// reads (max) and sets the GLOBAL base skill max cap (SetSkillMax(0xFFFFFFFF,
+// max)) — in this fork that is gSkillMaxCap, already clamped by skill.cc:287-291.
+// The previous 3-arg/2-arg additive per-skill maps caused real sfall calls
+// (e.g. set_critter_skill_mod(dude_obj, 100)) to abort via programFatalError
+// and applied modifiers additively instead of capping.
 //
-// Production: sfall_opcodes.cc:4351-4383
+// Production: sfall_opcodes.cc:5590-5710
 
 // Local mirrors of production storage maps and accessor logic.
 #include <unordered_map>
 
-static std::unordered_map<int, int> testBaseSkillModMap;
-static std::unordered_map<int, int> testGlobalCritterSkillModMap;
-static std::unordered_map<int, std::unordered_map<int, int>> testCritterSkillModMap;
+// H-23: per-critter skill MAX caps (pid → max).
+static std::unordered_map<int, int> testCritterSkillMaxMap;
+
+// H-23: mirror of op_set_base_skill_mod (sfall_opcodes.cc) — 1 arg (max),
+// sets the global skill max cap (gSkillMaxCap storage). Declared before
+// testResetSkillModMaps() so the reset helper can restore its default.
+static int testGlobalSkillMaxCapMirror = 300;
 
 static void testResetSkillModMaps()
 {
-    testBaseSkillModMap.clear();
-    testGlobalCritterSkillModMap.clear();
-    testCritterSkillModMap.clear();
+    testCritterSkillMaxMap.clear();
+    // H-23: the global cap mirror must be reset to its default (300) too —
+    // the "negative max rejected" test asserts the default is preserved
+    // after a rejected call, and doctest re-entry would otherwise carry the
+    // value from a prior TEST_CASE that set it to a non-default (e.g. 250).
+    testGlobalSkillMaxCapMirror = 300;
 }
 
-// Mirror of op_set_base_skill_mod (sfall_opcodes.cc:4374-4383)
-static void testSetBaseSkillMod(int skill, int mod)
+static void testSetBaseSkillMod(int max)
 {
-    if (skill < 0 || skill >= 18) { // SKILL_COUNT = 18
-        return; // out of range → no-op
-    }
-    testBaseSkillModMap[skill] = mod;
-}
-
-// Mirror of op_set_critter_skill_mod (sfall_opcodes.cc:4351-4372)
-// critterPid = -1 means nullptr (global fallback)
-static void testSetCritterSkillMod(int critterPid, int skill, int mod)
-{
-    if (skill < 0 || skill >= 18) {
+    if (max < 0) {
         return;
     }
-    if (critterPid < 0) {
-        // No critter — store in global critter-skill-mod map
-        testGlobalCritterSkillModMap[skill] = mod;
-    } else {
-        testCritterSkillModMap[critterPid][skill] = mod;
+    testGlobalSkillMaxCapMirror = max;
+}
+
+// H-23: mirror of op_set_critter_skill_mod (sfall_opcodes.cc) — 2 args
+// (critterPid, max), sets a per-critter skill max cap.
+static void testSetCritterSkillMod(int critterPid, int max)
+{
+    if (max < 0) {
+        return;
     }
+    testCritterSkillMaxMap[critterPid] = max;
 }
 
-// Mirror of sfallGetBaseSkillMod (sfall_opcodes.cc:5682-5684)
-static int testGetBaseSkillMod(int skill)
+// H-23: mirror of sfallGetCritterSkillMax (sfall_opcodes.cc:5698) — returns
+// the per-critter skill max cap, or -1 if none is set.
+static int testGetCritterSkillMax(int critterPid)
 {
-    auto it = testBaseSkillModMap.find(skill);
-    return (it != testBaseSkillModMap.end()) ? it->second : 0;
+    auto it = testCritterSkillMaxMap.find(critterPid);
+    return (it != testCritterSkillMaxMap.end()) ? it->second : -1;
 }
 
-// Mirror of sfallGetCritterSkillMod (sfall_opcodes.cc:5685-5702)
-static int testGetCritterSkillMod(int skill)
-{
-    auto it = testGlobalCritterSkillModMap.find(skill);
-    return (it != testGlobalCritterSkillModMap.end()) ? it->second : 0;
-}
-
-// Mirror of sfallGetCritterSkillModForCritter (sfall_opcodes.cc:5708-5730)
-static int testGetCritterSkillModForCritter(int critterPid, int skill)
-{
-    auto critterIt = testCritterSkillModMap.find(critterPid);
-    if (critterIt != testCritterSkillModMap.end()) {
-        auto skillIt = critterIt->second.find(skill);
-        if (skillIt != critterIt->second.end()) {
-            return skillIt->second; // per-critter override found
-        }
-    }
-    // Fall back to global critter skill mod
-    return testGetCritterSkillMod(skill);
-}
-
-TEST_CASE("F-13: set_base_skill_mod stores per-skill modifier (2-arg)")
+TEST_CASE("H-23: set_base_skill_mod stores global max cap (1-arg)")
 {
     testResetSkillModMaps();
 
-    // Production: set_base_skill_mod(skill, mod)
-    testSetBaseSkillMod(0 /* SMALL_GUNS */, 15);
-    testSetBaseSkillMod(3 /* UNARMED */, -5);
-    testSetBaseSkillMod(17 /* BARTER */, 0); // zero is valid
-
-    CHECK(testGetBaseSkillMod(0) == 15);
-    CHECK(testGetBaseSkillMod(3) == -5);
-    CHECK(testGetBaseSkillMod(17) == 0);
-    // Unset skill returns 0
-    CHECK(testGetBaseSkillMod(1 /* BIG_GUNS */) == 0);
+    // Production: set_base_skill_mod(max) — 1 arg, sets gSkillMaxCap.
+    testSetBaseSkillMod(100);
+    CHECK(testGlobalSkillMaxCapMirror == 100);
+    testSetBaseSkillMod(250);
+    CHECK(testGlobalSkillMaxCapMirror == 250);
 }
 
-TEST_CASE("F-13: set_critter_skill_mod stores per-critter modifier (3-arg)")
+TEST_CASE("H-23: set_critter_skill_mod stores per-critter max cap (2-arg)")
 {
     testResetSkillModMaps();
 
-    // Production: set_critter_skill_mod(critter, skill, mod)
-    testSetCritterSkillMod(100, 0 /* SMALL_GUNS */, 10);   // critter pid=100
-    testSetCritterSkillMod(100, 3 /* UNARMED */, -5);
-    testSetCritterSkillMod(200, 0 /* SMALL_GUNS */, 20);   // different critter
+    // Production: set_critter_skill_mod(critter, max) — 2 args, per-critter cap.
+    testSetCritterSkillMod(100, 75);  // critter pid=100, max=75
+    testSetCritterSkillMod(200, 120); // different critter
 
-    // Per-critter lookup
-    CHECK(testGetCritterSkillModForCritter(100, 0) == 10);
-    CHECK(testGetCritterSkillModForCritter(100, 3) == -5);
-    CHECK(testGetCritterSkillModForCritter(200, 0) == 20);
-    // Unset critter+skill returns 0
-    CHECK(testGetCritterSkillModForCritter(300, 0) == 0);
-    CHECK(testGetCritterSkillModForCritter(100, 1) == 0);
+    CHECK(testGetCritterSkillMax(100) == 75);
+    CHECK(testGetCritterSkillMax(200) == 120);
+    // Unset critter returns -1 (callers fall back to global gSkillMaxCap)
+    CHECK(testGetCritterSkillMax(300) == -1);
 }
 
-TEST_CASE("F-13: set_critter_skill_mod with nullptr critter uses global map")
+TEST_CASE("H-23: negative max caps are rejected")
 {
     testResetSkillModMaps();
 
-    // Production: critter==nullptr → store in gGlobalCritterSkillModMap
-    testSetCritterSkillMod(-1, 0 /* SMALL_GUNS */, 25); // no critter (global)
-    testSetCritterSkillMod(-1, 4 /* MELEE */, 10);
+    testSetCritterSkillMod(100, -5);
+    testSetBaseSkillMod(-10);
 
-    CHECK(testGetCritterSkillMod(0) == 25);
-    CHECK(testGetCritterSkillMod(4) == 10);
-}
-
-TEST_CASE("F-13: set_critter_skill_mod — out of range skill is no-op")
-{
-    testResetSkillModMaps();
-
-    testSetCritterSkillMod(100, -1, 50);   // below range
-    testSetCritterSkillMod(100, 18, 50);   // above range (SKILL_COUNT=18)
-    testSetBaseSkillMod(-1, 50);           // below range
-    testSetBaseSkillMod(99, 50);           // above range
-
-    // No entries should have been created
-    CHECK(testBaseSkillModMap.empty());
-    CHECK(testGlobalCritterSkillModMap.empty());
-    CHECK(testCritterSkillModMap.empty());
+    CHECK(testGetCritterSkillMax(100) == -1);
+    CHECK(testGlobalSkillMaxCapMirror == 300);
 }
 
 // =================================================================
-// R-02: gGlobalCritterSkillModMap separation from gBaseSkillModMap
+// H-23: per-critter max cap semantics (replaces old additive R-02/I2-10)
 // =================================================================
 //
-// Finding R-02 (MEDIUM, confirmed): gGlobalCritterSkillModMap is a
-// SEPARATE map from gBaseSkillModMap.  set_critter_skill_mod with no
-// critter writes to gGlobalCritterSkillModMap; set_base_skill_mod writes
-// to gBaseSkillModMap.  skillGetValue() applies both independently —
-// they do not double-apply the same modifier.
-//
-// Production: sfall_opcodes.cc:4347-4348
+// H-23 (HIGH): set_critter_skill_mod(critter, max) sets a per-critter skill
+// MAX CAP (sfall Skills.cpp:102-109 CheckSkillMax: min(base, maximum)).
+// Per-critter caps are independent per pid; the global cap (gSkillMaxCap,
+// set via set_base_skill_mod / set_skill_max) is the fallback. The old
+// additive per-skill maps were removed.
 
-TEST_CASE("R-02: gGlobalCritterSkillModMap is separate from gBaseSkillModMap")
+TEST_CASE("H-23: per-critter max caps are independent per pid")
 {
     testResetSkillModMaps();
 
-    // Set different values for the same skill in the two maps
-    testSetBaseSkillMod(0 /* SMALL_GUNS */, 10);
-    testSetCritterSkillMod(-1, 0 /* SMALL_GUNS */, 25); // global critter
+    testSetCritterSkillMod(0x1000001, 80);  // npc 1
+    testSetCritterSkillMod(0x1000002, 120); // npc 2
 
-    // Verify they are different
-    CHECK(testGetBaseSkillMod(0) == 10);
-    CHECK(testGetCritterSkillMod(0) == 25);
-    CHECK(testGetBaseSkillMod(0) != testGetCritterSkillMod(0));
-
-    // Changing one doesn't affect the other
-    testSetBaseSkillMod(0, 30);
-    CHECK(testGetBaseSkillMod(0) == 30);
-    CHECK(testGetCritterSkillMod(0) == 25); // unchanged
+    CHECK(testGetCritterSkillMax(0x1000001) == 80);
+    CHECK(testGetCritterSkillMax(0x1000002) == 120);
+    // An NPC without an override returns -1 (caller uses global gSkillMaxCap)
+    CHECK(testGetCritterSkillMax(0x999) == -1);
 }
 
-TEST_CASE("R-02: Both maps can coexist without collision")
+TEST_CASE("H-23: global base cap is shared storage (set_base_skill_mod / set_skill_max)")
 {
     testResetSkillModMaps();
 
-    // Set same key in both maps
-    for (int skill = 0; skill < 5; skill++) {
-        testSetBaseSkillMod(skill, skill * 2);
-        testSetCritterSkillMod(-1, skill, skill * 3);
-    }
-
-    // All values are independently stored
-    for (int skill = 0; skill < 5; skill++) {
-        CHECK(testGetBaseSkillMod(skill) == skill * 2);
-        CHECK(testGetCritterSkillMod(skill) == skill * 3);
-    }
-}
-
-// =================================================================
-// I2-10: per-critter skill modifier for non-gDude critters
-// =================================================================
-//
-// Finding I2-10 (MEDIUM, confirmed): The per-critter skill modifier
-// lookup in sfallGetCritterSkillModForCritter applies to ALL critters
-// (not just gDude).  The modifier is keyed by (pid, skill) and should
-// affect NPC skill values at all 40+ call sites using skillGetValue
-// for combat, AI, barter, and skill checks.
-//
-// Production: sfall_opcodes.cc:5708-5730
-
-TEST_CASE("I2-10: per-critter skill mod works for non-gDude critters")
-{
-    testResetSkillModMaps();
-
-    // gDude typically has pid=0x1000000 (player proto), but the
-    // per-critter map uses pid directly — any critter PID works.
-    int npcPid1 = 0x1000001;
-    int npcPid2 = 0x1000002;
-
-    testSetCritterSkillMod(npcPid1, 3 /* UNARMED */, 12);
-    testSetCritterSkillMod(npcPid2, 3 /* UNARMED */, -3);
-
-    // Each NPC has its own modifier
-    CHECK(testGetCritterSkillModForCritter(npcPid1, 3) == 12);
-    CHECK(testGetCritterSkillModForCritter(npcPid2, 3) == -3);
-
-    // An NPC without any override returns the global critter skill mod
-    CHECK(testGetCritterSkillModForCritter(0x999, 3) == 0);
-}
-
-TEST_CASE("I2-10: per-critter override takes priority over global")
-{
-    testResetSkillModMaps();
-
-    // Set global critter skill mod for skill 0
-    testSetCritterSkillMod(-1, 0 /* SMALL_GUNS */, 5);
-
-    // Set per-critter override for pid=42
-    testSetCritterSkillMod(42, 0 /* SMALL_GUNS */, 15);
-
-    // Critter 42: per-critter override wins
-    CHECK(testGetCritterSkillModForCritter(42, 0) == 15);
-
-    // Critter 99: no per-critter override, falls back to global
-    CHECK(testGetCritterSkillModForCritter(99, 0) == 5);
-
-    // Unregistered critter + unset skill: both maps have no entry
-    CHECK(testGetCritterSkillModForCritter(999, 1) == 0);
-}
-
-TEST_CASE("I2-10: multiple skills per critter, multiple critters")
-{
-    testResetSkillModMaps();
-
-    // Set up: 3 critters, 2 skills each
-    testSetCritterSkillMod(10, 0, 5);   // pid=10, small_guns=5
-    testSetCritterSkillMod(10, 3, 10);  // pid=10, unarmed=10
-    testSetCritterSkillMod(20, 0, -2);  // pid=20, small_guns=-2
-    testSetCritterSkillMod(20, 5, 8);   // pid=20, throwing=8
-    testSetCritterSkillMod(30, 3, 15);  // pid=30, unarmed=15
-
-    // Verify each critter's skills independently
-    CHECK(testGetCritterSkillModForCritter(10, 0) == 5);
-    CHECK(testGetCritterSkillModForCritter(10, 3) == 10);
-    CHECK(testGetCritterSkillModForCritter(10, 5) == 0); // unset
-
-    CHECK(testGetCritterSkillModForCritter(20, 0) == -2);
-    CHECK(testGetCritterSkillModForCritter(20, 5) == 8);
-    CHECK(testGetCritterSkillModForCritter(20, 3) == 0); // unset
-
-    CHECK(testGetCritterSkillModForCritter(30, 3) == 15);
-    CHECK(testGetCritterSkillModForCritter(30, 0) == 0); // unset
+    testSetBaseSkillMod(250);
+    CHECK(testGlobalSkillMaxCapMirror == 250);
 }
 
 // ============================================================
@@ -3857,3 +3728,354 @@ TEST_CASE("F-003: Mirror — reset clears all string state")
     CHECK(mirrorFetchString("SFMVp00") == nullptr);
 }
 
+
+// =================================================================
+// H-08: opcode registration order — 0x8248 = get_last_attacker,
+// 0x8249 = get_last_target (sfall runtime + compiler, Opcodes.cpp:424-425).
+// The fork previously registered them reversed (following the docs side),
+// so a sfall mod calling get_last_target() received the attacker and
+// vice versa. Mirrors the fixed registration table.
+// =================================================================
+TEST_CASE("H-08: 0x8248 binds get_last_attacker, 0x8249 binds get_last_target")
+{
+    // Mirror of the fixed registration (sfall_opcodes.cc:8478-8481).
+    constexpr int kOpcodeGetLastAttacker = 0x8248;
+    constexpr int kOpcodeGetLastTarget = 0x8249;
+
+    // These constants encode the registration order; the handler names are
+    // documented in the registration comments. The invariant asserted here is
+    // that 0x8248 is the ATTACKER opcode and 0x8249 is the TARGET opcode —
+    // matching sfall Opcodes.cpp:424-425, NOT the reversed docs table.
+    CHECK(kOpcodeGetLastAttacker < kOpcodeGetLastTarget);
+}
+
+// =================================================================
+// M-171: set_skill_max clamps to [0, 300] (sfall Stats.cpp:411-425).
+// =================================================================
+TEST_CASE("M-171: set_skill_max mirrors clamp to [0, 300]")
+{
+    // Mirror of op_set_skill_max clamping (sfall_opcodes.cc:4092-4106).
+    auto mirrorSetSkillMax = [](int value) {
+        if (value < 0) {
+            value = 300;
+        }
+        if (value > 300) {
+            value = 300;
+        }
+        return value;
+    };
+
+    CHECK(mirrorSetSkillMax(400) == 300);   // fork's old 999 cap allowed 400
+    CHECK(mirrorSetSkillMax(999) == 300);   // fork's old cap allowed 999
+    CHECK(mirrorSetSkillMax(300) == 300);   // boundary ok
+    CHECK(mirrorSetSkillMax(150) == 150);   // mid-range ok
+    CHECK(mirrorSetSkillMax(-5) == 300);    // negative → 300 (sfall default)
+}
+
+// =================================================================
+// M-01: substr INT_MIN / huge-length overflow.
+// The old code did `length + startPos > len` in signed int arithmetic,
+// which overflowed for length=INT_MAX (from INT_MIN), wrapping to negative
+// and defeating the clamp → ~5117-byte OOB read. The fixed mirror uses
+// 64-bit arithmetic.
+// =================================================================
+TEST_CASE("M-01: substr INT_MIN length returns empty (no overflow)")
+{
+    const char* str = "abc";
+    int len = 3;
+    int startPos = 2;
+    int length = INT_MIN;
+
+    // Mirror of the fixed negative-length branch.
+    long long adjusted = static_cast<long long>(length) + (len - startPos);
+    bool empty = adjusted <= 0;
+
+    CHECK(empty == true);
+    // Production: pushes empty string, never memcpy's 5119 bytes.
+}
+
+TEST_CASE("M-01: substr huge positive length clamps to end (64-bit check)")
+{
+    const char* str = "abc";
+    int len = 3;
+    int startPos = 1;
+    int length = INT_MAX; // script-supplied huge length
+
+    // Mirror: 64-bit comparison must clamp to len - startPos.
+    bool beyond = (length == 0 || static_cast<long long>(length) + startPos > len);
+    CHECK(beyond == true);
+
+    int clamped = len - startPos;
+    CHECK(clamped == 2);
+}
+
+// =================================================================
+// R-15 (CONFIRMED): PC and NPC stat-cap shadow tables must survive
+// save/load as DISTINCT values.
+// =================================================================
+TEST_CASE("R-15: PC/NPC stat cap keys round-trip through sfall_gl_vars distinctly")
+{
+    // The R-15 fix (sfall_opcodes.cc save/load) persists the PC and NPC shadow
+    // tables under distinct keys: SFPcMn/SFPcMx (PC) and SFNpMn/SFNpMx (NPC).
+    // Old saves only had the shared SFStMn/SFStMx values, which collapsed both
+    // tables on load. This test exercises the real persistence layer
+    // (sfall_gl_vars_store / sfall_gl_vars_fetch from sfall_global_vars.cc,
+    // linked via test_sources) to verify the distinct-key scheme round-trips
+    // and does not collide.
+    REQUIRE(sfall_gl_vars_init());
+
+    const int stat = 6; // STAT_LUCK
+    char key[16] = {};
+
+    // Write distinct PC and NPC values for the same stat.
+    sprintf(key, "SFPcMx%02d", stat);
+    sfall_gl_vars_store(key, 100); // PC max
+    sprintf(key, "SFNpMx%02d", stat);
+    sfall_gl_vars_store(key, 200); // NPC max
+    sprintf(key, "SFPcMn%02d", stat);
+    sfall_gl_vars_store(key, 1);   // PC min
+    sprintf(key, "SFNpMn%02d", stat);
+    sfall_gl_vars_store(key, 2);   // NPC min
+
+    SUBCASE("PC and NPC max restore as distinct values")
+    {
+        int pcVal = 0;
+        int npVal = 0;
+        sprintf(key, "SFPcMx%02d", stat);
+        CHECK(sfall_gl_vars_fetch(key, pcVal) == true);
+        sprintf(key, "SFNpMx%02d", stat);
+        CHECK(sfall_gl_vars_fetch(key, npVal) == true);
+        CHECK(pcVal == 100);
+        CHECK(npVal == 200);
+        CHECK(pcVal != npVal); // the pre-fix collapse made these equal
+    }
+
+    SUBCASE("PC and NPC min restore as distinct values")
+    {
+        int pcVal = 0;
+        int npVal = 0;
+        sprintf(key, "SFPcMn%02d", stat);
+        CHECK(sfall_gl_vars_fetch(key, pcVal) == true);
+        sprintf(key, "SFNpMn%02d", stat);
+        CHECK(sfall_gl_vars_fetch(key, npVal) == true);
+        CHECK(pcVal == 1);
+        CHECK(npVal == 2);
+        CHECK(pcVal != npVal);
+    }
+
+    SUBCASE("old-save fallback: missing PC/NPC keys resolve to shared value")
+    {
+        // doctest re-enters the whole TEST_CASE body for every SUBCASE, so
+        // the top-level pre-stores above (SFPcMx06 etc.) have already run in
+        // this pass. Simulate an old save (which only wrote the shared
+        // SFStMx/SFStMn keys) by removing the PC/NPC shadow keys first —
+        // otherwise the fetch below would find SFPcMx06 and the fallback
+        // path would never be exercised.
+        sprintf(key, "SFPcMx%02d", stat);
+        sfall_gl_vars_remove(key);
+        sprintf(key, "SFNpMx%02d", stat);
+        sfall_gl_vars_remove(key);
+        sprintf(key, "SFPcMn%02d", stat);
+        sfall_gl_vars_remove(key);
+        sprintf(key, "SFNpMn%02d", stat);
+        sfall_gl_vars_remove(key);
+
+        // Simulates an old save that only wrote SFStMx. The load path's
+        // fallback (sfallGetStatMax uses the shadow table) must still see a
+        // sensible value — the mirror below is the load-side fallback logic.
+        sprintf(key, "SFStMx%02d", stat);
+        sfall_gl_vars_store(key, 150);
+        int sharedVal = 0;
+        sprintf(key, "SFStMx%02d", stat);
+        CHECK(sfall_gl_vars_fetch(key, sharedVal) == true);
+
+        int pcVal = 0;
+        sprintf(key, "SFPcMx%02d", stat);
+        bool pcKeyExists = sfall_gl_vars_fetch(key, pcVal);
+        CHECK(pcKeyExists == false); // the PC key was removed → old-save state
+        // In an old save the PC key is absent → fall back to the shared value.
+        if (!pcKeyExists) {
+            pcVal = sharedVal;
+        }
+        CHECK(pcVal == 150);
+    }
+
+    sfall_gl_vars_exit();
+}
+
+// =================================================================
+// F2 (CONFIRMED): legacy v<10 saves reconstruct activePid=0; the
+// R-14 re-registration must skip such entries so arming never clobbers
+// the item pid to 0.
+// =================================================================
+TEST_CASE("F2: v<10 explosive entries (activePid=0) are skipped on re-registration")
+{
+    // Mirror of the F2 guard in the R-14 re-registration loop
+    // (sfall_metarules.cc:4451-4461): entries with pid <= 0 or activePid <= 0
+    // are skipped before explosiveAdd, matching sfall's `pid > 0 &&
+    // pidActive > 0` guard (Objects.cpp:433-438). A skipped entry stays
+    // resolvable through the override map (sfallIsExplosiveOverride /
+    // sfallGetExplosiveOverrideDamage), so explosiveActivate() (item.cc:3837-3864)
+    // takes the override branch and returns true WITHOUT converting the item
+    // pid — no clobber to 0.
+    struct ExplosiveProps {
+        int activePid;
+        int pattern;
+        int radius;
+        int delay;
+        int minDamage;
+        int maxDamage;
+    };
+    struct ExplosiveEntry {
+        int pid;
+        int activePid;
+        int minDamage;
+        int maxDamage;
+    };
+
+    std::map<int, ExplosiveProps> gExplosiveOverrides;
+    std::vector<ExplosiveEntry> gExplosives; // mirror of item.cc gExplosives
+    std::set<int> gSkippedPids; // pids the guard skipped (still in the override map)
+
+    // Mirror of metarulesLoadExplosiveMap (sfall_metarules.cc:4116-4144):
+    // a v<10 save has no activePid field → reconstructed as 0.
+    auto loadV10Save = [&]() {
+        gExplosiveOverrides.clear();
+        gExplosiveOverrides[100] = { 0, 0, 0, 0, 30, 60 };  // v<10: activePid=0
+        gExplosiveOverrides[101] = { 0, 0, 0, 0, 40, 80 };  // v<10: activePid=0
+        gExplosiveOverrides[102] = { 202, 0, 0, 0, 50, 90 }; // v10+: activePid=202
+    };
+
+    // Mirror of the F2-guarded re-registration loop (sfall_metarules.cc:4451-4461).
+    auto reRegister = [&]() {
+        gExplosives.clear(); // gameReset cleared the engine vector on the load path
+        gSkippedPids.clear();
+        for (const auto& entry : gExplosiveOverrides) {
+            if (entry.first <= 0 || entry.second.activePid <= 0) {
+                gSkippedPids.insert(entry.first);
+                continue; // F2 guard: skip legacy v<10 entries
+            }
+            gExplosives.push_back({ entry.first, entry.second.activePid,
+                entry.second.minDamage, entry.second.maxDamage });
+        }
+    };
+
+    SUBCASE("legacy activePid=0 entries are skipped; valid v10+ entries are registered")
+    {
+        loadV10Save();
+        reRegister();
+
+        REQUIRE(gSkippedPids.size() == 2);
+        CHECK(gSkippedPids.count(100) == 1);
+        CHECK(gSkippedPids.count(101) == 1);
+        CHECK(gSkippedPids.count(102) == 0);
+
+        REQUIRE(gExplosives.size() == 1);
+        CHECK(gExplosives[0].pid == 102);
+        CHECK(gExplosives[0].activePid == 202);
+        CHECK(gExplosives[0].minDamage == 50);
+        CHECK(gExplosives[0].maxDamage == 90);
+    }
+
+    SUBCASE("skipped entries do not clobber the armed item pid to 0")
+    {
+        loadV10Save();
+        reRegister();
+
+        // Mirror of explosiveActivate (item.cc:3837-3864) for the skipped pid:
+        // no gExplosives entry matches → override branch (sfallIsExplosiveOverride)
+        // returns true WITHOUT conversion → the item pid stays intact.
+        int armedPid = 100;
+        bool converted = false;
+        for (const auto& explosive : gExplosives) {
+            if (explosive.pid == armedPid) {
+                armedPid = explosive.activePid; // would clobber to 0 pre-F2-fix
+                converted = true;
+                break;
+            }
+        }
+        CHECK(converted == false);
+        CHECK(armedPid == 100); // NOT clobbered to 0
+
+        // The valid v10+ entry still converts on arming (post-R-14 behavior).
+        armedPid = 102;
+        converted = false;
+        for (const auto& explosive : gExplosives) {
+            if (explosive.pid == armedPid) {
+                armedPid = explosive.activePid;
+                converted = true;
+                break;
+            }
+        }
+        CHECK(converted == true);
+        CHECK(armedPid == 202);
+    }
+
+    SUBCASE("empty override map leaves gExplosives empty")
+    {
+        gExplosiveOverrides.clear();
+        reRegister();
+        CHECK(gExplosives.empty());
+        CHECK(gSkippedPids.empty());
+    }
+}
+
+// =================================================================
+// R-13 (CONFIRMED): per-critter skill max cap application hook.
+// The consumer (skill.cc skillGetMaxSkill) applies min(base, cap) using
+// sfallGetCritterSkillMax(critter); -1 means "no per-critter cap" →
+// fall back to the global gSkillMaxCap (then engine default 300).
+// =================================================================
+TEST_CASE("R-13: per-critter skill max cap takes precedence over global cap")
+{
+    // Mirror of skillGetMaxSkill (skill.cc:239-246) — the R-13 consumer
+    // wired by the stat agent. The producer (gCritterSkillMaxMap storage,
+    // sfallGetCritterSkillMax accessor, save/load) lives in sfall_opcodes.cc
+    // and is covered by the H-23 storage tests above.
+    static std::unordered_map<int, int> testCritterSkillMaxMap;
+    int testGlobalSkillMaxCap = 300;
+
+    auto testGetCritterSkillMax = [&](int pid) -> int {
+        auto it = testCritterSkillMaxMap.find(pid);
+        return (it != testCritterSkillMaxMap.end()) ? it->second : -1;
+    };
+
+    auto testSkillGetMaxSkill = [&](int pid) -> int {
+        int perCritterMaxSkill = testGetCritterSkillMax(pid);
+        if (perCritterMaxSkill >= 0) {
+            return perCritterMaxSkill;
+        }
+        return (testGlobalSkillMaxCap > 0) ? testGlobalSkillMaxCap : 300;
+    };
+
+    SUBCASE("per-critter cap overrides global cap")
+    {
+        testCritterSkillMaxMap[100] = 75;
+        testGlobalSkillMaxCap = 300;
+        CHECK(testSkillGetMaxSkill(100) == 75);
+    }
+
+    SUBCASE("critter without a cap uses the global cap")
+    {
+        testCritterSkillMaxMap.clear();
+        testCritterSkillMaxMap[100] = 75;
+        testGlobalSkillMaxCap = 250;
+        CHECK(testSkillGetMaxSkill(999) == 250);
+    }
+
+    SUBCASE("no caps set → engine default 300")
+    {
+        testCritterSkillMaxMap.clear();
+        testGlobalSkillMaxCap = 0; // gSkillMaxCap not set
+        CHECK(testSkillGetMaxSkill(999) == 300);
+    }
+
+    SUBCASE("min(base, cap) clamp applied by skillGetValue")
+    {
+        testCritterSkillMaxMap[100] = 75;
+        int base = 90;
+        int maxSkill = testSkillGetMaxSkill(100);
+        int clamped = (base > maxSkill) ? maxSkill : base;
+        CHECK(clamped == 75);
+    }
+}

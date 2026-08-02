@@ -179,17 +179,17 @@ typedef enum {
     HOOK_ENCOUNTER = 43,
 
     // Poison/radiation adjustment hooks — fire when the engine applies
-    // per-tick poison or radiation damage to a critter (usually dude_obj).
-    // Not implemented because CE's poison and radiation systems use a
-    // simplified pipeline where per-tick adjustments are applied directly
-    // in critter.cc without sfall-style callback injection points.
-    // Implementing these would require refactoring the poison/radiation
-    // update loop to interpose a hook fire call, which must handle
-    // the case where multiple critters receive simultaneous adjustments.
-    // Mods tracking poison/radiation should use HOOK_ONDEATH or
-    // HOOK_GAMEMODECHANGE for high-level state tracking.
+    // poison or radiation damage to a critter (usually dude_obj).
+    // HOOK_ADJUSTRADS is implemented (M-26): it fires from
+    // critterAdjustRadiation() (critter.cc) before the radiation delta is
+    // applied, matching sfall's AdjustRads_Script (ObjectHs.cpp:362-385).
+    // HOOK_ADJUSTPOISON remains unimplemented because CE's poison pipeline
+    // applies per-tick adjustments directly in critter.cc without an
+    // sfall-style callback injection point; implementing it would require
+    // refactoring the poison update loop to interpose a hook fire call.
+    // Mods tracking poison should use HOOK_ONDEATH or HOOK_GAMEMODECHANGE.
     // HOOK_ADJUSTPOISON = 44,
-    // HOOK_ADJUSTRADS = 45,
+    HOOK_ADJUSTRADS = 45,
 
     // NOTE: Deliberately absent — randomRoll() has 30+ call sites (skill
     // checks, combat rolls, AI evaluations) but no event_type context to
@@ -264,7 +264,8 @@ typedef enum {
 // Number of implemented hook types (active enum entries with fire functions or
 // declared fire sites). Updated when new hook types are added to the enum.
 // Phase 7 added HOOK_DIALOG(49) through HOOK_MESSAGE(53): +5 → 43.
-constexpr int HOOK_IMPLEMENTED_COUNT = 43;
+// M-26 enabled HOOK_ADJUSTRADS(45) with a fire site in critterAdjustRadiation: +1 → 44.
+constexpr int HOOK_IMPLEMENTED_COUNT = 44;
 
 typedef enum {
     REST_EVENT_TYPE_CANCEL = -1,
@@ -419,16 +420,19 @@ enum AmmoCostHookType {
 
 enum class EncounterHookEventType {
     RandomEncounter = 0,
-    // F-10 (FIX): Changed from 1 to 2 to avoid conflict with sfall's arg0
-    // encoding where 1 = special encounter. Value 2 is a CE-specific extension
-    // for entering a local map from worldmap — sfall does not define this case
-    // in its original HOOK_ENCOUNTER documentation (which uses 0=random, 1=special,
-    // 0x100=forced). Using 2 ensures CE's LocalMapEnter does not collide with
-    // sfall's arg0=1 for special encounters.
-    LocalMapEnter = 2,
-    // F-20 (FIX): Forced encounters use arg0=0x100 (256) per sfall convention.
-    // Previously forced encounters were indistinguishable from normal random
-    // encounters because both passed RandomEncounter with isSpecial=false.
+    // H-03/P-05: LocalMapEnter MUST be 1 to match sfall's HOOK_ENCOUNTER
+    // arg0 encoding (hooks.yml:731 — "1 - when the player enters from the
+    // world map"). Commit 86e6c4d changed this from 1 to 2 under the false
+    // premise that sfall's arg0=1 meant "special encounter" — sfall never
+    // encodes special encounters in arg0 (they live in arg2, encType==3).
+    // The old 86e6c4d comment was a PRIOR_FIX_ATTEMPT regression: prior to
+    // that pass CE's encoding matched sfall exactly.
+    LocalMapEnter = 1,
+    // ForcedEncounter is a CE-internal marker (0x100) used by the
+    // worldmap.cc forced-encounter call site. Per sfall, HOOK_ENCOUNTER
+    // NEVER fires for forced encounters (op_force_encounter jumps straight
+    // to map load) — scriptHooks_Encounter() returns without firing when
+    // this event type is passed (sfall N-01).
     ForcedEncounter = 256,
 };
 
@@ -489,6 +493,11 @@ bool scriptHooks_RestTimer(unsigned int gameTime, RestEventType eventType, int h
 void scriptHooks_OnDeath(Object* critter);
 int scriptHooks_ExplosiveTimer(Object* explosive, int delay, int eventType);
 EncounterHookResult scriptHooks_Encounter(EncounterHookEventType eventType, int* mapIdPtr, bool isSpecial, int tableId, int entryId);
+
+// M-26: HOOK_ADJUSTRADS fire function. Fires from critterAdjustRadiation()
+// before the radiation delta is applied to a critter (sfall ObjectHs.cpp:
+// AdjustRads_Script). Returns the (possibly script-overridden) amount.
+int scriptHooks_AdjustRads(Object* critter, int amount);
 bool scriptHooks_InventoryMove(HookInventoryMoveType actionType, Object* item, Object* targetItem);
 bool scriptHooks_CombatTurnStart(Object* critter, bool reloadedDuringCombat);
 bool scriptHooks_CombatTurnEnd(Object* critter, int turnResult, bool reloadedDuringCombat);

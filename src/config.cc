@@ -1,6 +1,7 @@
 #include "config.h"
 
 #include <ctype.h>
+#include <cmath>
 #include <errno.h>
 #include <limits.h>
 #include <stdio.h>
@@ -584,6 +585,15 @@ static bool configWriteStandard(Config* config, const char* filePath)
 static bool configWriteSection(FILE* stream, const char* sectionName, ConfigSection* section, const StringSet* handledKeys)
 {
     if (sectionName != nullptr) {
+        // M-39 (secondary): validate the section NAME like the standard path
+        // does at configWriteStandard — an embedded newline in a section name
+        // would inject a new INI header on re-read. configWriteSideBySide
+        // calls this for new sections (and section drains), so the guard must
+        // live here, not only at the standard writer.
+        if (!configWriteIsNameSafe(sectionName)) {
+            debugPrint("Config: rejected unsafe section name '%s' (contains control characters)\n", sectionName);
+            return false;
+        }
         if (fprintf(stream, "[%s]\n", sectionName) < 0) {
             return false;
         }
@@ -757,9 +767,30 @@ static bool configWriteSideBySide(Config* config, const char* filePath, int flag
                 if (flags & CONFIG_RETAIN_COMMENTS) {
                     *equals = '\0';
                     k = trimmed;
-                    if ((comment = strchr(equals + 1, ';')) == nullptr) {
-                        comment = strchr(equals + 1, '#');
-                    }
+                    // M-41: ONLY ';' is treated as an inline comment marker on
+                    // the write side, matching the read side (configParseLine
+                    // strips only ';' — '#' is a valid value character, e.g.
+                    // sfall color values like #FF0000). Previously the write
+                    // side also treated '#' as a comment marker, so a value
+                    // containing '#' (e.g. MusicPath=sound\foo#1) had its
+                    // value-tail re-appended as a "comment" on every
+                    // CONFIG_RETAIN_ALL save → the value doubled per save.
+                    comment = strchr(equals + 1, ';');
+                }
+
+                // M-39: F-14 injection guard was missing from the side-by-side
+                // writer (it existed only in configWriteStandard and
+                // configWriteSection). configWriteSideBySide is the ONLY writer
+                // used by gameConfigSave/gameConfigExit (CONFIG_RETAIN_ALL →
+                // configWriteEx), i.e. the primary settings-save path — an
+                // embedded newline in a value would otherwise be written raw
+                // and parsed as a new INI line on the next read. Reject it the
+                // same way configWriteStandard does (abort the whole write).
+                if (!configWriteIsValueSafe(value)) {
+                    debugPrint("Config: rejected unsafe value for key '%s' in section '%s' (contains control characters)\n",
+                        k, currentSectionName[0] != '\0' ? currentSectionName : "(null)");
+                    ok = false;
+                    break;
                 }
 
                 if (fprintf(output, "%s=%s%s%s", k, value, comment ? " " : "", comment ? comment : "\n") < 0) {
@@ -1050,6 +1081,17 @@ bool configGetDouble(Config* config, const char* sectionKey, const char* key, do
 
     // Reject on overflow/underflow.
     if (errno == ERANGE) {
+        return false;
+    }
+
+    // M-40: Reject NaN/Inf. strtod("nan") parses successfully with errno
+    // untouched, and std::clamp passes NaN through (all comparisons false),
+    // so (int)NaN — UB, INT_MIN on x86-64 — reached downstream consumers as
+    // a buffer offset (preferences.cc:709 brightness knob → wild heap write
+    // of 21×12 bytes at gPreferencesWindowBuffer + 640*knobY + INT_MIN).
+    // Rejecting non-finite values at the config choke point covers all
+    // settings-read callers at once.
+    if (!std::isfinite(d)) {
         return false;
     }
 

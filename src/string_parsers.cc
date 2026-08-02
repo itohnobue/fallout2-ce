@@ -215,7 +215,7 @@ int strParseIntWithKey(char** stringPtr, const char* key, int* valuePtr, const c
 }
 
 // 0x4B005C strParseStrAndSepVal
-int strParseKeyValue(char** stringPtr, char* key, int* valuePtr, const char* delimiter)
+int strParseKeyValue(char** stringPtr, char* key, int* valuePtr, const char* delimiter, size_t keySize)
 {
     char* str;
     size_t leadingSpacesLength, segmentLength, consumedLength, keyLength;
@@ -252,7 +252,15 @@ int strParseKeyValue(char** stringPtr, char* key, int* valuePtr, const char* del
     savedKeyDelimiter = *(str + keyLength);
     *(str + keyLength) = '\0';
 
-    strcpy(key, str);
+    // M-191: the old code copied the key segment with an unbounded strcpy,
+    // overflowing caller key buffers (the only caller passes a char[40]
+    // sfx->name). When keySize is provided, truncate and NUL-terminate.
+    if (keySize > 0) {
+        strncpy(key, str, keySize - 1);
+        key[keySize - 1] = '\0';
+    } else {
+        strcpy(key, str);
+    }
 
     *stringPtr = *stringPtr + consumedLength;
     *valuePtr = atoi(str + keyLength + 1);

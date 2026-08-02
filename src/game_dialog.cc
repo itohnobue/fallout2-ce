@@ -709,6 +709,7 @@ static void partyMemberCustomizationWindowHandleEvents();
 static void partyMemberCustomizationWindowUpdate();
 static void _gdCustomSelectRedraw(unsigned char* dest, int pitch, int type, int selectedIndex);
 static int _gdCustomSelect(int option);
+static int gdClampCustomSettingIndex(int index);
 static void _gdCustomUpdateSetting(int option, int value);
 static void gameDialogBarterButtonUpMouseUp(int btn, int keyCode);
 static int createDialogRedButton(int win, int x, int y, void (*mouseUp)(int, int), int keyCode = -1);
@@ -774,6 +775,27 @@ static void gameDialogRestoreCenterTile()
 bool _gdialogActive()
 {
     return _dialog_state_fix != 0;
+}
+
+// M-95: Returns true when [obj] is still a live object in the object list.
+// The dialog system documents that a speaker can be destroyed while its
+// dialog is active (gameDialogEnter:854-858), leaving a dangling
+// (freed-but-non-null) pointer. Comparing pointer identity against the live
+// object list — without dereferencing the suspect pointer — detects that
+// case so the caller can avoid a use-after-free.
+static bool gdObjectIsAlive(const Object* obj)
+{
+    if (obj == nullptr) {
+        return false;
+    }
+
+    for (Object* it = objectFindFirst(); it != nullptr; it = objectFindNext()) {
+        if (it == obj) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 // gdialogEnter
@@ -917,7 +939,13 @@ void gameDialogEnter(Object* speaker, int mode)
         // whose dialog is actually ending, not the new one.
         {
             Object* tmpSpeaker = gGameDialogSpeaker;
-            gGameDialogSpeaker = oldSpeaker;
+            // M-95: Only hand the exit hook a still-alive old speaker. If
+            // the old dialog's speaker was destroyed while its dialog was
+            // active, oldSpeaker is a dangling (freed but non-null) pointer
+            // and _gdialogExitFromScript would dereference it at :1114
+            // (use-after-free read). Pass nullptr instead — the hook call
+            // and the :1114 pid-save already null-guard.
+            gGameDialogSpeaker = gdObjectIsAlive(oldSpeaker) ? oldSpeaker : nullptr;
             _gdialogExitFromScript();
             gGameDialogSpeaker = tmpSpeaker;
         }
@@ -1048,7 +1076,14 @@ int _gdialogInitFromScript(int headFid, int reaction)
     _talk_need_to_center = true;
 
     // CE: Fix Barter button.
-    _gdCreateHeadWindow();
+    // M-94: _gdCreateHeadWindow can fail (missing dialog art / window
+    // creation failure). The old code ignored the return and continued,
+    // leaving the dialog state inconsistent (e.g. gGameDialogWindow == -1
+    // while _gdialog_state is set ACTIVE below).
+    if (_gdCreateHeadWindow() == -1) {
+        debugPrint("_gdialogInitFromScript(): failed to create head window, aborting init\n");
+        return -1;
+    }
     tickersAdd(gameDialogTicker);
     _gdSetupFidget(headFid, reaction);
     _gdialog_state = GAME_DIALOG_ACTIVE;
@@ -1280,6 +1315,18 @@ int _gdialogSayMessage()
 // 0x445538
 int gameDialogAddMessageOptionWithProcIdentifier(int messageListId, int messageId, const char* proc, int reaction)
 {
+    // M-93: Capacity-check BEFORE writing .proc. The old code wrote
+    // gDialogOptionEntries[gGameDialogOptionEntriesLength].proc first and
+    // relied on the callee's capacity check, so the 31st option
+    // (length == DIALOG_OPTION_ENTRIES_CAPACITY == 30) wrote one past the
+    // 30-entry array even though gameDialogAddMessageOption correctly
+    // refused the add (the auto-[Done] append in _gdialogGo makes the 31st
+    // call reachable).
+    if (gGameDialogOptionEntriesLength >= DIALOG_OPTION_ENTRIES_CAPACITY) {
+        debugPrint("\nError: dialog: Ran out of options!");
+        return -1;
+    }
+
     gDialogOptionEntries[gGameDialogOptionEntriesLength].proc = 0;
 
     return gameDialogAddMessageOption(messageListId, messageId, reaction);
@@ -1294,6 +1341,12 @@ int gameDialogAddMessageOptionWithProcIdentifier(int messageListId, int messageI
 // 0x445578
 int gameDialogAddTextOptionWithProcIdentifier(int messageListId, const char* text, const char* proc, int reaction)
 {
+    // M-93: See gameDialogAddMessageOptionWithProcIdentifier.
+    if (gGameDialogOptionEntriesLength >= DIALOG_OPTION_ENTRIES_CAPACITY) {
+        debugPrint("\nError: dialog: Ran out of options!");
+        return -1;
+    }
+
     gDialogOptionEntries[gGameDialogOptionEntriesLength].proc = 0;
 
     return gameDialogAddTextOption(messageListId, text, reaction);
@@ -1302,6 +1355,12 @@ int gameDialogAddTextOptionWithProcIdentifier(int messageListId, const char* tex
 // 0x4455B8
 int gameDialogAddMessageOptionWithProc(int messageListId, int messageId, int proc, int reaction)
 {
+    // M-93: See gameDialogAddMessageOptionWithProcIdentifier.
+    if (gGameDialogOptionEntriesLength >= DIALOG_OPTION_ENTRIES_CAPACITY) {
+        debugPrint("\nError: dialog: Ran out of options!");
+        return -1;
+    }
+
     gDialogOptionEntries[gGameDialogOptionEntriesLength].proc = proc;
 
     return gameDialogAddMessageOption(messageListId, messageId, reaction);
@@ -1310,6 +1369,12 @@ int gameDialogAddMessageOptionWithProc(int messageListId, int messageId, int pro
 // 0x4455FC
 int gameDialogAddTextOptionWithProc(int messageListId, const char* text, int proc, int reaction)
 {
+    // M-93: See gameDialogAddMessageOptionWithProcIdentifier.
+    if (gGameDialogOptionEntriesLength >= DIALOG_OPTION_ENTRIES_CAPACITY) {
+        debugPrint("\nError: dialog: Ran out of options!");
+        return -1;
+    }
+
     gDialogOptionEntries[gGameDialogOptionEntriesLength].proc = proc;
 
     return gameDialogAddTextOption(messageListId, text, reaction);
@@ -1968,7 +2033,13 @@ int _gdProcessInit()
     int optionsWindowY;
 
     Rect bgRect;
-    windowGetRect(gGameDialogBackgroundWindow, &bgRect);
+    // M-94: windowGetRect leaves bgRect untouched on failure. Without this
+    // check replyWindowX/Y and optionsWindowX/Y are computed from garbage
+    // and windowCreate is called at garbage coordinates.
+    if (windowGetRect(gGameDialogBackgroundWindow, &bgRect) == -1) {
+        debugPrint("\nError: _gdProcessInit: dialogue back window wasn't created!");
+        return -1;
+    }
     int replyWindowX = bgRect.left + GAME_DIALOG_REPLY_WINDOW_X;
     int replyWindowY = bgRect.top + GAME_DIALOG_REPLY_WINDOW_Y;
     gGameDialogReplyWindow = windowCreate(replyWindowX,
@@ -4154,7 +4225,13 @@ int partyMemberCustomizationWindowInit()
     _dialogue_subwin_len = backgroundFrmImage.getHeight();
 
     Rect bgRect;
-    windowGetRect(gGameDialogBackgroundWindow, &bgRect);
+    // M-94: windowGetRect leaves bgRect untouched on failure; the dialog
+    // background must exist before we derive the customization window
+    // position from it.
+    if (windowGetRect(gGameDialogBackgroundWindow, &bgRect) == -1) {
+        partyMemberCustomizationWindowFree();
+        return -1;
+    }
     int customizationWindowX = bgRect.left;
     int customizationWindowY = bgRect.top + GAME_DIALOG_WINDOW_HEIGHT - _dialogue_subwin_len;
     gGameDialogWindow = windowCreate(customizationWindowX,
@@ -4282,7 +4359,12 @@ void partyMemberCustomizationWindowFree()
     FrmImage backgroundFrmImage;
     // custom.frm - party member control interface
     int backgroundFid = buildFid(OBJ_TYPE_INTERFACE, 391, 0, 0, 0);
-    if (backgroundFrmImage.lock(backgroundFid)) {
+    // M-94: Guard the window handles before using their buffers —
+    // windowGetBuffer returns nullptr for a missing window and
+    // _gdialog_scroll_subwin would draw through it.
+    if (backgroundFrmImage.lock(backgroundFid)
+        && gGameDialogWindow != -1
+        && gGameDialogBackgroundWindow != -1) {
         _gdialog_scroll_subwin(gGameDialogWindow, false, backgroundFrmImage.getData(), windowGetBuffer(gGameDialogWindow), windowGetBuffer(gGameDialogBackgroundWindow) + (GAME_DIALOG_WINDOW_WIDTH) * (480 - _dialogue_subwin_len), _dialogue_subwin_len);
     }
 
@@ -4356,34 +4438,53 @@ void partyMemberCustomizationWindowUpdate()
         num = 99;
     } else {
         debugPrint("\nburst: %d", _custom_current_selected[PARTY_MEMBER_CUSTOMIZATION_OPTION_AREA_ATTACK_MODE]);
-        num = _custom_settings[PARTY_MEMBER_CUSTOMIZATION_OPTION_AREA_ATTACK_MODE][_custom_current_selected[PARTY_MEMBER_CUSTOMIZATION_OPTION_AREA_ATTACK_MODE]].messageId;
+        num = _custom_settings[PARTY_MEMBER_CUSTOMIZATION_OPTION_AREA_ATTACK_MODE][gdClampCustomSettingIndex(_custom_current_selected[PARTY_MEMBER_CUSTOMIZATION_OPTION_AREA_ATTACK_MODE])].messageId;
     }
 
     msg = getmsg(&gCustomMessageList, &messageListItem, num);
     fontDrawText(windowBuffer + windowWidth * 20 + 232, msg, 248, windowWidth, _colorTable[992]);
 
     // RUN AWAY
-    msg = getmsg(&gCustomMessageList, &messageListItem, _custom_settings[PARTY_MEMBER_CUSTOMIZATION_OPTION_RUN_AWAY_MODE][_custom_current_selected[PARTY_MEMBER_CUSTOMIZATION_OPTION_RUN_AWAY_MODE]].messageId);
+    msg = getmsg(&gCustomMessageList, &messageListItem, _custom_settings[PARTY_MEMBER_CUSTOMIZATION_OPTION_RUN_AWAY_MODE][gdClampCustomSettingIndex(_custom_current_selected[PARTY_MEMBER_CUSTOMIZATION_OPTION_RUN_AWAY_MODE])].messageId);
     fontDrawText(windowBuffer + windowWidth * 48 + 232, msg, 248, windowWidth, _colorTable[992]);
 
     // WEAPON PREF
-    msg = getmsg(&gCustomMessageList, &messageListItem, _custom_settings[PARTY_MEMBER_CUSTOMIZATION_OPTION_BEST_WEAPON][_custom_current_selected[PARTY_MEMBER_CUSTOMIZATION_OPTION_BEST_WEAPON]].messageId);
+    msg = getmsg(&gCustomMessageList, &messageListItem, _custom_settings[PARTY_MEMBER_CUSTOMIZATION_OPTION_BEST_WEAPON][gdClampCustomSettingIndex(_custom_current_selected[PARTY_MEMBER_CUSTOMIZATION_OPTION_BEST_WEAPON])].messageId);
     fontDrawText(windowBuffer + windowWidth * 78 + 232, msg, 248, windowWidth, _colorTable[992]);
 
     // DISTANCE
-    msg = getmsg(&gCustomMessageList, &messageListItem, _custom_settings[PARTY_MEMBER_CUSTOMIZATION_OPTION_DISTANCE][_custom_current_selected[PARTY_MEMBER_CUSTOMIZATION_OPTION_DISTANCE]].messageId);
+    msg = getmsg(&gCustomMessageList, &messageListItem, _custom_settings[PARTY_MEMBER_CUSTOMIZATION_OPTION_DISTANCE][gdClampCustomSettingIndex(_custom_current_selected[PARTY_MEMBER_CUSTOMIZATION_OPTION_DISTANCE])].messageId);
     fontDrawText(windowBuffer + windowWidth * 108 + 232, msg, 248, windowWidth, _colorTable[992]);
 
     // ATTACK WHO
-    msg = getmsg(&gCustomMessageList, &messageListItem, _custom_settings[PARTY_MEMBER_CUSTOMIZATION_OPTION_ATTACK_WHO][_custom_current_selected[PARTY_MEMBER_CUSTOMIZATION_OPTION_ATTACK_WHO]].messageId);
+    msg = getmsg(&gCustomMessageList, &messageListItem, _custom_settings[PARTY_MEMBER_CUSTOMIZATION_OPTION_ATTACK_WHO][gdClampCustomSettingIndex(_custom_current_selected[PARTY_MEMBER_CUSTOMIZATION_OPTION_ATTACK_WHO])].messageId);
     fontDrawText(windowBuffer + windowWidth * 137 + 232, msg, 248, windowWidth, _colorTable[992]);
 
     // CHEM USE
-    msg = getmsg(&gCustomMessageList, &messageListItem, _custom_settings[PARTY_MEMBER_CUSTOMIZATION_OPTION_CHEM_USE][_custom_current_selected[PARTY_MEMBER_CUSTOMIZATION_OPTION_CHEM_USE]].messageId);
+    msg = getmsg(&gCustomMessageList, &messageListItem, _custom_settings[PARTY_MEMBER_CUSTOMIZATION_OPTION_CHEM_USE][gdClampCustomSettingIndex(_custom_current_selected[PARTY_MEMBER_CUSTOMIZATION_OPTION_CHEM_USE])].messageId);
     fontDrawText(windowBuffer + windowWidth * 166 + 232, msg, 248, windowWidth, _colorTable[992]);
 
     windowRefresh(gGameDialogWindow);
     fontSetCurrent(oldFont);
+}
+
+// M-96: Clamp a party-member customization option index into the valid
+// range [0, PARTY_MEMBER_CUSTOMIZATION_OPTION_COUNT - 1] (the inner
+// dimension of _custom_settings). The stored selection is initialized from
+// aiGet* values (partyMemberCustomizationWindowInit) which return -1 when
+// the critter has no AI packet (aiGetPacketByNum miss) and whose packet
+// fields are not bounded to the 6-entry per-option table (aiSetBestWeapon
+// accepts values up to BEST_WEAPON_COUNT). An unclamped -1 or 6+ value
+// indexes _custom_settings out of bounds (the redraw and select paths).
+static int gdClampCustomSettingIndex(int index)
+{
+    if (index < 0) {
+        return 0;
+    }
+    if (index >= PARTY_MEMBER_CUSTOMIZATION_OPTION_COUNT) {
+        return PARTY_MEMBER_CUSTOMIZATION_OPTION_COUNT - 1;
+    }
+    return index;
 }
 
 // 0x449E64
@@ -4510,6 +4611,9 @@ int _gdCustomSelect(int option)
             }
 
             if (keyCode == KEY_RETURN || keyCode == 500) {
+                // M-96: Clamp the stored selection before indexing
+                // _custom_settings and before persisting it back.
+                value = gdClampCustomSettingIndex(value);
                 PartyMemberOptionSetting* ptr = &(_custom_settings[option][value]);
                 _custom_current_selected[option] = value;
                 _gdCustomUpdateSetting(option, ptr->value);
@@ -4539,7 +4643,10 @@ int _gdCustomSelect(int option)
                                     done = true;
                                 }
                             } else {
-                                PartyMemberOptionSetting* ptr = &(_custom_settings[option][newValue]);
+                                // M-96: Clamp the mouse-derived index; the
+                                // click-area check bounds it in practice but
+                                // the array index must never go negative.
+                                PartyMemberOptionSetting* ptr = &(_custom_settings[option][gdClampCustomSettingIndex(newValue)]);
                                 if (ptr->messageId != -1) {
                                     bool enabled = false;
                                     switch (option) {
@@ -4627,7 +4734,14 @@ void gameDialogBarterButtonUpMouseUp(int btn, int keyCode)
     }
 
     Proto* proto;
-    protoGetProto(gGameDialogSpeaker->pid, &proto);
+    // M-87: protoGetProto nulls the out-param and returns -1 on every
+    // failure path (missing/corrupt .pro, pid beyond .lst). The old code
+    // ignored the return and dereferenced `proto` unconditionally — a null
+    // deref for critters whose proto cannot be loaded. The sibling
+    // _gdCanBarter guards the same call; mirror it here.
+    if (protoGetProto(gGameDialogSpeaker->pid, &proto) == -1) {
+        return;
+    }
     if (proto->critter.data.flags & CRITTER_BARTER) {
         if (gGameDialogLipSyncStarted) {
             if (soundIsPlaying(gLipsData.sound)) {
@@ -4679,7 +4793,11 @@ int _gdialog_window_create()
 
     Rect bgRect;
     const int subWinRelativeY = GAME_DIALOG_WINDOW_HEIGHT - _dialogue_subwin_len;
-    windowGetRect(gGameDialogBackgroundWindow, &bgRect);
+    // M-94: windowGetRect leaves bgRect untouched on failure; bail instead
+    // of creating the subwindow at garbage coordinates.
+    if (windowGetRect(gGameDialogBackgroundWindow, &bgRect) == -1) {
+        return -1;
+    }
     int win = windowCreate(bgRect.left, bgRect.top + subWinRelativeY,
         GAME_DIALOG_WINDOW_WIDTH, _dialogue_subwin_len, 256, WINDOW_DONT_MOVE_TOP);
     if (win == -1) return -1;

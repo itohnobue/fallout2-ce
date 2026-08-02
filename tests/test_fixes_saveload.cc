@@ -35,17 +35,21 @@ namespace saveload_test {
 // F-55: Opcode mask — mirror of scan_unimplemented_opcodes.h mask values
 // ============================================================================
 //
-// Production: scan_unimplemented_opcodes.h uses opcode & 0x3FFF to extract
-// opcode indices. The runtime engine at interpreter.h:15 defines
-// OPCODE_MAX_COUNT=768 slots and uses a 14-bit mask (0x3FFF) for opcode
-// dispatch at interpreter.h:217.
+// Production: scan_unimplemented_opcodes.h uses opcode & 0x3FF to extract
+// opcode indices — the SAME 10-bit mask as the runtime dispatch loop
+// (interpreter.cc:3082, C-01). The runtime engine defines OPCODE_MAX_COUNT=768
+// slots (interpreter.h:15).
 //
-// Before fix: 0x3FF (10-bit, 1024 entries). After fix: 0x3FFF (14-bit, 16384).
-// Highest current opcode index: 647 (fits in 10 bits). The fix is for latent
-// correctness — any future opcode in the 1024-4095 range would be misidentified.
+// C-01/F-55 correction: the 14-bit 0x3FFF mask (introduced by 481cb9e) was
+// the BUG, not the fix. Under 0x3FFF the value-type words (0x9001 PUSH_STR,
+// 0xA001 PUSH_FLOAT, 0x9801 PUSH_DYNSTR, 0xE001 PUSH_PTR) mapped to indices
+// >= 768 and fatally aborted every string/float/dynstring/ptr constant push.
+// The correct 10-bit 0x3FF mask maps them to opPush (index 1). The scanner
+// must use the same 10-bit mask as the engine so both paths agree.
+// Highest current opcode index: 647 (fits in 10 bits).
 
-static constexpr unsigned int kOpcodeMask10bit = 0x3FF;  // old (buggy)
-static constexpr unsigned int kOpcodeMask14bit = 0x3FFF; // new (correct)
+static constexpr unsigned int kOpcodeMask10bit = 0x3FF;  // correct dispatch/scanner mask
+static constexpr unsigned int kOpcodeMask14bit = 0x3FFF; // C-01 regression (481cb9e)
 static constexpr int kOpcodeMaxCount = 768;               // OPCODE_MAX_COUNT
 static constexpr unsigned int kHighestKnownOpcode = 0x287; // 647 decimal
 
@@ -356,24 +360,16 @@ using namespace saveload_test;
 // TEST CASES: F-55 — Opcode Scan Tool Mask Mismatch
 // ============================================================================
 
-TEST_CASE("F-55: Opcode mask is 14-bit (0x3FFF), not 10-bit (0x3FF)") {
-    // Finding: F-55, MEDIUM, adversarial CONFIRMED
-    // Source: scan_unimplemented_opcodes.h:116,148,320,385,412
+TEST_CASE("F-55/C-01: Opcode mask is 10-bit (0x3FF), not 14-bit (0x3FFF)") {
+    // Finding: F-55, MEDIUM, adversarial CONFIRMED; C-01, HIGH.
+    // Source: scan_unimplemented_opcodes.h:194-195/230; interpreter.cc:3082.
     //
-    // The scan tool used a 10-bit mask (0x3FF = 1023 entries) while the
-    // runtime engine uses a 14-bit mask (0x3FFF = 16383 entries). After
-    // fix, both use 0x3FFF.
+    // The 14-bit mask (0x3FFF = 16383 entries) was the regression introduced
+    // by 481cb9e. It broke every value-type constant push (0x9001/0xA001/
+    // 0x9801/0xE001 → indices >= 768 → dispatch fatal). After the fix, the
+    // scanner uses the same 10-bit mask (0x3FF) as the runtime engine.
 
-    SUBCASE("0x3FFF is 14-bit (16383 decimal)") {
-        // The correct mask covers 14 bits of the opcode.
-        CHECK(kOpcodeMask14bit == 0x3FFF);
-        CHECK(kOpcodeMask14bit == 16383);
-        // 14 bits: bits 0-13 are 1
-        CHECK(((kOpcodeMask14bit >> 14) & 1) == 0);  // bit 14 is 0
-        CHECK(((kOpcodeMask14bit >> 13) & 1) == 1);  // bit 13 is 1
-    }
-
-    SUBCASE("0x3FF is 10-bit (1023 decimal) — insufficient") {
+    SUBCASE("0x3FF is the correct 10-bit dispatch/scanner mask") {
         CHECK(kOpcodeMask10bit == 0x3FF);
         CHECK(kOpcodeMask10bit == 1023);
         // 10 bits: bits 0-9 are 1
@@ -381,81 +377,147 @@ TEST_CASE("F-55: Opcode mask is 14-bit (0x3FFF), not 10-bit (0x3FF)") {
         CHECK(((kOpcodeMask10bit >> 9) & 1) == 1);   // bit 9 is 1
     }
 
-    SUBCASE("Current highest opcode (0x287 = 647) fits in both masks") {
-        // The latent issue: current opcodes fit in 10 bits, but any
-        // future opcode in range 1024-4095 would be misidentified.
+    SUBCASE("0x3FFF (14-bit) is the C-01 regression mask") {
+        // The 14-bit mask mapped value-type words out of the 768-entry table.
+        CHECK(kOpcodeMask14bit == 0x3FFF);
+        CHECK(kOpcodeMask14bit == 16383);
+        // 14 bits: bits 0-13 are 1
+        CHECK(((kOpcodeMask14bit >> 14) & 1) == 0);  // bit 14 is 0
+        CHECK(((kOpcodeMask14bit >> 13) & 1) == 1);  // bit 13 is 1
+    }
+
+    SUBCASE("Current highest opcode (0x287 = 647) fits in the 10-bit mask") {
+        // Every registered real opcode (core 0x8000-0x804B, sfall 0x804C-
+        // 0x8287) decodes identically under both masks, so the 10-bit mask
+        // cannot regress any registered opcode.
         CHECK((kHighestKnownOpcode & kOpcodeMask10bit) == kHighestKnownOpcode);
         CHECK((kHighestKnownOpcode & kOpcodeMask14bit) == kHighestKnownOpcode);
-        // 647 < 1024 → current opcodes are safe with either mask
         CHECK(kHighestKnownOpcode < (kOpcodeMask10bit + 1));
     }
 
-    SUBCASE("OPCODE_MAX_COUNT (768) fits in 14-bit mask") {
-        // OPCODE_MAX_COUNT at interpreter.h:15 = 768
-        // 768 ≤ 16383 → the table is well within the mask capacity.
-        CHECK(kOpcodeMaxCount <= static_cast<int>(kOpcodeMask14bit + 1));
-        // 768 > 1023 + 1 → would NOT fit in old 10-bit mask
-        // Wait: 768 ≤ 1024, so it does fit. The real issue is opcodes
-        // may exceed the table index range. Any opcode 1024-16383 is OK
-        // but would be incorrectly masked to 0-1023 by the old code.
-        // The diagnostic would report wrong opcode names.
+    SUBCASE("Value-type push words dispatch to opPush under the 10-bit mask") {
+        // 0x9001 PUSH_STR / 0xA001 PUSH_FLOAT / 0x9801 PUSH_DYNSTR /
+        // 0xE001 PUSH_PTR / 0xC001 PUSH_INT all decode to index 1 (opPush)
+        // under 0x3FF — the engine executes them instead of fataling.
+        const unsigned int valueTypes[] = {
+            0x9001u, // VALUE_TYPE_STRING
+            0xA001u, // VALUE_TYPE_FLOAT
+            0x9801u, // VALUE_TYPE_DYNAMIC_STRING
+            0xE001u, // VALUE_TYPE_PTR
+            0xC001u, // VALUE_TYPE_INT
+        };
+        for (unsigned int vt : valueTypes) {
+            CHECK((vt & kOpcodeMask10bit) == 1);          // opPush slot
+            CHECK((vt & kOpcodeMask10bit) < static_cast<unsigned int>(kOpcodeMaxCount));
+        }
+
+        // R-09: the 14-bit-mask "regression" claim only holds for the four
+        // words whose value-type bits sit in the 0x3FFF window
+        // (0x9001/0xA001/0x9801/0xE001 → indices 4097/8193/6145/8193, all
+        // >= 768). 0xC001 is NOT one of them: 0xC001 & 0x3FFF = 1, i.e. the
+        // 14-bit mask maps VALUE_TYPE_INT back to index 1 (opPush) — the
+        // wrap-around case documented by the P-04 test (0xC001 & 0x3FFF = 1
+        // → the OLD mask returned TRUE). It must not be asserted >= 768.
+        const unsigned int regressedWords[] = {
+            0x9001u, // VALUE_TYPE_STRING → 4097
+            0xA001u, // VALUE_TYPE_FLOAT → 8193
+            0x9801u, // VALUE_TYPE_DYNAMIC_STRING → 6145
+            0xE001u, // VALUE_TYPE_PTR → 8193
+        };
+        for (unsigned int vt : regressedWords) {
+            CHECK((vt & kOpcodeMask14bit) >= static_cast<unsigned int>(kOpcodeMaxCount));
+        }
+        // 0xC001 under the 14-bit mask wraps to opPush (index 1) instead of
+        // an out-of-bounds index — the correct (non-fatal) behavior.
+        CHECK((0xC001u & kOpcodeMask14bit) == 1);
+        CHECK((0xC001u & kOpcodeMask14bit) < static_cast<unsigned int>(kOpcodeMaxCount));
     }
 
-    SUBCASE("14-bit mask correctly identifies opcode 0x3FFF") {
-        // An opcode at the mask boundary: 0xC3FF with MSB set (valid opcode)
-        // Old mask: 0xC3FF & 0x3FF = 0x3FF (index 1023)
-        // New mask: 0xC3FF & 0x3FFF = 0x3FF (same — coincidence at boundary)
-        unsigned int opcode = 0xC3FF;
-        CHECK((opcode & kOpcodeMask10bit) == 0x3FF);
-        CHECK((opcode & kOpcodeMask14bit) == 0x3FF);
+    SUBCASE("OPCODE_MAX_COUNT (768) fits in the 10-bit mask's index range") {
+        // 768 <= 1024 → the table is fully addressable with the 10-bit mask.
+        CHECK(kOpcodeMaxCount <= static_cast<int>(kOpcodeMask10bit + 1));
+        // Malformed words in the 768-1023 band still trap via the bounds
+        // check (interpreter.cc:3083).
+        CHECK((0x8300 & kOpcodeMask10bit) >= static_cast<unsigned int>(kOpcodeMaxCount));
     }
 
-    SUBCASE("14-bit mask correctly identifies opcode at 1024 boundary") {
-        // An opcode at the 10-bit boundary: 0xC400 (index 1024)
-        // Old mask: 0xC400 & 0x3FF = 0x000 → WRONG (index 0, not 1024)
-        // New mask: 0xC400 & 0x3FFF = 0x400 → CORRECT (index 1024)
-        unsigned int opcode = 0xC400;
-        CHECK((opcode & kOpcodeMask10bit) == 0x000);   // old: misidentified
-        CHECK((opcode & kOpcodeMask14bit) == 0x400);   // new: correct
-        CHECK((opcode & kOpcodeMask10bit) != (opcode & kOpcodeMask14bit));
-    }
-
-    SUBCASE("14-bit mask correctly identifies opcode at 4095 boundary") {
-        // An opcode at the 14-bit boundary: 0xFFFF (index 4095)
-        // Old mask: 0xFFFF & 0x3FF = 0x3FF → WRONG (identified as 1023)
-        // New mask: 0xFFFF & 0x3FFF = 0x3FFF → CORRECT (identified as 4095)
-        unsigned int opcode = 0xFFFF;
-        CHECK((opcode & kOpcodeMask10bit) == 0x3FF);    // old: 1023
-        CHECK((opcode & kOpcodeMask14bit) == 0x3FFF);   // new: 4095
-        CHECK((opcode & kOpcodeMask10bit) != (opcode & kOpcodeMask14bit));
-    }
-
-    SUBCASE("All 5 sites use the same mask value") {
-        // The fix changed 5 literal `0x3FF` sites to `0x3FFF`:
-        //   Line 116: opcodeIndex = opcode & 0x3FFF
-        //   Line 148: OPCODE_PUSH & 0x3FFF for comparison
-        //   Line 320: lambda in get_opcode_name
-        //   Line 385: both operands in printf
-        //   Line 412: toHexString formatting
-        //
-        // All 5 use the exact same mask constant — verify consistency.
-        // We test the mask value once; the fix report (s6-fix-saveload-report.md)
-        // confirms via grep that no 0x3FF remains in the file.
-        //
-        // The key property: OPCODE_PUSH comparison must use the same mask
-        // as the opcodeIndex extraction, otherwise the opcode-indexed
-        // table lookup and the OPCODE_PUSH comparison diverge.
-        constexpr unsigned int kOpcPush = 0xC001; // OPCODE_PUSH value
-        unsigned int pushIndex = kOpcPush & kOpcodeMask14bit;
+    SUBCASE("Scanner OPCODE_PUSH comparison uses the same 10-bit mask as extraction") {
+        // The key property: the scan tool's OPCODE_PUSH operand-skip comparison
+        // (scan_unimplemented_opcodes.h:230) must use the same mask as the
+        // opcodeIndex extraction, otherwise the handler lookup and the push
+        // operand skip diverge.
+        constexpr unsigned int kOpcPush = 0x8001; // OPCODE_PUSH value
+        unsigned int pushIndex = kOpcPush & kOpcodeMask10bit;
         CHECK(pushIndex == 1); // OPCODE_PUSH has index 1
-        CHECK((kOpcPush & kOpcodeMask10bit) == 1); // same result for PUSH
+        CHECK((kOpcPush & kOpcodeMask14bit) == 1); // same result for PUSH
+        // Value-type words must ALSO be treated as pushes (skip 4-byte
+        // operand), matching engine decode:
+        CHECK((0x9001u & kOpcodeMask10bit) == pushIndex);
+    }
+}
+
+// ============================================================================
+// TEST CASES: P-04 — opcode_exists exact-range semantics (sfall parity)
+// ============================================================================
+
+TEST_CASE("P-04/C-01: opcode_exists uses the exact sfall range [0x8000, 0x8300)") {
+    // Finding: P-04, MEDIUM (fix-constraint), adversarial CONFIRMED.
+    // Source: sfall_metarules.cc:1308 (mf_opcode_exists).
+    //
+    // The C-01 fix must NOT mechanically flip mf_opcode_exists to a 0x3FF
+    // mask: that would make opcode_exists(0x9001) return TRUE (opPush is
+    // registered at index 1) where sfall returns FALSE. The correct re-express
+    // is the exact sfall range check [0x8000, 0x8000 + opcodeCount) =
+    // [0x8000, 0x8300) (opcodeCount == 0x300, Opcodes.cpp:51). This also
+    // repairs the latent wrap-around bug where 0xC001 & 0x3FFF = 1 returned
+    // TRUE under the old mask.
+    constexpr int kOpcodeStart = 0x8000;
+    constexpr int kOpcodeEnd = kOpcodeStart + kOpcodeMaxCount; // 0x8300
+
+    // Mirror of the fixed mf_opcode_exists range predicate.
+    auto opcodeExistsRangePasses = [kOpcodeStart, kOpcodeEnd](int opcode) {
+        return opcode >= kOpcodeStart && opcode < kOpcodeEnd;
+    };
+
+    SUBCASE("Registered sfall opcodes pass the range") {
+        CHECK(opcodeExistsRangePasses(0x8000));  // OPCODE_NOOP
+        CHECK(opcodeExistsRangePasses(0x8001));  // OPCODE_PUSH
+        CHECK(opcodeExistsRangePasses(0x827F));  // highest sfall opcode index
+        CHECK(opcodeExistsRangePasses(0x82FF));  // last in-range word
+        CHECK(opcodeExistsRangePasses(0x8000 + 639)); // index 639
+    }
+
+    SUBCASE("Type-bit words return FALSE (sfall parity, no 0x3FF flip)") {
+        // 0x9001 & 0x3FF = 1 → opPush registered → a mechanical 0x3FF flip
+        // would return TRUE. The exact range must return FALSE.
+        CHECK_FALSE(opcodeExistsRangePasses(0x9001)); // VALUE_TYPE_STRING
+        CHECK_FALSE(opcodeExistsRangePasses(0xA001)); // VALUE_TYPE_FLOAT
+        CHECK_FALSE(opcodeExistsRangePasses(0x9801)); // VALUE_TYPE_DYNAMIC_STRING
+        CHECK_FALSE(opcodeExistsRangePasses(0xE001)); // VALUE_TYPE_PTR
+        // 0xC001 & 0x3FFF = 1 → the OLD mask returned TRUE (wrap-around bug).
+        CHECK_FALSE(opcodeExistsRangePasses(0xC001)); // VALUE_TYPE_INT
+    }
+
+    SUBCASE("Out-of-range words return FALSE") {
+        CHECK_FALSE(opcodeExistsRangePasses(0x7FFF)); // below start
+        CHECK_FALSE(opcodeExistsRangePasses(0x8300)); // == end
+        CHECK_FALSE(opcodeExistsRangePasses(0xFFFF)); // far above
+        CHECK_FALSE(opcodeExistsRangePasses(0x0000));
+        CHECK_FALSE(opcodeExistsRangePasses(-1));
+    }
+
+    SUBCASE("In-range index maps to the handler slot without masking") {
+        // After the range passes, the handler index is opcode - 0x8000
+        // (not a mask) — identical to sfall's OpcodeExists.
+        CHECK((0x8000 - kOpcodeStart) == 0);
+        CHECK((0x827F - kOpcodeStart) == 0x27F); // 639
+        CHECK((0x827F - kOpcodeStart) < kOpcodeMaxCount);
     }
 }
 
 // ============================================================================
 // TEST CASES: F-61 — SAVE.DAT Non-Atomic Write
 // ============================================================================
-
 TEST_CASE("F-61: SAVE.DAT atomic write — temp-file-then-rename pattern") {
     // Finding: F-61, MEDIUM, adversarial CONFIRMED
     // Source: loadsave.cc:1966-2114 (the fixed code)

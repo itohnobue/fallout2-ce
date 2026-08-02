@@ -647,6 +647,29 @@ static char* gCharacterEditorFolderCardDescription;
 static char* gCharacterEditorFolderCardTitleOwned = nullptr;
 static char* gCharacterEditorFolderCardDescriptionOwned = nullptr;
 
+// Mutable empty description for fake perk/trait entries whose scripts omit a
+// description (H-10). The card draw functions write into the description
+// buffer during the word-wrap render (e.g. characterEditorDrawCardWithOptions
+// writes description[ending] = '\0'), so a string literal would be written to
+// read-only memory. A dedicated mutable buffer is safe and lets the card
+// render normally with an empty description.
+static char gCharacterEditorEmptyDescription[] = "";
+
+// R-16: traitGetDescription/perkGetDescription/skillGetDescription return the
+// "" string literal for valid-but-unloaded entries (trait.cc:178, perk.cc:617,
+// skill.cc:541). The card draws write into the description buffer during the
+// word-wrap render (characterEditorDrawCardWithOptions 5199-5202,
+// perkDialogDrawCard 7293-7298), so a literal would be written to read-only
+// memory (UB). Route any null or empty description through the mutable empty
+// buffer so the write is always safe.
+static char* characterEditorWriteSafeDescription(char* description)
+{
+    if (description == nullptr || description[0] == '\0') {
+        return gCharacterEditorEmptyDescription;
+    }
+    return description;
+}
+
 // 0x5705D0 folder_ypos
 static int gCharacterEditorFolderViewNextY;
 
@@ -1926,7 +1949,12 @@ void characterEditorInit()
 
     // F-M4: Use traitGetMaxSelectedCount() instead of hardcoded 2.
     // FO1 mode allows 3 traits, FO2 allows 2.
-    for (i = 0; i < traitGetMaxSelectedCount(); i++) {
+    // M-58: also clear the unused trailing slot(s) so a stale value from a
+    // previous session or a runtime FO1↔FO2 toggle can never surface as a
+    // phantom trait (defense-in-depth; the primary trigger is refuted — the
+    // I2-132 read at characterEditorWindowInit:1272 re-reads all slots before
+    // any draw).
+    for (i = 0; i < TRAITS_MAX_SELECTED_COUNT; i++) {
         gCharacterEditorTempTraits[i] = -1;
         gCharacterEditorOptionalTraitsBackup[i] = -1;
     }
@@ -2156,13 +2184,22 @@ static void characterEditorDrawPerksFolder()
         // slots (including [2] in FO1 mode) are rendered. In FO2 mode maxTraits=2
         // and the loop behavior is identical to the original hardcoded [0]/[1].
         for (int i = 0; i < maxTraits; i++) {
-            if (gCharacterEditorTempTraits[i] != -1) {
-                string = traitGetName(gCharacterEditorTempTraits[i]);
+            int trait = gCharacterEditorTempTraits[i];
+            // H-11: only resolve real trait ids. op_remove_trait writes the
+            // empty-slot sentinel -1 (sfall semantics); pre-fix saves may
+            // contain TRAIT_COUNT(16). Negative (fake) trait ids also fail
+            // traitGetName. traitGetName returns nullptr for all of these —
+            // drawing it crashes fontDrawText at sheet open.
+            if (trait >= 0 && trait < TRAIT_COUNT) {
+                string = traitGetName(trait);
                 if (characterEditorFolderViewDrawString(string)) {
-                    gCharacterEditorFolderCardFrmId = traitGetFrmId(gCharacterEditorTempTraits[i]);
-                    gCharacterEditorFolderCardTitle = traitGetName(gCharacterEditorTempTraits[i]);
+                    gCharacterEditorFolderCardFrmId = traitGetFrmId(trait);
+                    gCharacterEditorFolderCardTitle = traitGetName(trait);
                     gCharacterEditorFolderCardSubtitle = nullptr;
-                    gCharacterEditorFolderCardDescription = traitGetDescription(gCharacterEditorTempTraits[i]);
+                    // R-16: traitGetDescription returns the "" literal for a
+                    // valid-but-unloaded trait — the card draw writes into the
+                    // description buffer, so route through the mutable empty.
+                    gCharacterEditorFolderCardDescription = characterEditorWriteSafeDescription(traitGetDescription(trait));
                     hasContent = true;
                 }
             }
@@ -2178,7 +2215,9 @@ static void characterEditorDrawPerksFolder()
                     gCharacterEditorFolderCardFrmId = traitGetFrmId(traitId);
                     gCharacterEditorFolderCardTitle = traitGetName(traitId);
                     gCharacterEditorFolderCardSubtitle = nullptr;
-                    gCharacterEditorFolderCardDescription = traitGetDescription(traitId);
+                    // R-16: route the "" literal (valid-but-unloaded trait)
+                    // through the mutable buffer before the card draw writes.
+                    gCharacterEditorFolderCardDescription = characterEditorWriteSafeDescription(traitGetDescription(traitId));
                     hasContent = true;
                 }
             }
@@ -2211,7 +2250,9 @@ static void characterEditorDrawPerksFolder()
                     gCharacterEditorFolderCardFrmId = perkGetFrmId(perk);
                     gCharacterEditorFolderCardTitle = perkGetName(perk);
                     gCharacterEditorFolderCardSubtitle = nullptr;
-                    gCharacterEditorFolderCardDescription = perkGetDescription(perk);
+                    // R-16: route the "" literal (valid-but-unloaded perk)
+                    // through the mutable buffer before the card draw writes.
+                    gCharacterEditorFolderCardDescription = characterEditorWriteSafeDescription(perkGetDescription(perk));
                     hasContent = true;
                 }
             }
@@ -2281,7 +2322,11 @@ static void characterEditorDrawPerksFolder()
                         gCharacterEditorFolderCardDescription = gCharacterEditorFolderCardDescriptionOwned;
                     } else {
                         gCharacterEditorFolderCardDescriptionOwned = nullptr;
-                        gCharacterEditorFolderCardDescription = nullptr;
+                        // H-10: pass an empty string instead of nullptr — a
+                        // null description crashes wordWrap/fontDrawText. The
+                        // window-side wordWrap null guard is a safety net, not
+                        // a substitute for a valid call.
+                        gCharacterEditorFolderCardDescription = gCharacterEditorEmptyDescription;
                     }
                     hasContent = true;
                 }
@@ -2305,7 +2350,11 @@ static void characterEditorDrawPerksFolder()
                         gCharacterEditorFolderCardDescription = gCharacterEditorFolderCardDescriptionOwned;
                     } else {
                         gCharacterEditorFolderCardDescriptionOwned = nullptr;
-                        gCharacterEditorFolderCardDescription = nullptr;
+                        // H-10: pass an empty string instead of nullptr — a
+                        // null description crashes wordWrap/fontDrawText. The
+                        // window-side wordWrap null guard is a safety net, not
+                        // a substitute for a valid call.
+                        gCharacterEditorFolderCardDescription = gCharacterEditorEmptyDescription;
                     }
                     hasContent = true;
                 }
@@ -2329,7 +2378,11 @@ static void characterEditorDrawPerksFolder()
                         gCharacterEditorFolderCardDescription = gCharacterEditorFolderCardDescriptionOwned;
                     } else {
                         gCharacterEditorFolderCardDescriptionOwned = nullptr;
-                        gCharacterEditorFolderCardDescription = nullptr;
+                        // H-10: pass an empty string instead of nullptr — a
+                        // null description crashes wordWrap/fontDrawText. The
+                        // window-side wordWrap null guard is a safety net, not
+                        // a substitute for a valid call.
+                        gCharacterEditorFolderCardDescription = gCharacterEditorEmptyDescription;
                     }
                     hasContent = true;
                 }
@@ -3318,7 +3371,10 @@ static void characterEditorDrawCard()
 
         graphicId = skillGetFrmId(skill);
         title = skillGetName(skill);
-        description = skillGetDescription(skill);
+        // R-16: skillGetDescription returns the "" literal for a valid-but-
+        // unloaded skill; characterEditorDrawCardWithOptions writes into the
+        // description buffer, so route through the mutable empty.
+        description = characterEditorWriteSafeDescription(skillGetDescription(skill));
         characterEditorDrawCardWithOptions(graphicId, title, formatted, description);
     } else if (characterEditorSelectedItem >= 79 && characterEditorSelectedItem < 82) {
         switch (characterEditorSelectedItem) {
@@ -4658,8 +4714,12 @@ static int characterPrintToFile(const char* fileName)
         // NOTE: The original code does not use loop, or it was optimized away.
         // F-076: Use dynamic max trait count for FO1 (3) vs FO2 (2).
         for (int index = 0; index < traitGetMaxSelectedCount(); index++) {
-            if (gCharacterEditorTempTraits[index] != -1) {
-                snprintf(title1, sizeof(title1), "  %s", traitGetName(gCharacterEditorTempTraits[index]));
+            int trait = gCharacterEditorTempTraits[index];
+            // M-59: skip invalid trait ids (negative fake-trait ids, the H-11
+            // TRAIT_COUNT sentinel, anything out of range). traitGetName
+            // returns nullptr for them and snprintf("%s", nullptr) is UB.
+            if (trait >= 0 && trait < TRAIT_COUNT) {
+                snprintf(title1, sizeof(title1), "  %s", traitGetName(trait));
                 fileWriteString(title1, stream);
                 fileWriteString("\n", stream);
             }
@@ -5581,7 +5641,9 @@ static void characterEditorDrawOptionalTraits()
             gCharacterEditorFolderCardFrmId = traitGetFrmId(i);
             gCharacterEditorFolderCardTitle = traitGetName(i);
             gCharacterEditorFolderCardSubtitle = nullptr;
-            gCharacterEditorFolderCardDescription = traitGetDescription(i);
+            // R-16: route the "" literal (valid-but-unloaded trait) through the
+            // mutable buffer before the card draw writes.
+            gCharacterEditorFolderCardDescription = characterEditorWriteSafeDescription(traitGetDescription(i));
         } else {
             if (i != gCharacterEditorTempTraits[0] && i != gCharacterEditorTempTraits[1] && i != gCharacterEditorTempTraits[2]) {
                 color = _colorTable[992];
@@ -5607,7 +5669,9 @@ static void characterEditorDrawOptionalTraits()
             gCharacterEditorFolderCardFrmId = traitGetFrmId(i);
             gCharacterEditorFolderCardTitle = traitGetName(i);
             gCharacterEditorFolderCardSubtitle = nullptr;
-            gCharacterEditorFolderCardDescription = traitGetDescription(i);
+            // R-16: route the "" literal (valid-but-unloaded trait) through the
+            // mutable buffer before the card draw writes.
+            gCharacterEditorFolderCardDescription = characterEditorWriteSafeDescription(traitGetDescription(i));
         } else {
             if (i != gCharacterEditorTempTraits[0] && i != gCharacterEditorTempTraits[1] && i != gCharacterEditorTempTraits[2]) {
                 color = _colorTable[992];
@@ -6046,7 +6110,17 @@ static void perkDialogRefreshPerks()
     perkDialogDrawPerks();
 
     // NOTE: Original code is slightly different, but basically does the same thing.
-    int perk = gPerkDialogOptionList[gPerkDialogTopLine + gPerkDialogCurrentLine].value;
+    // M-60: the input handler clamps gPerkDialogCurrentLine to count-1, which
+    // is -1 when the list is empty (perkDialogDrawPerks early-returns before
+    // zeroing the list). Reading optionList[-1] is an OOB read — clamp the
+    // cursor index to a valid range.
+    int perkOptionIndex = gPerkDialogTopLine + gPerkDialogCurrentLine;
+    if (perkOptionIndex < 0) {
+        perkOptionIndex = 0;
+    } else if (perkOptionIndex >= DIALOG_PICKER_NUM_OPTIONS) {
+        perkOptionIndex = DIALOG_PICKER_NUM_OPTIONS - 1;
+    }
+    int perk = gPerkDialogOptionList[perkOptionIndex].value;
     int perkFrmId;
     char* perkName;
     char* perkDescription;
@@ -6062,16 +6136,29 @@ static void perkDialogRefreshPerks()
             perkFrmId = fp.image;
             // F-051: Guard against nullptr name in FakePerkEntry.
             perkName = fp.name ? fp.name : const_cast<char*>("(unknown)");
-            perkDescription = fp.desc;
+            // H-10: fp.desc stays nullptr when the script omits it; a null
+            // description crashes wordWrap/fontDrawText.
+            perkDescription = fp.desc ? fp.desc : gCharacterEditorEmptyDescription;
         } else {
             perkFrmId = 0;
-            perkName = nullptr;
-            perkDescription = nullptr;
+            // H-10: fall back to non-null strings — perkDialogDrawCard draws
+            // the name unconditionally.
+            perkName = const_cast<char*>("(unknown)");
+            perkDescription = gCharacterEditorEmptyDescription;
         }
     } else {
         perkFrmId = perkGetFrmId(perk);
         perkName = perkGetName(perk);
-        perkDescription = perkGetDescription(perk);
+        // R-16: perkGetDescription returns the "" literal for a valid-but-
+        // unloaded perk; perkDialogDrawCard writes into the description buffer,
+        // so route through the mutable empty (also handles the nullptr case).
+        perkDescription = characterEditorWriteSafeDescription(perkGetDescription(perk));
+        // H-10/M-60: perk can be a stale/garbage value when the list is empty
+        // (count==0 leaves the option list uninitialized) — perkGetName and
+        // perkGetDescription return nullptr for invalid ids.
+        if (perkName == nullptr) {
+            perkName = const_cast<char*>("(unknown)");
+        }
 
         int rank = perkGetRank(gDude, perk);
         if (rank != 0) {
@@ -6246,7 +6333,15 @@ static int perkDialogShow()
     int count = perkDialogDrawPerks();
 
     // NOTE: Original code is slightly different, but does the same thing.
-    int perk = gPerkDialogOptionList[gPerkDialogTopLine + gPerkDialogCurrentLine].value;
+    // M-60: clamp the cursor index — the list can be empty (count==0) and the
+    // stale option list may contain garbage.
+    int perkOptionIndex = gPerkDialogTopLine + gPerkDialogCurrentLine;
+    if (perkOptionIndex < 0) {
+        perkOptionIndex = 0;
+    } else if (perkOptionIndex >= DIALOG_PICKER_NUM_OPTIONS) {
+        perkOptionIndex = DIALOG_PICKER_NUM_OPTIONS - 1;
+    }
+    int perk = gPerkDialogOptionList[perkOptionIndex].value;
     int perkFrmId;
     char* perkName;
     char* perkDescription;
@@ -6263,20 +6358,31 @@ static int perkDialogShow()
         if (fakeIdx >= 0 && fakeIdx < fakeCount) {
             const FakePerkEntry& fp = fakePerks[fakeIdx];
             perkFrmId = fp.image;
-            perkName = fp.name;
-            perkDescription = fp.desc;
+            // H-10: fp.name/fp.desc stay nullptr when the script omits them;
+            // perkDialogDrawCard draws the name unconditionally and wraps the
+            // description — both crash on nullptr.
+            perkName = fp.name ? fp.name : const_cast<char*>("(unknown)");
+            perkDescription = fp.desc ? fp.desc : gCharacterEditorEmptyDescription;
             // Fake perks don't have ranks in the engine perk system;
             // perkRank stays nullptr so no rank is drawn.
         } else {
             // Safety: invalid fake perk index — fall through with defaults.
             perkFrmId = 0;
-            perkName = nullptr;
-            perkDescription = nullptr;
+            perkName = const_cast<char*>("(unknown)");
+            perkDescription = gCharacterEditorEmptyDescription;
         }
     } else {
         perkFrmId = perkGetFrmId(perk);
         perkName = perkGetName(perk);
-        perkDescription = perkGetDescription(perk);
+        // R-16: perkGetDescription returns the "" literal for a valid-but-
+        // unloaded perk; perkDialogDrawCard writes into the description buffer,
+        // so route through the mutable empty (also handles the nullptr case).
+        perkDescription = characterEditorWriteSafeDescription(perkGetDescription(perk));
+        // H-10/M-60: guard nullptr from perkGetName/perkGetDescription (invalid
+        // or stale perk id when the list is empty).
+        if (perkName == nullptr) {
+            perkName = const_cast<char*>("(unknown)");
+        }
 
         int rank = perkGetRank(gDude, perk);
         if (rank != 0) {
@@ -6291,7 +6397,15 @@ static int perkDialogShow()
     int rc = perkDialogHandleInput(count, perkDialogRefreshPerks);
 
     if (rc == 1) {
-        int selectedValue = gPerkDialogOptionList[gPerkDialogTopLine + gPerkDialogCurrentLine].value;
+        // M-60: the cursor index can be -1 when the list is empty (count==0) —
+        // clamp before reading the option list.
+        int selectedIndex = gPerkDialogTopLine + gPerkDialogCurrentLine;
+        if (selectedIndex < 0) {
+            selectedIndex = 0;
+        } else if (selectedIndex >= DIALOG_PICKER_NUM_OPTIONS) {
+            selectedIndex = DIALOG_PICKER_NUM_OPTIONS - 1;
+        }
+        int selectedValue = gPerkDialogOptionList[selectedIndex].value;
         // F-37: Fake perks (negative value) cannot be added through the
         // engine's perkAdd() — their effects are managed by scripts via
         // set_fake_perk/has_fake_perk opcodes. Skip perkAdd for fake perks
@@ -6714,7 +6828,13 @@ static int perkDialogDrawPerks()
             color = _colorTable[992];
         }
 
-        fontDrawText(gPerkDialogWindowBuffer + PERK_WINDOW_WIDTH * y + 45, gPerkDialogOptionList[index].name, PERK_WINDOW_WIDTH, PERK_WINDOW_WIDTH, color);
+        // R-03: Guard against nullptr name in perk dialog entries (fake perks
+        // with no name from op_set_fake_perk/op_set_selectable_perk leave
+        // entry.name nullptr; qsort puts them last, so a short list draws them
+        // on the first frame). Mirrors the trait twin at 7202-7205.
+        const char* optionName = gPerkDialogOptionList[index].name;
+        fontDrawText(gPerkDialogWindowBuffer + PERK_WINDOW_WIDTH * y + 45,
+            optionName ? optionName : "(unknown)", PERK_WINDOW_WIDTH, PERK_WINDOW_WIDTH, color);
 
         // Only show rank for real engine perks (value >= 0).
         int perkValue = gPerkDialogOptionList[index].value;
@@ -6744,6 +6864,12 @@ static void perkDialogRefreshTraits()
 
     int trait = gPerkDialogOptionList[gPerkDialogTopLine + gPerkDialogCurrentLine].value;
     char* traitName = gPerkDialogOptionList[gPerkDialogTopLine + gPerkDialogCurrentLine].name;
+    // H-10: the option-list name can be nullptr (fake trait without a name,
+    // or the H-11 TRAIT_COUNT sentinel resolved by traitGetName → nullptr).
+    // perkDialogDrawCard draws the name unconditionally.
+    if (traitName == nullptr) {
+        traitName = const_cast<char*>("(unknown)");
+    }
     char* tratDescription;
     int frmId;
 
@@ -6757,14 +6883,26 @@ static void perkDialogRefreshTraits()
             const FakeTraitEntry& ft = fakeTraits[fakeIdx];
             frmId = ft.image;
             traitName = ft.name ? ft.name : const_cast<char*>("(unknown)");
-            tratDescription = ft.desc;
+            // H-10: ft.desc stays nullptr when the script omits it — a null
+            // description crashes wordWrap/fontDrawText.
+            tratDescription = ft.desc ? ft.desc : gCharacterEditorEmptyDescription;
         } else {
             frmId = 0;
-            tratDescription = nullptr;
+            // H-10: fall back to non-null strings for the invalid index case.
+            traitName = const_cast<char*>("(unknown)");
+            tratDescription = gCharacterEditorEmptyDescription;
         }
-    } else {
-        tratDescription = traitGetDescription(trait);
+    } else if (trait < TRAIT_COUNT) {
+        // R-16: traitGetDescription returns the "" literal for a valid-but-
+        // unloaded trait; perkDialogDrawCard writes into the description
+        // buffer, so route through the mutable empty.
+        tratDescription = characterEditorWriteSafeDescription(traitGetDescription(trait));
         frmId = traitGetFrmId(trait);
+    } else {
+        // H-11: the TRAIT_COUNT(16) sentinel from a pre-fix save (or any
+        // out-of-range id) — traitGetDescription returns nullptr for it.
+        tratDescription = gCharacterEditorEmptyDescription;
+        frmId = 0;
     }
 
     perkDialogDrawCard(frmId, traitName, nullptr, tratDescription);
@@ -6860,13 +6998,23 @@ static bool perkDialogHandleMutatePerk()
 
         gPerkDialogCurrentLine = 0;
         gPerkDialogTopLine = 0;
+        // Non-zero argument selects the a1 != 0 branch of perkDialogDrawTraits
+        // (the "pick a new trait" list); the branch records the real filled
+        // count in gPerkDialogOptionCount (M-61).
         gPerkDialogOptionCount = 1;
 
         perkDialogRefreshTraits();
 
-        int count = 16 - gCharacterEditorTempTraitCount;
-        if (count > 16) {
-            count = 16;
+        // M-61: pass the actual number of entries filled by
+        // perkDialogDrawTraits(a1 != 0) instead of the old formula
+        // (16 - gCharacterEditorTempTraitCount), which overcounted by 1 in
+        // FO2 (14 filled vs 15 passed). KEY_END then landed on a zeroed stale
+        // option (name == nullptr) → fontDrawText(nullptr) crash at render.
+        int count = gPerkDialogOptionCount;
+        if (count < 0) {
+            count = 0;
+        } else if (count > DIALOG_PICKER_NUM_OPTIONS) {
+            count = DIALOG_PICKER_NUM_OPTIONS;
         }
 
         int rc = perkDialogHandleInput(count, perkDialogRefreshTraits);
@@ -6874,10 +7022,16 @@ static bool perkDialogHandleMutatePerk()
             // I2-128: Insert new trait into first empty slot.
             // Works with any number of trait slots (2 for FO2, 3 for FO1).
             int newTrait = gPerkDialogOptionList[gPerkDialogCurrentLine + gPerkDialogTopLine].value;
-            for (int t = 0; t < maxTraits; t++) {
-                if (gCharacterEditorTempTraits[t] == -1) {
-                    gCharacterEditorTempTraits[t] = newTrait;
-                    break;
+            // M-59: only accept real engine trait ids. The picker list can
+            // contain fake traits (negative ids); storing one would commit an
+            // id that traitGetName/traitGetDescription cannot resolve
+            // (nullptr → UB in print/display paths) and persist it to saves.
+            if (newTrait >= 0 && newTrait < TRAIT_COUNT) {
+                for (int t = 0; t < maxTraits; t++) {
+                    if (gCharacterEditorTempTraits[t] == -1) {
+                        gCharacterEditorTempTraits[t] = newTrait;
+                        break;
+                    }
                 }
             }
 
@@ -6917,7 +7071,10 @@ static void perkDialogRefreshSkills()
     perkDialogDrawSkills();
 
     char* name = gPerkDialogOptionList[gPerkDialogTopLine + gPerkDialogCurrentLine].name;
-    char* description = skillGetDescription(gPerkDialogOptionList[gPerkDialogTopLine + gPerkDialogCurrentLine].value);
+    // R-16: skillGetDescription returns the "" literal for a valid-but-unloaded
+    // skill; perkDialogDrawCard writes into the description buffer, so route
+    // through the mutable empty.
+    char* description = characterEditorWriteSafeDescription(skillGetDescription(gPerkDialogOptionList[gPerkDialogTopLine + gPerkDialogCurrentLine].value));
     int frmId = skillGetFrmId(gPerkDialogOptionList[gPerkDialogTopLine + gPerkDialogCurrentLine].value);
     perkDialogDrawCard(frmId, name, nullptr, description);
 
@@ -6995,7 +7152,12 @@ static void perkDialogDrawSkills()
             color = _colorTable[992];
         }
 
-        fontDrawText(gPerkDialogWindowBuffer + PERK_WINDOW_WIDTH * y + 45, gPerkDialogOptionList[index].name, PERK_WINDOW_WIDTH, PERK_WINDOW_WIDTH, color);
+        // R-03: Guard against nullptr name (stale option-list entries when the
+        // list is shorter than the visible window). Same pattern as the trait
+        // twin at 7202-7205.
+        const char* optionName = gPerkDialogOptionList[index].name;
+        fontDrawText(gPerkDialogWindowBuffer + PERK_WINDOW_WIDTH * y + 45,
+            optionName ? optionName : "(unknown)", PERK_WINDOW_WIDTH, PERK_WINDOW_WIDTH, color);
         y += yStep;
     }
 }
@@ -7039,8 +7201,14 @@ static int perkDialogDrawTraits(int a1)
         }
 
         qsort(gPerkDialogOptionList, count, sizeof(*gPerkDialogOptionList), perkDialogOptionCompare);
+        // M-61: record the real filled count so the Mutate dialog passes the
+        // correct entry count to the input handler.
+        gPerkDialogOptionCount = count;
 
-        for (int index = gPerkDialogTopLine; index < gPerkDialogTopLine + 11; index++) {
+        // M-61: bound the render loop by the filled count (the old bound
+        // topLine+11 could reach a zeroed stale entry when count < topLine+11)
+        // and fall back on nullptr names (fake traits without a name).
+        for (int index = gPerkDialogTopLine; index < gPerkDialogTopLine + 11 && index < count; index++) {
             int color;
             if (index == gPerkDialogCurrentLine + gPerkDialogTopLine) {
                 color = _colorTable[32747];
@@ -7048,14 +7216,21 @@ static int perkDialogDrawTraits(int a1)
                 color = _colorTable[992];
             }
 
-            fontDrawText(gPerkDialogWindowBuffer + PERK_WINDOW_WIDTH * y + 45, gPerkDialogOptionList[index].name, PERK_WINDOW_WIDTH, PERK_WINDOW_WIDTH, color);
+            const char* optionName = gPerkDialogOptionList[index].name;
+            fontDrawText(gPerkDialogWindowBuffer + PERK_WINDOW_WIDTH * y + 45,
+                optionName ? optionName : "(unknown)", PERK_WINDOW_WIDTH, PERK_WINDOW_WIDTH, color);
             y += yStep;
         }
     } else {
         // NOTE: Original code does not use loop.
         for (int index = 0; index < TRAITS_MAX_SELECTED_COUNT; index++) {
-            gPerkDialogOptionList[index].value = gCharacterEditorTempTraits[index];
-            gPerkDialogOptionList[index].name = traitGetName(gCharacterEditorTempTraits[index]);
+            int trait = gCharacterEditorTempTraits[index];
+            gPerkDialogOptionList[index].value = trait;
+            // M-59/H-11: traitGetName returns nullptr for negative (fake)
+            // trait ids and the TRAIT_COUNT sentinel — fall back so the
+            // remove list renders "(unknown)" instead of crashing.
+            char* name = traitGetName(trait);
+            gPerkDialogOptionList[index].name = name ? name : const_cast<char*>("(unknown)");
         }
 
         if (gCharacterEditorTempTraitCount > 1) {

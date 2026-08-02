@@ -14,7 +14,18 @@ void versionGetVersion(char* dest, size_t size)
     if (!*versionString) {
         versionString = nullptr;
     }
-    snprintf(dest, size, (versionString != nullptr ? versionString : "FALLOUT II %d.%02d"), VERSION_MAJOR, VERSION_MINOR);
+
+    // M-188: Never use the user-writable version_string as the format
+    // string. The old code passed it directly to snprintf, so a config
+    // value containing format specifiers (e.g. "%s", "%n") made snprintf
+    // read VERSION_MAJOR as a char* or write through a format-derived
+    // address — arbitrary read/write from a config file. Use it only as
+    // an argument.
+    if (versionString != nullptr) {
+        snprintf(dest, size, "%s", versionString);
+    } else {
+        snprintf(dest, size, "FALLOUT II %d.%02d", VERSION_MAJOR, VERSION_MINOR);
+    }
 }
 
 } // namespace fallout

@@ -300,6 +300,17 @@ target_include_directories(test_window PRIVATE "${CMAKE_SOURCE_DIR}/src")
 target_link_libraries(test_window PRIVATE test_stubs doctest)
 add_test(NAME test_window COMMAND test_window)
 
+# ---- Test: word_wrap.cc (real production function, H-10 null guard) ----
+# word_wrap.cc is a standalone translation unit (font function pointers +
+# strlen only) and can be linked directly, unlike window.cc.
+add_executable(test_word_wrap
+    test_word_wrap.cc
+    "${CMAKE_SOURCE_DIR}/src/word_wrap.cc"
+)
+target_include_directories(test_word_wrap PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_link_libraries(test_word_wrap PRIVATE doctest)
+add_test(NAME test_word_wrap COMMAND test_word_wrap)
+
 # ---- Test: dbox.cc (enum validation, file dialog layout constants) ----
 # Header-only test — self-contained with dbox.h constants.
 add_executable(test_dbox
@@ -339,6 +350,17 @@ add_executable(test_character_editor
 target_include_directories(test_character_editor PRIVATE "${CMAKE_SOURCE_DIR}/src")
 target_link_libraries(test_character_editor PRIVATE doctest)
 add_test(NAME test_character_editor COMMAND test_character_editor)
+
+# ---- Test: character_selector.cc (pure logic mirrors, C-07) ----
+# Self-contained test — does not link character_selector.cc (heavy rendering
+# deps). Mirrors the C-07 render-stats null guards (invalid skill/trait ids are
+# skipped, never reaching strcpy with nullptr).
+add_executable(test_character_selector
+    test_character_selector.cc
+)
+target_include_directories(test_character_selector PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_link_libraries(test_character_selector PRIVATE doctest)
+add_test(NAME test_character_selector COMMAND test_character_selector)
 
 # ============================================================
 # Stage 6 Implementation — New Test Executables (8 entries)
@@ -848,6 +870,16 @@ add_executable(test_fixes_stage6_misc
 target_link_libraries(test_fixes_stage6_misc PRIVATE doctest)
 add_test(NAME test_fixes_stage6_misc COMMAND test_fixes_stage6_misc)
 
+# ---- Test: fixes stage6 misc audio/movie/lips/party/pipboy/object/mouse/kb (s6-fix-misc) ----
+# Self-contained mirror test — does not link production .cc files (50+ engine deps).
+# Covers M-76..M-79, M-129..M-139, M-146, M-155, M-156, M-158, M-179..M-181,
+# M-183, M-186, M-191, M-193, M-196..M-198.
+add_executable(test_fixes_stage6_misc_av
+    test_fixes_stage6_misc_av.cc
+)
+target_link_libraries(test_fixes_stage6_misc_av PRIVATE doctest)
+add_test(NAME test_fixes_stage6_misc_av COMMAND test_fixes_stage6_misc_av)
+
 # ============================================================
 # Stage 4 Implementation — RENDER + SCANNER Fix Tests (1 entry)
 # ============================================================
@@ -924,3 +956,20 @@ add_executable(test_sfall_compat_fixes
 )
 target_link_libraries(test_sfall_compat_fixes PRIVATE doctest)
 add_test(NAME test_sfall_compat_fixes COMMAND test_sfall_compat_fixes)
+
+# ============================================================
+# Stage 6 Art/IO/Heap/Version Fix — Regression Tests (1 entry)
+# ============================================================
+
+# ---- Test: art/IO/heap/version fixes (H-16, art NEW-01, H-17, P-16, M-160,
+# art N-1, M-168, M-169, M-187, M-188, M-202) ----
+# Self-contained mirror test — does not link pcx.cc/dfile.cc/art.cc/
+# heap.cc/version.cc/file_utils.cc/dialog.cc (50+ engine deps each).
+# Validates the dimension guards, DAT accounting-field validation, heap
+# negative-size rejection, version_string format-string safety, fwrite
+# error propagation, and dialog slot selection via local mirrors.
+add_executable(test_art_io_fixes
+    test_art_io_fixes.cc
+)
+target_link_libraries(test_art_io_fixes PRIVATE doctest)
+add_test(NAME test_art_io_fixes COMMAND test_art_io_fixes)

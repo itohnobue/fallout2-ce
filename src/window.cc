@@ -268,12 +268,30 @@ unsigned char scriptWindowGetHighlightColor()
     return _colorTable[_currentHighlightColorB | (_currentHighlightColorG << 5) | (_currentHighlightColorR << 10)];
 }
 
+// Clamps a script-provided color component into the [0, 1] range and converts
+// it to the 5-bit (0..31) color table component.
+//
+// Scripts may pass arbitrary floats (opFill/opFillRect validate only that
+// INT arguments are 0/1; FLOAT arguments pass through unvalidated). An
+// unclamped component would produce a _colorTable index outside the
+// 32768-entry table (M-104).
+static int scriptWindowColorComponent(float component)
+{
+    if (component < 0.0f) {
+        component = 0.0f;
+    } else if (component > 1.0f) {
+        component = 1.0f;
+    }
+
+    return (int)(component * 31.0f);
+}
+
 // 0x4B61BC
 int scriptWindowSetTextColor(float r, float g, float b)
 {
-    _currentTextColorR = (int)(r * 31.0);
-    _currentTextColorG = (int)(g * 31.0);
-    _currentTextColorB = (int)(b * 31.0);
+    _currentTextColorR = scriptWindowColorComponent(r);
+    _currentTextColorG = scriptWindowColorComponent(g);
+    _currentTextColorB = scriptWindowColorComponent(b);
 
     return 1;
 }
@@ -281,9 +299,9 @@ int scriptWindowSetTextColor(float r, float g, float b)
 // 0x4B6208
 int scriptWindowSetHighlightColor(float r, float g, float b)
 {
-    _currentHighlightColorR = (int)(r * 31.0);
-    _currentHighlightColorG = (int)(g * 31.0);
-    _currentHighlightColorB = (int)(b * 31.0);
+    _currentHighlightColorR = scriptWindowColorComponent(r);
+    _currentHighlightColorG = scriptWindowColorComponent(g);
+    _currentHighlightColorB = scriptWindowColorComponent(b);
 
     return 1;
 }
@@ -351,7 +369,9 @@ bool scriptWindowRefreshRegions()
         if (managedWindow->window == win) {
             for (int regionIndex = 0; regionIndex < managedWindow->regionsLength; regionIndex++) {
                 Region* region = managedWindow->regions[regionIndex];
-                region->rightProcs[3] = 0;
+                if (region != nullptr) {
+                    region->rightProcs[3] = 0;
+                }
             }
 
             int mouseEvent = mouseGetEvent();
@@ -574,7 +594,19 @@ void scriptWindowDispatchButtonMouseEvent(int btn, int mouseEvent)
                             programExecuteProcedureAsync(managedButton->program, managedButton->procs[mouseEvent]);
                         }
 
-                        if (managedButton->mouseEventCallback != nullptr) {
+                        // Revalidate: a CRITICAL proc runs synchronously and may
+                        // have deleted buttons (individually or delete-all, which
+                        // frees the whole array). Re-find the button by id before
+                        // touching the (possibly dangling) ManagedButton again.
+                        managedButton = nullptr;
+                        for (int recheckIndex = 0; recheckIndex < managedWindow->buttonsLength; recheckIndex++) {
+                            if (managedWindow->buttons[recheckIndex].btn == btn) {
+                                managedButton = &(managedWindow->buttons[recheckIndex]);
+                                break;
+                            }
+                        }
+
+                        if (managedButton != nullptr && managedButton->mouseEventCallback != nullptr) {
                             managedButton->mouseEventCallback(managedButton->mouseEventCallbackUserData, mouseEvent);
                         }
                     }
@@ -875,6 +907,68 @@ bool scriptWindowDelete(const char* windowName)
     return true;
 }
 
+// Frees the button/region resources of a managed window whose underlying
+// window was destroyed but whose managed state (image buffers, region
+// objects) survived, and marks the slot empty.
+//
+// Used by the resize/scale failure path: windowDestroy() frees the low-level
+// Window and its Button structs but NOT the ManagedButton image buffers or
+// Region objects; if the subsequent windowCreate() fails, the slot is marked
+// empty but those arrays would otherwise leak, and gCurrentManagedWindowIndex
+// would keep pointing at a dead slot (a later scriptWindowDisplayBuf would
+// blit through a null window buffer).
+static void scriptWindowManagedWindowCleanup(ManagedWindow* managedWindow, int managedIndex)
+{
+    if (managedWindow->buttons != nullptr) {
+        for (int index = 0; index < managedWindow->buttonsLength; index++) {
+            ManagedButton* button = &(managedWindow->buttons[index]);
+            if (button->hover != nullptr) {
+                internal_free_safe(button->hover, __FILE__, __LINE__);
+            }
+
+            if (button->field_4C != nullptr) {
+                internal_free_safe(button->field_4C, __FILE__, __LINE__);
+            }
+
+            if (button->pressed != nullptr) {
+                internal_free_safe(button->pressed, __FILE__, __LINE__);
+            }
+
+            if (button->normal != nullptr) {
+                internal_free_safe(button->normal, __FILE__, __LINE__);
+            }
+
+            if (button->field_50 != nullptr) {
+                internal_free_safe(button->field_50, __FILE__, __LINE__);
+            }
+        }
+
+        internal_free_safe(managedWindow->buttons, __FILE__, __LINE__);
+        managedWindow->buttons = nullptr;
+        managedWindow->buttonsLength = 0;
+    }
+
+    if (managedWindow->regions != nullptr) {
+        for (int index = 0; index < managedWindow->regionsLength; index++) {
+            Region* region = managedWindow->regions[index];
+            if (region != nullptr) {
+                regionDelete(region);
+            }
+        }
+
+        internal_free_safe(managedWindow->regions, __FILE__, __LINE__);
+        managedWindow->regions = nullptr;
+        managedWindow->regionsLength = 0;
+    }
+
+    if (gCurrentManagedWindowIndex == managedIndex) {
+        gCurrentManagedWindowIndex = -1;
+    }
+
+    managedWindow->window = -1;
+    managedWindow->name[0] = '\0';
+}
+
 // 0x4B7AC4
 int scriptWindowResize(const char* windowName, int x, int y, int width, int height)
 {
@@ -910,8 +1004,9 @@ int scriptWindowResize(const char* windowName, int x, int y, int width, int heig
     managedWindow->window = windowCreate(x, y, width, height, color, flags);
 
     if (managedWindow->window == -1) {
-        // Creation failed — mark the slot as empty.
-        managedWindow->name[0] = '\0';
+        // Creation failed — free the dangling button/region resources and
+        // mark the slot empty (M-100).
+        scriptWindowManagedWindowCleanup(managedWindow, managedIndex);
         return -1;
     }
 
@@ -976,8 +1071,9 @@ int scriptWindowScale(const char* windowName, int x, int y, int width, int heigh
     managedWindow->window = windowCreate(x, y, width, height, color, flags);
 
     if (managedWindow->window == -1) {
-        // Creation failed — mark the slot as empty.
-        managedWindow->name[0] = '\0';
+        // Creation failed — free the dangling button/region resources and
+        // mark the slot empty (M-100).
+        scriptWindowManagedWindowCleanup(managedWindow, managedIndex);
         return -1;
     }
 
@@ -1281,6 +1377,15 @@ void windowPrintBuf(int win, char* string, int stringLength, int width, int maxY
         stringHeight++;
     }
 
+    // A negative y would make the final blit write before the window buffer
+    // (heap underflow). The guard at the top is defeated by
+    // windowWrapLineWithSpacing passing maxY = height + y; clamp here so the
+    // subsequent height/width clamps operate on non-negative coordinates
+    // (M-107).
+    if (y < 0) {
+        y = 0;
+    }
+
     unsigned char* backgroundBuffer = (unsigned char*)internal_calloc_safe(stringWidth, stringHeight, __FILE__, __LINE__); // "..\\int\\WINDOW.C", 1093
     unsigned char* backgroundBufferPtr = backgroundBuffer;
     fontDrawText(backgroundBuffer, stringCopy, stringWidth, stringWidth, flags);
@@ -1358,13 +1463,23 @@ char** windowWordWrap(char* string, int maxLength, int indent, int* substringLis
             pch++;
         } else {
             while (width > maxLength && pch > start) {
-                width -= fontGetCharacterWidth(*pch);
+                width -= fontGetCharacterWidth(*pch & 0xFF);
                 pch--;
             }
 
             if (*pch != '\n') {
                 while (pch != start && *pch != ' ') {
                     pch--;
+                }
+
+                // Guard: if we scanned all the way back to start without finding
+                // a space, break the word at the current position to prevent
+                // an infinite loop (M-99).
+                if (pch == start) {
+                    // Skip non-space chars to advance out of the current word.
+                    while (*pch != '\0' && *pch != ' ' && *pch != '\n') {
+                        pch++;
+                    }
                 }
             }
 
@@ -1379,6 +1494,11 @@ char** windowWordWrap(char* string, int maxLength, int indent, int* substringLis
             substring[pch - start] = '\0';
 
             substringList[substringListLength] = substring;
+
+            // Skip past newline character to avoid infinite loop (M-99).
+            if (*pch == '\n') {
+                pch++;
+            }
 
             while (*pch == ' ') {
                 pch++;
@@ -1625,6 +1745,22 @@ bool scriptWindowDisplayBuf(unsigned char* src, int srcWidth, int srcHeight, int
 
     if (destY + destHeight > managedWindow->height) {
         destHeight = managedWindow->height - destY;
+    }
+
+    // Clamp the source offsets and copy extents against the source
+    // dimensions: a negative destX/destY larger than the source would make
+    // `src + srcOffsetY * srcWidth + srcOffsetX` read past the source buffer,
+    // and an unclamped destWidth/destHeight would blit past it too (H-12).
+    if (srcOffsetX >= srcWidth || srcOffsetY >= srcHeight) {
+        return false;
+    }
+
+    if (destWidth > srcWidth - srcOffsetX) {
+        destWidth = srcWidth - srcOffsetX;
+    }
+
+    if (destHeight > srcHeight - srcOffsetY) {
+        destHeight = srcHeight - srcOffsetY;
     }
 
     if (destWidth <= 0 || destHeight <= 0) {
@@ -2349,7 +2485,7 @@ bool scriptWindowFill(float r, float g, float b)
         return false;
     }
 
-    int colorIndex = ((int)(r * 31.0) << 10) | ((int)(g * 31.0) << 5) | (int)(b * 31.0);
+    int colorIndex = (scriptWindowColorComponent(r) << 10) | (scriptWindowColorComponent(g) << 5) | scriptWindowColorComponent(b);
 
     ManagedWindow* managedWindow = &(gManagedWindows[gCurrentManagedWindowIndex]);
     windowFill(managedWindow->window,
@@ -2376,7 +2512,7 @@ bool scriptWindowFillRect(int x, int y, int width, int height, float r, float g,
     width = (int)(width * managedWindow->scaleX);
     height = (int)(height * managedWindow->scaleY);
 
-    int colorIndex = ((int)(r * 31.0) << 10) | ((int)(g * 31.0) << 5) | (int)(b * 31.0);
+    int colorIndex = (scriptWindowColorComponent(r) << 10) | (scriptWindowColorComponent(g) << 5) | scriptWindowColorComponent(b);
 
     windowFill(managedWindow->window,
         x,
@@ -2401,6 +2537,9 @@ void scriptWindowEndRegion()
     }
 
     ManagedWindow* managedWindow = &(gManagedWindows[gCurrentManagedWindowIndex]);
+    if (managedWindow->regions == nullptr || managedWindow->currentRegionIndex >= managedWindow->regionsLength) {
+        return;
+    }
     Region* region = managedWindow->regions[managedWindow->currentRegionIndex];
     if (region->points != nullptr) {
         scriptWindowAddRegionPoint(region->points->x, region->points->y, false);
@@ -2481,6 +2620,9 @@ bool scriptWindowAddRegionPoint(int x, int y, bool a3)
     }
 
     ManagedWindow* managedWindow = &(gManagedWindows[gCurrentManagedWindowIndex]);
+    if (managedWindow->regions == nullptr || managedWindow->currentRegionIndex >= managedWindow->regionsLength) {
+        return false;
+    }
     Region* region = managedWindow->regions[managedWindow->currentRegionIndex];
     if (region == nullptr) {
         region = managedWindow->regions[managedWindow->currentRegionIndex] = regionCreate(1);
@@ -2571,6 +2713,9 @@ bool scriptWindowAddRegionName(const char* regionName)
     }
 
     ManagedWindow* managedWindow = &(gManagedWindows[gCurrentManagedWindowIndex]);
+    if (managedWindow->regions == nullptr || managedWindow->currentRegionIndex >= managedWindow->regionsLength) {
+        return false;
+    }
     Region* region = managedWindow->regions[managedWindow->currentRegionIndex];
     if (region == nullptr) {
         return false;
@@ -2637,6 +2782,7 @@ bool scriptWindowDeleteRegion(const char* regionName)
 
         managedWindow->regions = nullptr;
         managedWindow->regionsLength = 0;
+        managedWindow->currentRegionIndex = 0;
     }
 
     return true;
@@ -2704,6 +2850,11 @@ void scriptWindowStopMovie()
 // 0x4BB3A8
 void _drawScaled(unsigned char* dest, int destWidth, int destHeight, int destPitch, unsigned char* src, int srcWidth, int srcHeight, int srcPitch)
 {
+    // A zero destination dimension would divide by zero below (M-105).
+    if (destWidth <= 0 || destHeight <= 0) {
+        return;
+    }
+
     if (destWidth == srcWidth && destHeight == srcHeight) {
         blitBufferToBuffer(src, srcWidth, srcHeight, srcPitch, dest, destPitch);
         return;
@@ -2783,6 +2934,11 @@ void _drawScaled(unsigned char* dest, int destWidth, int destHeight, int destPit
 // 0x4BB5D0
 void _drawScaledBuf(unsigned char* dest, int destWidth, int destHeight, unsigned char* src, int srcWidth, int srcHeight)
 {
+    // A zero destination dimension would divide by zero below (M-105).
+    if (destWidth <= 0 || destHeight <= 0) {
+        return;
+    }
+
     if (destWidth == srcWidth && destHeight == srcHeight) {
         memcpy(dest, src, srcWidth * srcHeight);
         return;
@@ -2861,6 +3017,20 @@ void _fillBuf3x3(unsigned char* src, int srcWidth, int srcHeight, unsigned char*
 {
     int chunkWidth = srcWidth / 3;
     int chunkHeight = srcHeight / 3;
+
+    // A source smaller than 3×3 yields zero-sized chunks, which would make
+    // the loops below non-terminating (x += 0). Clamp the chunks to the
+    // destination as well so the trailing dest + ... - chunk expressions stay
+    // inside the destination buffer (M-102).
+    if (chunkWidth <= 0 || chunkHeight <= 0) {
+        return;
+    }
+    if (chunkWidth > destWidth) {
+        chunkWidth = destWidth;
+    }
+    if (chunkHeight > destHeight) {
+        chunkHeight = destHeight;
+    }
 
     // Middle Middle
     unsigned char* ptr = src + srcWidth * chunkHeight + chunkWidth;

@@ -153,20 +153,29 @@ int sfallGetPerkLevelMod();
 
 // ============================================================
 // Skill modifier globals (F-034). Set via opcodes 0x81C7/0x81C8.
-// Integration point: skill.cc skillGetValue() should add these
-// modifiers to the skill value calculation.
+// H-23: these opcodes now match sfall max-cap semantics:
 //
-// set_critter_skill_mod(critter, skill, mod) — 0x81C7 (3 args)
-// set_base_skill_mod(skill, mod)             — 0x81C8 (2 args)
+// set_critter_skill_mod(critter, max) — 0x81C7 (2 args): per-critter skill MAX CAP
+// set_base_skill_mod(max)             — 0x81C8 (1 arg):  global base skill max cap
+//   (same storage as set_skill_max; consumed by skill.cc:287-291 clamp)
 //
-// sfallGetCritterSkillMod(skill) returns the global per-skill modifier.
-// sfallGetCritterSkillModForCritter(critter, skill) checks the per-critter
-//   map keyed by (pid, skill) pair. Returns 0 if no override exists.
-// sfallGetBaseSkillMod(skill) returns the base per-skill modifier set via
-//   set_base_skill_mod.
+// The previous 3-arg/2-arg additive per-skill maps caused real sfall calls
+// (e.g. set_critter_skill_mod(dude_obj, 100)) to abort via programFatalError
+// and applied modifiers additively instead of capping. The legacy additive
+// accessors below remain for reads of old save data but are no longer written.
 // ============================================================
 int sfallGetCritterSkillMod(int skill);
 int sfallGetBaseSkillMod(int skill);
+// H-23: per-critter skill max cap set via set_critter_skill_mod(critter, max).
+// Returns -1 if no cap is set for the critter's pid; callers fall back to the
+// global gSkillMaxCap (set via set_skill_max / set_base_skill_mod).
+int sfallGetCritterSkillMax(Object* critter);
+
+// M-21: PC/NPC stat cap accessors honoring the isNpc argument (sfall
+// Stats.cpp:387-396). Returns -1 for an invalid stat. Shadow tables are
+// maintained by the set_stat_max/min and set_pc/npc_stat_max/min opcodes.
+int sfallGetStatMax(int stat, bool isNpc);
+int sfallGetStatMin(int stat, bool isNpc);
 
 // F-001: Per-critter skill mod accessor. Returns the per-critter skill
 // modifier set via set_critter_skill_mod (0x81C7) for the given critter

@@ -189,6 +189,16 @@ int textFontLoad(int font)
     if (fileRead(&(textFontDescriptor->lineHeight), 4, 1, stream) != 1) goto out;
     if (fileRead(&(textFontDescriptor->letterSpacing), 4, 1, stream) != 1) goto out;
 
+    // Validate the descriptor header before allocating: a crafted .fon must
+    // not carry a non-positive glyph count (which would index glyphs[-1]
+    // when computing dataSize below), an implausible glyph count (which would
+    // overflow the glyph table allocation/read), or a non-positive line
+    // height (P-11/P-09). The .fon format addresses glyphs by byte value, so
+    // at most 256 glyphs are meaningful.
+    if (textFontDescriptor->glyphCount <= 0 || textFontDescriptor->glyphCount > 256 || textFontDescriptor->lineHeight <= 0) {
+        goto out;
+    }
+
     int glyphsPtr;
     if (fileRead(&glyphsPtr, 4, 1, stream) != 1) goto out;
 
@@ -204,7 +214,36 @@ int textFontLoad(int font)
         goto out;
     }
 
-    dataSize = textFontDescriptor->lineHeight * ((textFontDescriptor->glyphs[textFontDescriptor->glyphCount - 1].width + 7) >> 3) + textFontDescriptor->glyphs[textFontDescriptor->glyphCount - 1].dataOffset;
+    // R4/W2-2 (ride-along): use unsigned arithmetic in `(width + 7u)` — a
+    // crafted width near INT_MAX passes the `width < 0` check, then signed
+    // `(width + 7)` overflows to a negative value, `>> 3` stays negative, and
+    // the validation below fails to reject the glyph (glyphDataLength <= 0).
+    // Unsigned arithmetic makes the shifted value huge instead, so the
+    // validation rejects the crafted glyph at load time.
+    dataSize = textFontDescriptor->lineHeight * ((textFontDescriptor->glyphs[textFontDescriptor->glyphCount - 1].width + 7u) >> 3) + textFontDescriptor->glyphs[textFontDescriptor->glyphCount - 1].dataOffset;
+
+    // Validate the glyph table against the data area: a crafted .fon must not
+    // reference data offsets/widths outside the allocated data buffer, and a
+    // negative width would make the renderer write before the destination
+    // (P-11).
+    if (dataSize <= 0) {
+        goto out;
+    }
+
+    for (int index = 0; index < textFontDescriptor->glyphCount; index++) {
+        TextFontGlyph* glyph = &(textFontDescriptor->glyphs[index]);
+        if (glyph->width < 0 || glyph->dataOffset < 0) {
+            goto out;
+        }
+
+        // Unsigned arithmetic in `(glyph->width + 7u)`: see the R4/W2-2 note
+        // at the dataSize computation above.
+        int glyphDataLength = textFontDescriptor->lineHeight * ((glyph->width + 7u) >> 3);
+        if (glyph->dataOffset > dataSize || glyphDataLength > dataSize - glyph->dataOffset) {
+            goto out;
+        }
+    }
+
     textFontDescriptor->data = (unsigned char*)internal_malloc(dataSize);
     if (textFontDescriptor->data == nullptr) {
         goto out;
@@ -337,9 +376,12 @@ static void textFontDrawImpl(unsigned char* buf, const char* string, int length,
 
     unsigned char* ptr = buf;
     while (*string != '\0') {
-        char ch = *string++;
+        // Use unsigned char: for bytes >= 0x80 a signed char would be
+        // negative, making `ch < glyphCount` always true and then indexing
+        // glyphs[ch & 0xFF] out of bounds when glyphCount < 256 (M-200).
+        unsigned char ch = *string++;
         if (ch < gCurrentTextFontDescriptor->glyphCount) {
-            TextFontGlyph* glyph = &(gCurrentTextFontDescriptor->glyphs[ch & 0xFF]);
+            TextFontGlyph* glyph = &(gCurrentTextFontDescriptor->glyphs[ch]);
 
             unsigned char* end;
             if ((color & FONT_MONO) != 0) {
@@ -400,8 +442,11 @@ static int textFontGeStringWidthImpl(const char* string)
 
     const char* ch = string;
     while (*ch != '\0') {
-        if (*ch < gCurrentTextFontDescriptor->glyphCount) {
-            width += gCurrentTextFontDescriptor->letterSpacing + gCurrentTextFontDescriptor->glyphs[*ch & 0xFF].width;
+        // Mask before the bounds check: a signed char *ch would be negative
+        // for bytes >= 0x80 and pass `ch < glyphCount` unconditionally,
+        // then index glyphs[*ch & 0xFF] out of bounds (M-200).
+        if ((unsigned char)*ch < gCurrentTextFontDescriptor->glyphCount) {
+            width += gCurrentTextFontDescriptor->letterSpacing + gCurrentTextFontDescriptor->glyphs[(unsigned char)*ch].width;
         }
         ch++;
     }
@@ -412,7 +457,12 @@ static int textFontGeStringWidthImpl(const char* string)
 // 0x4D5BA4 GNW_text_char_width
 static int textFontGetCharacterWidthImpl(int ch)
 {
-    return gCurrentTextFontDescriptor->glyphs[ch & 0xFF].width;
+    int maskedCh = ch & 0xFF;
+    if (maskedCh >= gCurrentTextFontDescriptor->glyphCount) {
+        return 0;
+    }
+
+    return gCurrentTextFontDescriptor->glyphs[maskedCh].width;
 }
 
 // 0x4D5BB8 GNW_text_mono_width

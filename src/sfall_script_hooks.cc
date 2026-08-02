@@ -439,14 +439,16 @@ void scriptHooks_GameModeChange(int exit, int previousGameMode)
         return;
     }
 
-    // UC-04: Pass the current (new) game mode as arg0 to match sfall
-    // contract. Previously CE passed the exit flag (0/1) as arg0.
-    // On exit (exit=1), arg0 is 0 (no mode active). On mode change,
-    // arg0 is the new mode bitmask from GameMode::getCurrentGameMode().
-    int newGameMode = exit ? 0 : GameMode::getCurrentGameMode();
-
+    // M-28 / sfall N-02: Pass the exit flag as arg0 to match sfall's
+    // HOOK_GAMEMODECHANGE contract (Common.cpp:219-225, hooks.yml:568-573):
+    //   arg0 - event type: 1 - when the player exits the game, 0 - otherwise
+    //   arg1 - the previous game mode
+    // The previous comment ("UC-04: pass the current/new game mode as arg0")
+    // was factually wrong — sfall never passes the new mode bitmask in arg0;
+    // scripts detecting exit read get_sfall_arg_at(0) == 1. CE's old arg0
+    // (new-mode bitmask, 0 on exit) broke that check for every sfall mod.
     GameModeChangeGuard guard;
-    ScriptHookCall(HOOK_GAMEMODECHANGE, 0, { newGameMode, previousGameMode }).call();
+    ScriptHookCall(HOOK_GAMEMODECHANGE, 0, { exit, previousGameMode }).call();
 }
 
 /*
@@ -704,26 +706,50 @@ void scriptHooks_OnDeath(Object* critter)
 }
 
 /*
+Runs when a critter's radiation level is changed (before the delta is applied).
+Matches sfall's AdjustRads_Script (ObjectHs.cpp:362-385 + hooks.yml:757-765).
+
+Critter arg0 - the critter (usually dude_obj)
+int     arg1 - the amount of radiation being added/removed
+
+int     ret0 - the new amount of radiation being added/removed
+*/
+int scriptHooks_AdjustRads(Object* critter, int amount)
+{
+    if (scriptHooks[HOOK_ADJUSTRADS].empty()) {
+        return amount;
+    }
+
+    ScriptHookCall hook(HOOK_ADJUSTRADS, 1, { critter, amount });
+    hook.call();
+
+    if (hook.numReturnValues() > 0) {
+        return hook.getReturnValueAt(0).asInt();
+    }
+
+    return amount;
+}
+
+/*
 Runs whenever a random encounter occurs (except the Horrigan meeting and scripted encounters), or when the player enters a local map from the world map.
 You can override the map for loading or the encounter.
 
-CE ARGUMENT LAYOUT (5 args):
-int     arg0 - event type: 0 - when a random encounter occurs, 2 - when the player enters from the world map
+SFALL ARGUMENT LAYOUT (5 args — H-03/P-05 corrected to match sfall MiscHs.cpp:593-664 + hooks.yml:724-736):
+int     arg0 - event type: 0 - when a random encounter occurs, 1 - when the player enters from the world map
 int     arg1 - the map ID that the encounter will load
 int     arg2 - 1 when the encounter is a special encounter, 0 otherwise
 int     arg3 - encounter table number, or -1 if not an encounter
 int     arg4 - encounter index in the table, or -1 if not an encounter
 
-CE's first 3 arguments (eventType, mapId, isSpecial) match sfall's 3-argument
-HOOK_ENCOUNTER contract.  Per sfall documentation, the standard layout is:
-  arg0 - event type (0=random encounter, 1=special encounter, 0x100=forced)
-  arg1 - the map ID being entered
-  arg2 - 1 when special/forced, 0 otherwise
-CE preserves this compatibility and extends the hook with 2 additional
-arguments (tableId, entryId) to provide enhanced encounter context that
-is not available in sfall's original 3-argument interface.  Scripts written
-for sfall's 3-argument layout receive the expected values in arg0..arg2;
-scripts can optionally read arg3..arg4 for the extended information.
+Special random encounters are encoded in arg2 (encType==3), NEVER in arg0.
+sfall does NOT fire HOOK_ENCOUNTER for forced encounters (op_force_encounter
+jumps straight to map load) — CE matches this (sfall N-01): a
+ForcedEncounter eventType returns immediately without firing the hook.
+
+The pre-86e6c4d encoding (LocalMapEnter arg0=1, special random arg0=0 with
+special in arg2) was sfall-compatible; commit 86e6c4d regressed it to
+arg0=2 for LocalMapEnter and arg0=1 for specials, inverting Et Tu's
+gl_worldmap.ssl handler (event==1 → local-enter branch, event==0 → random).
 
 int     ret0 - overrides the map ID, or pass -1 for event type 0 to cancel the encounter and continue traveling
 int     ret1 - pass 1 to cancel the encounter and load the specified map from the ret0 (only for event type 0)
@@ -732,33 +758,40 @@ EncounterHookResult scriptHooks_Encounter(EncounterHookEventType eventType, int*
 {
     if (mapIdPtr == nullptr) return EncounterHookResult::ContinueEncounter;
 
+    // sfall N-01: HOOK_ENCOUNTER must NOT fire for forced encounters.
+    // sfall's op_force_encounter jumps straight to map_load_idx_ without
+    // invoking the hook (MiscHs.cpp wmRndEncounterOccurred_hook is only
+    // wired to random encounters). CE previously fired the hook with
+    // arg0=0x100, which Et Tu's gl_worldmap.ssl misrouted (it read
+    // GVAR_WORLDMAP_TABLE=-20 on every forced encounter). Returning
+    // ContinueEncounter lets the caller proceed with the default
+    // forced-encounter map load, matching sfall.
+    if (eventType == EncounterHookEventType::ForcedEncounter) {
+        return EncounterHookResult::ContinueEncounter;
+    }
+
     if (scriptHooks[HOOK_ENCOUNTER].empty()) {
         return EncounterHookResult::ContinueEncounter;
     }
 
-    // Random and forced encounters support 2 return values (ret0=map override,
+    // Random encounters support 2 return values (ret0=map override,
     // ret1=LoadMapDirectly flag). LocalMapEnter only supports 1 (map override).
+    // (Forced encounters never reach here — sfall N-01 early-return above.)
     const int maxReturnValues = (eventType == EncounterHookEventType::LocalMapEnter) ? 1 : 2;
 
-    // F-10 + F-20 (FIXED): Compute sfall-compatible arg0 encoding.
-    // Sfall convention: 0 = normal random encounter, 1 = special encounter,
-    // 0x100 (256) = forced encounter. CE-specific: LocalMapEnter uses value 2
-    // to avoid collision with sfall's arg0=1 for special encounters.
-    // For random encounters, special encounters are flagged with arg0=1.
-    // For ForcedEncounter, the enum value (256) is passed directly to match
-    // sfall's 0x100 convention.
-    // For LocalMapEnter, the enum value (2) is passed directly.
+    // H-03/P-05: sfall-compatible arg0 encoding.
+    //   arg0: 0 = random encounter, 1 = player enters from the world map.
+    //   arg2: isSpecial ? 1 : 0 (encType==3) — specials live here, never arg0.
+    // The 86e6c4d "1 = special encounter" premise was factually wrong and is
+    // reverted; LocalMapEnter uses enum value 1 which IS the sfall arg0.
     int arg0;
     switch (eventType) {
     case EncounterHookEventType::RandomEncounter:
-        arg0 = isSpecial ? 1 : 0;
+        arg0 = 0;
         break;
-    case EncounterHookEventType::ForcedEncounter:
-        arg0 = static_cast<int>(EncounterHookEventType::ForcedEncounter); // 256 = 0x100
-        break;
+    case EncounterHookEventType::LocalMapEnter:
     default:
-        // LocalMapEnter — enum value (2) is already non-conflicting.
-        arg0 = static_cast<int>(eventType);
+        arg0 = static_cast<int>(EncounterHookEventType::LocalMapEnter); // 1
         break;
     }
 
@@ -1626,9 +1659,17 @@ Runs when a script triggers an object animation via animate_stand_obj or
 animate_stand_reverse_obj. Allows scripts to intercept or modify the animation
 before it is registered.
 
-Obj     arg0 - the object being animated
-int     arg1 - the animation ID (ANIM_STAND or other)
-int     arg2 - the animation delay (0 for immediate)
+M-25: argument layout corrected to match sfall's HOOK_USEANIMOBJ
+(ObjectHs.cpp:116-132 UseAnimateObjHook_Script + hooks.yml:582-588):
+Critter arg0 - the critter that uses an object (usually dude_obj)
+Obj     arg1 - the object being used/animating
+int     arg2 - the animation code
+
+CE previously passed {object, animId, delay} — arg1 carried the animation id
+instead of the object, so Et Tu's gl_fo1mechanics.ssl punching-bag override
+(obj_pid(get_sfall_arg_at(1)) == PID_PUNCHING_BAG) never fired.
+
+int     ret0 - overrides the animation code (valid range [0, ANIM_COUNT-1])
 */
 int scriptHooks_UseAnimObj(Object* object, int animId, int delay)
 {
@@ -1639,7 +1680,8 @@ int scriptHooks_UseAnimObj(Object* object, int animId, int delay)
     // UH-10: maxReturnValues=1 to allow scripts to override the animation
     // (previously 0, which prevented any return value — the opcode guard
     // at sfall_opcodes.cc blocks at maxReturnValues==0).
-    ScriptHookCall hook(HOOK_USEANIMOBJ, 1, { object, animId, delay });
+    // M-25: gDude is the animating critter (sfall: "usually dude_obj").
+    ScriptHookCall hook(HOOK_USEANIMOBJ, 1, { gDude, object, animId });
     hook.call();
 
     if (hook.numReturnValues() > 0) {
@@ -1661,9 +1703,14 @@ Runs when the player examines an object (right-click to view description).
 Per sfall 4.4.0+: the hook can return a plain string directly to override
 the description text displayed to the player.
 
-Critter arg0 - the critter performing the examination (may be null)
-Obj     arg1 - the object being examined
-string  arg2 - the default description text (from proto or script override)
+M-24: argument layout corrected to match sfall's HOOK_DESCRIPTIONOBJ
+(ObjectHs.cpp:160-175 DescriptionObjHook_Script + hooks.yml):
+Obj     arg0 - the object being examined
+
+sfall passes ONLY the examined object (argCount=1). CE previously passed
+{examiner, target, description} — arg0 was the examiner, so Et Tu's
+gl_fo1mechanics.ssl DescriptionObj_handler read obj_pid(get_sfall_arg) as
+the EXAMINER's pid and the farm-parts description override never fired.
 
 string  ret0 - the new description text to display (empty string = no override)
 */
@@ -1673,7 +1720,8 @@ void scriptHooks_DescriptionObj(Object* examiner, Object* target, std::string& d
         return;
     }
 
-    ScriptHookCall hook(HOOK_DESCRIPTIONOBJ, 1, { examiner, target, description.c_str() });
+    // M-24: only the examined object is exposed to scripts (sfall contract).
+    ScriptHookCall hook(HOOK_DESCRIPTIONOBJ, 1, { target });
     hook.call();
 
     if (hook.numReturnValues() <= 0) {

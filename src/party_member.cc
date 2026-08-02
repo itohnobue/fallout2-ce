@@ -190,7 +190,12 @@ int partyMembersInit()
         if (configGetString(&config, section, "area_attack_mode", &string)) {
             while (*string != '\0') {
                 int areaAttackMode;
-                strParseStrFromList(&string, &areaAttackMode, gAreaAttackModeKeys, AREA_ATTACK_MODE_COUNT);
+                // M-156: on no-match strParseStrFromList sets the value to -1
+                // and returns -1; indexing areaAttackMode[-1] writes 1 byte
+                // before the heap allocation. Break out like worldmap.cc does.
+                if (strParseStrFromList(&string, &areaAttackMode, gAreaAttackModeKeys, AREA_ATTACK_MODE_COUNT) == -1) {
+                    break;
+                }
                 partyMemberDescription->areaAttackMode[areaAttackMode] = true;
             }
         }
@@ -198,7 +203,9 @@ int partyMembersInit()
         if (configGetString(&config, section, "attack_who", &string)) {
             while (*string != '\0') {
                 int attachWho;
-                strParseStrFromList(&string, &attachWho, gAttackWhoKeys, ATTACK_WHO_COUNT);
+                if (strParseStrFromList(&string, &attachWho, gAttackWhoKeys, ATTACK_WHO_COUNT) == -1) {
+                    break;
+                }
                 partyMemberDescription->attackWho[attachWho] = true;
             }
         }
@@ -206,7 +213,9 @@ int partyMembersInit()
         if (configGetString(&config, section, "best_weapon", &string)) {
             while (*string != '\0') {
                 int bestWeapon;
-                strParseStrFromList(&string, &bestWeapon, gBestWeaponKeys, BEST_WEAPON_COUNT);
+                if (strParseStrFromList(&string, &bestWeapon, gBestWeaponKeys, BEST_WEAPON_COUNT) == -1) {
+                    break;
+                }
                 partyMemberDescription->bestWeapon[bestWeapon] = true;
             }
         }
@@ -214,7 +223,9 @@ int partyMembersInit()
         if (configGetString(&config, section, "chem_use", &string)) {
             while (*string != '\0') {
                 int chemUse;
-                strParseStrFromList(&string, &chemUse, gChemUseKeys, CHEM_USE_COUNT);
+                if (strParseStrFromList(&string, &chemUse, gChemUseKeys, CHEM_USE_COUNT) == -1) {
+                    break;
+                }
                 partyMemberDescription->chemUse[chemUse] = true;
             }
         }
@@ -222,7 +233,9 @@ int partyMembersInit()
         if (configGetString(&config, section, "distance", &string)) {
             while (*string != '\0') {
                 int distanceMode;
-                strParseStrFromList(&string, &distanceMode, gDistanceModeKeys, DISTANCE_COUNT);
+                if (strParseStrFromList(&string, &distanceMode, gDistanceModeKeys, DISTANCE_COUNT) == -1) {
+                    break;
+                }
                 partyMemberDescription->distanceMode[distanceMode] = true;
             }
         }
@@ -230,7 +243,9 @@ int partyMembersInit()
         if (configGetString(&config, section, "run_away_mode", &string)) {
             while (*string != '\0') {
                 int runAwayMode;
-                strParseStrFromList(&string, &runAwayMode, gRunAwayModeKeys, RUN_AWAY_MODE_COUNT);
+                if (strParseStrFromList(&string, &runAwayMode, gRunAwayModeKeys, RUN_AWAY_MODE_COUNT) == -1) {
+                    break;
+                }
                 partyMemberDescription->runAwayMode[runAwayMode] = true;
             }
         }
@@ -238,7 +253,9 @@ int partyMembersInit()
         if (configGetString(&config, section, "disposition", &string)) {
             while (*string != '\0') {
                 int disposition;
-                strParseStrFromList(&string, &disposition, gDispositionKeys, DISPOSITION_COUNT);
+                if (strParseStrFromList(&string, &disposition, gDispositionKeys, DISPOSITION_COUNT) == -1) {
+                    break;
+                }
                 partyMemberDescription->disposition[disposition] = true;
             }
         }
@@ -726,6 +743,20 @@ int partyMembersLoad(File* stream)
         internal_free(partyMemberObjectIds);
         return -1;
     }
+
+    // M-155: the length is read from the save file without bounds. The object
+    // id buffer above (and gPartyMembers, allocated with the same capacity) is
+    // only gPartyMemberDescriptionsLength + 20 entries, so a mismatched or
+    // corrupt save (e.g. party.txt shrank between save and load) would write
+    // OOB. Clamp to the buffer capacity; reject negative lengths (which would
+    // also make the vector reserve() in get_all_party_members_objects throw
+    // std::bad_alloc).
+    int partyMembersCapacity = gPartyMemberDescriptionsLength + 20;
+    if (gPartyMembersLength < 0 || gPartyMembersLength > partyMembersCapacity) {
+        debugPrint("partyMembersLoad: clamping invalid party member count %d to %d\n", gPartyMembersLength, partyMembersCapacity);
+        gPartyMembersLength = partyMembersCapacity;
+    }
+
     if (fileReadInt32(stream, &_partyMemberItemCount) == -1) {
         internal_free(partyMemberObjectIds);
         return -1;

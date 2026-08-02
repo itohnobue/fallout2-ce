@@ -11,6 +11,15 @@ namespace fallout {
 // 0x4BC6F0 word_wrap
 int wordWrap(const char* string, int width, short* breakpoints, short* breakpointsLengthPtr)
 {
+    if (string == nullptr) {
+        // traitGetDescription/traitGetName return nullptr for out-of-range
+        // trait ids (e.g. the TRAIT_COUNT sentinel fed by the character
+        // editor); callers treat a non-zero return as "cannot wrap" and bail
+        // (H-10).
+        *breakpointsLengthPtr = 0;
+        return -1;
+    }
+
     breakpoints[0] = 0;
     *breakpointsLengthPtr = 1;
 

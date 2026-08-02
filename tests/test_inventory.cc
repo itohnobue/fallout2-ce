@@ -2195,3 +2195,89 @@ TEST_CASE("M-045: HOOK_DESCRIPTIONOBJ — hook call and override pattern (proto_
         CHECK(gTestDescriptionObjLastTarget == 200);
     }
 }
+
+// ================================================================
+// H-22: loot-all and barter must transfer the FULL stack quantity per
+// slot. The fork regression (a342f63d) moved `itemMove(..., 1)` — 1
+// unit per slot — leaving N-1 behind. The fix captures the slot
+// quantity at collection time and moves the whole stack while keeping
+// the HOOK_INVENTORYMOVE filter.
+// ================================================================
+
+namespace {
+struct TestSlot {
+    int item;
+    int quantity;
+};
+
+// Mirrors the fixed loot-all loop (inventory.cc): collect
+// {item, quantity} pairs for hook-passing slots, then move the full
+// quantity per slot. Returns the number of slots transferred and the
+// total quantity moved.
+struct TestMoveResult {
+    int slots;
+    int totalQuantity;
+};
+
+TestMoveResult testLootAllFullStack(TestSlot* slots, int count, bool (*hookPasses)(int))
+{
+    TestMoveResult result = { 0, 0 };
+    for (int i = 0; i < count; i++) {
+        if (hookPasses == nullptr || hookPasses(slots[i].item)) {
+            // itemMove(target, dude, item, quantity) — full stack.
+            result.slots++;
+            result.totalQuantity += slots[i].quantity;
+        }
+    }
+    return result;
+}
+
+// The pre-fix buggy behavior: moved exactly 1 unit per slot.
+TestMoveResult testLootAllOneUnit(TestSlot* slots, int count, bool (*hookPasses)(int))
+{
+    TestMoveResult result = { 0, 0 };
+    for (int i = 0; i < count; i++) {
+        if (hookPasses == nullptr || hookPasses(slots[i].item)) {
+            result.slots++;
+            result.totalQuantity += 1; // BUG: 1 unit per slot
+        }
+    }
+    return result;
+}
+
+bool testHookPassAll(int) { return true; }
+bool testHookBlockHeavy(int item) { return item != 999; }
+} // namespace
+
+TEST_CASE("H-22: loot-all transfers full stacks")
+{
+    TestSlot slots[3] = {
+        { 1, 24 },   // 24 caps
+        { 2, 30 },   // 30 rounds of ammo
+        { 3, 5 },    // 5 stimpaks
+    };
+
+    SUBCASE("Full-stack transfer moves the exact totals")
+    {
+        TestMoveResult fixed = testLootAllFullStack(slots, 3, testHookPassAll);
+        CHECK(fixed.slots == 3);
+        CHECK(fixed.totalQuantity == 24 + 30 + 5);
+    }
+
+    SUBCASE("Buggy 1-unit transfer leaves the remainder behind")
+    {
+        TestMoveResult buggy = testLootAllOneUnit(slots, 3, testHookPassAll);
+        CHECK(buggy.slots == 3);
+        CHECK(buggy.totalQuantity == 3); // 1 per slot — N-1 left behind
+        TestMoveResult fixed = testLootAllFullStack(slots, 3, testHookPassAll);
+        CHECK(buggy.totalQuantity < fixed.totalQuantity);
+    }
+
+    SUBCASE("Hook filter still applies per item")
+    {
+        TestSlot withHeavy[2] = { { 1, 10 }, { 999, 50 } };
+        TestMoveResult fixed = testLootAllFullStack(withHeavy, 2, testHookBlockHeavy);
+        CHECK(fixed.slots == 1);
+        CHECK(fixed.totalQuantity == 10);
+    }
+}

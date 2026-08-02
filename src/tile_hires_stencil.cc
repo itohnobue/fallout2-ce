@@ -363,6 +363,17 @@ void tile_hires_stencil_draw(Rect* rect, unsigned char* buffer, int windowWidth,
     if ((maxYglobal) % square_height != 0) {
         maxYglobal = maxYglobal - (maxYglobal % square_height) + square_height;
     };
+    // M-162: the round-up above can produce the exact grid extent
+    // (8000/3600 — multiples of square_width/square_height), whose square
+    // index (500/300) is one past the last valid element of
+    // visible_squares[][500][300]. Clamp back to the last valid pixel so
+    // maxSquareX/maxSquareY stay in bounds.
+    if (maxXglobal >= square_width * square_grid_width) {
+        maxXglobal = square_width * square_grid_width - 1;
+    }
+    if (maxYglobal >= square_height * square_grid_height) {
+        maxYglobal = square_height * square_grid_height - 1;
+    }
 
     int minSquareX = minXglobal / square_width;
     int minSquareY = minYglobal / square_height;

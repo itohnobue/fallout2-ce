@@ -180,11 +180,32 @@ unsigned char* pcxRead(const char* path, int* widthPtr, int* heightPtr, unsigned
 
     int width = pcxHeader.maxX - pcxHeader.minX + 1;
     int height = pcxHeader.maxY - pcxHeader.minY + 1;
+    int bytesPerLine = pcxHeader.planeCount * pcxHeader.bytesPerLine;
+
+    // H-16 / art NEW-01 / M-168: Validate PCX dimensions before allocating
+    // and decoding. width/height/bytesPerLine are computed from file-
+    // controlled signed short header fields (PcxHeader.minX..maxY,
+    // bytesPerLine) and planeCount. Without validation:
+    //   - width > bytesPerLine → pcxReadLine writes bytesPerLine bytes per
+    //     row but the decode loop advances `ptr` by `width`, so the last rows
+    //     overrun the bytesPerLine*height allocation (H-16, HIGH).
+    //   - width < 0 (maxX < minX) → `ptr += width` walks the write pointer
+    //     backwards, writing up to (height-1)*|width| bytes before the buffer
+    //     (art NEW-01, MEDIUM).
+    //   - negative width*height products reach internal_malloc_safe and abort
+    //     the process via exit(1) (H-16).
+    // The single width > 0 guard covers both the overflow and the underflow
+    // vector: pcxReadLine always writes exactly `bytesPerLine` bytes per row,
+    // so requiring width <= bytesPerLine keeps every row in bounds and
+    // requiring width > 0 keeps the per-row advance non-negative.
+    if (width <= 0 || height <= 0 || bytesPerLine <= 0 || width > bytesPerLine) {
+        fileClose(stream);
+        return nullptr;
+    }
 
     *widthPtr = width;
     *heightPtr = height;
 
-    int bytesPerLine = pcxHeader.planeCount * pcxHeader.bytesPerLine;
     unsigned char* data = (unsigned char*)internal_malloc_safe(bytesPerLine * height, __FILE__, __LINE__); // "..\\int\\PCX.C", 195
     if (data == nullptr) {
         // NOTE: This code is unreachable, internal_malloc_safe never fails.

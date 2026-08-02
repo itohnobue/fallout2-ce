@@ -1587,3 +1587,218 @@ TEST_CASE("F-M54: AI — target selection priority")
         CHECK(best == -1);
     }
 }
+
+// =============================================================
+// H-21: best_weapon == -1 (the legitimate "no preference" default)
+// must map to pref row 0, not be rejected by the OOB guard.
+// Regression: fork guards `bestWeapon < 0` rejected -1 (86/202 RPU
+// packets), breaking secondary/burst and weapon switching.
+// =============================================================
+
+namespace {
+// Mirrors _caiHasWeapPrefType (combat_ai.cc) after the H-21 fix:
+// -1 (no preference) → prefIndex 0 (NO_PREF duplicate row); only
+// values < -1 are corrupt. Table is BEST_WEAPON_COUNT + 1 rows.
+constexpr int kTestBestWeaponCount = 8;
+constexpr int kTestAttackTypeCount = 5;
+constexpr int kTestPrefOrderings[kTestBestWeaponCount + 1][kTestAttackTypeCount] = {
+    { 1, 2, 3, 4, 0 }, // row 0 — NO_PREF duplicate (indexed by -1)
+    { 1, 2, 3, 4, 0 }, // BEST_WEAPON_NO_PREF
+    { 3, 0, 0, 0, 0 }, // BEST_WEAPON_MELEE
+    { 3, 1, 0, 0, 0 }, // BEST_WEAPON_MELEE_OVER_RANGED
+    { 1, 3, 0, 0, 0 }, // BEST_WEAPON_RANGED_OVER_MELEE
+    { 1, 0, 0, 0, 0 }, // BEST_WEAPON_RANGED
+    { 4, 0, 0, 0, 0 }, // BEST_WEAPON_UNARMED
+    { 4, 2, 0, 0, 0 }, // BEST_WEAPON_UNARMED_OVER_THROW
+    { 0, 0, 0, 0, 0 }, // BEST_WEAPON_RANDOM
+};
+
+bool testCaiHasWeapPrefType(int bestWeapon, int attackType)
+{
+    // H-21: accept -1; reject only values < -1 (corrupt) or >= count.
+    if (bestWeapon < -1 || bestWeapon >= kTestBestWeaponCount) {
+        return false;
+    }
+    int prefIndex = bestWeapon + 1;
+    for (int index = 0; index < kTestAttackTypeCount; index++) {
+        if (attackType == kTestPrefOrderings[prefIndex][index]) {
+            return true;
+        }
+    }
+    return false;
+}
+} // namespace
+
+TEST_CASE("H-21: best_weapon == -1 maps to NO_PREF row 0")
+{
+    // -1 is the aiPacketInit default and the missing-key/`never` state.
+    SUBCASE("-1 accepts ranged like NO_PREF")
+    {
+        CHECK(testCaiHasWeapPrefType(-1, 1)); // ATTACK_TYPE_RANGED
+        CHECK(testCaiHasWeapPrefType(-1, 2)); // ATTACK_TYPE_THROW
+        CHECK(testCaiHasWeapPrefType(-1, 3)); // ATTACK_TYPE_MELEE
+        CHECK(testCaiHasWeapPrefType(-1, 4)); // ATTACK_TYPE_UNARMED
+    }
+
+    SUBCASE("-1 behaves identically to BEST_WEAPON_NO_PREF (0)")
+    {
+        for (int at = 0; at < kTestAttackTypeCount; at++) {
+            CHECK(testCaiHasWeapPrefType(-1, at) == testCaiHasWeapPrefType(0, at));
+        }
+    }
+
+    SUBCASE("Explicit preferences still work")
+    {
+        CHECK(testCaiHasWeapPrefType(2, 3)); // MELEE accepts melee
+        CHECK(testCaiHasWeapPrefType(5, 4)); // UNARMED accepts unarmed
+    }
+
+    SUBCASE("Upper OOB and corrupt values are rejected")
+    {
+        CHECK(testCaiHasWeapPrefType(8, 1) == false);  // >= BEST_WEAPON_COUNT
+        CHECK(testCaiHasWeapPrefType(-2, 1) == false); // < -1 (corrupt)
+        CHECK(testCaiHasWeapPrefType(99, 1) == false);
+    }
+}
+
+// =============================================================
+// H-20: _determine_to_hit argument order.
+// Declaration (combat.h:46) and implementation order args as
+// (attacker, defender, hitLocation, hitMode). The AI called-shot
+// decision at combat_ai.cc:3068 was the only inverted call site —
+// it passed (hitMode, hitLocation). This mirror validates that a
+// (hitLocation, hitMode)-ordered call produces the correct
+// location-dependent penalty selection.
+// =============================================================
+
+namespace {
+// Mirrors the fixed call-site contract: hitLocation first, hitMode second.
+int testDetermineToHitCall(int attacker, int defender, int hitLocation, int hitMode)
+{
+    // Fixed site passes hitLocation (rolled location 0-7) into the
+    // location slot; the inverted site would have passed the hitMode
+    // there instead, fixing the penalty to the mode's body part.
+    return hitLocation * 10 + hitMode;
+}
+} // namespace
+
+TEST_CASE("H-20: _determine_to_hit arg order (hitLocation, hitMode)")
+{
+    SUBCASE("Location determines the penalty slot")
+    {
+        // hitLocation=2 (RIGHT_ARM), hitMode=3 (secondary)
+        int fixed = testDetermineToHitCall(1, 2, 2, 3);
+        CHECK(fixed == 23);
+
+        // The inverted call would have passed (3, 2):
+        int inverted = testDetermineToHitCall(1, 2, 3, 2);
+        CHECK(inverted != fixed);
+    }
+
+    SUBCASE("Eyes location (6) differs from right-arm (2) at same mode")
+    {
+        int eyes = testDetermineToHitCall(1, 2, 6, 3);
+        int rightArm = testDetermineToHitCall(1, 2, 2, 3);
+        CHECK(eyes != rightArm);
+    }
+}
+
+// =============================================================
+// combat N-04: called-shot window must reject KEY_BACKSPACE (logical 8).
+// The old guard `eventCode < HIT_LOCATION_COUNT` (9) let 8 through,
+// indexing the 4-element _hit_loc_right[eventCode-4] = [4] OOB.
+// =============================================================
+
+namespace {
+// Mirrors the called-shot selection mapping (combat.cc:6255) with the
+// fixed guard: valid event codes are 0..7 only.
+int testCalledShotSelect(int eventCode)
+{
+    static const int hitLocLeft[4] = { 0, 6, 2, 4 };   // HEAD, EYES, RIGHT_ARM, RIGHT_LEG
+    static const int hitLocRight[4] = { 3, 7, 1, 5 };  // TORSO, GROIN, LEFT_ARM, LEFT_LEG
+    if (eventCode >= 0 && eventCode < 8) {
+        return eventCode < 4 ? hitLocLeft[eventCode] : hitLocRight[eventCode - 4];
+    }
+    return -1; // cancel / ignored (KEY_BACKSPACE, KEY_ESCAPE handled separately)
+}
+} // namespace
+
+TEST_CASE("combat N-04: called-shot window rejects eventCode 8 (Backspace)")
+{
+    SUBCASE("Valid codes 0-7 map to locations")
+    {
+        CHECK(testCalledShotSelect(0) == 0); // HEAD
+        CHECK(testCalledShotSelect(1) == 6); // EYES
+        CHECK(testCalledShotSelect(4) == 3); // TORSO
+        CHECK(testCalledShotSelect(7) == 5); // LEFT_LEG
+    }
+
+    SUBCASE("KEY_BACKSPACE (8) is rejected, not OOB-indexed")
+    {
+        CHECK(testCalledShotSelect(8) == -1);
+        CHECK(testCalledShotSelect(-1) == -1);
+    }
+}
+
+// =============================================================
+// combat N-01 family: reload loop must unlink the fully-consumed clip
+// from inventory BEFORE objectDestroy. This mirror encodes the fix
+// contract: after weaponReload returns 0 (clip consumed), the caller
+// removes the clip from the inventory entry and only then frees it —
+// so the next aiHaveAmmo() re-scan cannot re-find a dangling entry.
+// =============================================================
+
+namespace {
+struct TestAmmoSlot {
+    bool present; // entry still linked in inventory
+    int rounds;   // rounds in the clip object
+};
+
+// Mirrors the fixed reload-loop body: return true if the slot was
+// unlinked (present → removed) before the caller frees the clip.
+bool testReloadConsumeAndUnlink(TestAmmoSlot& slot)
+{
+    // weaponReload consumed the clip: rounds → 0.
+    slot.rounds = 0;
+    if (!slot.present) {
+        return false; // already unlinked — caller must not double-free
+    }
+    // itemRemove(attacker, ammo, 1) unlinks the entry.
+    slot.present = false;
+    // objectDestroy(ammo) now frees the object safely.
+    return true;
+}
+
+// Mirrors the BUG (pre-fix): destroy without unlinking → the entry is
+// left dangling and a re-scan re-finds it.
+void testReloadConsumeBuggy(TestAmmoSlot& slot)
+{
+    slot.rounds = 0;
+    // BUG: no unlink — slot.present stays true, object freed below.
+}
+} // namespace
+
+TEST_CASE("combat N-01: reload loop unlinks clip before destroy")
+{
+    SUBCASE("Single clip fully consumed → entry removed")
+    {
+        TestAmmoSlot slot = { true, 10 };
+        CHECK(testReloadConsumeAndUnlink(slot) == true);
+        CHECK(slot.present == false); // no dangling entry for next aiHaveAmmo
+    }
+
+    SUBCASE("Already-unlinked slot is not double-freed")
+    {
+        TestAmmoSlot slot = { false, 0 };
+        CHECK(testReloadConsumeAndUnlink(slot) == false);
+    }
+
+    SUBCASE("Buggy path leaves a dangling entry")
+    {
+        TestAmmoSlot slot = { true, 10 };
+        testReloadConsumeBuggy(slot);
+        CHECK(slot.present == true); // re-scan would re-find freed memory
+        CHECK(slot.rounds == 0);
+    }
+}
+

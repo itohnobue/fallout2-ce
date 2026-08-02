@@ -182,9 +182,14 @@ static unsigned int _defaultTimerFunc()
 }
 
 // Returns interpreter time in milliseconds.  This is effectively just ticks, since interpreterTimerTick == 1000
+// M-43: The 1000 * ticks product is computed in 64-bit arithmetic. In 32-bit
+// unsigned arithmetic it overflowed at ticks > 4,294,967 ms (~71.6 min of
+// uptime), corrupting script timing (waits that never elapse, delayed calls
+// that misfire). With a 64-bit intermediate the result is exact for the full
+// 32-bit tick range.
 static unsigned int getInterpreterTime()
 {
-    return 1000 * interpreterTimerFunc() / interpreterTimerTick;
+    return static_cast<unsigned int>(1000ULL * interpreterTimerFunc() / interpreterTimerTick);
 }
 
 // 0x4670B4
@@ -529,9 +534,13 @@ Program* programCreateByPath(const char* path)
 {
     File* stream = fileOpen(path, "rb");
     if (stream == nullptr) {
-        char err[260];
-        snprintf(err, sizeof(err), "Couldn't open %s for read\n", path);
-        programFatalError(err);
+        // R-08: a missing (or TOCTOU-vanished) .int must not programFatalError
+        // — the longjmp lands in gInterpreterCurrentProgram->env, which during
+        // opCallStart/opSpawn/forkProgram dispatch is the CALLING program,
+        // permanently killing it. Return nullptr; every caller already
+        // null-checks (runScript, scriptsCreateProgramByName,
+        // sfall_gl_scr_load_hook_scripts, sfall_gl_scr_exec_start_proc).
+        debugPrint("\nError: couldn't open %s for read\n", path);
         return nullptr;
     }
 
@@ -543,7 +552,9 @@ Program* programCreateByPath(const char* path)
 
     if (fileSize < 118) {
         internal_free_safe(data, __FILE__, __LINE__);
-        programFatalError("Invalid .int file '%s': size %d is too small (minimum 118 bytes)\n", path, fileSize);
+        // R-08: corrupt-but-existing .int (too small) — graceful nullptr
+        // return instead of programFatalError (same caller-kill reasoning).
+        debugPrint("\nError: invalid .int file '%s': size %d is too small (minimum 118 bytes)\n", path, fileSize);
         return nullptr;
     }
 
@@ -571,7 +582,8 @@ Program* programCreateByPath(const char* path)
     // cannot overflow a signed 32-bit int.
     if (procedureCount < 0 || procedureCount > INT_MAX / 24) {
         programFree(program);
-        programFatalError("Invalid .int file '%s': procedure count %d causes overflow\n", path, procedureCount);
+        // R-08: corrupt .int — graceful nullptr return (see above).
+        debugPrint("\nError: invalid .int file '%s': procedure count %d causes overflow\n", path, procedureCount);
         return nullptr;
     }
     const int procedureTableSize = 24 * procedureCount;
@@ -580,16 +592,29 @@ Program* programCreateByPath(const char* path)
     // Validate identifiers pointer is within the data buffer with room for the size header
     if (program->identifiers + 4 > program->data + program->dataSize) {
         programFree(program);
-        programFatalError("Invalid .int file '%s': procedure table extends past end of data\n", path);
+        // R-08: corrupt .int — graceful nullptr return (see above).
+        debugPrint("\nError: invalid .int file '%s': procedure table extends past end of data\n", path);
         return nullptr;
     }
 
+    // M-48: validate identifierTableSize BEFORE computing staticStrings. A
+    // negative size would make staticStrings point before identifiers (the
+    // pointer check below cannot fire for negative sizes), and a huge positive
+    // size is caught by the pointer check. Both would enable out-of-bounds
+    // string/identifier reads later (programGetString / programGetIdentifier).
     const int identifierTableSize = stackReadInt32(program->identifiers, 0);
+    if (identifierTableSize < 0) {
+        programFree(program);
+        // R-08: corrupt .int — graceful nullptr return (see above).
+        debugPrint("\nError: invalid .int file '%s': negative identifier table size %d\n", path, identifierTableSize);
+        return nullptr;
+    }
     program->staticStrings = program->identifiers + 4 + identifierTableSize;
     // Validate staticStrings pointer is within the data buffer with room for the size header
     if (program->staticStrings + 4 > program->data + program->dataSize) {
         programFree(program);
-        programFatalError("Invalid .int file '%s': identifier table extends past end of data\n", path);
+        // R-08: corrupt .int — graceful nullptr return (see above).
+        debugPrint("\nError: invalid .int file '%s': identifier table extends past end of data\n", path);
         return nullptr;
     }
 
@@ -2374,6 +2399,15 @@ static void opCall(Program* program)
     const int flags = stackReadInt32(ptr, offsetof(Procedure, flags));
     if ((flags & PROCEDURE_FLAG_IMPORTED) != 0) {
         char* procedureIdentifier = programGetIdentifier(program, stackReadInt32(ptr, offsetof(Procedure, nameOffset)));
+        if (procedureIdentifier == nullptr) {
+            // M-45: corrupted nameOffset. Treat as an unresolvable external
+            // procedure (matches the "not found" path below) instead of
+            // passing null into _hashName/compat_stricmp.
+            char err[260];
+            snprintf(err, sizeof(err), "External procedure not found\n");
+            _interpretOutput(err);
+            return;
+        }
         int externalProcedureAddress;
         int externalProcedureArgumentCount;
         Program* externalProgram = externalProcedureGetProgram(procedureIdentifier, &externalProcedureAddress, &externalProcedureArgumentCount);
@@ -2645,6 +2679,11 @@ static void opStoreExternalVariable(Program* program)
     ProgramValue value = programStackPopValue(program);
 
     const char* identifier = programGetIdentifier(program, addr.integerValue);
+    if (identifier == nullptr) {
+        // M-45: corrupted name offset — bail before _hashName(null).
+        programFatalError("External variable does not exist\n");
+        return;
+    }
 
     if (externalVariableSetValue(program, identifier, value)) {
         char err[256];
@@ -2659,6 +2698,11 @@ static void opFetchExternalVariable(Program* program)
     ProgramValue addr = programStackPopValue(program);
 
     const char* identifier = programGetIdentifier(program, addr.integerValue);
+    if (identifier == nullptr) {
+        // M-45: corrupted name offset — bail before _hashName(null).
+        programFatalError("External variable does not exist\n");
+        return;
+    }
 
     ProgramValue value;
     if (externalVariableGetValue(program, identifier, value) != 0) {
@@ -2683,6 +2727,11 @@ static void opExportProcedure(Program* program)
     unsigned char* const proc_ptr = program->procedures + 4 + sizeof(Procedure) * procedureIndex;
 
     char* const procedureName = programGetIdentifier(program, stackReadInt32(proc_ptr, offsetof(Procedure, nameOffset)));
+    if (procedureName == nullptr) {
+        // M-45: corrupted name offset — bail before _hashName(strncpy).
+        programFatalError("Error exporting procedure: invalid name offset");
+        return;
+    }
     const int procedureAddress = stackReadInt32(proc_ptr, offsetof(Procedure, bodyOffset));
 
     if (externalProcedureCreate(program, procedureName, procedureAddress, argumentCount) != 0) {
@@ -2698,6 +2747,11 @@ static void opExportVariable(Program* program)
     ProgramValue addr = programStackPopValue(program);
 
     const char* identifier = programGetIdentifier(program, addr.integerValue);
+    if (identifier == nullptr) {
+        // M-45: corrupted name offset — bail before _hashName(strncpy).
+        programFatalError("External variable does not exist");
+        return;
+    }
 
     if (externalVariableCreate(program, identifier)) {
         char err[256];
@@ -2755,9 +2809,17 @@ static void opCallStart(Program* program)
     // NOTE: Uninline.
     program->child = runScript(name);
     if (program->child == nullptr) {
-        char err[260];
-        snprintf(err, sizeof(err), "Error spawning child %s", name);
-        programFatalError(err);
+        // R-08: runScript returned nullptr because the .int is missing or
+        // corrupt. Do NOT call programFatalError — it longjmps to
+        // gInterpreterCurrentProgram->env, which during opCallStart dispatch
+        // is THIS program (the caller), permanently marking it
+        // EXITED|FATAL_ERROR (programInterpret's longjmp recovery, lines
+        // 3085-3090). Mirror scriptExecProc's graceful handling
+        // (scripts.cc:1391-1394): clear the child flag, log, and return.
+        // The script continues after the failed callstart.
+        debugPrint("\nError: callstart: failed to load child script '%s'\n", name);
+        program->flags &= ~PROGRAM_FLAG_CHILD_CALL;
+        return;
     }
 
     program->child->parent = program;
@@ -2779,9 +2841,13 @@ static void opSpawn(Program* program)
     // NOTE: Uninline.
     program->child = runScript(name);
     if (program->child == nullptr) {
-        char err[260];
-        snprintf(err, sizeof(err), "Error spawning child %s", name);
-        programFatalError(err);
+        // R-08: same graceful handling as opCallStart — do NOT
+        // programFatalError (the longjmp target during spawn dispatch is this
+        // program's env). Clear the child flag and return; the caller script
+        // survives a missing/corrupt spawned .int.
+        debugPrint("\nError: spawn: failed to load child script '%s'\n", name);
+        program->flags &= ~PROGRAM_FLAG_CHILD_SPAWN;
+        return;
     }
 
     program->child->parent = program;
@@ -2801,9 +2867,13 @@ static Program* forkProgram(Program* program)
     Program* forked = runScript(name);
 
     if (forked == nullptr) {
-        char err[256];
-        snprintf(err, sizeof(err), "couldn't fork script '%s'", name);
-        programFatalError(err);
+        // R-08: runScript returned nullptr (missing/corrupt .int). Do NOT
+        // programFatalError — the longjmp target during fork dispatch is this
+        // program's env, permanently disabling the caller. Mirror the graceful
+        // pattern; return nullptr and let opFork/opExec handle it (opExec
+        // guards the nullptr; opFork discards the result).
+        debugPrint("\nError: couldn't fork script '%s' (script load failed)\n", name);
+        return nullptr;
     }
 
     forked->windowId = program->windowId;
@@ -2824,6 +2894,14 @@ static void opExec(Program* program)
 {
     Program* parent = program->parent;
     Program* fork = forkProgram(program);
+
+    // R-08: forkProgram now returns nullptr on load failure instead of
+    // programFatalError. Guard the dereference — on failure, leave the
+    // current program running (exec simply does not happen).
+    if (fork == nullptr) {
+        debugPrint("\nError: exec: fork failed (script load failed)\n");
+        return;
+    }
 
     if (parent != nullptr) {
         fork->parent = parent;
@@ -2858,7 +2936,9 @@ static void opCheckProcedureArgumentCount(Program* program)
     if (actualArgumentCount != expectedArgumentCount) {
         const char* identifier = programGetIdentifier(program, stackReadInt32(program->procedures + 4 + 24 * procedureIndex, offsetof(Procedure, nameOffset)));
         char err[260];
-        snprintf(err, sizeof(err), "Wrong number of args to procedure %s\n", identifier);
+        // M-45: guard against null identifier (corrupted name offset) —
+        // snprintf("%s", nullptr) is UB.
+        snprintf(err, sizeof(err), "Wrong number of args to procedure %s\n", identifier != nullptr ? identifier : "<unknown>");
         programFatalError(err);
     }
 }
@@ -2879,6 +2959,12 @@ static void opLookupStringProc(Program* program)
     for (int index = 1; index < procedureCount; index++) {
         int offset = stackReadInt32(procedurePtr, offsetof(Procedure, nameOffset));
         const char* procedureName = programGetIdentifier(program, offset);
+        if (procedureName == nullptr) {
+            // M-45: corrupted name offset — skip this procedure instead of
+            // calling compat_stricmp(nullptr, ...).
+            procedurePtr += sizeof(Procedure);
+            continue;
+        }
         if (compat_stricmp(procedureName, procedureNameToLookup) == 0) {
             programStackPushInteger(program, index);
             return;
@@ -3079,7 +3165,15 @@ void programInterpret(Program* program, int numInstructions)
             programFatalError(err);
         }
 
-        const unsigned int opcodeIndex = opcode & 0x3FFF;
+        // C-01: 10-bit decode mask. The 0x3FFF (14-bit) mask introduced in
+        // 481cb9e mapped value-type words (0x9001 PUSH_STR, 0xA001 PUSH_FLOAT,
+        // 0x9801 PUSH_DYNSTR, 0xE001 PUSH_PTR) to indices >= OPCODE_MAX_COUNT,
+        // fatally aborting every script that pushes a string/float/dynstring/ptr
+        // constant. Under the correct 0x3FF mask all value-type words map to
+        // index 1 (OPCODE_PUSH), with the type preserved via program->flags
+        // bits 16-31. The bounds check below still traps malformed 0x8300-0x83FF
+        // words (indices 768-1023).
+        const unsigned int opcodeIndex = opcode & 0x3FF;
         if (opcodeIndex >= OPCODE_MAX_COUNT) {
             snprintf(err, sizeof(err), "Opcode index %x out of bounds (max %d).", opcodeIndex, OPCODE_MAX_COUNT);
             programFatalError(err);
@@ -3198,12 +3292,24 @@ void programExecuteProcedureAsync(Program* program, int procedureIndex)
     procedureFlags = stackReadInt32(procedurePtr, offsetof(Procedure, flags));
     if ((procedureFlags & PROCEDURE_FLAG_IMPORTED) != 0) {
         procedureIdentifier = programGetIdentifier(program, stackReadInt32(procedurePtr, offsetof(Procedure, nameOffset)));
+        if (procedureIdentifier == nullptr) {
+            // M-45: corrupted name offset — bail before _hashName(null).
+            snprintf(err, sizeof(err), "External procedure not found\n");
+            _interpretOutput(err);
+            return;
+        }
         externalProgram = externalProcedureGetProgram(procedureIdentifier, &externalProcedureAddress, &externalProcedureArgumentCount);
         if (externalProgram != nullptr) {
             if (externalProcedureArgumentCount == 0) {
             } else {
+                // M-44: return on error instead of falling through to
+                // setupExternalCall with a mismatched argument stack. The
+                // synchronous twin (programExecuteProcedure) keeps
+                // setupExternalCall inside the argCount == 0 branch; this
+                // path must not execute the external with a corrupted stack.
                 snprintf(err, sizeof(err), "External procedure cannot take arguments in interrupt context");
                 _interpretOutput(err);
+                return;
             }
         } else {
             snprintf(err, sizeof(err), "External procedure %s not found\n", procedureIdentifier);
@@ -3258,7 +3364,15 @@ int programFindProcedure(Program* program, const char* name)
     unsigned char* ptr = program->procedures + 4;
     for (int index = 0; index < procedureCount; index++) {
         int identifierOffset = stackReadInt32(ptr, offsetof(Procedure, nameOffset));
-        if (compat_stricmp((char*)(program->identifiers + identifierOffset), name) == 0) {
+        // M-45: route through programGetIdentifier so a corrupted nameOffset
+        // cannot cause an out-of-bounds read / compat_stricmp on a bad
+        // pointer. Skip the entry when the offset is invalid.
+        char* identifier = programGetIdentifier(program, identifierOffset);
+        if (identifier == nullptr) {
+            ptr += sizeof(Procedure);
+            continue;
+        }
+        if (compat_stricmp(identifier, name) == 0) {
             return index;
         }
 
@@ -3295,6 +3409,12 @@ void programExecuteProcedure(Program* program, int procedureIndex)
 
     if ((procedureFlags & PROCEDURE_FLAG_IMPORTED) != 0) {
         procedureIdentifier = programGetIdentifier(program, stackReadInt32(procedurePtr, offsetof(Procedure, nameOffset)));
+        if (procedureIdentifier == nullptr) {
+            // M-45: corrupted name offset — bail before _hashName(null).
+            snprintf(err, sizeof(err), "External procedure not found\n");
+            _interpretOutput(err);
+            return;
+        }
         externalProgram = externalProcedureGetProgram(procedureIdentifier, &externalProcedureAddress, &externalProcedureArgumentCount);
         if (externalProgram != nullptr) {
             if (externalProcedureArgumentCount == 0) {
@@ -3445,6 +3565,19 @@ void runProgram(Program* program)
 Program* runScript(char* name)
 {
     Program* program;
+
+    // interp N-01: Pre-check file existence to prevent programCreateByPath's
+    // internal programFatalError from longjmp-ing to the CALLING program's
+    // context. programFatalError longjmps to gInterpreterCurrentProgram->env,
+    // which during a spawn/exec (opCallStart/opSpawn/forkProgram) points at
+    // the caller, not the script being loaded — a missing .int would corrupt
+    // the caller's state and permanently disable it. Mirrors the hardened
+    // lazy-load path scriptsCreateProgramByName (scripts.cc:774-784).
+    File* test = fileOpen(_interpretMangleName(name), "rb");
+    if (test == nullptr) {
+        return nullptr;
+    }
+    fileClose(test);
 
     // NOTE: Uninline.
     program = programCreateByPath(_interpretMangleName(name));

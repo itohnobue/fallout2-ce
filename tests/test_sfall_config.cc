@@ -206,6 +206,16 @@ TEST_CASE("sfallConfigInit — default config values") {
         CHECK(val == 0);
     }
 
+    SUBCASE("H-06: WorldMapSlots defaults to 21") {
+        // RPU's gl_k_modini.ssl requires get_ini_setting("ddraw.ini|Misc|WorldMapSlots")
+        // to equal 21 or it calls signal_end_game. sfall's own default is 0,
+        // which also fails the check — 21 is the only value that satisfies RPU.
+        int val = -1;
+        CHECK(configGetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY,
+            SFALL_CONFIG_WORLDMAP_SLOTS_KEY, &val, -1));
+        CHECK(val == 21);
+    }
+
     sfallConfigExit();
 }
 

@@ -231,39 +231,45 @@ void _kb_simulate_key(KeyboardData* data)
         gLastKeyboardEvent.scanCode = physicalKey;
         gLastKeyboardEvent.modifiers = 0;
 
-        if (physicalKey == SDL_SCANCODE_CAPSLOCK) {
-            if (gPressedPhysicalKeys[SDL_SCANCODE_LCTRL] == KEY_STATE_UP && gPressedPhysicalKeys[SDL_SCANCODE_RCTRL] == KEY_STATE_UP) {
-                // TODO: Missing check for QWERTY keyboard layout.
-                if ((gModifierKeysState & MODIFIER_KEY_STATE_CAPS_LOCK) != 0) {
-                    // TODO: There is some strange code checking for _kb_layout, check in
-                    // debugger.
-                    gModifierKeysState &= ~MODIFIER_KEY_STATE_CAPS_LOCK;
-                } else {
-                    gModifierKeysState |= MODIFIER_KEY_STATE_CAPS_LOCK;
+        // M-158: only toggle lock keys on the initial key-down. KEY_STATE_REPEAT
+        // events are synthesized while a key is held (SDL key repeat ~every 80ms,
+        // and CE's own repeat loop at input.cc), so the old code re-toggled
+        // CapsLock/NumLock/ScrollLock on every repeat tick.
+        if (keyState == KEY_STATE_DOWN) {
+            if (physicalKey == SDL_SCANCODE_CAPSLOCK) {
+                if (gPressedPhysicalKeys[SDL_SCANCODE_LCTRL] == KEY_STATE_UP && gPressedPhysicalKeys[SDL_SCANCODE_RCTRL] == KEY_STATE_UP) {
+                    // TODO: Missing check for QWERTY keyboard layout.
+                    if ((gModifierKeysState & MODIFIER_KEY_STATE_CAPS_LOCK) != 0) {
+                        // TODO: There is some strange code checking for _kb_layout, check in
+                        // debugger.
+                        gModifierKeysState &= ~MODIFIER_KEY_STATE_CAPS_LOCK;
+                    } else {
+                        gModifierKeysState |= MODIFIER_KEY_STATE_CAPS_LOCK;
+                    }
                 }
-            }
-        } else if (physicalKey == SDL_SCANCODE_NUMLOCKCLEAR) {
-            if (gPressedPhysicalKeys[SDL_SCANCODE_LCTRL] == KEY_STATE_UP && gPressedPhysicalKeys[SDL_SCANCODE_RCTRL] == KEY_STATE_UP) {
-                if ((gModifierKeysState & MODIFIER_KEY_STATE_NUM_LOCK) != 0) {
-                    gModifierKeysState &= ~MODIFIER_KEY_STATE_NUM_LOCK;
-                } else {
-                    gModifierKeysState |= MODIFIER_KEY_STATE_NUM_LOCK;
+            } else if (physicalKey == SDL_SCANCODE_NUMLOCKCLEAR) {
+                if (gPressedPhysicalKeys[SDL_SCANCODE_LCTRL] == KEY_STATE_UP && gPressedPhysicalKeys[SDL_SCANCODE_RCTRL] == KEY_STATE_UP) {
+                    if ((gModifierKeysState & MODIFIER_KEY_STATE_NUM_LOCK) != 0) {
+                        gModifierKeysState &= ~MODIFIER_KEY_STATE_NUM_LOCK;
+                    } else {
+                        gModifierKeysState |= MODIFIER_KEY_STATE_NUM_LOCK;
+                    }
                 }
-            }
-        } else if (physicalKey == SDL_SCANCODE_SCROLLLOCK) {
-            if (gPressedPhysicalKeys[SDL_SCANCODE_LCTRL] == KEY_STATE_UP && gPressedPhysicalKeys[SDL_SCANCODE_RCTRL] == KEY_STATE_UP) {
-                if ((gModifierKeysState & MODIFIER_KEY_STATE_SCROLL_LOCK) != 0) {
-                    gModifierKeysState &= ~MODIFIER_KEY_STATE_SCROLL_LOCK;
-                } else {
-                    gModifierKeysState |= MODIFIER_KEY_STATE_SCROLL_LOCK;
+            } else if (physicalKey == SDL_SCANCODE_SCROLLLOCK) {
+                if (gPressedPhysicalKeys[SDL_SCANCODE_LCTRL] == KEY_STATE_UP && gPressedPhysicalKeys[SDL_SCANCODE_RCTRL] == KEY_STATE_UP) {
+                    if ((gModifierKeysState & MODIFIER_KEY_STATE_SCROLL_LOCK) != 0) {
+                        gModifierKeysState &= ~MODIFIER_KEY_STATE_SCROLL_LOCK;
+                    } else {
+                        gModifierKeysState |= MODIFIER_KEY_STATE_SCROLL_LOCK;
+                    }
                 }
-            }
-        } else if ((physicalKey == SDL_SCANCODE_LSHIFT || physicalKey == SDL_SCANCODE_RSHIFT) && (gModifierKeysState & MODIFIER_KEY_STATE_CAPS_LOCK) != 0 && gKeyboardLayout != 0) {
-            if (gPressedPhysicalKeys[SDL_SCANCODE_LCTRL] == KEY_STATE_UP && gPressedPhysicalKeys[SDL_SCANCODE_RCTRL] == KEY_STATE_UP) {
-                if (gModifierKeysState & MODIFIER_KEY_STATE_CAPS_LOCK) {
-                    gModifierKeysState &= ~MODIFIER_KEY_STATE_CAPS_LOCK;
-                } else {
-                    gModifierKeysState |= MODIFIER_KEY_STATE_CAPS_LOCK;
+            } else if ((physicalKey == SDL_SCANCODE_LSHIFT || physicalKey == SDL_SCANCODE_RSHIFT) && (gModifierKeysState & MODIFIER_KEY_STATE_CAPS_LOCK) != 0 && gKeyboardLayout != 0) {
+                if (gPressedPhysicalKeys[SDL_SCANCODE_LCTRL] == KEY_STATE_UP && gPressedPhysicalKeys[SDL_SCANCODE_RCTRL] == KEY_STATE_UP) {
+                    if (gModifierKeysState & MODIFIER_KEY_STATE_CAPS_LOCK) {
+                        gModifierKeysState &= ~MODIFIER_KEY_STATE_CAPS_LOCK;
+                    } else {
+                        gModifierKeysState |= MODIFIER_KEY_STATE_CAPS_LOCK;
+                    }
                 }
             }
         }

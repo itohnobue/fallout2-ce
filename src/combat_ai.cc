@@ -1362,7 +1362,12 @@ static int _ai_check_drugs(Object* critter)
         } while (lastItem != nullptr && critter->data.critter.combat.ap >= 2);
     }
 
-    return drugUsed ? 1 : 0;
+    // M-56: always return 0. The fork changed the return to
+    // `drugUsed ? 1 : 0` (481cb9e), and the caller (_combat_ai, 3527-3530)
+    // treats a non-zero return as "FLEEING: I need DRUGS!" → _ai_run_away.
+    // After a successful stimpak use drugUsed=1, so the NPC immediately
+    // fled. Upstream and sfall both force 0 unconditionally.
+    return 0;
 }
 
 // 0x428868
@@ -2103,6 +2108,11 @@ void _caiTeamCombatExit()
 }
 
 // 0x4292D4
+//
+// combat N-01 / M-73 family: finds compatible ammo in [critter]'s inventory.
+// A clip whose rounds are already 0 is never returned — a fully-consumed
+// clip must be removed (see the reload loops), and returning it here would
+// hand the caller a clip that `weaponReload` cannot fill.
 static bool aiHaveAmmo(Object* critter, Object* weapon, Object** ammoPtr)
 {
     if (ammoPtr != nullptr) {
@@ -2119,6 +2129,12 @@ static bool aiHaveAmmo(Object* critter, Object* weapon, Object** ammoPtr)
         Object* ammo = inventoryFindByType(critter, ITEM_TYPE_AMMO, &inventoryItemIndex);
         if (ammo == nullptr) {
             break;
+        }
+
+        // A clip that is already empty cannot be loaded into a weapon; skip
+        // it so the caller never reloads/destroys a 0-round clip repeatedly.
+        if (ammoGetQuantity(ammo) == 0) {
+            continue;
         }
 
         if (weaponCanBeReloadedWith(weapon, ammo)) {
@@ -2147,8 +2163,12 @@ static bool _caiHasWeapPrefType(AiPacket* ai, int attackType)
     // into _weapPrefOrderings (dim[0] = BEST_WEAPON_COUNT + 1).
     // ai->best_weapon comes from an ai.txt file parsed at runtime; a
     // malformed/corrupted ai.txt can produce values outside [0, BEST_WEAPON_COUNT).
+    //
+    // H-21: -1 is the legitimate "no preference" default (aiPacketInit sets
+    // best_weapon = -1; missing/`never` keys keep it). bestWeapon + 1 maps
+    // -1 to row 0 (NO_PREF duplicate). Only values < -1 are corrupt.
     int bestWeapon = ai->best_weapon;
-    if (bestWeapon < 0 || bestWeapon >= BEST_WEAPON_COUNT) {
+    if (bestWeapon < -1 || bestWeapon >= BEST_WEAPON_COUNT) {
         return false;
     }
     int prefIndex = bestWeapon + 1;
@@ -2183,8 +2203,12 @@ static Object* _ai_best_weapon(Object* attacker, Object* weapon1, Object* weapon
     // Matches the guard pattern in _caiHasWeapPrefType at line 2121.
     // ai->best_weapon is parsed from ai.txt at runtime or loaded from save
     // file deserialization (raw int32); corrupted data can produce OOB values.
+    //
+    // H-21: -1 is the legitimate "no preference" default (aiPacketInit sets
+    // best_weapon = -1; missing/`never` keys keep it). bestWeapon + 1 maps
+    // -1 to row 0 (NO_PREF duplicate). Only values < -1 are corrupt.
     int bestWeapon = ai->best_weapon;
-    if (bestWeapon < 0 || bestWeapon >= BEST_WEAPON_COUNT) {
+    if (bestWeapon < -1 || bestWeapon >= BEST_WEAPON_COUNT) {
         return nullptr;
     }
 
@@ -2573,7 +2597,11 @@ static Object* _ai_search_environ(Object* critter, int itemType)
 
     Object** objects;
     int count = objectListCreate(-1, gElevation, OBJ_TYPE_ITEM, &objects);
-    if (count == 0) {
+    // M-57: objectListCreate returns -1 and leaves *objectListPtr null on
+    // allocation failure. The old `count == 0` guard let -1 through to
+    // _ai_sort_list_distance → qsort(nullptr, (size_t)-1 = SIZE_MAX, ...)
+    // — UB/crash on OOM.
+    if (count <= 0) {
         return nullptr;
     }
 
@@ -3065,7 +3093,12 @@ static int _ai_called_shot(Object* attacker, Object* defender, int hitMode)
 
                 if (critterGetStat(attacker, STAT_INTELLIGENCE) >= intelligenceRequired) {
                     hitLocation = randomBetween(0, HIT_LOCATION_SPECIFIC_COUNT - 1);
-                    int chanceToHit = _determine_to_hit(attacker, defender, hitMode, hitLocation);
+                    // H-20: declaration/implementation order is
+                    // (attacker, defender, hitLocation, hitMode) — the other
+                    // 6 call sites use it; this was the only inverted site,
+                    // feeding the rolled location into the hitMode slot and
+                    // the actual mode into the location slot.
+                    int chanceToHit = _determine_to_hit(attacker, defender, hitLocation, hitMode);
                     if (chanceToHit < ai->min_to_hit) {
                         hitLocation = HIT_LOCATION_TORSO;
                     }
@@ -3153,11 +3186,29 @@ static int _ai_try_attack(Object* attacker, Object* defender)
             // out of ammo
             int roundsLoaded = 0;
             if (aiHaveAmmo(attacker, weapon, &ammo)) {
-                while (aiHaveAmmo(attacker, weapon, &ammo)) {
+                for (;;) {
                     int remainingAmmoQuantity = weaponReload(weapon, ammo);
                     if (remainingAmmoQuantity == 0 && ammo != nullptr) {
+                        // combat N-01: weaponReload consumed the whole clip but
+                        // never removed the inventory entry; the entry must be
+                        // unlinked BEFORE the object is freed, otherwise the
+                        // next aiHaveAmmo()/inventoryFindByType() re-reads the
+                        // dangling entry (UAF read) and can double-free.
+                        //
+                        // Remove ONE clip (the one just consumed). For a
+                        // single-clip entry this compacts the whole entry; for
+                        // a multi-clip stack itemRemove(...,1) decrements the
+                        // stack and refills the next clip to capacity — the
+                        // engine's correct "advance to the next clip" step
+                        // (item.cc:453-455). Removing the full entry quantity
+                        // here would drop the remaining clips' rounds.
+                        itemRemove(attacker, ammo, 1);
                         objectDestroy(ammo);
                         ++roundsLoaded;
+
+                        if (!aiHaveAmmo(attacker, weapon, &ammo)) {
+                            break;
+                        }
                     } else {
                         break;
                     }
@@ -3188,6 +3239,11 @@ static int _ai_try_attack(Object* attacker, Object* defender)
                     if (ammo != nullptr) {
                         int remainingAmmoQuantity = weaponReload(weapon, ammo);
                         if (remainingAmmoQuantity == 0) {
+                            // combat N-01 family: the retrieved clip is now in
+                            // the critter's inventory; unlink it BEFORE freeing
+                            // so a later aiHaveAmmo() cannot re-find the freed
+                            // entry (UAF read / double-free).
+                            itemRemove(attacker, ammo, 1);
                             objectDestroy(ammo);
                         }
 
@@ -3353,6 +3409,13 @@ void aiAttemptWeaponReload(Object* critter, int animate)
             if (aiHaveAmmo(critter, weapon, &ammo)) {
                 int rc = weaponReload(weapon, ammo);
                 if (rc == 0) {
+                    // combat N-01: unlink the fully-consumed clip from the
+                    // critter's inventory BEFORE freeing it (see the same
+                    // fix in _ai_try_attack). weaponReload only zeroes the
+                    // clip's rounds; without this, aiHaveAmmo re-finds the
+                    // freed entry on the next iteration (UAF read) and can
+                    // objectDestroy the same pointer again (double-free).
+                    itemRemove(critter, ammo, 1);
                     objectDestroy(ammo);
                     ++loadedRounds;
                 } else {

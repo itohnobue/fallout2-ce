@@ -164,7 +164,10 @@ TEST_CASE("AmmoCostHookType enum values")
 TEST_CASE("EncounterHookEventType enum values")
 {
     CHECK(static_cast<int>(EncounterHookEventType::RandomEncounter) == 0);
-    CHECK(static_cast<int>(EncounterHookEventType::LocalMapEnter) == 2);
+    // H-03/P-05: LocalMapEnter == 1 matches sfall's HOOK_ENCOUNTER arg0
+    // (0=random, 1=enter-from-worldmap). The 86e6c4d value 2 inverted the
+    // contract and broke Et Tu's gl_worldmap.ssl handler.
+    CHECK(static_cast<int>(EncounterHookEventType::LocalMapEnter) == 1);
 }
 
 TEST_CASE("EncounterHookResult enum values")
@@ -1081,62 +1084,50 @@ TEST_CASE("F-68: HOOK_ONDEATH — single fire site per F-68 fix")
 }
 
 // =================================================================
-// F-20 (MEDIUM, FIXED): ForcedEncounter enum value and usage
+// F-20 / H-03 / P-05 / sfall N-01 (MEDIUM, FIXED): EncounterHookEventType
 // =================================================================
 //
-// Finding F-20: EncounterHookEventType enum had no ForcedEncounter member.
-// Forced encounters passed RandomEncounter with isSpecial=false → arg0=0,
-// indistinguishable from normal random encounters. Scripts could not
-// differentiate forced encounters from random ones.
-//
-// Fix at sfall_script_hooks.h:426 and sfall_script_hooks.cc:722-723:
-// Added ForcedEncounter = 256 (0x100) to the enum and wired it into
-// the scriptHooks_Encounter() switch, passing arg0=0x100 to match sfall's
-// convention.
+// The original F-20 finding added ForcedEncounter = 256 so forced encounters
+// could be distinguished from random ones. Stage-3 verification (H-03 + P-05
+// + sfall N-01) proved that premise factually wrong:
+//   - sfall NEVER fires HOOK_ENCOUNTER for forced encounters
+//     (op_force_encounter jumps straight to map load) — CE now returns
+//     without firing for ForcedEncounter (sfall N-01).
+//   - sfall's arg0 is 0=random, 1=player-enters-from-world-map; special
+//     encounters live in arg2 (encType==3), never arg0. The 86e6c4d pass
+//     flipped LocalMapEnter 1→2 and encoded specials in arg0=1 — both
+//     regressions are reverted (H-03/P-05).
+// ForcedEncounter stays in the enum as a CE-internal marker for the
+// worldmap.cc forced-encounter call site (it is never sent to scripts).
 
 TEST_CASE("F-20: ForcedEncounter enum value is 256 (0x100)")
 {
-    // The sfall convention for forced encounters is arg0=0x100 (256).
-    // CE-specific LocalMapEnter uses arg0=2 to avoid collision.
+    // CE-internal marker used by the worldmap.cc forced-encounter call site;
+    // NOT passed to scripts (sfall N-01 — the hook never fires for forced
+    // encounters).
     CHECK(static_cast<int>(EncounterHookEventType::ForcedEncounter) == 256);
 }
 
 TEST_CASE("F-20: EncounterHookEventType enum — all values are distinct")
 {
-    // Verify all three encounter event types have distinct values
     int randomEnc = static_cast<int>(EncounterHookEventType::RandomEncounter);
     int localMap = static_cast<int>(EncounterHookEventType::LocalMapEnter);
     int forcedEnc = static_cast<int>(EncounterHookEventType::ForcedEncounter);
 
     CHECK(randomEnc == 0);
-    CHECK(localMap == 2);
+    CHECK(localMap == 1); // H-03: matches sfall arg0=1 for enter-from-worldmap
     CHECK(forcedEnc == 256);
 
-    // All three are distinct
     CHECK(randomEnc != localMap);
     CHECK(randomEnc != forcedEnc);
     CHECK(localMap != forcedEnc);
-
-    // Semantic checks:
-    // RandomEncounter=0 matches sfall's arg0=0 for normal encounters
-    // ForcedEncounter=256 matches sfall's arg0=0x100 for forced encounters
-    // LocalMapEnter=2 is CE-specific and does not collide with sfall values
-    CHECK(forcedEnc > 255); // ensures arg0=256 does NOT collide with any 0..255 value
 }
 
-TEST_CASE("F-20: ForcedEncounter is used in HOOK_ENCOUNTER dispatch")
+TEST_CASE("F-20/H-03: sfall-compatible arg0 encoding is {0=random, 1=local-enter}")
 {
-    // Production: scriptHooks_Encounter() at sfall_script_hooks.cc:718-723
-    // switch (eventType):
-    //   case ForcedEncounter: arg0 = 256 (0x100)
-    //   case RandomEncounter: arg0 = isSpecial ? 1 : 0
-    //   default (LocalMapEnter): arg0 = 2
-    //
-    // Verify the switch cases produce the correct arg0 values.
-    int forcedArg0 = static_cast<int>(EncounterHookEventType::ForcedEncounter);
-    CHECK(forcedArg0 == 256); // arg0=0x100 matches sfall convention
-
-    // Scripts can detect forced encounters by checking arg0 == 0x100
-    // This was impossible before F-20 fix (arg0 was always 0 for forced
-    // encounters because they were treated as RandomEncounter with isSpecial=false).
+    // sfall MiscHs.cpp:593-597 + hooks.yml:731: arg0 is 0 for random
+    // encounters and 1 when the player enters from the world map. Special
+    // encounters are encoded in arg2 (encType==3), NEVER in arg0.
+    CHECK(static_cast<int>(EncounterHookEventType::RandomEncounter) == 0);
+    CHECK(static_cast<int>(EncounterHookEventType::LocalMapEnter) == 1);
 }

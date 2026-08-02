@@ -80,9 +80,11 @@ static int gKillsByType[TEST_KILL_TYPE_COUNT];
 // ============================================================
 
 // Mirrors critter.cc:705-713 killsIncByType
+// M-81: guard rejects ALL negative indices (old `!= -1` accepted killType < -1
+// → gKillsByType[-2] OOB write).
 static int testKillsIncByType(int killType)
 {
-    if (killType != -1 && killType < TEST_KILL_TYPE_COUNT) {
+    if (killType >= 0 && killType < TEST_KILL_TYPE_COUNT) {
         gKillsByType[killType]++;
         return 0;
     }
@@ -90,9 +92,10 @@ static int testKillsIncByType(int killType)
 }
 
 // Mirrors critter.cc:716-723 killsGetByType
+// M-81: same guard fix — metarule3(104, -2) must not read gKillsByType[-2].
 static int testKillsGetByType(int killType)
 {
-    if (killType != -1 && killType < TEST_KILL_TYPE_COUNT) {
+    if (killType >= 0 && killType < TEST_KILL_TYPE_COUNT) {
         return gKillsByType[killType];
     }
     return 0;
@@ -346,6 +349,19 @@ TEST_CASE("killsIncByType / killsGetByType — CRUD")
         resetKillsState();
         CHECK(testKillsIncByType(-1) == -1);
         CHECK(testKillsGetByType(-1) == 0);
+    }
+
+    SUBCASE("M-81: kill type below -1 is rejected (no OOB access)")
+    {
+        // metarule3(104, -2) reaches killsGetByType with an unvalidated
+        // script int (interpreter_extra.cc:2073-2077). The old guard
+        // `killType != -1` accepted -2 → gKillsByType[-2] OOB read; the
+        // inc path was an OOB write. Both must now be rejected.
+        resetKillsState();
+        CHECK(testKillsGetByType(-2) == 0);
+        CHECK(testKillsIncByType(-2) == -1);
+        CHECK(testKillsGetByType(-100) == 0);
+        CHECK(testKillsIncByType(-100) == -1);
     }
 
     SUBCASE("kill type out of range returns -1 for inc, 0 for get")
@@ -929,5 +945,67 @@ TEST_CASE("M-024: HOOK_SNEAK integration — hook overrides sneak result")
         int time = 0;
         testSneakEventProcess(120, &result, &time);
         CHECK(time == -1);  // passed through to queueAddEvent without validation
+    }
+}
+
+// ===========================================================================
+// N-01: radiationLevel clamped to the gRadiationEffectPenalties table range
+// ===========================================================================
+// radiationEventRead (critter.cc:650-687) loads radiationLevel from the save
+// file unvalidated. radiationProcess() computes radiationLevelIndex =
+// radiationLevel - 1 and indexes the static gRadiationEffectPenalties[6][8]
+// table; a crafted save with radiationLevel < 1 or > 6 → OOB read + garbage
+// stat/HP writes. Valid indexing range is [MINOR=1, RADIATION_LEVEL_COUNT=6]
+// (6 = FATAL+1, legitimately produced by critterCheckRadiationEvent when the
+// endurance roll fails at radiation > 999, critter.cc:524).
+
+// Mirror of the N-01 radiationLevel clamp (critter.cc:660-678).
+enum {
+    TEST_RADIATION_LEVEL_NONE = 0,
+    TEST_RADIATION_LEVEL_MINOR = 1,
+    TEST_RADIATION_LEVEL_FATAL = 5,
+    TEST_RADIATION_LEVEL_COUNT = 6,
+};
+
+static int testClampRadiationLevel(int radiationLevel)
+{
+    if (radiationLevel < TEST_RADIATION_LEVEL_MINOR) {
+        return TEST_RADIATION_LEVEL_MINOR;
+    }
+    if (radiationLevel > TEST_RADIATION_LEVEL_COUNT) {
+        return TEST_RADIATION_LEVEL_COUNT;
+    }
+    return radiationLevel;
+}
+
+TEST_CASE("N-01: radiationLevel clamped to valid table range on load")
+{
+    SUBCASE("in-range levels pass through unchanged")
+    {
+        CHECK(testClampRadiationLevel(TEST_RADIATION_LEVEL_MINOR) == 1);
+        CHECK(testClampRadiationLevel(TEST_RADIATION_LEVEL_FATAL) == 5);
+        CHECK(testClampRadiationLevel(TEST_RADIATION_LEVEL_COUNT) == 6);
+    }
+
+    SUBCASE("crafted-save negative level clamped up to MINOR")
+    {
+        // Pre-fix: radiationLevel = -2 → index -3 → gRadiationEffectPenalties[-3]
+        CHECK(testClampRadiationLevel(-2) == TEST_RADIATION_LEVEL_MINOR);
+        CHECK(testClampRadiationLevel(-100) == TEST_RADIATION_LEVEL_MINOR);
+    }
+
+    SUBCASE("crafted-save huge level clamped down to COUNT (max table row)")
+    {
+        // Pre-fix: radiationLevel = 7 → index 6 → gRadiationEffectPenalties[6] OOB
+        CHECK(testClampRadiationLevel(7) == TEST_RADIATION_LEVEL_COUNT);
+        CHECK(testClampRadiationLevel(1000) == TEST_RADIATION_LEVEL_COUNT);
+    }
+
+    SUBCASE("NONE (0) is never emitted by the clamp (events at NONE are no-ops)")
+    {
+        // The clamp maps 0 → MINOR so a loaded event stays functional rather
+        // than silently becoming a no-op; radiationProcess early-returns only
+        // for exactly RADIATION_LEVEL_NONE.
+        CHECK(testClampRadiationLevel(TEST_RADIATION_LEVEL_NONE) == TEST_RADIATION_LEVEL_MINOR);
     }
 }

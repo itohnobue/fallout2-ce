@@ -633,13 +633,19 @@ namespace {
             // Simulate hook return value
             int overrideDxCode = gTestHookCallResult.returnValue;
 
-            // F-27/I2F-039: ret0=1 means "block/consume the key" — return -1 sentinel.
-            // Production: sfall_kb_helpers.cc:411-413.
-            if (overrideDxCode == 1) {
-                return -1;
+            // M-29: sfall HOOK_KEYPRESS ret0 semantics (Common.cpp:194-197):
+            //   ret0 in [1, 263] → remap to DIK code (1 = DIK_ESCAPE remap)
+            //   ret0 == 0         → no override
+            //   ret0 == 255       → 255-swallow idiom → return -1 (block)
+            //   any other value   → no override
+            // Production: sfall_kb_helpers.cc sfall_kb_handle_key_pressed.
+            if (overrideDxCode == 255) {
+                return -1; // 255-swallow idiom (Et Tu gl_tma.ssl)
             }
-
-            return static_cast<int>(testGetScancodeFromKey(overrideDxCode));
+            if (overrideDxCode > 0 && overrideDxCode < 264) {
+                return static_cast<int>(testGetScancodeFromKey(overrideDxCode));
+            }
+            return SDL_SCANCODE_UNKNOWN;
         }
 
         return SDL_SCANCODE_UNKNOWN;
@@ -727,26 +733,39 @@ TEST_CASE("HOOK_KEYPRESS with zero return value means no override")
     CHECK(result == SDL_SCANCODE_UNKNOWN);
 }
 
-// I2F-039: ret0=1 sentinel — "block/consume the key" per sfall spec.
-// Production: sfall_kb_helpers.cc:407-413. When hook returns ret0=1,
-// the function returns -1 to signal the caller to fully consume the key.
-// This was missing from the test mirror and is a concrete divergence.
-TEST_CASE("HOOK_KEYPRESS — ret0=1 sentinel blocks the key (returns -1)")
+// M-29: ret0 semantics now match sfall exactly (Common.cpp KeyPressHook):
+//   - ret0=1 is a DIK remap to DIK_ESCAPE (sfall does NOT treat 1 as "block")
+//   - ret0=255 is the "swallow" idiom → return -1 (block/consume)
+//   - ret0=0 → no override (SDL_SCANCODE_UNKNOWN)
+TEST_CASE("HOOK_KEYPRESS — ret0=1 remaps to DIK_ESCAPE (sfall semantics)")
 {
     gTestHookCallResult = {};
-    gTestHookCallResult.returnValue = 1; // ret0=1 → block/consume
+    gTestHookCallResult.returnValue = 1; // ret0=1 → DIK_ESCAPE remap
 
     int result = testHandleKeyPressed(SDL_SCANCODE_A, true, true, true);
 
     CHECK(gTestHookCallResult.hookFired == true);
-    // ret0=1 → -1 sentinel (key consumed, not remapped)
+    // 1 → kDiks[1] = SDL_SCANCODE_ESCAPE (NOT a block; sfall sets dxKey=1)
+    CHECK(result == SDL_SCANCODE_ESCAPE);
+}
+
+TEST_CASE("HOOK_KEYPRESS — ret0=255 swallows the key (Et Tu gl_tma idiom)")
+{
+    gTestHookCallResult = {};
+    gTestHookCallResult.returnValue = 255; // 255-swallow
+
+    int result = testHandleKeyPressed(SDL_SCANCODE_A, true, true, true);
+
+    CHECK(gTestHookCallResult.hookFired == true);
+    // 255 → -1 sentinel (key consumed; previously mapped to UNKNOWN → passed
+    // through and advanced dialogue while Et Tu's TMA box was open)
     CHECK(result == -1);
 }
 
-TEST_CASE("HOOK_KEYPRESS — ret0=1 blocks key on release as well")
+TEST_CASE("HOOK_KEYPRESS — ret0=255 swallows key on release as well")
 {
     gTestHookCallResult = {};
-    gTestHookCallResult.returnValue = 1;
+    gTestHookCallResult.returnValue = 255;
 
     int result = testHandleKeyPressed(SDL_SCANCODE_RETURN, false, true, true);
 
@@ -755,10 +774,10 @@ TEST_CASE("HOOK_KEYPRESS — ret0=1 blocks key on release as well")
     CHECK(result == -1);
 }
 
-TEST_CASE("HOOK_KEYPRESS — ret0=1 differs from ret0=0 (unmapped)")
+TEST_CASE("HOOK_KEYPRESS — ret0=1 remap differs from ret0=0 (no override)")
 {
-    // ret0=0: numReturnValues() <= 0 path → return SDL_SCANCODE_UNKNOWN
-    // ret0=1: override → return -1 sentinel (block)
+    // ret0=0: no override → return SDL_SCANCODE_UNKNOWN
+    // ret0=1: remap to DIK_ESCAPE → SDL_SCANCODE_ESCAPE
     // These are different behaviors that must not be conflated.
 
     // ret0=0 → UNKNOWN
@@ -767,11 +786,11 @@ TEST_CASE("HOOK_KEYPRESS — ret0=1 differs from ret0=0 (unmapped)")
     int result0 = testHandleKeyPressed(SDL_SCANCODE_A, true, true, true);
     CHECK(result0 == SDL_SCANCODE_UNKNOWN);
 
-    // ret0=1 → -1 (block)
+    // ret0=1 → ESCAPE remap
     gTestHookCallResult = {};
     gTestHookCallResult.returnValue = 1;
     int result1 = testHandleKeyPressed(SDL_SCANCODE_A, true, true, true);
-    CHECK(result1 == -1);
+    CHECK(result1 == SDL_SCANCODE_ESCAPE);
 
     // They must be different — 1 != SDL_SCANCODE_UNKNOWN (which is 0)
     CHECK(result0 != result1);

@@ -516,10 +516,12 @@ TEST_CASE("Only guard 5 (all pass) enables migration")
 
 TEST_CASE("F-054: kSfallMigrationEntryCount matches production header")
 {
-    // The header declares 58 migration entries. Our mirror tests verify
-    // 8 entries (the most commonly used ones). The full table of 58 entries
-    // exists in game_config_migration.cc and content_config.cc.
-    CHECK(kSfallMigrationEntryCount == 59);
+    // The header declares 56 migration entries (P-19: ViewXPos/ViewYPos/
+    // WorldMapSlots rows removed — dead targets, zero consumers; WorldMapSlots
+    // served by the gSfallConfig default of 21 per H-06). Our mirror tests
+    // verify 8 entries (the most commonly used ones). The full table of 56
+    // entries exists in game_config_migration.cc and content_config.cc.
+    CHECK(kSfallMigrationEntryCount == 56);
     CHECK(kSfallMigrationEntryCount > 0);
 }
 

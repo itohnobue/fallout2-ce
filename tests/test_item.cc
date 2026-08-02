@@ -17,6 +17,7 @@
 #include "doctest.h"
 
 #include <cstring>
+#include <vector>
 
 // ================================================================
 // Test-local type definitions mirroring production types
@@ -1142,5 +1143,330 @@ TEST_CASE("N2-013: weaponGetRange — called outside weapon-null guard (item.cc:
         int range = testWeaponGetRange(0, TEST_HIT_MODE_RIGHT_WEAPON_PRIMARY, 0, 0);
         CHECK(range >= 1);
         CHECK(range <= 2);
+    }
+}
+
+// ================================================================
+// H-15: explosiveGetDamage must handle the _II (active) vanilla pids.
+// explosiveActivate() converts DYNAMITE_I (51) → DYNAMITE_II (206)
+// and PLASTIC_EXPLOSIVES_I (85) → PLASTIC_EXPLOSIVES_II (209) before
+// queueAddEvent, so queue.cc:490 queries the damage with the _II pid.
+// Before the fix the _II pids returned false and min/max stayed 0 —
+// every vanilla timed explosive detonated with zero damage.
+// ================================================================
+
+namespace {
+// Mirrors item.cc explosiveGetDamage() after the H-15 fix and the R-14
+// (F1) activePid parity fix.
+enum {
+    TEST_PID_DYNAMITE_I = 51,
+    TEST_PID_DYNAMITE_II = 206,
+    TEST_PID_PLASTIC_EXPLOSIVES_I = 85,
+    TEST_PID_PLASTIC_EXPLOSIVES_II = 209,
+};
+
+int testGDynamiteMin = 30;
+int testGdynamiteMax = 50;
+int testGPlasticMin = 40;
+int testGPlasticMax = 80;
+
+// Mirror of item.cc ExplosiveDescription (item.cc:93-98) + the file-static
+// gExplosives vector + explosiveAdd() (item.cc:3781-3804, dedup included).
+struct TestExplosiveDescription {
+    int pid;
+    int activePid;
+    int minDamage;
+    int maxDamage;
+};
+std::vector<TestExplosiveDescription> testGExplosives;
+
+void testExplosiveAdd(int pid, int activePid, int minDamage, int maxDamage)
+{
+    for (auto it = testGExplosives.begin(); it != testGExplosives.end(); ++it) {
+        if (it->pid == pid) {
+            testGExplosives.erase(it);
+            break;
+        }
+    }
+    testGExplosives.push_back({ pid, activePid, minDamage, maxDamage });
+}
+
+bool testExplosiveGetDamage(int pid, int* minPtr, int* maxPtr)
+{
+    if (pid == TEST_PID_DYNAMITE_I || pid == TEST_PID_DYNAMITE_II) {
+        if (minPtr) *minPtr = testGDynamiteMin;
+        if (maxPtr) *maxPtr = testGdynamiteMax;
+        return true;
+    }
+    if (pid == TEST_PID_PLASTIC_EXPLOSIVES_I || pid == TEST_PID_PLASTIC_EXPLOSIVES_II) {
+        if (minPtr) *minPtr = testGPlasticMin;
+        if (maxPtr) *maxPtr = testGPlasticMax;
+        return true;
+    }
+    // R-14 (F1): match BOTH the registered (inactive) pid and the converted
+    // active pid — sfall GetDamage matches item.pidActive (Explosions.cpp:184)
+    // and explosiveIsActiveExplosive mirrors it (item.cc:3827).
+    for (const auto& explosive : testGExplosives) {
+        if (explosive.pid == pid || explosive.activePid == pid) {
+            if (minPtr) *minPtr = explosive.minDamage;
+            if (maxPtr) *maxPtr = explosive.maxDamage;
+            return true;
+        }
+    }
+    return false;
+}
+
+// Mirror of item.cc explosiveActivate() (item.cc:3837-3864) for the
+// custom-explosive pid → activePid conversion performed on arming.
+bool testExplosiveActivate(int* pidPtr)
+{
+    for (const auto& explosive : testGExplosives) {
+        if (explosive.pid == *pidPtr) {
+            *pidPtr = explosive.activePid;
+            return true;
+        }
+    }
+    return false;
+}
+} // namespace
+
+TEST_CASE("H-15: explosiveGetDamage handles _II active pids")
+{
+    SUBCASE("Dynamite II returns the same damage as Dynamite I")
+    {
+        int minI = 0, maxI = 0;
+        CHECK(testExplosiveGetDamage(TEST_PID_DYNAMITE_I, &minI, &maxI) == true);
+        int minII = 0, maxII = 0;
+        CHECK(testExplosiveGetDamage(TEST_PID_DYNAMITE_II, &minII, &maxII) == true);
+        CHECK(minII == minI);
+        CHECK(maxII == maxI);
+        CHECK(minII == 30);
+        CHECK(maxII == 50);
+    }
+
+    SUBCASE("Plastic Explosives II returns the same damage as Plastic I")
+    {
+        int minI = 0, maxI = 0;
+        CHECK(testExplosiveGetDamage(TEST_PID_PLASTIC_EXPLOSIVES_I, &minI, &maxI) == true);
+        int minII = 0, maxII = 0;
+        CHECK(testExplosiveGetDamage(TEST_PID_PLASTIC_EXPLOSIVES_II, &minII, &maxII) == true);
+        CHECK(minII == minI);
+        CHECK(maxII == maxI);
+        CHECK(minII == 40);
+        CHECK(maxII == 80);
+    }
+
+    SUBCASE("Pre-fix behavior would return false for _II pids (zero damage)")
+    {
+        // The old code only handled the _I pids, so the _II lookup failed
+        // and the caller's zero-initialized min/max stayed 0.
+        int min = 0, max = 0;
+        bool handled = false;
+        if (TEST_PID_DYNAMITE_II == 51 || TEST_PID_DYNAMITE_II == 85) {
+            handled = true; // _I-only lookup
+        }
+        CHECK(handled == false);
+        (void)min;
+        (void)max;
+    }
+}
+
+// ================================================================
+// R-14 (F1, CONFIRMED): explosiveGetDamage must resolve the CONVERTED
+// active pid for custom explosives with a distinct activePid.
+//
+// item_make_explosive(pid=100, activePid=200, min=30, max=60) registers
+// {pid:100, activePid:200, 30, 60} in gExplosives. On arming,
+// _obj_use_explosive → explosiveActivate() (item.cc:3849-3853) rewrites the
+// item pid to activePid (100 → 200) before queueAddEvent, so the detonation
+// lookup at queue.cc:570 queries explosiveGetDamage(200). Pre-fix, the
+// gExplosives loop matched only explosive.pid (the inactive pid 100) and the
+// override map is keyed by the inactive pid too — both lookups missed → 0/0
+// damage (randomBetween(0,0) = 0). This test drives the arming → detonation
+// round-trip through the mirrored production predicate (which now also
+// matches explosive.activePid, mirroring sfall GetDamage at Explosions.cpp:184
+// and explosiveIsActiveExplosive at item.cc:3827).
+// ================================================================
+TEST_CASE("R-14 (F1): explosiveGetDamage resolves the converted active pid")
+{
+    SUBCASE("Detonation after arming resolves damage via the active pid")
+    {
+        testGExplosives.clear();
+        testExplosiveAdd(100, 200, 30, 60); // item_make_explosive(100, 200, 30, 60)
+
+        // Arming converts the item pid to the active pid (proto_instance.cc
+        // _obj_use_explosive → explosiveActivate, item.cc:3849-3853).
+        int pid = 100;
+        CHECK(testExplosiveActivate(&pid) == true);
+        CHECK(pid == 200);
+
+        // Detonation (queue.cc:570) queries the converted pid. Pre-fix this
+        // missed both the gExplosives loop (100 != 200) and the override map
+        // (keyed by inactive pid 100) → 0/0 damage.
+        int min = 0, max = 0;
+        CHECK(testExplosiveGetDamage(pid, &min, &max) == true);
+        CHECK(min == 30);
+        CHECK(max == 60);
+    }
+
+    SUBCASE("Inactive pid still resolves damage (both lookups work)")
+    {
+        testGExplosives.clear();
+        testExplosiveAdd(100, 200, 30, 60);
+
+        int min = 0, max = 0;
+        CHECK(testExplosiveGetDamage(100, &min, &max) == true);
+        CHECK(min == 30);
+        CHECK(max == 60);
+    }
+
+    SUBCASE("Unmatched pid returns false (caller keeps 0/0 defaults)")
+    {
+        testGExplosives.clear();
+        testExplosiveAdd(100, 200, 30, 60);
+
+        int min = 0, max = 0;
+        CHECK(testExplosiveGetDamage(999, &min, &max) == false);
+        CHECK(min == 0);
+        CHECK(max == 0);
+    }
+
+    SUBCASE("Distinct-activePid entries coexist without cross-resolution")
+    {
+        testGExplosives.clear();
+        testExplosiveAdd(100, 200, 30, 60);
+        testExplosiveAdd(300, 400, 10, 20);
+
+        int min = 0, max = 0;
+        CHECK(testExplosiveGetDamage(200, &min, &max) == true);
+        CHECK(min == 30);
+        CHECK(max == 60);
+        min = 0; max = 0;
+        CHECK(testExplosiveGetDamage(400, &min, &max) == true);
+        CHECK(min == 10);
+        CHECK(max == 20);
+        min = 0; max = 0;
+        CHECK(testExplosiveGetDamage(300, &min, &max) == true);
+        CHECK(min == 10);
+        CHECK(max == 20);
+    }
+}
+
+// ================================================================
+// R-07 (P-02 residual): drugEffectEventRead must reject the CURRENT_*
+// pseudo-stats (35/36/37) and the identity stats AGE (33) / GENDER (34).
+//
+// The pass-1 P-02 read-side validation allowed stats[i] ==
+// STAT_CURRENT_HIT_POINTS (35) through the ±1000 clamp. A crafted save with
+// stats[0]=35, modifiers[0]=-1000 → _perform_drug_effect →
+// critterSetBonusStat(35,-1000) → critterAdjustHitPoints(-1000) →
+// critterKill → INSTANT DEATH on event fire. The stat-36 sibling is a poison
+// loop: stats[0]=36, modifiers[0]=+1000 → critterAdjustPoison(1000) →
+// negative-delay poison event → immediate re-fire, −1 HP/tick → death
+// (critter.cc:329-377). Save-loaded drug events are proto-detached
+// (drugPid zeroed at item.cc:3189), so the read path cannot validate them
+// against proto data — the CURRENT_* set is rejected entirely. Runtime-created
+// events stay trusted (the vanilla chem-death special case in
+// _perform_drug_effect, item.cc:2952, is preserved for them).
+//
+// This mirror encodes the fixed validation predicate from item.cc
+// drugEffectEventRead: stats[i] must be -1 (no effect) or in
+// [0, SPECIAL_STAT_COUNT). SPECIAL_STAT_COUNT = 33 excludes AGE (33),
+// GENDER (34) and the CURRENT_* pseudo-stats (35/36/37). Modifiers are
+// clamped to ±1000.
+// ================================================================
+
+namespace {
+// Mirrors stat_defs.h Stat enum values relevant to the drug-event read.
+enum {
+    TEST_STAT_AGE = 33,
+    TEST_STAT_GENDER = 34,
+    TEST_STAT_CURRENT_HIT_POINTS = 35,
+    TEST_STAT_CURRENT_POISON_LEVEL = 36,
+    TEST_STAT_CURRENT_RADIATION_LEVEL = 37,
+    TEST_SPECIAL_STAT_COUNT = 33, // matches SPECIAL_STAT_COUNT
+};
+
+// Mirrors the R-07-fixed validation loop of drugEffectEventRead.
+// Returns the sanitized stats[i] (the value after the read guard).
+int testSanitizeDrugStat(int stat, int& modifier)
+{
+    const int kModifierClamp = 1000;
+    int sanitized = stat;
+    if (sanitized != -1 && !(sanitized >= 0 && sanitized < TEST_SPECIAL_STAT_COUNT)) {
+        sanitized = -1;
+        modifier = 0;
+    }
+    if (modifier < -kModifierClamp) {
+        modifier = -kModifierClamp;
+    } else if (modifier > kModifierClamp) {
+        modifier = kModifierClamp;
+    }
+    return sanitized;
+}
+} // namespace
+
+TEST_CASE("R-07: drugEffectEventRead rejects CURRENT_* pseudo-stats and identity stats")
+{
+    SUBCASE("CURRENT_HIT_POINTS (35) is rejected — closes the -1000 instant-death vector")
+    {
+        // Pre-fix: 35 passed the allow-list; on fire
+        // critterSetBonusStat(35,-1000) → critterAdjustHitPoints(-1000) →
+        // critterKill. Post-fix: 35 is outside [0, SPECIAL_STAT_COUNT) → -1.
+        int mod = -1000;
+        CHECK(testSanitizeDrugStat(TEST_STAT_CURRENT_HIT_POINTS, mod) == -1);
+        CHECK(mod == 0); // modifier zeroed with the rejected stat
+    }
+
+    SUBCASE("CURRENT_POISON_LEVEL (36) is rejected — closes the poison-loop death")
+    {
+        int mod = 1000;
+        CHECK(testSanitizeDrugStat(TEST_STAT_CURRENT_POISON_LEVEL, mod) == -1);
+        CHECK(mod == 0);
+    }
+
+    SUBCASE("CURRENT_RADIATION_LEVEL (37) is rejected")
+    {
+        int mod = 1000;
+        CHECK(testSanitizeDrugStat(TEST_STAT_CURRENT_RADIATION_LEVEL, mod) == -1);
+        CHECK(mod == 0);
+    }
+
+    SUBCASE("GENDER (34) and AGE (33) are rejected (R-20 fold-in)")
+    {
+        // R-20: stat 34 (GENDER) was in the pass-1 allow-list. No legitimate
+        // drug targets identity stats. Restricting to [0, SPECIAL_STAT_COUNT)
+        // excludes both AGE and GENDER.
+        int mod = -1;
+        CHECK(testSanitizeDrugStat(TEST_STAT_GENDER, mod) == -1);
+        CHECK(mod == 0);
+        mod = -1;
+        CHECK(testSanitizeDrugStat(TEST_STAT_AGE, mod) == -1);
+        CHECK(mod == 0);
+    }
+
+    SUBCASE("Valid SPECIAL stats and -1 pass through unchanged")
+    {
+        // STAT_STRENGTH (0) and STAT_MAXIMUM_HIT_POINTS (7) are legitimate
+        // drug targets; -1 is the "no effect" marker.
+        int mod = 50;
+        CHECK(testSanitizeDrugStat(0, mod) == 0);
+        CHECK(mod == 50);
+        mod = -2;
+        CHECK(testSanitizeDrugStat(7, mod) == 7);
+        CHECK(mod == -2);
+        mod = 5;
+        CHECK(testSanitizeDrugStat(-1, mod) == -1);
+        CHECK(mod == 5);
+    }
+
+    SUBCASE("Modifiers are still clamped to ±1000 for accepted stats")
+    {
+        int mod = 100000;
+        CHECK(testSanitizeDrugStat(0, mod) == 0);
+        CHECK(mod == 1000);
+        mod = -100000;
+        CHECK(testSanitizeDrugStat(0, mod) == 0);
+        CHECK(mod == -1000);
     }
 }

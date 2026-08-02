@@ -57,14 +57,21 @@ static constexpr F2ResMigrationEntry kTestMirrorF2ResEntries[] = {
     { "IFACE", "IFACE_BAR_SIDE_ART", GAME_CONFIG_UI_KEY, GAME_CONFIG_IFACE_BAR_SIDE_ART_KEY },
     { "IFACE", "IFACE_BAR_SIDES_ORI", GAME_CONFIG_UI_KEY, GAME_CONFIG_IFACE_BAR_SIDES_ORI_KEY },
     // [MAPS]
+    // P-18: EDGE_CLIPPING_ON is the sibling of IGNORE_MAP_EDGES — both gate
+    // the HRP edge subsystem (map_edge.cc:399-403 reads edg_support AND
+    // ignore_map_edges). It was missing from the migration table, so migrated
+    // HRP users who disabled edge clipping silently got it re-enabled.
+    // NOTE: order must match src/game_config_migration.cc:33-44 exactly —
+    // EDGE_CLIPPING_ON precedes IGNORE_MAP_EDGES in the production table.
+    { "MAPS", "EDGE_CLIPPING_ON", GAME_CONFIG_UI_KEY, "edg_support" },
     { "MAPS", "IGNORE_MAP_EDGES", GAME_CONFIG_UI_KEY, GAME_CONFIG_IGNORE_MAP_EDGES_KEY },
     // [STATIC_SCREENS]
     { "STATIC_SCREENS", "SPLASH_SCRN_SIZE", GAME_CONFIG_UI_KEY, GAME_CONFIG_SPLASH_SCREEN_SIZE_KEY },
     // [MOVIES]
     { "MOVIES", "MOVIE_SIZE", GAME_CONFIG_UI_KEY, GAME_CONFIG_MOVIE_ASPECT_FIT_KEY },
 };
-static_assert(sizeof(kTestMirrorF2ResEntries) / sizeof(kTestMirrorF2ResEntries[0]) == 10,
-    "F2Res migration mirror must have exactly 10 entries (matches src/game_config_migration.cc:33-44)");
+static_assert(sizeof(kTestMirrorF2ResEntries) / sizeof(kTestMirrorF2ResEntries[0]) == 11,
+    "F2Res migration mirror must have exactly 11 entries (matches src/game_config_migration.cc:33-44; P-18 added EDGE_CLIPPING_ON)");
 
 // ---- Sfall migration table mirror (test oracle for src/game_config_migration.cc:175-239) ----
 
@@ -191,9 +198,10 @@ TEST_CASE("gameConfigMigrateFromF2Res no legacy file present")
 
 TEST_CASE("F2Res migration table entry count")
 {
-    // The source file has exactly 10 entries in kF2ResMigrationEntries.
+    // The source file has exactly 11 entries in kF2ResMigrationEntries
+    // (P-18 added EDGE_CLIPPING_ON).
     constexpr int expectedCount = sizeof(kTestMirrorF2ResEntries) / sizeof(kTestMirrorF2ResEntries[0]);
-    CHECK(expectedCount == 10);
+    CHECK(expectedCount == 11);
 }
 
 TEST_CASE("F2Res migration table — all entries have non-null keys")
@@ -226,8 +234,14 @@ TEST_CASE("F2Res migration table — verify expected key mappings")
     CHECK(strcmp(kTestMirrorF2ResEntries[3].targetSection, GAME_CONFIG_UI_KEY) == 0);
 
     // [MOVIES] MOVIE_SIZE -> ui.movie_aspect_fit
-    CHECK(strcmp(kTestMirrorF2ResEntries[9].legacySection, "MOVIES") == 0);
-    CHECK(strcmp(kTestMirrorF2ResEntries[9].targetKey, GAME_CONFIG_MOVIE_ASPECT_FIT_KEY) == 0);
+    CHECK(strcmp(kTestMirrorF2ResEntries[10].legacySection, "MOVIES") == 0);
+    CHECK(strcmp(kTestMirrorF2ResEntries[10].targetKey, GAME_CONFIG_MOVIE_ASPECT_FIT_KEY) == 0);
+
+    // [MAPS] EDGE_CLIPPING_ON -> ui.edg_support (P-18)
+    CHECK(strcmp(kTestMirrorF2ResEntries[7].legacySection, "MAPS") == 0);
+    CHECK(strcmp(kTestMirrorF2ResEntries[7].legacyKey, "EDGE_CLIPPING_ON") == 0);
+    CHECK(strcmp(kTestMirrorF2ResEntries[7].targetSection, GAME_CONFIG_UI_KEY) == 0);
+    CHECK(strcmp(kTestMirrorF2ResEntries[7].targetKey, "edg_support") == 0);
 }
 
 TEST_CASE("Sfall migration table entry count")

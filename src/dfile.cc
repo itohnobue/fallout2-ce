@@ -187,6 +187,26 @@ DBase* dbaseOpen(const char* filePath, int* errorFlags)
         if (fread(&(entry->dataOffset), sizeof(entry->dataOffset), 1, stream) != 1) {
             break;
         }
+
+        // H-17 / P-16: Validate the DAT entry accounting fields, mirroring
+        // the ZIP path (dbaseParseZip validates all of these at :868/:930).
+        // Negative values corrupt the read path:
+        //   - negative dataSize → `dataSize - compressedBytesRead` wraps in
+        //     dfileReadCompressed (:1137), so bytesToRead becomes a huge
+        //     size_t and fread overflows the 4096-byte decompression buffer
+        //     (H-17, HIGH).
+        //   - negative dataOffset → dfileSeek/dfileOpen seek to a wrong
+        //     offset, reading another entry's data (P-16).
+        //   - negative uncompressedSize → size_t wrap in dfileRead (:492)
+        //     and dfileGetSize returns a negative file length (P-16).
+        //   - compressed values other than {0,1} silently select the
+        //     decompression path for raw data (P-16).
+        if (entry->dataSize < 0
+            || entry->dataOffset < 0
+            || entry->uncompressedSize < 0
+            || entry->compressed > 1) {
+            break;
+        }
     }
 
     if (entryIndex < dbase->entriesLength) {

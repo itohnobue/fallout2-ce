@@ -16,6 +16,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest.h"
 
+#include <algorithm>
 #include <cstring>
 
 #include "skill_defs.h"
@@ -134,6 +135,11 @@ static TestSkillDescription gTestSkillDescriptions[TEST_SKILL_COUNT] = {
 // Default gSkillMaxCap = 300 (matches sfall_opcodes.cc:2799)
 static int gTestSkillMaxCap = 300;
 
+// R-13 (H-23): mirror of the per-critter skill max cap state written by
+// set_critter_skill_mod (0x81C7). -1 = no per-critter cap set for this
+// critter (matches sfallGetCritterSkillMax's contract).
+static int gTestCritterSkillMax = -1;
+
 // Mirror of skill.h:52-55 — skillIsValid (inline)
 static inline bool testSkillIsValid(int skill)
 {
@@ -170,11 +176,22 @@ static int testSkillGetFrmId(int skill)
     return testSkillIsValid(skill) ? gTestSkillDescriptions[skill].frmId : 0;
 }
 
-// Mirror of skill.cc:268-273 — skillGetValue cap clamping (simplified)
-// This tests just the gSkillMaxCap clamping logic without full stat calculation.
+// Mirror of skill.cc:234-246 skillGetMaxSkill — effective skill max cap:
+// per-critter cap (set_critter_skill_mod, 0x81C7) takes precedence, then the
+// global gSkillMaxCap (set_skill_max / set_base_skill_mod), then 300.
+static int testSkillGetMaxSkill()
+{
+    if (gTestCritterSkillMax >= 0) {
+        return gTestCritterSkillMax;
+    }
+    return (gTestSkillMaxCap > 0) ? gTestSkillMaxCap : 300;
+}
+
+// Mirror of skill.cc:306-319 — skillGetValue cap clamping (simplified)
+// This tests just the skill max cap clamping logic without full stat calculation.
 static int testSkillCapValue(int rawValue)
 {
-    int maxSkill = (gTestSkillMaxCap > 0) ? gTestSkillMaxCap : 300;
+    int maxSkill = testSkillGetMaxSkill();
     return (rawValue > maxSkill) ? maxSkill : rawValue;
 }
 
@@ -585,56 +602,124 @@ TEST_CASE("testSkillCapValue — clamping logic")
 
 // ---- Integration: skillGetValue cap behavior (without full stat calculation) ----
 
-TEST_CASE("gSkillMaxCap — all three integration points use same formula")
+TEST_CASE("skillGetMaxSkill — all three integration points use the shared helper")
 {
-    // The same cap formula appears in three places in skill.cc:
-    //   skillGetValue:   int maxSkill = (gSkillMaxCap > 0) ? gSkillMaxCap : 300; (line 270)
-    //   skillAdd:        int maxSkill = (gSkillMaxCap > 0) ? gSkillMaxCap : 300; (line 317)
-    //   skillAddForce:   int maxSkill = (gSkillMaxCap > 0) ? gSkillMaxCap : 300; (line 351)
+    // R-13 (H-23): production skill.cc now routes the max-skill decision through
+    // the static skillGetMaxSkill() helper (skill.cc:234-246), called from:
+    //   skillGetValue:   int maxSkill = skillGetMaxSkill(critter); (line ~309)
+    //   skillAdd:        int maxSkill = skillGetMaxSkill(obj);    (line ~363)
+    //   skillAddForce:   int maxSkill = skillGetMaxSkill(obj);    (line ~397)
     //
-    // All three use identical logic. Verify the shared formula behavior.
+    // Precedence: per-critter cap (set_critter_skill_mod, 0x81C7) > global
+    // gSkillMaxCap (set_skill_max / set_base_skill_mod) > engine default 300.
+    int savedCritterMax = gTestCritterSkillMax;
+    int savedGlobalMax = gTestSkillMaxCap;
+    gTestCritterSkillMax = -1; // no per-critter cap
 
-    SUBCASE("gSkillMaxCap = 300 (default)")
+    SUBCASE("no per-critter cap, gSkillMaxCap = 300 (default)")
     {
         gTestSkillMaxCap = 300;
-        int maxSkill = (gTestSkillMaxCap > 0) ? gTestSkillMaxCap : 300;
-        CHECK(maxSkill == 300);
+        CHECK(testSkillGetMaxSkill() == 300);
     }
 
-    SUBCASE("gSkillMaxCap = 0 (fallback to 300)")
+    SUBCASE("no per-critter cap, gSkillMaxCap = 0 (fallback to 300)")
     {
         gTestSkillMaxCap = 0;
-        int maxSkill = (gTestSkillMaxCap > 0) ? gTestSkillMaxCap : 300;
-        CHECK(maxSkill == 300);
+        CHECK(testSkillGetMaxSkill() == 300);
     }
 
-    SUBCASE("gSkillMaxCap = -1 (fallback to 300)")
+    SUBCASE("no per-critter cap, gSkillMaxCap = -1 (fallback to 300)")
     {
         gTestSkillMaxCap = -1;
-        int maxSkill = (gTestSkillMaxCap > 0) ? gTestSkillMaxCap : 300;
-        CHECK(maxSkill == 300);
+        CHECK(testSkillGetMaxSkill() == 300);
     }
 
-    SUBCASE("gSkillMaxCap = 200 (custom cap)")
+    SUBCASE("no per-critter cap, gSkillMaxCap = 200 (custom global cap)")
     {
         gTestSkillMaxCap = 200;
-        int maxSkill = (gTestSkillMaxCap > 0) ? gTestSkillMaxCap : 300;
-        CHECK(maxSkill == 200);
+        CHECK(testSkillGetMaxSkill() == 200);
     }
 
-    SUBCASE("gSkillMaxCap = 1 (minimum positive cap)")
+    SUBCASE("no per-critter cap, gSkillMaxCap = 1 (minimum positive cap)")
     {
         gTestSkillMaxCap = 1;
-        int maxSkill = (gTestSkillMaxCap > 0) ? gTestSkillMaxCap : 300;
-        CHECK(maxSkill == 1);
+        CHECK(testSkillGetMaxSkill() == 1);
     }
 
-    SUBCASE("gSkillMaxCap = 999 (above vanilla)")
+    SUBCASE("no per-critter cap, gSkillMaxCap = 999 (above vanilla)")
     {
         gTestSkillMaxCap = 999;
-        int maxSkill = (gTestSkillMaxCap > 0) ? gTestSkillMaxCap : 300;
-        CHECK(maxSkill == 999);
+        CHECK(testSkillGetMaxSkill() == 999);
     }
+
+    SUBCASE("per-critter cap set (0x81C7) overrides the global cap")
+    {
+        gTestSkillMaxCap = 300;
+        gTestCritterSkillMax = 100;
+        CHECK(testSkillGetMaxSkill() == 100);
+
+        gTestCritterSkillMax = 0;
+        CHECK(testSkillGetMaxSkill() == 0);
+    }
+
+    SUBCASE("per-critter cap with higher global cap")
+    {
+        gTestSkillMaxCap = 999;
+        gTestCritterSkillMax = 50;
+        CHECK(testSkillGetMaxSkill() == 50);
+    }
+
+    gTestCritterSkillMax = savedCritterMax;
+    gTestSkillMaxCap = savedGlobalMax;
+}
+
+// ---- Per-critter skill max cap (R-13 / H-23) ----
+
+TEST_CASE("testSkillCapValue — per-critter skill max cap (set_critter_skill_mod)")
+{
+    int savedCritterMax = gTestCritterSkillMax;
+    int savedGlobalMax = gTestSkillMaxCap;
+
+    SUBCASE("per-critter cap below global cap clamps skill value")
+    {
+        gTestSkillMaxCap = 300;
+        gTestCritterSkillMax = 100;
+        CHECK(testSkillCapValue(0) == 0);
+        CHECK(testSkillCapValue(99) == 99);
+        CHECK(testSkillCapValue(100) == 100);
+        CHECK(testSkillCapValue(150) == 100);
+        CHECK(testSkillCapValue(300) == 100);
+        CHECK(testSkillCapValue(9999) == 100);
+    }
+
+    SUBCASE("per-critter cap of 0 clamps everything to 0")
+    {
+        gTestSkillMaxCap = 300;
+        gTestCritterSkillMax = 0;
+        CHECK(testSkillCapValue(0) == 0);
+        CHECK(testSkillCapValue(50) == 0);
+        CHECK(testSkillCapValue(300) == 0);
+    }
+
+    SUBCASE("per-critter cap above global cap still wins (matches CheckSkillMax)")
+    {
+        gTestSkillMaxCap = 200;
+        gTestCritterSkillMax = 300;
+        CHECK(testSkillCapValue(250) == 250);
+        CHECK(testSkillCapValue(300) == 300);
+        CHECK(testSkillCapValue(400) == 300);
+    }
+
+    SUBCASE("no per-critter cap falls back to global cap")
+    {
+        gTestCritterSkillMax = -1;
+        gTestSkillMaxCap = 200;
+        CHECK(testSkillCapValue(150) == 150);
+        CHECK(testSkillCapValue(250) == 200);
+    }
+
+    gTestCritterSkillMax = savedCritterMax;
+    gTestSkillMaxCap = savedGlobalMax;
 }
 
 // ---- TestSkillDescription struct layout ----
@@ -709,4 +794,99 @@ TEST_CASE("RollResult enum values match random.h")
     CHECK(TEST_ROLL_FAILURE == 1);
     CHECK(TEST_ROLL_SUCCESS == 2);
     CHECK(TEST_ROLL_CRITICAL_SUCCESS == 3);
+}
+
+// ===========================================================================
+// M-173: base-skill mod applied ONCE (not doubled on tagged skills)
+// ===========================================================================
+// skill.cc:252 applies sfallGetBaseSkillMod(skill) in the base term; the
+// tagged-skill "base again" term (skill.cc:256) must double only the proto
+// baseValue. The pre-fix code inserted the mod into BOTH terms, giving
+// tagged skills +2N instead of +N for mods set via set_base_skill_mod (0x81C8).
+
+// Mirror of the fixed base-mod application (skill.cc:252-263).
+static int testSkillValueWithMod(int baseValue, int baseSkillMod,
+                                 int baseValueMult, bool isTagged)
+{
+    int value = (baseValue + baseSkillMod) * baseValueMult; // base term — mod once
+    if (isTagged) {
+        value += baseValue * baseValueMult; // tagged term — base only (M-173)
+    }
+    return value;
+}
+
+TEST_CASE("M-173: base-skill mod is applied once, not doubled on tagged skills")
+{
+    SUBCASE("non-tagged skill — mod applies once")
+    {
+        CHECK(testSkillValueWithMod(50, 10, 1, false) == 60);
+    }
+
+    SUBCASE("tagged skill — tagged term doubles base only, mod NOT doubled")
+    {
+        // base 50 + mod 10: base term 60, tagged term +50 → 110.
+        // Pre-fix (bug): tagged term +60 → 120 (mod double-counted).
+        CHECK(testSkillValueWithMod(50, 10, 1, true) == 110);
+        CHECK(testSkillValueWithMod(50, 10, 1, true) != 120);
+    }
+
+    SUBCASE("tagged with zero mod matches vanilla double-base rule")
+    {
+        CHECK(testSkillValueWithMod(50, 0, 1, true) == 100); // 50 + 50
+        CHECK(testSkillValueWithMod(50, 0, 1, false) == 50);
+    }
+
+    SUBCASE("negative mod (rare) is not amplified by the tagged term")
+    {
+        CHECK(testSkillValueWithMod(50, -5, 1, true) == 95);  // 45 + 50
+        CHECK(testSkillValueWithMod(50, -5, 1, true) != 90);  // not 45 + 45
+    }
+}
+
+// ===========================================================================
+// M-174: steal catchChance clamped to [0, 100]
+// ===========================================================================
+// skill.cc:1185-1187 computed catchChance = skillGetValue(target, SKILL_STEAL)
+// - stealModifier with NO clamp, while stealChance was clamped (1155-1167).
+// stealModifier includes unbounded sfall pickpocket mods; a large positive
+// mod drove catchChance deeply negative → randomRoll(negative) always returns
+// ROLL_FAILURE → the thief is never caught. Fixed with std::clamp(catchChance,
+// 0, 100), mirroring the steal-side clamp.
+
+// Mirror of the fixed catchChance computation (skill.cc:1183-1190).
+static int testCatchChance(int targetSteal, int stealModifier)
+{
+    int catchChance = targetSteal - stealModifier;
+    catchChance = std::clamp(catchChance, 0, 100);
+    return catchChance;
+}
+
+TEST_CASE("M-174: catchChance clamped to [0, 100]")
+{
+    SUBCASE("normal in-range chance passes through")
+    {
+        CHECK(testCatchChance(50, 0) == 50);
+        CHECK(testCatchChance(80, 20) == 60);
+    }
+
+    SUBCASE("large positive pickpocket mod no longer drives catchChance negative")
+    {
+        // Pre-fix: 50 - 200 = -150 → randomRoll(-150) always ROLL_FAILURE
+        // (thief never caught). Post-fix: clamped to 0.
+        CHECK(testCatchChance(50, 200) == 0);
+        CHECK(testCatchChance(5, 1000) == 0);
+    }
+
+    SUBCASE("large negative mod caps at 100 (can't exceed 100%)")
+    {
+        CHECK(testCatchChance(50, -100) == 100);
+        CHECK(testCatchChance(50, -1000) == 100);
+    }
+
+    SUBCASE("boundary values stay in range")
+    {
+        CHECK(testCatchChance(0, 0) == 0);
+        CHECK(testCatchChance(100, 0) == 100);
+        CHECK(testCatchChance(0, -100) == 100);
+    }
 }

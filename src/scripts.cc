@@ -144,12 +144,13 @@ static int gGameModeEnabled = 0;
 // 0x51C720 fallout_game_time
 static unsigned int gGameTime = 302400;
 
-// UF-H-036: Fractional remainder for mapGetTimeMultiplier() accumulation.
-// The worldmap path (wmGameTimeIncrement, worldmap.cc:4668) uses the
-// multiplier via gScriptWorldMapMulti + a double remainder to accumulate
-// fractional ticks without losing precision.  We mirror that pattern here
-// for the local-map path.
-static double gGameTimeLocalRemainder = 0.0;
+// M-150: Local-map game time advances at vanilla 1:1 (gGameTime += 1 per
+// processing interval in _script_chk_timed_events). The pass-13 UF-H-036
+// change applied the worldmap time multiplier (mapGetTimeMultiplier) to the
+// local path, freezing/accelerating the local clock when a mod set the
+// multiplier; the worldmap path (wmGameTimeIncrement, worldmap.cc) already
+// owns the multiplier and its fractional remainder (gGameTimeIncRemainder),
+// so the local remainder accumulator was removed.
 
 // 0x51C724 days_in_month
 static const int gGameTimeDaysPerMonth[12] = {
@@ -898,14 +899,13 @@ static void _script_chk_timed_events()
     if (getTicksBetween(currentTime, gLastQueueProcessingTime) >= 100) {
         gLastQueueProcessingTime = currentTime;
         if (!isInCombat()) {
-            // UF-H-036: Apply the script world map time multiplier from map.h
-            // so local-map time advances at the same rate as worldmap time.
-            // Uses the same remainder-accumulation pattern as the worldmap
-            // path (worldmap.cc:4668) to avoid losing fractional ticks.
-            double rawTicks = 1.0 * static_cast<double>(mapGetTimeMultiplier()) + gGameTimeLocalRemainder;
-            double intPart = 0.0;
-            gGameTimeLocalRemainder = modf(rawTicks, &intPart);
-            gGameTime += static_cast<unsigned int>(intPart);
+            // M-150: The script world-map time multiplier is applied by the
+            // worldmap's own travel loop (wmGameTimeIncrement, worldmap.cc:
+            // 4745-4764). Applying it here too (pass-13 UF-H-036 regression)
+            // made the LOCAL game clock freeze (multiplier 0) or accelerate
+            // (>1) whenever a mod set the multiplier. Local-map time advances
+            // at the vanilla 1:1 rate.
+            gGameTime += 1;
         }
         shouldProcessQueue = true;
     }
@@ -1248,6 +1248,14 @@ void scriptsRequestWorldMap()
 // 0x4A466C
 int scriptsRequestElevator(Object* obj, int elevatorType)
 {
+    // M-151: scriptGetSelfWithOverride can return nullptr for ownerless
+    // non-spatial scripts (documented at interpreter_extra.cc:4932-4937, the
+    // sibling opUseObjOnObj guard). Guard before dereferencing obj->tile.
+    if (obj == nullptr) {
+        debugPrint("\nError: scripts_request_elevator! Bad object");
+        return -1;
+    }
+
     int elevatorLevel = gElevation;
 
     int tile = obj->tile;
@@ -1395,7 +1403,16 @@ int scriptExecProc(int sid, int proc)
         return -1;
     }
 
-    if ((program->flags & (PROGRAM_FLAG_FATAL_ERROR | PROGRAM_FLAG_CHILD_CALL | PROGRAM_FLAG_CHILD_SPAWN)) != 0) {
+    // M-46: Do not re-dispatch a mid-wait script. scriptExecProc re-dispatches
+    // scripts on every event cycle (map update, critter proc, timed proc).
+    // For a script left in PROGRAM_IS_WAITING (e.g. a bounded -1 dispatch that
+    // hit the instruction limit inside wait()), the re-dispatch re-enters
+    // programInterpret(-1), whose WAITING branch busy-spins at 100% CPU — and
+    // because programSetupCall resets the instruction pointer to the proc
+    // body, the wait() opcode re-executes each dispatch, re-arming waitEnd and
+    // turning the bounded spin into an infinite one. Skip WAITING programs;
+    // the interpreter's own dispatch loop still honors in-dispatch waits.
+    if ((program->flags & (PROGRAM_FLAG_FATAL_ERROR | PROGRAM_FLAG_CHILD_CALL | PROGRAM_FLAG_CHILD_SPAWN | PROGRAM_IS_WAITING)) != 0) {
         return 0;
     }
 
@@ -1447,17 +1464,53 @@ int scriptExecProc(int sid, int proc)
     Object* target = script->target;
     int fixedParam = script->fixedParam;
 
+    // M-152: cache the sid for revalidation after each hook dispatch.
+    // scriptHooks_StdProcedure runs arbitrary hook-script code that may
+    // remove this script (scriptRemove swap-and-pop) or trigger teardown
+    // (_scr_remove_all → programListFree), leaving the `script` and `program`
+    // pointers dangling. The load path above revalidates after
+    // programInterpret; the hook paths must revalidate too.
+    int hookCachedSid = script->sid;
+
     // HOOK_STDPROCEDURE
     if (scriptHooks_StdProcedure(proc, self, source, target, fixedParam, false)) {
+        Script* rechecked;
+        if (scriptGetScript(hookCachedSid, &rechecked) == -1) {
+            return -1;
+        }
+        script = rechecked;
         script->action = 0;
         script->source = nullptr;
         return -1;
+    }
+
+    // M-152: revalidate before executing the procedure — the hook above may
+    // have freed the program (programListFree) or removed the script.
+    {
+        Script* rechecked;
+        if (scriptGetScript(hookCachedSid, &rechecked) == -1) {
+            return -1;
+        }
+        script = rechecked;
+        program = script->program;
+        if (program == nullptr) {
+            return -1;
+        }
     }
 
     programExecuteProcedure(program, procedureIndex);
 
     // HOOK_STDPROCEDURE_END
     scriptHooks_StdProcedure(proc, self, source, target, fixedParam, true);
+
+    // M-152: revalidate after the end hook before writing to `script`.
+    {
+        Script* rechecked;
+        if (scriptGetScript(hookCachedSid, &rechecked) == -1) {
+            return -1;
+        }
+        script = rechecked;
+    }
 
     script->source = nullptr;
     script->action = 0;
@@ -2802,17 +2855,48 @@ bool scriptsExecSpatialProc(Object* object, int tile, int elevation)
 // 0x4A677C
 int scriptsExecStartProc()
 {
+    // M-153: snapshot the sid list before executing START procs. START code
+    // can call remove_script/set_script (scriptRemove swap-and-pop, frees the
+    // tail extent) — walking extents and reading extent->length/scripts/next
+    // after arbitrary START code ran is a use-after-free. Mirrors the sibling
+    // hardened walk in scriptsExecMapUpdateScripts (2861-2893).
+    int sidListCapacity = 0;
+    for (int scriptListIndex = 0; scriptListIndex < SCRIPT_TYPE_COUNT; scriptListIndex++) {
+        ScriptList* scriptList = &(gScriptLists[scriptListIndex]);
+        ScriptListExtent* extent = scriptList->head;
+        while (extent != nullptr) {
+            sidListCapacity += extent->length;
+            extent = extent->next;
+        }
+    }
+
+    if (sidListCapacity == 0) {
+        return 0;
+    }
+
+    int* sidList = (int*)internal_malloc(sizeof(*sidList) * sidListCapacity);
+    if (sidList == nullptr) {
+        debugPrint("\nError: scr_load_all_scripts: Out of memory for sidList!");
+        return -1;
+    }
+
+    int sidListLength = 0;
     for (int scriptListIndex = 0; scriptListIndex < SCRIPT_TYPE_COUNT; scriptListIndex++) {
         ScriptList* scriptList = &(gScriptLists[scriptListIndex]);
         ScriptListExtent* extent = scriptList->head;
         while (extent != nullptr) {
             for (int scriptIndex = 0; scriptIndex < extent->length; scriptIndex++) {
-                Script* script = &(extent->scripts[scriptIndex]);
-                scriptExecProc(script->sid, SCRIPT_PROC_START);
+                sidList[sidListLength++] = extent->scripts[scriptIndex].sid;
             }
             extent = extent->next;
         }
     }
+
+    for (int index = 0; index < sidListLength; index++) {
+        scriptExecProc(sidList[index], SCRIPT_PROC_START);
+    }
+
+    internal_free(sidList);
 
     return 0;
 }
@@ -3127,24 +3211,69 @@ int _scr_explode_scenery(Object* explosionSource, int tile, int radius, int elev
         return 0;
     }
 
-    int* scriptIds = (int*)internal_malloc(sizeof(*scriptIds) * scriptExtentsCount * SCRIPT_LIST_EXTENT_SIZE);
+    int maxScripts = scriptExtentsCount * SCRIPT_LIST_EXTENT_SIZE;
+    int* scriptIds = (int*)internal_malloc(sizeof(*scriptIds) * maxScripts);
     if (scriptIds == nullptr) {
         return -1;
     }
 
-    ScriptListExtent* extent;
+    int* startIds = (int*)internal_malloc(sizeof(*startIds) * maxScripts);
+    if (startIds == nullptr) {
+        internal_free(scriptIds);
+        return -1;
+    }
+
     int scriptsCount = 0;
+    int startCount = 0;
 
     gSpatialsEnabled = false;
 
-    extent = gScriptLists[SCRIPT_TYPE_ITEM].head;
+    // interp N-02: Snapshot the sids of lazy scripts needing their START proc
+    // run, then execute START from the snapshot. Running START inline while
+    // walking extents is a use-after-free: arbitrary START code can call
+    // remove_script/set_script (scriptRemove swap-and-pop frees the tail
+    // extent), invalidating extent->length/scripts/next for the rest of the
+    // walk. The damage-proc sids are re-collected from the live lists after
+    // START has run (which may have located damage procs via scriptLocateProcs).
+
+    // First pass: snapshot START candidates (do not execute anything).
+    ScriptListExtent* extent = gScriptLists[SCRIPT_TYPE_ITEM].head;
     while (extent != nullptr) {
         for (int index = 0; index < extent->length; index++) {
             Script* script = &(extent->scripts[index]);
             if (script->procs[SCRIPT_PROC_DAMAGE] == SCRIPT_PROC_NO_PROC && script->program == nullptr) {
-                scriptExecProc(script->sid, SCRIPT_PROC_START);
+                startIds[startCount] = script->sid;
+                startCount += 1;
             }
+        }
+        extent = extent->next;
+    }
 
+    extent = gScriptLists[SCRIPT_TYPE_SPATIAL].head;
+    while (extent != nullptr) {
+        for (int index = 0; index < extent->length; index++) {
+            Script* script = &(extent->scripts[index]);
+            if (script->procs[SCRIPT_PROC_DAMAGE] == SCRIPT_PROC_NO_PROC && script->program == nullptr) {
+                startIds[startCount] = script->sid;
+                startCount += 1;
+            }
+        }
+        extent = extent->next;
+    }
+
+    // Second pass: run the START procs from the snapshot.
+    for (int index = 0; index < startCount; index++) {
+        scriptExecProc(startIds[index], SCRIPT_PROC_START);
+    }
+    internal_free(startIds);
+
+    // Third pass: re-walk the live lists to collect damage-proc sids. This
+    // walk performs no script execution, so no extent pointer is held across
+    // a scriptExecProc call.
+    extent = gScriptLists[SCRIPT_TYPE_ITEM].head;
+    while (extent != nullptr) {
+        for (int index = 0; index < extent->length; index++) {
+            Script* script = &(extent->scripts[index]);
             if (script->procs[SCRIPT_PROC_DAMAGE] != SCRIPT_PROC_NO_PROC) {
                 Object* self = script->owner;
                 if (self != nullptr) {
@@ -3162,10 +3291,6 @@ int _scr_explode_scenery(Object* explosionSource, int tile, int radius, int elev
     while (extent != nullptr) {
         for (int index = 0; index < extent->length; index++) {
             Script* script = &(extent->scripts[index]);
-            if (script->procs[SCRIPT_PROC_DAMAGE] == SCRIPT_PROC_NO_PROC && script->program == nullptr) {
-                scriptExecProc(script->sid, SCRIPT_PROC_START);
-            }
-
             if (script->procs[SCRIPT_PROC_DAMAGE] != SCRIPT_PROC_NO_PROC
                 && builtTileGetElevation(script->sp.built_tile) == elevation
                 && tileDistanceBetween(builtTileGetTile(script->sp.built_tile), tile) <= radius) {
@@ -3184,10 +3309,7 @@ int _scr_explode_scenery(Object* explosionSource, int tile, int radius, int elev
         scriptExecProc(sid, SCRIPT_PROC_DAMAGE);
     }
 
-    // TODO: Redundant, we already know `scriptIds` is not NULL.
-    if (scriptIds != nullptr) {
-        internal_free(scriptIds);
-    }
+    internal_free(scriptIds);
 
     gSpatialsEnabled = true;
 

@@ -57,6 +57,12 @@ int automapSaveCurrent();
 int automapGetHeader(AutomapHeader** automapHeaderPtr);
 int automapGetWindow();
 
+// M-145: Returns true if the map index is within the AUTOMAP.DB entry range
+// ([0, AUTOMAP_MAP_COUNT)). Modded maps.txt files can exceed AUTOMAP_MAP_COUNT
+// (RPU ships 173 maps); every automap site that indexes offsets[]/_displayMapList[]
+// by map number must validate via this helper before accessing.
+bool automapMapIndexIsValid(int map);
+
 void automapSetDisplayMap(int map, bool available);
 
 } // namespace fallout

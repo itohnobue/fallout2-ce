@@ -64,6 +64,16 @@ typedef struct AutomapEntry {
     unsigned char* data;
 } AutomapEntry;
 
+// M-145: Shared bounds check for automap map indices. The AUTOMAP.DB header
+// (offsets[160][3]) and _displayMapList[160] only cover AUTOMAP_MAP_COUNT
+// entries, but modded maps.txt files (e.g. RPU's 173 maps) make
+// mapGetCurrentMap()/wmMapMaxCount() exceed 160. All automap sites that index
+// by map number must go through this helper.
+bool automapMapIndexIsValid(int map)
+{
+    return map >= 0 && map < AUTOMAP_MAP_COUNT;
+}
+
 // 0x41ADE0 defam
 static const int _defam[AUTOMAP_MAP_COUNT][ELEVATION_COUNT] = {
     { -1, -1, -1 },
@@ -293,6 +303,13 @@ int automapSave(File* stream)
 // 0x41B8B4 automapDisplayMap
 int _automapDisplayMap(int map)
 {
+    // M-145: _PrintAMList (pipboy.cc:1861) iterates map < wmMapMaxCount(),
+    // which exceeds AUTOMAP_MAP_COUNT with modded maps.txt. Returning -1
+    // ("not available") for out-of-range indices makes the pipboy loop skip
+    // those maps safely.
+    if (!automapMapIndexIsValid(map)) {
+        return -1;
+    }
     return _displayMapList[map];
 }
 
@@ -528,7 +545,11 @@ static void automapRenderInMapWindow(int window, int elevation, unsigned char* b
     blitBufferToBuffer(backgroundData, AUTOMAP_WINDOW_WIDTH, AUTOMAP_WINDOW_HEIGHT, AUTOMAP_WINDOW_WIDTH, windowBuffer, AUTOMAP_WINDOW_WIDTH);
 
     for (Object* object = objectFindFirstAtElevation(elevation); object != nullptr; object = objectFindNextAtElevation()) {
-        if (object->tile == -1) {
+        // P-17: object->tile is loaded raw (object.cc:438 — root validation in
+        // the object agent's pass). Defense-in-depth: negative tiles other than
+        // -1 write before the window buffer, and tiles >= HEX_GRID_SIZE (e.g.
+        // 47900) overflow the 519x480 buffer via the pixelOffset formula.
+        if (object->tile < 0 || object->tile >= HEX_GRID_SIZE) {
             continue;
         }
 
@@ -710,6 +731,14 @@ int automapSaveCurrent()
 {
     int map = mapGetCurrentMap();
     int elevation = gElevation;
+
+    // M-145: mapGetCurrentMap() returns the map index, which exceeds
+    // AUTOMAP_MAP_COUNT (160) with modded maps.txt (RPU ships 173 maps).
+    // The offsets[map][elevation] read below (and the write at line 906)
+    // would go out of bounds; skip saving for out-of-range maps.
+    if (!automapMapIndexIsValid(map)) {
+        return 0;
+    }
 
     int entryOffset = gAutomapHeader.offsets[map][elevation];
     if (entryOffset < 0) {
@@ -960,6 +989,13 @@ static int automapLoadEntry(int map, int elevation)
 {
     gAutomapEntry.compressedData = nullptr;
 
+    // M-145: map can exceed AUTOMAP_MAP_COUNT with modded maps.txt; the
+    // offsets[map][elevation] read below would go out of bounds.
+    if (!automapMapIndexIsValid(map)) {
+        debugPrint("\nAUTOMAP: map index %d out of range [0, %d)!\n", map, AUTOMAP_MAP_COUNT);
+        return -1;
+    }
+
     char path[COMPAT_MAX_PATH];
     snprintf(path, sizeof(path), "%s\\%s", "MAPS", AUTOMAP_DB);
 
@@ -989,6 +1025,16 @@ static int automapLoadEntry(int map, int elevation)
     }
 
     if (_db_freadInt(stream, &(gAutomapEntry.dataSize)) == -1) {
+        success = false;
+        goto out;
+    }
+
+    // M-144: dataSize comes straight from the AUTOMAP.DB entry with no
+    // validation; fileReadUInt8List writes that many bytes into the fixed
+    // 11024-byte data/compressedData buffers, so a crafted/corrupt DB with
+    // dataSize > 11024 (or negative) overflows the heap. Reject out-of-range
+    // sizes before any read.
+    if (gAutomapEntry.dataSize <= 0 || gAutomapEntry.dataSize > 11024) {
         success = false;
         goto out;
     }
@@ -1110,7 +1156,16 @@ static void _decode_map_data(int elevation)
 
     Object* object = objectFindFirstAtElevation(elevation);
     while (object != nullptr) {
-        if (object->tile != -1 && (object->flags & OBJECT_SEEN) != 0) {
+        // map NEW-2: object->tile is loaded raw (object.cc:438 — root fix in
+        // the object agent's pass). Defense-in-depth: the v2 index formula
+        // (v1/4 + 50*(tile/200)) indexes gAutomapEntry.data; a crafted tile
+        // >= 44000 writes past the 11024-byte buffer. Also covers negative
+        // tiles (other than -1) which the previous `!= -1` check allowed.
+        if (object->tile < 0 || object->tile >= HEX_GRID_SIZE) {
+            object = objectFindNextAtElevation();
+            continue;
+        }
+        if ((object->flags & OBJECT_SEEN) != 0) {
             int contentType;
 
             int objectType = FID_TYPE(object->fid);

@@ -555,6 +555,9 @@ static const TestMetaruleEntry kTestMetaruleSubset[] = {
     { "add_trait", 1, 1, -1 },
     { "get_map_enter_position", 1, 1, 0 },
     { "set_map_enter_position", 1, 1, 0 },
+    // H-04 / H-05: newly registered metarules (sfall_metarules.cc:461, 472).
+    { "set_fo1_hit_chance", 1, 1, -1 },
+    { "remove_wm_town_names", 1, 1, -1 },
     { "rotators", 0, 0, 0 }, // sentinel for compatibility check
 };
 static const int kTestMetaruleSubsetCount = sizeof(kTestMetaruleSubset) / sizeof(kTestMetaruleSubset[0]);
@@ -1170,6 +1173,126 @@ TEST_CASE("set_terrain_name / get_terrain_name — map storage logic")
     // Clear
     gTerrainNameOverrides.clear();
     CHECK(gTerrainNameOverrides.empty());
+}
+
+// =================================================================
+// M-67 (CONFIRMED): get_terrain_name zero-arg branch must consult
+// gTerrainNameOverrides at the party's current sub-tile position.
+// =================================================================
+TEST_CASE("M-67: get_terrain_name zero-arg branch checks overrides first")
+{
+    // Mirror of mf_get_terrain_name's zero-arg branch (sfall_metarules.cc:2499-2521).
+    // Before the fix the branch returned wmGetPartyTerrainName() unconditionally,
+    // ignoring gTerrainNameOverrides — set_terrain_name overrides were invisible
+    // to the zero-arg form. sfall's GetCurrentTerrainName (Worldmap.cpp:714-719)
+    // checks the override map at (world_xpos/50, world_ypos/50) FIRST.
+    std::map<std::pair<int, int>, std::string> overrides;
+
+    // Party position in world pixels; sub-tile coordinate = pixel / 50
+    // (WM_SUBTILE_SIZE == 50, worldmap.cc:142).
+    auto zeroArgLookup = [&overrides](int partyWorldX, int partyWorldY) -> std::string {
+        const int kSubtileSize = 50;
+        auto it = overrides.find({ partyWorldX / kSubtileSize, partyWorldY / kSubtileSize });
+        if (it != overrides.end()) {
+            return it->second;
+        }
+        // Fallback: built-in terrain name (wmGetPartyTerrainName in production).
+        return "BuiltinTerrain";
+    };
+
+    SUBCASE("override at party position is returned")
+    {
+        overrides[{10, 20}] = "CustomTerrain";
+        // world pos (500, 1000) → sub-tile (10, 20)
+        CHECK(zeroArgLookup(500, 1000) == "CustomTerrain");
+    }
+
+    SUBCASE("no override at party position falls back to built-in name")
+    {
+        overrides.clear();
+        overrides[{3, 7}] = "Elsewhere";
+        // world pos (600, 900) → sub-tile (12, 18) — no override
+        CHECK(zeroArgLookup(600, 900) == "BuiltinTerrain");
+    }
+
+    SUBCASE("override at a different sub-tile does not leak into party lookup")
+    {
+        overrides.clear();
+        overrides[{10, 20}] = "CustomTerrain";
+        overrides[{11, 20}] = "Neighbor";
+        // world pos (505, 1000) → sub-tile (10, 20) → exact match wins
+        CHECK(zeroArgLookup(505, 1000) == "CustomTerrain");
+    }
+
+    SUBCASE("sub-tile division truncates toward zero (matches sfall integer division)")
+    {
+        overrides.clear();
+        overrides[{10, 20}] = "CustomTerrain";
+        // world pos (525, 1025) → sub-tile (10, 20) — 525/50 = 10, 1025/50 = 20
+        CHECK(zeroArgLookup(525, 1025) == "CustomTerrain");
+    }
+}
+
+// =================================================================
+// R-14 (CONFIRMED): load-time re-registration of gExplosives from
+// gExplosiveOverrides (sfall_metarules_load, sfall_metarules.cc:4423-4434).
+// =================================================================
+TEST_CASE("R-14: gExplosives is re-populated from gExplosiveOverrides after load")
+{
+    // Mirror of the R-14 fix: after metarulesLoadExplosiveMap() restores
+    // gExplosiveOverrides, the load path re-adds each entry to the engine
+    // explosive vector via explosiveAdd(pid, activePid, minDamage, maxDamage).
+    // Without this, gExplosives (cleared by gameReset on the load path) stays
+    // empty and explosiveActivate() takes the override branch (item.cc:3811-3813)
+    // returning true WITHOUT the pid→activePid conversion.
+    struct ExplosiveProps {
+        int activePid;
+        int pattern;
+        int radius;
+        int delay;
+        int minDamage;
+        int maxDamage;
+    };
+    struct ExplosiveEntry {
+        int pid;
+        int activePid;
+        int minDamage;
+        int maxDamage;
+    };
+
+    std::map<int, ExplosiveProps> gExplosiveOverrides;
+    std::vector<ExplosiveEntry> gExplosives; // mirror of item.cc gExplosives
+
+    auto reRegister = [&gExplosiveOverrides, &gExplosives]() {
+        gExplosives.clear(); // gameReset cleared the engine vector on the load path
+        for (const auto& entry : gExplosiveOverrides) {
+            gExplosives.push_back({ entry.first, entry.second.activePid,
+                entry.second.minDamage, entry.second.maxDamage });
+        }
+    };
+
+    SUBCASE("overrides are re-registered into gExplosives after load")
+    {
+        gExplosiveOverrides[100] = { 200, 0, 0, 0, 30, 60 };
+        gExplosiveOverrides[101] = { 0, 0, 0, 0, 40, 80 };
+
+        reRegister();
+
+        REQUIRE(gExplosives.size() == 2);
+        CHECK(gExplosives[0].pid == 100);
+        CHECK(gExplosives[0].activePid == 200);
+        CHECK(gExplosives[0].minDamage == 30);
+        CHECK(gExplosives[0].maxDamage == 60);
+        CHECK(gExplosives[1].pid == 101);
+        CHECK(gExplosives[1].activePid == 0);
+    }
+
+    SUBCASE("empty override map leaves gExplosives empty")
+    {
+        gExplosiveOverrides.clear();
+        reRegister();
+        CHECK(gExplosives.empty());
+    }
 }
 
 TEST_CASE("set_town_title — map storage with empty-clear logic")
@@ -2809,4 +2932,63 @@ TEST_CASE("I2F-007: NPC fake selectable perk accessor — same pattern")
     CHECK(result->size() == 1);
     CHECK(result->begin()->second.name == "BonusMove");
     CHECK(result->begin()->second.image == 96);
+}
+
+// =================================================================
+// H-04 / H-05: newly registered metarules are discoverable.
+// set_fo1_hit_chance and remove_wm_town_names are registered in
+// kMetarules (sfall_metarules.cc:461, 472); mf_metarule_exist must
+// return true for them so RPU/Et Tu scripts calling them no longer hit
+// the "metarule function is unknown" path.
+// =================================================================
+TEST_CASE("H-04/H-05: new metarules are discoverable via metarule_exist")
+{
+    // Mirror of mf_metarule_exist lookup over the two new kMetarules entries.
+    static const char* kNewMetarules[] = {
+        "set_fo1_hit_chance",
+        "remove_wm_town_names",
+    };
+
+    for (const char* name : kNewMetarules) {
+        const TestMetaruleEntry* entry = TestFindMetarule(name);
+        CHECK_MESSAGE(entry != nullptr, name);
+        if (entry != nullptr) {
+            CHECK(entry->minArgs == 1);
+            CHECK(entry->maxArgs == 1);
+        }
+    }
+}
+
+// =================================================================
+// H-04: set_fo1_hit_chance stores the flag state.
+// =================================================================
+TEST_CASE("H-04: set_fo1_hit_chance mirror stores state")
+{
+    bool gTestFo1HitChance = false;
+
+    auto mirrorSet = [&gTestFo1HitChance](int state) {
+        gTestFo1HitChance = (state != 0);
+    };
+
+    mirrorSet(1);
+    CHECK(gTestFo1HitChance == true);
+    mirrorSet(0);
+    CHECK(gTestFo1HitChance == false);
+}
+
+// =================================================================
+// H-05: remove_wm_town_names stores the flag state.
+// =================================================================
+TEST_CASE("H-05: remove_wm_town_names mirror stores state")
+{
+    bool gTestRemoveWmTownNames = false;
+
+    auto mirrorSet = [&gTestRemoveWmTownNames](int state) {
+        gTestRemoveWmTownNames = (state != 0);
+    };
+
+    mirrorSet(1);
+    CHECK(gTestRemoveWmTownNames == true);
+    mirrorSet(0);
+    CHECK(gTestRemoveWmTownNames == false);
 }

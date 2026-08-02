@@ -513,6 +513,18 @@ void windowDrawText(int win, const char* str, int maxWidth, int x, int y, int fl
         return;
     }
 
+    // A negative x/y would make the buffer pointer at the bottom of this
+    // function point before the heap window buffer (heap underflow write).
+    // Clamp here as a single choke point; this also covers the worldmap
+    // town-map path which passes config-parsed coordinates (P-14).
+    if (x < 0) {
+        x = 0;
+    }
+
+    if (y < 0) {
+        y = 0;
+    }
+
     if (maxWidth == 0) {
         if (flags & DRAW_TEXT_FLAG_MONOSPACED) {
             maxWidth = fontGetMonospacedStringWidth(str);
@@ -627,6 +639,35 @@ void windowFill(int win, int x, int y, int width, int height, int color)
     }
 
     if (window == nullptr) {
+        return;
+    }
+
+    // Clip against the window bounds: script-provided rects (opFillRect) can
+    // be fully or partially outside the window buffer, and bufferFill below
+    // performs no clipping of its own (window N-03).
+    if (x < 0) {
+        width += x;
+        x = 0;
+    }
+
+    if (y < 0) {
+        height += y;
+        y = 0;
+    }
+
+    if (x >= window->width || y >= window->height) {
+        return;
+    }
+
+    if (x + width > window->width) {
+        width = window->width - x;
+    }
+
+    if (y + height > window->height) {
+        height = window->height - y;
+    }
+
+    if (width <= 0 || height <= 0) {
         return;
     }
 
@@ -1262,15 +1303,27 @@ int _win_check_all_buttons()
 
     int keyCode = -1;
     for (int index = gWindowsLength - 1; index >= 1; index--) {
+        // Save the window id before dispatching: _GNW_check_buttons runs
+        // button callbacks that may destroy the window (e.g. via
+        // scriptWindowDelete → windowDestroy), making gWindows[index] a
+        // dangling pointer (H-13 window-level site).
+        int windowId = gWindows[index]->id;
         if (_GNW_check_buttons(gWindows[index], &keyCode) == 0) {
             break;
+        }
+
+        Window* window = windowGetWindow(windowId);
+        if (window == nullptr) {
+            // The window was destroyed by a callback during the dispatch;
+            // continue with the next window below it.
+            continue;
         }
 
         // A visible modal window blocks all windows below it, but a hidden
         // one should not — otherwise a hidden modal window permanently
         // prevents all button input.
-        if ((gWindows[index]->flags & WINDOW_MODAL) != 0
-            && (gWindows[index]->flags & WINDOW_HIDDEN) == 0) {
+        if ((window->flags & WINDOW_MODAL) != 0
+            && (window->flags & WINDOW_HIDDEN) == 0) {
             break;
         }
     }
@@ -1900,8 +1953,13 @@ int _GNW_check_buttons(Window* window, int* keyCodePtr)
 
                 if (!(prevClickedButton->flags & BUTTON_FLAG_DISABLED)) {
                     if (prevClickedButton->mouseEnterProc != nullptr) {
-                        prevClickedButton->mouseEnterProc(prevClickedButton->id, *keyCodePtr);
-                        if (!(prevClickedButton->flags & BUTTON_FLAG_0x40)) {
+                        // Save button ID and flags before callback: the
+                        // callback may destroy the button, making
+                        // prevClickedButton a dangling pointer (H-13).
+                        int savedBtnId = prevClickedButton->id;
+                        int savedFlags = prevClickedButton->flags;
+                        prevClickedButton->mouseEnterProc(savedBtnId, *keyCodePtr);
+                        if (buttonGetButton(savedBtnId, nullptr) != nullptr && !(savedFlags & BUTTON_FLAG_0x40)) {
                             *keyCodePtr = -1;
                         }
                     }
@@ -1933,8 +1991,12 @@ int _GNW_check_buttons(Window* window, int* keyCodePtr)
 
                     if (!(previousHoveredButton->flags & BUTTON_FLAG_DISABLED)) {
                         if (previousHoveredButton->mouseExitProc != nullptr) {
-                            previousHoveredButton->mouseExitProc(previousHoveredButton->id, *keyCodePtr);
-                            if (!(previousHoveredButton->flags & BUTTON_FLAG_0x40)) {
+                            // Save button ID and flags before callback: the
+                            // callback may destroy the button (H-13).
+                            int savedBtnId = previousHoveredButton->id;
+                            int savedFlags = previousHoveredButton->flags;
+                            previousHoveredButton->mouseExitProc(savedBtnId, *keyCodePtr);
+                            if (buttonGetButton(savedBtnId, nullptr) != nullptr && !(savedFlags & BUTTON_FLAG_0x40)) {
                                 *keyCodePtr = -1;
                             }
                         }
@@ -2043,9 +2105,32 @@ int _GNW_check_buttons(Window* window, int* keyCodePtr)
                                             button->flags &= ~BUTTON_FLAG_CHECKED;
                                         }
                                     } else {
+                                        // Save the button id BEFORE _button_check_group:
+                                        // the group callbacks run inside it may destroy
+                                        // `clickedButton` (window N-04 / R-11), so no
+                                        // member of `clickedButton` may be read after it
+                                        // returns.
+                                        int savedClickedButtonId = clickedButton->id;
                                         if (_button_check_group(clickedButton) == -1) {
+                                            // _button_check_group returns -1 in two cases:
+                                            //   1. radio group: a group callback destroyed
+                                            //      `clickedButton` (buttonGetButton(savedId)
+                                            //      == nullptr — window N-04);
+                                            //   2. non-radio group full: `func` was invoked
+                                            //      and the button may still be alive (the
+                                            //      rejection callback).
+                                            // Re-fetch by saved id and draw only if the button
+                                            // survived, preserving the non-radio group-full
+                                            // rejection draw while never drawing through a
+                                            // freed pointer — closing the N-04 UAF at this
+                                            // caller (R-11: the pass-1 fix moved the deref
+                                            // from ~2115 to ~2110 instead of closing it).
+                                            Button* liveClickedButton = buttonGetButton(savedClickedButtonId, &window);
+                                            if (liveClickedButton != nullptr) {
+                                                _button_draw(liveClickedButton, window, liveClickedButton->normalImage, true, nullptr, true);
+                                            }
+
                                             button = nullptr;
-                                            _button_draw(clickedButton, window, clickedButton->normalImage, true, nullptr, true);
                                             break;
                                         }
 
@@ -2120,8 +2205,12 @@ int _GNW_check_buttons(Window* window, int* keyCodePtr)
 
         if (button != nullptr) {
             if (cb != nullptr) {
-                cb(button->id, *keyCodePtr);
-                if (!(button->flags & BUTTON_FLAG_0x40)) {
+                // Save button ID and flags before callback: the callback may
+                // destroy the button (H-13).
+                int savedBtnId = button->id;
+                int savedFlags = button->flags;
+                cb(savedBtnId, *keyCodePtr);
+                if (buttonGetButton(savedBtnId, nullptr) != nullptr && !(savedFlags & BUTTON_FLAG_0x40)) {
                     *keyCodePtr = -1;
                 }
             }
@@ -2150,8 +2239,12 @@ int _GNW_check_buttons(Window* window, int* keyCodePtr)
 
         if ((prevHoveredButton->flags & BUTTON_FLAG_DISABLED) == 0) {
             if (prevHoveredButton->mouseExitProc != nullptr) {
-                prevHoveredButton->mouseExitProc(prevHoveredButton->id, *keyCodePtr);
-                if (!(prevHoveredButton->flags & BUTTON_FLAG_0x40)) {
+                // Save button ID and flags before callback: the callback may
+                // destroy the button (H-13).
+                int savedBtnId = prevHoveredButton->id;
+                int savedFlags = prevHoveredButton->flags;
+                prevHoveredButton->mouseExitProc(savedBtnId, *keyCodePtr);
+                if (buttonGetButton(savedBtnId, nullptr) != nullptr && !(savedFlags & BUTTON_FLAG_0x40)) {
                     *keyCodePtr = -1;
                 }
             }
@@ -2162,7 +2255,10 @@ int _GNW_check_buttons(Window* window, int* keyCodePtr)
     if (prevHoveredButton != nullptr) {
         if ((prevHoveredButton->flags & BUTTON_FLAG_DISABLED) == 0) {
             if (prevHoveredButton->mouseExitProc != nullptr) {
-                prevHoveredButton->mouseExitProc(prevHoveredButton->id, *keyCodePtr);
+                // Save button ID before callback: the callback may destroy
+                // the button (H-13).
+                int savedBtnId = prevHoveredButton->id;
+                prevHoveredButton->mouseExitProc(savedBtnId, *keyCodePtr);
             }
         }
     }
@@ -2491,25 +2587,44 @@ int _button_check_group(Button* button)
     }
 
     if ((button->flags & BUTTON_FLAG_RADIO) != 0) {
-        if (button->buttonGroup->currChecked > 0) {
-            for (int index = 0; index < button->buttonGroup->buttonsLength; index++) {
-                Button* groupButton = button->buttonGroup->buttons[index];
+        // Save identity before invoking any callback: a group callback may
+        // destroy buttons (including `button` itself) and compact the group
+        // array mid-walk (window N-04).
+        int savedButtonId = button->id;
+        ButtonGroup* buttonGroup = button->buttonGroup;
+
+        if (buttonGroup->currChecked > 0) {
+            for (int index = 0; index < buttonGroup->buttonsLength; index++) {
+                Button* groupButton = buttonGroup->buttons[index];
                 if ((groupButton->flags & BUTTON_FLAG_CHECKED) != 0) {
                     groupButton->flags &= ~BUTTON_FLAG_CHECKED;
 
-                    Window* window;
-                    buttonGetButton(groupButton->id, &window);
-                    _button_draw(groupButton, window, groupButton->normalImage, true, nullptr, true);
+                    // Revalidate before drawing: a prior callback in this walk
+                    // may have freed groupButton and compacted the array
+                    // (P-08: the window pointer must not stay uninitialized).
+                    Window* window = nullptr;
+                    if (buttonGetButton(groupButton->id, &window) != nullptr) {
+                        _button_draw(groupButton, window, groupButton->normalImage, true, nullptr, true);
+                    }
 
                     if (groupButton->leftMouseUpProc != nullptr) {
-                        groupButton->leftMouseUpProc(groupButton->id, groupButton->leftMouseUpEventCode);
+                        int savedGroupBtnId = groupButton->id;
+                        groupButton->leftMouseUpProc(savedGroupBtnId, groupButton->leftMouseUpEventCode);
                     }
                 }
             }
         }
 
-        if ((button->flags & BUTTON_FLAG_CHECKED) == 0) {
-            button->buttonGroup->currChecked++;
+        // Revalidate after the callbacks: `button` (or the whole group) may
+        // have been destroyed. Returning -1 makes callers abort their walk
+        // instead of dereferencing the freed button (window N-04).
+        Button* liveButton = buttonGetButton(savedButtonId, nullptr);
+        if (liveButton == nullptr) {
+            return -1;
+        }
+
+        if ((liveButton->flags & BUTTON_FLAG_CHECKED) == 0) {
+            buttonGroup->currChecked++;
         }
 
         return 0;
@@ -2524,7 +2639,10 @@ int _button_check_group(Button* button)
     }
 
     if (button->buttonGroup->func != nullptr) {
-        button->buttonGroup->func(button->id);
+        // Save the id before the callback: the callback may destroy the
+        // button (H-13 family).
+        int savedButtonId = button->id;
+        button->buttonGroup->func(savedButtonId);
     }
 
     return -1;
@@ -2647,10 +2765,20 @@ int _win_button_press_and_release(int btn)
     _button_draw(button, window, button->pressedImage, true, nullptr, true);
 
     if (button->leftMouseDownProc != nullptr) {
-        button->leftMouseDownProc(btn, button->lefMouseDownEventCode);
+        // Save event code/flags before the callback: the callback may destroy
+        // the button (H-13 family defense-in-depth — no in-tree caller
+        // installs these procs, but a future caller could).
+        int savedEventCode = button->lefMouseDownEventCode;
+        int savedFlags = button->flags;
+        button->leftMouseDownProc(btn, savedEventCode);
 
-        if ((button->flags & BUTTON_FLAG_0x40) != 0) {
-            enqueueInputEvent(button->lefMouseDownEventCode);
+        button = buttonGetButton(btn, &window);
+        if (button == nullptr) {
+            return -1;
+        }
+
+        if ((savedFlags & BUTTON_FLAG_0x40) != 0) {
+            enqueueInputEvent(savedEventCode);
         }
     } else {
         if (button->lefMouseDownEventCode != -1) {
@@ -2661,10 +2789,17 @@ int _win_button_press_and_release(int btn)
     _button_draw(button, window, button->normalImage, true, nullptr, true);
 
     if (button->leftMouseUpProc != nullptr) {
-        button->leftMouseUpProc(btn, button->leftMouseUpEventCode);
+        int savedEventCode = button->leftMouseUpEventCode;
+        int savedFlags = button->flags;
+        button->leftMouseUpProc(btn, savedEventCode);
 
-        if ((button->flags & BUTTON_FLAG_0x40) != 0) {
-            enqueueInputEvent(button->leftMouseUpEventCode);
+        button = buttonGetButton(btn, &window);
+        if (button == nullptr) {
+            return -1;
+        }
+
+        if ((savedFlags & BUTTON_FLAG_0x40) != 0) {
+            enqueueInputEvent(savedEventCode);
         }
     } else {
         if (button->leftMouseUpEventCode != -1) {

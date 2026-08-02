@@ -75,6 +75,21 @@ static void audioEngineMixin(void* userData, Uint8* stream, int length)
                     remaining = sizeof(buffer);
                 }
 
+                // M-138: guard the frame read against the buffer end. The
+                // pos >= size wrap check below runs AFTER this read, so a
+                // buffer whose size is not a multiple of srcFrameSize (odd
+                // byte counts) would read srcFrameSize bytes past the
+                // allocation. Wrap a looping buffer, otherwise treat the
+                // short tail as end-of-buffer.
+                if (soundBuffer->pos + srcFrameSize > soundBuffer->size) {
+                    if (soundBuffer->looping && soundBuffer->size > 0) {
+                        soundBuffer->pos = 0;
+                    } else {
+                        soundBuffer->playing = false;
+                        break;
+                    }
+                }
+
                 // TODO: Make something better than frame-by-frame convertion.
                 if (SDL_AudioStreamPut(soundBuffer->stream, (unsigned char*)soundBuffer->data + soundBuffer->pos, srcFrameSize) == -1) {
                     break;

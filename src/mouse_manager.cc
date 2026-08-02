@@ -445,6 +445,13 @@ bool mouseManagerSetMouseShape(char* fileName, int a2, int a3)
         MouseManagerStaticData* staticData;
         staticData = (MouseManagerStaticData*)internal_malloc_safe(sizeof(*staticData), __FILE__, __LINE__); // "..\\int\\MOUSEMGR.C", 430
         staticData->data = datafileReadRaw(mangledFileName, &width, &height);
+        if (staticData->data == nullptr) {
+            // M-183: datafileReadRaw fails for missing/corrupt files (and
+            // leaves width/height uninitialized). The STATIC case below would
+            // memcpy from the null data with a garbage size and crash.
+            internal_free_safe(staticData, __FILE__, __LINE__);
+            return false;
+        }
         staticData->field_4 = a2;
         staticData->field_8 = a3;
         staticData->width = width;

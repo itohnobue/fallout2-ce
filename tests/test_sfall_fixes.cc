@@ -776,3 +776,219 @@ TEST_CASE("std::clamp boundary — value at max unchanged")
     int result = std::clamp(9999, 0, 9999);
     CHECK(result == 9999);
 }
+
+// =================================================================
+// H-27 / sfall NEW-2 / M-11: VFS deletable-flag semantics.
+// Mirrors the production logic: only files created by fs_create/fs_copy
+// (deletable=true) may be removed at handle-free; fs_find'd files and
+// files flipped to read-write by fs_resize (mode 1→2) are never deletable.
+// =================================================================
+namespace vfs_deletable_mirror {
+
+constexpr int kTestVfsMaxFiles = 8;
+
+struct TestVfsState {
+    bool fileOpen[kTestVfsMaxFiles] = {};
+    int fileMode[kTestVfsMaxFiles] = {};       // 0 unopened, 1 read-only, 2 read-write
+    bool fileDeletable[kTestVfsMaxFiles] = {}; // H-27: separate deletable flag
+    bool deleted[kTestVfsMaxFiles] = {};       // records compat_remove calls
+};
+
+// Mirror of sfallVfsFreeHandle: delete only when deletable flag set.
+void freeHandle(TestVfsState& s, int id)
+{
+    if (id < 0 || id >= kTestVfsMaxFiles || !s.fileOpen[id]) {
+        return;
+    }
+    if (s.fileDeletable[id]) {
+        s.deleted[id] = true;
+    }
+    s.fileOpen[id] = false;
+    s.fileMode[id] = 0;
+    s.fileDeletable[id] = false;
+}
+
+} // namespace vfs_deletable_mirror
+
+TEST_CASE("H-27: fs_find handle (mode 1) is not deletable")
+{
+    using namespace vfs_deletable_mirror;
+    TestVfsState s;
+    s.fileOpen[0] = true;
+    s.fileMode[0] = 1;          // read-only, opened via fs_find
+    s.fileDeletable[0] = false; // fs_find never sets deletable
+
+    freeHandle(s, 0);
+
+    CHECK(s.deleted[0] == false);
+    CHECK(s.fileOpen[0] == false);
+}
+
+TEST_CASE("H-27: fs_resize mode-1→2 flip must NOT make the file deletable")
+{
+    using namespace vfs_deletable_mirror;
+    TestVfsState s;
+    // Simulate fs_find then fs_resize reopen (F-028): mode flips 1→2 but
+    // sfallVfsFileDeletable stays false — the file is a pre-existing asset.
+    s.fileOpen[0] = true;
+    s.fileMode[0] = 1;
+    s.fileDeletable[0] = false;
+    s.fileMode[0] = 2; // fs_resize reopen (mode flip only)
+
+    freeHandle(s, 0);
+
+    CHECK(s.deleted[0] == false);
+}
+
+TEST_CASE("H-27: fs_create handle (deletable=true) IS deleted at free")
+{
+    using namespace vfs_deletable_mirror;
+    TestVfsState s;
+    s.fileOpen[0] = true;
+    s.fileMode[0] = 2;
+    s.fileDeletable[0] = true; // created via fs_create
+
+    freeHandle(s, 0);
+
+    CHECK(s.deleted[0] == true);
+    CHECK(s.fileOpen[0] == false);
+}
+
+TEST_CASE("H-27: fs_copy handle (deletable=true) IS deleted at free")
+{
+    using namespace vfs_deletable_mirror;
+    TestVfsState s;
+    s.fileOpen[1] = true;
+    s.fileMode[1] = 2;
+    s.fileDeletable[1] = true; // created via fs_copy
+
+    freeHandle(s, 1);
+
+    CHECK(s.deleted[1] == true);
+}
+
+TEST_CASE("M-11: sfallVfsCloseAll (free every handle) deletes only script-created files")
+{
+    using namespace vfs_deletable_mirror;
+    TestVfsState s;
+    s.fileOpen[0] = true;
+    s.fileMode[0] = 1;
+    s.fileDeletable[0] = false; // fs_find'd asset
+    s.fileOpen[1] = true;
+    s.fileMode[1] = 2;
+    s.fileDeletable[1] = true; // fs_create'd
+
+    for (int i = 0; i < kTestVfsMaxFiles; i++) {
+        freeHandle(s, i);
+    }
+
+    CHECK(s.deleted[0] == false);
+    CHECK(s.deleted[1] == true);
+}
+
+// =================================================================
+// P-06: drive-letter VFS sandbox rejection.
+// Mirrors sfallVfsResolvePath's new check: 'C:\...' / 'c:/...' / 'C:foo'
+// must be rejected, matching compat_path_contains_traversal.
+// =================================================================
+namespace vfs_drive_mirror {
+
+bool resolvePath(const char* rawPath)
+{
+    if (rawPath == nullptr || rawPath[0] == '\0') {
+        return false;
+    }
+    // absolute path rejection
+    if (rawPath[0] == '/' || rawPath[0] == '\\') {
+        return false;
+    }
+    // P-06: drive-letter rejection
+    if (rawPath[0] != '\0' && rawPath[1] == ':'
+        && ((rawPath[0] >= 'A' && rawPath[0] <= 'Z')
+            || (rawPath[0] >= 'a' && rawPath[0] <= 'z'))) {
+        return false;
+    }
+    return true;
+}
+
+} // namespace vfs_drive_mirror
+
+TEST_CASE("P-06: VFS rejects C:\\ drive-letter absolute path")
+{
+    CHECK(vfs_drive_mirror::resolvePath("C:\\Users\\victim\\file.txt") == false);
+}
+
+TEST_CASE("P-06: VFS rejects c:/ lowercase drive-letter path")
+{
+    CHECK(vfs_drive_mirror::resolvePath("c:/Users/victim/file.txt") == false);
+}
+
+TEST_CASE("P-06: VFS rejects drive-relative C:foo")
+{
+    CHECK(vfs_drive_mirror::resolvePath("C:foo") == false);
+}
+
+TEST_CASE("P-06: VFS accepts normal relative path")
+{
+    CHECK(vfs_drive_mirror::resolvePath("art\\critters\\mawalka.frm") == true);
+}
+
+// =================================================================
+// C-06: fs_copy same-path rejection.
+// Mirrors op_fs_copy's resolved-path comparison.
+// =================================================================
+namespace vfs_samepath_mirror {
+
+// Mirror of compat_stricmp (case-insensitive path comparison used by
+// op_fs_copy to reject identical resolved paths).
+bool samePath(const char* a, const char* b)
+{
+    if (a == nullptr || b == nullptr) {
+        return false;
+    }
+    while (*a != '\0' && *b != '\0') {
+        char ca = *a;
+        char cb = *b;
+        if (ca >= 'A' && ca <= 'Z') ca = static_cast<char>(ca - 'A' + 'a');
+        if (cb >= 'A' && cb <= 'Z') cb = static_cast<char>(cb - 'A' + 'a');
+        if (ca != cb) {
+            return false;
+        }
+        a++;
+        b++;
+    }
+    return *a == *b;
+}
+
+} // namespace vfs_samepath_mirror
+
+TEST_CASE("C-06: fs_copy identical resolved paths rejected")
+{
+    const char* src = "art\\critters\\mawalka.frm";
+    const char* dst = "art\\critters\\mawalka.frm";
+
+    bool samePath = vfs_samepath_mirror::samePath(src, dst);
+
+    CHECK(samePath == true);
+    // Production: samePath → push -1, never open dest "w+b"
+}
+
+TEST_CASE("C-06: fs_copy case-variant same path rejected")
+{
+    const char* src = "Art\\Critters\\mawalka.frm";
+    const char* dst = "art\\critters\\mawalka.frm";
+
+    bool samePath = vfs_samepath_mirror::samePath(src, dst);
+
+    CHECK(samePath == true);
+}
+
+TEST_CASE("C-06: fs_copy different paths accepted")
+{
+    const char* src = "art\\critters\\mawalka.frm";
+    const char* dst = "art\\critters\\mawalkb.frm";
+
+    bool samePath = vfs_samepath_mirror::samePath(src, dst);
+
+    CHECK(samePath == false);
+}

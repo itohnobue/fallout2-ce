@@ -11,8 +11,10 @@
 #include <cstdlib>
 
 #include "animation.h"
+#include "config.h"
 #include "db.h"
 #include "debug.h"
+#include "game_config.h"
 #include "input.h"
 #include "interpreter.h"
 #include "object.h"
@@ -306,6 +308,12 @@ namespace fallout {
 namespace fallout {
     Settings settings;
     // Config gSfallConfig; — MOVED to sfall_config.cc (via test_sources)
+
+    // game_config_migration.cc (M-199 SkipOpeningMovies migration) references
+    // the fallout2.cfg globals; game_config.cc is not linked in tests.
+    bool gGameConfigInitialized = false;
+    Config gGameConfig;
+    char gGameConfigFilePath[COMPAT_MAX_PATH] = "";
 
     // sfall_opcodes.cc extern globals — defined here so test_sfall_opcodes
     // can be self-contained without linking sfall_opcodes.cc (150+ engine deps).

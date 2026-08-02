@@ -57,8 +57,19 @@ bool mouseDeviceInitMode()
     bool wantsRelativeMode = screenIsFullscreen();
 
     if (wantsRelativeMode) {
+        // M-186: verify SDL_SetRelativeMouseMode BEFORE marking relative mode
+        // active. The old order set mouseRelativeMode = true first and returned
+        // the SDL result, so on platforms where SDL fails (e.g. Emscripten
+        // fullscreen) the flag stayed true while SDL stayed absolute — and
+        // mouseDeviceGetData would then read deltas as positions, and the
+        // propagated failure aborted startup at window.cc:1769. Fall back to
+        // absolute mode instead of failing startup.
+        if (SDL_SetRelativeMouseMode(SDL_TRUE) != 0) {
+            mouseRelativeMode = false;
+            return true;
+        }
         mouseRelativeMode = true;
-        return SDL_SetRelativeMouseMode(SDL_TRUE) == 0;
+        return true;
     }
 
     if (SDL_SetRelativeMouseMode(SDL_FALSE) != 0) {

@@ -502,7 +502,6 @@ static bool testSfallHookHasFireSite(int hookType)
     case 15: // HOOK_HEXSIGHTBLOCKING (obsolete)
     case 37: // HOOK_SUBCOMBATDAMAGE (per-hit not supported)
     case 44: // HOOK_ADJUSTPOISON (requires engine refactor)
-    case 45: // HOOK_ADJUSTRADS (requires engine refactor)
     case 46: // HOOK_ROLLCHECK (30+ call sites, lacks context)
     case 47: // HOOK_BESTWEAPON (10+ return points, lifetime issues)
     // F-22 fix: reserved hooks 54-60 have no fire sites
@@ -567,16 +566,30 @@ TEST_CASE("F-22: Hook 61 (BUILDSFXWEAPON) also has no fire site")
     CHECK_FALSE(testRegistrationWouldSucceed(61, prog));
 }
 
-TEST_CASE("F-22: Other unimplemented hooks (14, 15, 37, 44-47) have no fire site")
+TEST_CASE("F-22: Other unimplemented hooks (14, 15, 37, 44, 46, 47) have no fire site")
 {
     void* prog = reinterpret_cast<void*>(0xF00D);
 
-    int unimplemented[] = { 14, 15, 37, 44, 45, 46, 47 };
+    // M-26: hook 45 (HOOK_ADJUSTRADS) is now implemented — it fires from
+    // critterAdjustRadiation and is removed from this list.
+    int unimplemented[] = { 14, 15, 37, 44, 46, 47 };
     for (int ht : unimplemented) {
         INFO("Hook type ", ht, " must have no fire site");
         CHECK_FALSE(testSfallHookHasFireSite(ht));
         CHECK_FALSE(testRegistrationWouldSucceed(ht, prog));
     }
+}
+
+TEST_CASE("M-26: HOOK_ADJUSTRADS (45) has a fire site and allows registration")
+{
+    void* prog = reinterpret_cast<void*>(0xF00D);
+
+    // HOOK_ADJUSTRADS fires from critterAdjustRadiation (critter.cc);
+    // registration must now succeed (the production sfallHookHasFireSite
+    // switch in sfall_opcodes.cc must be updated in the same pass — the
+    // functional hook works regardless, the opcode-side warning is cosmetic).
+    CHECK(testSfallHookHasFireSite(45));
+    CHECK(testRegistrationWouldSucceed(45, prog));
 }
 
 TEST_CASE("F-22: Registration with null program still fails for reserved hooks")

@@ -95,14 +95,34 @@ int soundEffectsListInit(const char* soundEffectsPath, int compression, int debu
         fileReadString(path, 255, stream);
         gSoundEffectsListEntriesLength = atoi(path);
 
+        // M-195: the SNDLIST.LST count is trusted without bounds. A crafted
+        // list can claim a huge count, making internal_malloc fail (it returns
+        // NULL, unlike the *_safe variants) and the loop below dereference
+        // NULL. Cap the count like the disk-scan branch does (10000) and
+        // reject non-positive counts.
+        if (gSoundEffectsListEntriesLength <= 0 || gSoundEffectsListEntriesLength > 10000) {
+            fileClose(stream);
+            gSoundEffectsListEntriesLength = 0;
+            debugPrint("Reading SNDLIST.LST Sound FX Count: %d", gSoundEffectsListEntriesLength);
+            return SFXL_ERR;
+        }
+
         gSoundEffectsListEntries = (SoundEffectsListEntry*)internal_malloc(sizeof(*gSoundEffectsListEntries) * gSoundEffectsListEntriesLength);
+        if (gSoundEffectsListEntries == nullptr) {
+            fileClose(stream);
+            gSoundEffectsListEntriesLength = 0;
+            return SFXL_ERR;
+        }
         for (int index = 0; index < gSoundEffectsListEntriesLength; index++) {
             SoundEffectsListEntry* entry = &(gSoundEffectsListEntries[index]);
 
             fileReadString(path, 255, stream);
 
             // Remove trailing newline.
-            *(path + strlen(path) - 1) = '\0';
+            size_t pathLength = strlen(path);
+            if (pathLength > 0) {
+                *(path + pathLength - 1) = '\0';
+            }
             entry->name = internal_strdup(path);
 
             fileReadString(path, 255, stream);

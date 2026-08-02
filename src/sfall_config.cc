@@ -60,6 +60,14 @@ bool sfallConfigInit(int argc, char** argv)
     configSetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, SFALL_CONFIG_USE_FILESYSTEM_OVERRIDE_KEY, 0);
     configSetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, SFALL_CONFIG_OVERRIDE_ART_CACHE_SIZE_KEY, 0);
     configSetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, SFALL_CONFIG_EXTRA_SAVE_SLOTS_KEY, 0);
+    // H-06: WorldMapSlots defaults to 21. RPU's gl_k_modini.ssl checks
+    // `get_ini_setting("ddraw.ini|Misc|WorldMapSlots") != 21` and calls
+    // signal_end_game (ending the session) on any other value. sfall's own
+    // default is 0, which also fails RPU's check — the only value that
+    // satisfies RPU is 21. This default flows to scripts through the
+    // gSfallConfig fallback tier in op_get_ini_setting (sfall_ini.cc) when
+    // ddraw.ini has no WorldMapSlots key.
+    configSetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, SFALL_CONFIG_WORLDMAP_SLOTS_KEY, 21);
 
     configSetInt(&gSfallConfig, SFALL_CONFIG_DEBUGGING_KEY, SFALL_CONFIG_ALLOW_UNSAFE_SCRIPTING_KEY, 0);
 

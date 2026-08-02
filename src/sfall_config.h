@@ -31,6 +31,9 @@ namespace fallout {
 #define SFALL_CONFIG_USE_FILESYSTEM_OVERRIDE_KEY "UseFileSystemOverride"
 #define SFALL_CONFIG_OVERRIDE_ART_CACHE_SIZE_KEY "OverrideArtCacheSize"
 #define SFALL_CONFIG_EXTRA_SAVE_SLOTS_KEY "ExtraSaveSlots"
+// H-06: WorldMapSlots — RPU gl_k_modini.ssl requires this to be 21; CE's
+// default is 21 so the ddraw.ini fallback tier satisfies RPU out of the box.
+#define SFALL_CONFIG_WORLDMAP_SLOTS_KEY "WorldMapSlots"
 
 extern bool gSfallConfigInitialized;
 extern Config gSfallConfig;

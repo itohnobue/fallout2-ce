@@ -303,11 +303,20 @@ void _refreshSoundBuffers(Sound* sound)
     sound->lastPosition = readPos;
 
     if (sound->fileSize < sound->numBytesRead) {
-        int v3;
-        do {
-            v3 = sound->numBytesRead - sound->fileSize;
-            sound->numBytesRead = v3;
-        } while (v3 > sound->fileSize);
+        // M-133: with fileSize <= 0 (negative ACM sample count propagated
+        // from a crafted header, or a zero-size stream) the wrap arithmetic
+        // never terminates: v3 = numBytesRead - fileSize grows each iteration
+        // and v3 > fileSize stays true forever. Only wrap when the file size
+        // is positive; otherwise clamp the read position once.
+        if (sound->fileSize > 0) {
+            int v3;
+            do {
+                v3 = sound->numBytesRead - sound->fileSize;
+                sound->numBytesRead = v3;
+            } while (v3 > sound->fileSize);
+        } else {
+            sound->numBytesRead = 0;
+        }
     }
 
     int v6 = readPos / sound->dataSize;

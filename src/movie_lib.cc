@@ -339,6 +339,10 @@ static void* io_handle;
 // 0x6B39D0 rm_len
 static int rm_len;
 
+// Bytes remaining in the current record buffer. Used to bound the record
+// chunk-walk in _MVE_rmStepMovie (M-136); reset on each ioNextRecord.
+static unsigned int rm_record_remaining;
+
 // 0x6B39D4 mem_free
 static MveFreeFunc* mve_free_func;
 
@@ -594,11 +598,16 @@ static void* MVE_MemAlloc(MveMem* mem, unsigned int size)
 static unsigned char* ioNextRecord()
 {
     unsigned char* buf;
+    unsigned int recordSize = (io_next_hdr & 0xFFFF) + 4;
 
-    buf = (unsigned char*)ioRead((io_next_hdr & 0xFFFF) + 4);
+    buf = (unsigned char*)ioRead(recordSize);
     if (buf == nullptr) {
         return nullptr;
     }
+
+    // M-136: record the current record buffer size so the chunk-walk in
+    // _MVE_rmStepMovie can be bounded against it.
+    rm_record_remaining = recordSize;
 
     io_next_hdr = *(unsigned int*)(buf + (io_next_hdr & 0xFFFF));
 
@@ -665,9 +674,24 @@ LABEL_5:
     }
 
     while (1) {
+        // M-136: chunk sizes are file-controlled; bound each chunk header and
+        // its data against the current record buffer so a crafted chain of
+        // inflated sizes cannot walk v1 far past the record allocation.
+        if (rm_record_remaining < 4) {
+            v6 = -3;
+            break;
+        }
+
         v5 = *(unsigned int*)((unsigned char*)v1 + v0);
         v1 = (unsigned short*)((unsigned char*)v1 + v0 + 4);
         v0 = v5 & 0xFFFF;
+
+        rm_record_remaining -= 4;
+        if (v0 > rm_record_remaining) {
+            v6 = -3;
+            break;
+        }
+        rm_record_remaining -= v0;
 
         switch ((v5 >> 16) & 0xFF) {
         case 0:
@@ -848,6 +872,14 @@ static int _MVE_sndConfigure(int a1, int a2, int a3, int a4, int a5, int a6)
     _snd_buf = a6;
 
     gMveBufferBytes = (a2 + (a2 >> 1)) & 0xFFFFFFFC;
+
+    // M-137: a crafted audio-init chunk (a2 in {0,1,2}) makes gMveBufferBytes 0;
+    // audioEngineCreateSoundBuffer(0, ...) still succeeds (malloc(0) returns a
+    // non-null pointer) and _MVE_sndSync then executes `% gMveBufferBytes`,
+    // dividing by zero (SIGFPE). Reject the zero-sized buffer config.
+    if (gMveBufferBytes == 0) {
+        return 0;
+    }
 
     dword_6B3AE4 = 0;
     dword_6B3660 = 0;
@@ -1246,12 +1278,25 @@ static void _do_nothing_(int a1, int a2, unsigned short* a3)
 // 0x4F6090 SetPalette_1
 static void palSetPalette(int start, int count)
 {
+    // M-134: start/count are raw MVE chunk bytes (case 7 passes v1[0]/v1[1]
+    // unvalidated). Without this check the values reach _setSystemPaletteEntries
+    // and overflow the 768-byte newPalette/_systemCmap and svga's colors[256].
+    // Mirror the guard used by palLoadPalette below.
+    if (start < 0 || count < 0 || start + count > 256) {
+        return;
+    }
+
     pal_SetPalette(pal_tbl, start, count);
 }
 
 // 0x4F60C0 SetPalette_2
 static void palClrPalette(int start, int count)
 {
+    // M-134: same file-controlled bounds validation as palSetPalette.
+    if (start < 0 || count < 0 || start + count > 256) {
+        return;
+    }
+
     unsigned char palette[768];
 
     memset(palette, 0, sizeof(palette));
@@ -1307,6 +1352,7 @@ void MVE_rmEndMovie()
         syncRelease();
         _MVE_sndReset();
         rm_active = 0;
+        rm_record_remaining = 0;
     }
 }
 
@@ -1424,6 +1470,19 @@ static void _nfPkConfig()
 static void _nfPkDecomp(unsigned char* a1, unsigned char* a2, int a3, int a4, int a5, int a6, size_t a2_size)
 {
     if (a2_size == 0) {
+        return;
+    }
+
+    // M-135: a3/a4/a5/a6 are file-controlled chunk coordinates/dimensions
+    // (8px units, ushorts from the MVE header). Without validation the dest
+    // computation (nf_buf_cur + 8*a3 + nf_width * 8*a4*byte_6B4016) and the
+    // following 8-row writes land far past the nf_buf_cur allocation. Bound
+    // the chunk against the frame dimensions configured by nfConfig.
+    const int frameWidthBlocks = nf_width / 8;
+    const int frameHeightBlocks = byte_6B4016 > 0 ? nf_height / (8 * byte_6B4016) : 0;
+    if (a3 < 0 || a4 < 0 || a5 <= 0 || a6 <= 0
+        || a3 + a5 > frameWidthBlocks
+        || a4 + a6 > frameHeightBlocks) {
         return;
     }
 

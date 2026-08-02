@@ -2,7 +2,7 @@
 //
 // Covers:
 //   UF-H-015/H-016 — Barter table bounds checks with offset
-//   UF-H-020 — critterSetBonusStat min/max value clamping
+//   C-05 — critterSetBonusStat signed-delta semantics (write-side clamp removed)
 //   UF-H-039 — _movieUpdate stops on any negative error code
 //   UF-H-043 — configGetInt base=10 (no octal parse failure)
 //
@@ -160,70 +160,75 @@ static const MirroredStatDescription kBonusStatDescriptions[] = {
 static_assert(std::size(kBonusStatDescriptions) == MIRROR_SAVEABLE_COUNT,
               "kBonusStatDescriptions must have MIRROR_SAVEABLE_COUNT entries");
 
-// Mirror of critterSetBonusStat clamping logic from src/stat.cc:587-597 (fixed).
-// Returns: 0 on success, -2 if below min, -3 if above max, -5 on invalid stat.
+// Mirror of critterSetBonusStat (src/stat.cc:577-625) — C-05 FIXED semantics.
+// bonusStats[stat] is a SIGNED DELTA (modifier), NOT an absolute value, so
+// the write path stores the raw delta with NO min/max validation (0 and
+// negatives are legitimate: radiation, addiction, drug wear-off, editor
+// reset). The effective stat is bounded by the READ-SIDE display clamp in
+// critterGetStat() (src/stat.cc:423-426), mirrored as mirroredGetStat below.
+// Returns: 0 on success (delta accepted/stored), -5 on invalid stat index.
 static int mirroredSetBonusStat(int stat, int value, int saveableCount,
                                 const MirroredStatDescription* descs)
 {
+    (void)value;
+    (void)descs;
     if (stat < 0 || stat >= saveableCount) return -5;
-
-    // UF-H-020: Added min/max clamping matching critterSetBaseStat pattern.
-    if (value < descs[stat].minimumValue) return -2;
-    if (value > descs[stat].maximumValue) return -3;
-
     return 0;
 }
 
-TEST_CASE("UF-H-020: critterSetBonusStat clamps to min/max range")
+// Mirror of the read-side display clamp in critterGetStat (src/stat.cc:423-426):
+// effective = base + bonus, clamped to [minimumValue, maximumValue] when
+// min <= max (the guard prevents UB on min > max, C++17 [alg.clamp]).
+static int mirroredGetStat(int baseValue, int bonusValue,
+                           const MirroredStatDescription& desc)
 {
-    SUBCASE("valid value within range succeeds")
-    {
-        CHECK(mirroredSetBonusStat(MIRROR_STAT_STRENGTH, 5,
-              MIRROR_SAVEABLE_COUNT, kBonusStatDescriptions) == 0);
-        CHECK(mirroredSetBonusStat(MIRROR_STAT_MAX_HP, 500,
-              MIRROR_SAVEABLE_COUNT, kBonusStatDescriptions) == 0);
+    int value = baseValue + bonusValue;
+    if (desc.minimumValue <= desc.maximumValue) {
+        value = std::clamp(value, desc.minimumValue, desc.maximumValue);
     }
+    return value;
+}
 
-    SUBCASE("value at minimum boundary succeeds")
+TEST_CASE("C-05: critterSetBonusStat accepts signed deltas (0/negative/above-max)")
+{
+    SUBCASE("zero bonus is accepted (editor GCD reset)")
     {
-        CHECK(mirroredSetBonusStat(MIRROR_STAT_STRENGTH, 1,
-              MIRROR_SAVEABLE_COUNT, kBonusStatDescriptions) == 0);
-        CHECK(mirroredSetBonusStat(MIRROR_STAT_CRIT_CHANCE, -60,
-              MIRROR_SAVEABLE_COUNT, kBonusStatDescriptions) == 0);
-    }
-
-    SUBCASE("value at maximum boundary succeeds")
-    {
-        CHECK(mirroredSetBonusStat(MIRROR_STAT_STRENGTH, 10,
-              MIRROR_SAVEABLE_COUNT, kBonusStatDescriptions) == 0);
-        CHECK(mirroredSetBonusStat(MIRROR_STAT_DT_NORMAL, 100,
-              MIRROR_SAVEABLE_COUNT, kBonusStatDescriptions) == 0);
-    }
-
-    SUBCASE("value below minimum returns -2")
-    {
+        // character_editor.cc:4205 writes 0 for every saveable stat to reset
+        // bonuses. The pre-fix write-side clamp rejected 0 (< PRIMARY_STAT_MIN=1),
+        // leaving stale bonuses permanently applied.
         CHECK(mirroredSetBonusStat(MIRROR_STAT_STRENGTH, 0,
-              MIRROR_SAVEABLE_COUNT, kBonusStatDescriptions) == -2);
+              MIRROR_SAVEABLE_COUNT, kBonusStatDescriptions) == 0);
+    }
+
+    SUBCASE("negative bonus is accepted (radiation/addiction penalties)")
+    {
+        // Radiation penalties (critter.cc:128-137) and addiction penalties
+        // (perk.cc) are negative deltas.
+        CHECK(mirroredSetBonusStat(MIRROR_STAT_STRENGTH, -2,
+              MIRROR_SAVEABLE_COUNT, kBonusStatDescriptions) == 0);
         CHECK(mirroredSetBonusStat(MIRROR_STAT_CRIT_CHANCE, -61,
-              MIRROR_SAVEABLE_COUNT, kBonusStatDescriptions) == -2);
+              MIRROR_SAVEABLE_COUNT, kBonusStatDescriptions) == 0);
     }
 
-    SUBCASE("value above maximum returns -3")
+    SUBCASE("above-max bonus is accepted (raw delta; read side clamps display)")
     {
+        // Drug/perk boosts may push the raw delta above the stat's nominal
+        // maximum; the effective value is bounded at read time, not on write.
         CHECK(mirroredSetBonusStat(MIRROR_STAT_STRENGTH, 11,
-              MIRROR_SAVEABLE_COUNT, kBonusStatDescriptions) == -3);
-        CHECK(mirroredSetBonusStat(MIRROR_STAT_DT_NORMAL, 101,
-              MIRROR_SAVEABLE_COUNT, kBonusStatDescriptions) == -3);
+              MIRROR_SAVEABLE_COUNT, kBonusStatDescriptions) == 0);
+        CHECK(mirroredSetBonusStat(MIRROR_STAT_STRENGTH, 1000,
+              MIRROR_SAVEABLE_COUNT, kBonusStatDescriptions) == 0);
     }
 
-    SUBCASE("INT_MAX max bound allows large values")
+    SUBCASE("read-side clamp bounds the effective value")
     {
-        // UNARMED_DMG has INT_MAX max — should accept large value
-        CHECK(mirroredSetBonusStat(MIRROR_STAT_UNARMED_DMG, 50000,
-              MIRROR_SAVEABLE_COUNT, kBonusStatDescriptions) == 0);
-        // INT_MAX check — max value itself
-        CHECK(mirroredSetBonusStat(MIRROR_STAT_UNARMED_DMG, INT_MAX,
-              MIRROR_SAVEABLE_COUNT, kBonusStatDescriptions) == 0);
+        // effective = base + bonus, clamped at read time (stat.cc:423-426).
+        // STR base 5: bonus -10 → 5-10 = -5 → clamped to min 1; bonus +100
+        // → 105 → clamped to max 10; in-range deltas pass through unchanged.
+        CHECK(mirroredGetStat(5, -10, kBonusStatDescriptions[MIRROR_STAT_STRENGTH]) == 1);
+        CHECK(mirroredGetStat(5, 100, kBonusStatDescriptions[MIRROR_STAT_STRENGTH]) == 10);
+        CHECK(mirroredGetStat(5, -2, kBonusStatDescriptions[MIRROR_STAT_STRENGTH]) == 3);
+        CHECK(mirroredGetStat(5, 0, kBonusStatDescriptions[MIRROR_STAT_STRENGTH]) == 5);
     }
 
     SUBCASE("invalid stat index returns -5")
@@ -233,6 +238,121 @@ TEST_CASE("UF-H-020: critterSetBonusStat clamps to min/max range")
         CHECK(mirroredSetBonusStat(MIRROR_SAVEABLE_COUNT, 5,
               MIRROR_SAVEABLE_COUNT, kBonusStatDescriptions) == -5);
     }
+}
+
+// ---- C-05 consumer-level regression tests ----
+// These model the actual game consumers that route through critterSetBonusStat:
+// radiation drain/heal (critter.cc:595-647), drug apply/wear-off
+// (item.cc:2803-2859), addiction apply/withdrawal-end (perk.cc:697-760), and
+// the character-editor GCD reset loop (character_editor.cc:4205). Each models
+// the production delta formula (statBonus = oldBonus ± delta) against the
+// fixed write path and asserts the cycle returns to baseline with NO
+// permanent stat inflation (the pre-fix clamp rejected the negative leg and
+// accepted the positive leg, producing permanent +N per cycle).
+
+TEST_CASE("C-05: radiation drain/heal cycle returns to baseline (never +1)")
+{
+    // radiationProcess (critter.cc:595-598): value = bonus + modifier * penalty
+    // with penalty = -1 for STR at the first damaging level
+    // (gRadiationEffectPenalties[0][0]); modifier = +1 on drain, -1 on heal
+    // (radiationClearDamage, critter.cc:555-564).
+    const int penalty = -1;
+    const MirroredStatDescription& strDesc = kBonusStatDescriptions[MIRROR_STAT_STRENGTH];
+
+    SUBCASE("radiation drain applies the negative penalty")
+    {
+        int bonus = 0;
+        int value = bonus + 1 * penalty; // 0 + (-1) = -1 → ACCEPTED
+        CHECK(mirroredSetBonusStat(MIRROR_STAT_STRENGTH, value,
+              MIRROR_SAVEABLE_COUNT, kBonusStatDescriptions) == 0);
+        bonus = value;
+        CHECK(bonus == -1);
+        // Effective STR = base 5 + (-1) = 4; alive (>= PRIMARY_STAT_MIN 1).
+        CHECK(mirroredGetStat(5, bonus, strDesc) == 4);
+    }
+
+    SUBCASE("healing restores exactly to baseline, no permanent +1")
+    {
+        int bonus = -1; // state after radiation drain
+        int value = bonus + (-1) * penalty; // -1 + (+1) = 0 → ACCEPTED
+        CHECK(mirroredSetBonusStat(MIRROR_STAT_STRENGTH, value,
+              MIRROR_SAVEABLE_COUNT, kBonusStatDescriptions) == 0);
+        bonus = value;
+        CHECK(bonus == 0); // never +1: the old clamp accepted +1 on the heal leg
+        CHECK(mirroredGetStat(5, bonus, strDesc) == 5);
+    }
+}
+
+TEST_CASE("C-05: drug apply/wear-off cycle returns to baseline")
+{
+    // _perform_drug_effect (item.cc:2803-2859): statBonus = mod + oldStatBonus;
+    // wear-off applies the negative side of the drug's mods to return to 0.
+    const int drugMod = 2;
+    const MirroredStatDescription& strDesc = kBonusStatDescriptions[MIRROR_STAT_STRENGTH];
+
+    SUBCASE("drug boost applies and wear-off returns to 0")
+    {
+        int bonus = 0;
+        int value = bonus + drugMod; // 0 + 2 = +2 → ACCEPTED
+        CHECK(mirroredSetBonusStat(MIRROR_STAT_STRENGTH, value,
+              MIRROR_SAVEABLE_COUNT, kBonusStatDescriptions) == 0);
+        bonus = value;
+        CHECK(bonus == 2);
+        CHECK(mirroredGetStat(5, bonus, strDesc) == 7);
+
+        // wear-off: 2 + (-2) = 0 → ACCEPTED (pre-fix clamp rejected the
+        // reversal below PRIMARY_STAT_MIN, making drug boosts permanent).
+        value = bonus - drugMod;
+        CHECK(mirroredSetBonusStat(MIRROR_STAT_STRENGTH, value,
+              MIRROR_SAVEABLE_COUNT, kBonusStatDescriptions) == 0);
+        bonus = value;
+        CHECK(bonus == 0);
+        CHECK(mirroredGetStat(5, bonus, strDesc) == 5);
+    }
+}
+
+TEST_CASE("C-05: addiction apply/withdrawal-end cycle returns to baseline")
+{
+    // perkAddEffect (perk.cc:716-720): value + (-2) penalty → ACCEPTED;
+    // perkRemoveEffect on withdrawal end (perk.cc:757-761): 0 - (-2) → +2
+    // added back → returns to 0. The pre-fix clamp rejected the -2 penalty
+    // but accepted the +2 removal, producing permanent stat inflation.
+    const int addictionPenalty = -2;
+    const MirroredStatDescription& strDesc = kBonusStatDescriptions[MIRROR_STAT_STRENGTH];
+
+    SUBCASE("addiction penalty applies and withdrawal end restores baseline")
+    {
+        int bonus = 0;
+        int value = bonus + addictionPenalty; // 0 + (-2) = -2 → ACCEPTED
+        CHECK(mirroredSetBonusStat(MIRROR_STAT_STRENGTH, value,
+              MIRROR_SAVEABLE_COUNT, kBonusStatDescriptions) == 0);
+        bonus = value;
+        CHECK(bonus == -2);
+        CHECK(mirroredGetStat(5, bonus, strDesc) == 3);
+
+        // withdrawal end: -2 - (-2) = 0 → ACCEPTED
+        value = bonus - addictionPenalty;
+        CHECK(mirroredSetBonusStat(MIRROR_STAT_STRENGTH, value,
+              MIRROR_SAVEABLE_COUNT, kBonusStatDescriptions) == 0);
+        bonus = value;
+        CHECK(bonus == 0);
+        CHECK(mirroredGetStat(5, bonus, strDesc) == 5);
+    }
+}
+
+TEST_CASE("C-05: editor GCD reset loop clears all bonus stats")
+{
+    // character_editor.cc:4205: critterSetBonusStat(gDude, stat, 0) for every
+    // saveable stat. The reset must succeed on primary stats (bonus 0 < 1 was
+    // previously rejected → stale bonuses unrecoverable in-game).
+    const MirroredStatDescription& strDesc = kBonusStatDescriptions[MIRROR_STAT_STRENGTH];
+
+    int bonus = 5; // some accumulated bonus
+    CHECK(mirroredSetBonusStat(MIRROR_STAT_STRENGTH, 0,
+          MIRROR_SAVEABLE_COUNT, kBonusStatDescriptions) == 0);
+    bonus = 0;
+    CHECK(bonus == 0);
+    CHECK(mirroredGetStat(5, bonus, strDesc) == 5);
 }
 
 // ---- UF-H-039: _movieUpdate stops on any negative error code ----

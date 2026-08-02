@@ -15,7 +15,10 @@ void contentConfigTryMigrateFromSfall(const char* contentConfigPath);
 // cover the same set of ddraw.ini keys mapped to content_config sections.
 // When adding new migration entries, update this count and add the
 // corresponding entry to BOTH tables to keep them synchronized.
-inline constexpr size_t kSfallMigrationEntryCount = 59;
+// P-19: reduced 59 → 56 — ViewXPos/ViewYPos/WorldMapSlots rows removed
+// (dead targets, zero consumers; WorldMapSlots now served by the
+// gSfallConfig default of 21 per H-06).
+inline constexpr size_t kSfallMigrationEntryCount = 56;
 
 } // namespace fallout
 

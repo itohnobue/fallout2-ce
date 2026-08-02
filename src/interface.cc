@@ -2331,6 +2331,15 @@ static void interfaceRenderCounter(int x, int y, int previousValue, int value, i
         value = -999;
     }
 
+    // The animation path derives the displayed digits from previousValue;
+    // clamp it to the same range as value so hundreds stays within the
+    // 10-digit numbers buffer (OOB read otherwise) (M-113).
+    if (previousValue > 999) {
+        previousValue = 999;
+    } else if (previousValue < -999) {
+        previousValue = -999;
+    }
+
     unsigned char* numbers = _numbersFrmImage.getData() + offset;
     unsigned char* dest = gInterfaceWindowBuffer + gInterfaceBarWidth * y;
 
@@ -2351,7 +2360,10 @@ static void interfaceRenderCounter(int x, int y, int previousValue, int value, i
         normalizedValue = abs(value);
     } else {
         normalizedSign = previousValue >= 0 ? 1 : -1;
-        normalizedValue = previousValue;
+        // Take the magnitude: the sign is drawn separately (plusSrc/minusSrc),
+        // so a negative previousValue must not index the digit buffer before
+        // its start (M-113).
+        normalizedValue = abs(previousValue);
     }
 
     int ones = normalizedValue % 10;

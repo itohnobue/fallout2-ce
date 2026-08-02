@@ -75,13 +75,30 @@ namespace fallout {
 
 #define LOAD_SAVE_SIGNATURE "FALLOUT SAVE FILE"
 #define LOAD_SAVE_DESCRIPTION_LENGTH 30
+// C-04 (HIGH): Number of handler chunks in the current (1.4R) save format.
+// The 1.4R layout adds lightSave/lightLoad at index 26 (28 chunks total).
 #define LOAD_SAVE_HANDLER_COUNT 28
+// Number of handler chunks in the legacy (1.2R/1.3R) save format. Pre-pass-15
+// builds wrote 27 chunks with _EndLoad at index 26 (no lightSave/lightLoad).
+#define LOAD_SAVE_LEGACY_HANDLER_COUNT 27
 
 // SFALL: Minimum save file version that includes CRC32 checksums on each
 // handler chunk. Version 1.3+ saves have a 4-byte CRC prefix per handler
 // chunk; version 1.2 saves (original format) have no CRC and load without
 // verification. Both versions have the same major=1 and release='R'.
 #define SAVE_FORMAT_CRC_VERSION_MAJOR (3)
+
+// C-03/C-04 (save-format pass): On-disk versionMajor stores VERSION_MINOR.
+//   versionMajor == 2 (1.2R): no handler CRC, no header CRC, 27 chunks.
+//   versionMajor == 3 (1.3R): handler CRC; header CRC absent for pass-7..10
+//                             saves (the 4 bytes after the header are
+//                             handler-0's zero placeholder), garbage
+//                             crc32-of-zeros for pass-11+ saves (unrecoverable,
+//                             dropped); 27 chunks.
+//   versionMajor == 4 (1.4R): handler CRC + header CRC (verified
+//                             unconditionally); 28 chunks (lightSave/lightLoad
+//                             at index 26).
+#define SAVE_FORMAT_28_HANDLERS_VERSION_MAJOR (4)
 
 // CRC-32 (IEEE 802.3) table — initialized lazily on first use.
 static unsigned int _crc32Table[256];
@@ -336,8 +353,55 @@ static LoadGameHandler* _master_load_list[LOAD_SAVE_HANDLER_COUNT] = {
     _EndLoad,
 };
 
+// C-04 (HIGH): Legacy 27-chunk load handler list (save formats 1.2R/1.3R,
+// on-disk versionMajor 2/3). Identical to _master_load_list for indices
+// 0..25, but index 26 is _EndLoad instead of lightLoad — pre-pass-15 builds
+// had no lightSave/lightLoad handler, so a 27-chunk save written before that
+// change ends at interfaceLoad, and _EndLoad reads no data. The 28-chunk
+// 1.4R list above must be used only for versionMajor >= 4 saves; using it on
+// a 27-chunk save would run lightLoad at index 26 and read garbage/EOF.
+static LoadGameHandler* _master_load_list_legacy[LOAD_SAVE_LEGACY_HANDLER_COUNT] = {
+    _PrepLoad,
+    _LoadObjDudeCid,
+    scriptsLoadGameGlobalVars,
+    _SlotMap2Game,
+    scriptsSkipGameGlobalVars,
+    _obj_load_dude,
+    critterLoad,
+    killsLoad,
+    skillsLoad,
+    randomLoad,
+    perksLoad,
+    combatLoad,
+    aiLoad,
+    statsLoad,
+    itemsLoad,
+    traitsLoad,
+    automapLoad,
+    preferencesLoad,
+    characterEditorLoad,
+    wmWorldMap_load,
+    pipboyLoad,
+    gameMoviesLoad,
+    skillsUsageLoad,
+    partyMembersLoad,
+    queueLoad,
+    interfaceLoad,
+    _EndLoad,
+};
+
 // 0x5194C4 loadingGame
 static bool _loadingGame = false;
+
+// M-62 (MEDIUM): Version gate for the gScriptWorldMapMulti save field.
+// Defined in worldmap.cc (defaults to fork format). loadsave.cc MUST set this
+// to the loaded save's versionMajor before the handler loop so wmWorldMap_load
+// reads the fork-added float only for fork saves (versionMajor >= 3) and skips
+// it for upstream/vanilla 1.2R saves (versionMajor == 2) — otherwise the first
+// city's x is consumed as the float and the whole worldmap stream misaligns.
+// On the save side we set it to the current format (VERSION_MINOR == 4) so the
+// write path is always fork-format.
+extern int gLoadedSaveVersionMajor;
 
 // lsgame.msg
 //
@@ -1979,7 +2043,13 @@ static int lsgPerformSaveGame()
 
     debugPrint("\nLOADSAVE: Save name: %s\n", _gmpath);
 
-    _flptr = fileOpen(_saveDatTmp, "wb");
+    // C-02 (CRITICAL): Open the temp save file "w+b" (read-write), not "wb"
+    // (write-only). The header-CRC read-back (lsgSaveHeaderInSlot) and the
+    // handler-CRC read-back (handler loop below) both fread() from this stream
+    // to compute CRC32s. On a write-only stream fread() returns 0, the
+    // read-back silently fails, and every save aborted with
+    // "Error writing save game header!" / "Error reading save data for CRC".
+    _flptr = fileOpen(_saveDatTmp, "w+b");
     if (_flptr == nullptr) {
         debugPrint("\nLOADSAVE: ** Error opening save game for writing! **\n");
         _RestoreSave();
@@ -2004,10 +2074,15 @@ static int lsgPerformSaveGame()
         return -1;
     }
 
+    // M-62 (MEDIUM): Ensure the worldmap save handler writes the fork-format
+    // stream. New saves are always written by this build in the current fork
+    // format (1.4R), which includes the gScriptWorldMapMulti float — even when
+    // the save slot previously held an upstream/vanilla 1.2R save.
+    gLoadedSaveVersionMajor = VERSION_MINOR;
+
     for (int index = 0; index < LOAD_SAVE_HANDLER_COUNT; index++) {
         long chunkStart = fileTell(_flptr);
         SaveGameHandler* handler = _master_save_list[index];
-
         // SFALL: Write placeholder CRC32 before handler data (version 1.3+).
         // The CRC covers only the handler's data bytes (not the CRC field itself).
         // Computed after the handler writes, then patched back with fileSeek.
@@ -2101,7 +2176,11 @@ static int lsgPerformSaveGame()
         snprintf(tmpPath, sizeof(tmpPath), "%ssfallgv.tmp", sfPath);
         strcat(sfPath, "sfallgv.sav");
 
-        File* sfFile = fileOpen(tmpPath, "wb");
+        // save NEW-2 (MEDIUM): Open the sfallgv temp file "w+b" (read-write),
+        // not "wb". sfallSaveGameData appends a CRC32 trailer over the whole
+        // payload and needs to read back the written bytes to compute it —
+        // the same read-back pattern as the SAVE.DAT handler/header CRCs.
+        File* sfFile = fileOpen(tmpPath, "w+b");
         if (sfFile != nullptr) {
             bool saved = sfallSaveGameData(sfFile);
             fileClose(sfFile);
@@ -2226,9 +2305,26 @@ static int lsgLoadGameInSlot(int slot)
     // Version 1.2 saves have no CRC — they load without verification.
     bool hasHandlerCrc = (ptr->versionMajor >= SAVE_FORMAT_CRC_VERSION_MAJOR);
 
-    for (int index = 0; index < LOAD_SAVE_HANDLER_COUNT; index += 1) {
+    // M-62 (MEDIUM): Set the worldmap save-format version gate to the loaded
+    // save's versionMajor BEFORE the handler loop runs. wmWorldMap_load reads
+    // the fork-added gScriptWorldMapMulti float only when versionMajor >= 3;
+    // for upstream/vanilla 1.2R saves (versionMajor == 2) it must skip the
+    // float or the first city's x is consumed and the stream misaligns.
+    gLoadedSaveVersionMajor = ptr->versionMajor;
+
+    // C-04 (HIGH): Select the handler list and count by save-format version.
+    //   versionMajor <= 3 (1.2R/1.3R): legacy 27-chunk layout — index 26 is
+    //     _EndLoad (pre-pass-15). Using the 28-chunk list here would run
+    //     lightLoad at index 26 on a save that has no light data (EOF/garbage).
+    //   versionMajor >= 4 (1.4R): 28-chunk layout — index 26 is lightLoad,
+    //     index 27 is _EndLoad.
+    const bool has28Handlers = (ptr->versionMajor >= SAVE_FORMAT_28_HANDLERS_VERSION_MAJOR);
+    const int loadHandlerCount = has28Handlers ? LOAD_SAVE_HANDLER_COUNT : LOAD_SAVE_LEGACY_HANDLER_COUNT;
+    LoadGameHandler** loadList = has28Handlers ? _master_load_list : _master_load_list_legacy;
+
+    for (int index = 0; index < loadHandlerCount; index += 1) {
         long pos = fileTell(_flptr);
-        LoadGameHandler* handler = _master_load_list[index];
+        LoadGameHandler* handler = loadList[index];
 
         unsigned int storedCrc = 0;
         if (hasHandlerCrc) {
@@ -2476,23 +2572,30 @@ static int lsgSaveHeaderInSlot(int slot)
     // This protects the entire header (signature, version, characterName,
     // description, dates, gameTime, elevation, map, fileName, preview, padding)
     // and specifically guards versionMajor against corruption (F2-20, F2-21).
+    // save NEW-4 (MEDIUM): a malloc failure here must ABORT the save, exactly
+    // like the handler-loop malloc failure (see "Error allocating CRC buffer").
+    // Silently omitting the header CRC produces a save that the load path
+    // classifies CORRUPT (it reads the first handler bytes as a CRC and
+    // mismatches) — a permanent, undetectable-at-save-time corruption.
     long headerEnd = fileTell(_flptr);
     long headerSize = headerEnd - headerStart;
     if (headerSize > 0) {
         unsigned char* headerBuf = (unsigned char*)internal_malloc(headerSize);
-        if (headerBuf != nullptr) {
-            memset(headerBuf, 0, headerSize);
-            fileSeek(_flptr, headerStart, SEEK_SET);
-            if (fileRead(headerBuf, 1, headerSize, _flptr) != headerSize) {
-                internal_free(headerBuf);
-                return -1;
-            }
-            unsigned int headerCrc = _crc32Compute(headerBuf, headerSize);
+        if (headerBuf == nullptr) {
+            debugPrint("\nLOADSAVE: ** Error allocating header CRC buffer! **\n");
+            return -1;
+        }
+        memset(headerBuf, 0, headerSize);
+        fileSeek(_flptr, headerStart, SEEK_SET);
+        if (fileRead(headerBuf, 1, headerSize, _flptr) != headerSize) {
             internal_free(headerBuf);
-            fileSeek(_flptr, headerEnd, SEEK_SET);
-            if (fileWriteUInt32(_flptr, headerCrc) == -1) {
-                return -1;
-            }
+            return -1;
+        }
+        unsigned int headerCrc = _crc32Compute(headerBuf, headerSize);
+        internal_free(headerBuf);
+        fileSeek(_flptr, headerEnd, SEEK_SET);
+        if (fileWriteUInt32(_flptr, headerCrc) == -1) {
+            return -1;
         }
     }
 
@@ -2532,20 +2635,30 @@ static int lsgLoadHeaderInSlot(int slot)
         return -1;
     }
 
+    // C-03/C-04 (save-format pass): Accept versionMajor (on disk: stores
+    // VERSION_MINOR) 2 (1.2R legacy), 3 (1.3R legacy), and 4 (1.4R current).
     if (ptr->versionMinor != 1 || ptr->versionRelease != 'R'
-        || (ptr->versionMajor != 2 && ptr->versionMajor != 3)) {
+        || (ptr->versionMajor != 2 && ptr->versionMajor != 3 && ptr->versionMajor != 4)) {
         debugPrint("\nLOADSAVE: Load slot #%d Version: %d.%d%c\n", slot, ptr->versionMinor, ptr->versionMajor, ptr->versionRelease);
         _ls_error_code = 1;
         return -1;
     }
 
+    // NEW-1 residual (LOW): Guarantee NUL termination on load. A crafted save
+    // can omit the NUL byte inside characterName/description; downstream
+    // consumers (_ShowSlotList strcpy, fontDrawText, dudeSetName) then read
+    // past the field. The write side already NUL-terminates (I2-084); the load
+    // side must enforce the same invariant (the strcpy-overflow claim was
+    // REJECTED — byte 91 padding bounds the read — but the NUL gap is real).
     if (fileRead(ptr->characterName, 32, 1, _flptr) != 1) {
         return -1;
     }
+    ptr->characterName[sizeof(ptr->characterName) - 1] = '\0';
 
     if (fileRead(ptr->description, 30, 1, _flptr) != 1) {
         return -1;
     }
+    ptr->description[sizeof(ptr->description) - 1] = '\0';
 
     if (fileReadInt16List(_flptr, v8, 3) == -1) {
         return -1;
@@ -2591,45 +2704,80 @@ static int lsgLoadHeaderInSlot(int slot)
         return -1;
     }
 
-    // Verify header CRC if present (added in version 1.3+ alongside handler CRC).
-    // fileReadUInt32 will fail (return non-zero) for old saves that don't have
-    // the 4-byte CRC suffix — we silently accept those. If CRC bytes are present,
-    // verify them against the full header data. This protects versionMajor (F2-21:
-    // corruption of 3→2 would cause CRC mismatch) and all other header fields
-    // (F2-20: header integrity protection).
+    // C-03 (CRITICAL) / save NEW-3 (constraint) / save NEW-4 (write side):
+    // Header-CRC interpretation. The 4-byte header CRC covers versionMajor and
+    // every other header field (F2-20/F2-21). The version field selects ONLY
+    // the legacy-vs-CRC interpretation and the handler layout — it never gates
+    // the CRC read inside the CRC era (NEW-3: gating on versionMajor alone
+    // would let a version flip disable the CRC that is supposed to detect the
+    // flip). Within the CRC era (versionMajor 3/4) the header CRC is read and
+    // verified UNCONDITIONALLY:
+    //   versionMajor == 2 (1.2R legacy): no header CRC at all — seek to headerEnd.
+    //   versionMajor == 3 (1.3R): pass-7..10 saves predate the header CRC — the
+    //     next 4 bytes are handler-0's zero placeholder, so a stored value of 0
+    //     means "no header CRC present" and is accepted. Pass-11+ 1.3R saves
+    //     carry a garbage crc32-of-zeros header CRC (the C-02 read-back failure)
+    //     and are rejected here (documented drop — unrecoverable).
+    //   versionMajor == 4 (1.4R): header CRC always present; verified
+    //     unconditionally. A 4->3 flip changes the header bytes → mismatch.
     long headerEnd = fileTell(_flptr);
-    unsigned int storedHeaderCrc;
-    if (fileReadUInt32(_flptr, &storedHeaderCrc) == 0) {
+
+    if (ptr->versionMajor == 2) {
+        // 1.2R legacy: no header CRC in the stream. Seek back to header end so
+        // the handler loop starts at handler-0's data.
+        fileSeek(_flptr, headerEnd, SEEK_SET);
+    } else {
+        unsigned int storedHeaderCrc;
+        if (fileReadUInt32(_flptr, &storedHeaderCrc) != 0) {
+            // CRC-era save but fewer than 4 bytes remain after the header —
+            // truncated/corrupt (the C-03 bug was reading handler data as a
+            // CRC; a genuine 1.2R save never reaches this branch).
+            debugPrint("\nLOADSAVE: ** Header CRC read failed (truncated save) **\n");
+            _ls_error_code = 2;
+            return -1;
+        }
+
         long headerSize = headerEnd - headerStart;
         if (headerSize > 0) {
             unsigned char* headerBuf = (unsigned char*)internal_malloc(headerSize);
-            if (headerBuf != nullptr) {
-                memset(headerBuf, 0, headerSize);
-                fileSeek(_flptr, headerStart, SEEK_SET);
-                if (fileRead(headerBuf, 1, headerSize, _flptr) != headerSize) {
-                    internal_free(headerBuf);
-                    _ls_error_code = 2;
-                    return -1;
-                }
-                unsigned int computedCrc = _crc32Compute(headerBuf, headerSize);
+            if (headerBuf == nullptr) {
+                // Fail closed, matching the handler-loop CRC behavior (a
+                // malloc failure there also aborts the load). A CRC-era save
+                // whose header CRC cannot be verified must not load silently.
+                debugPrint("\nLOADSAVE: ** Error allocating header CRC buffer! **\n");
+                _ls_error_code = 2;
+                return -1;
+            }
+            memset(headerBuf, 0, headerSize);
+            fileSeek(_flptr, headerStart, SEEK_SET);
+            if (fileRead(headerBuf, 1, headerSize, _flptr) != headerSize) {
                 internal_free(headerBuf);
-                if (computedCrc != storedHeaderCrc) {
-                    debugPrint("\nLOADSAVE: ** Header CRC mismatch! (stored=%08x, computed=%08x) **\n",
-                        storedHeaderCrc, computedCrc);
-                    _ls_error_code = 2;
-                    return -1;
+                _ls_error_code = 2;
+                return -1;
+            }
+            unsigned int computedCrc = _crc32Compute(headerBuf, headerSize);
+            internal_free(headerBuf);
+            if (computedCrc != storedHeaderCrc) {
+                if (storedHeaderCrc == 0 && ptr->versionMajor == SAVE_FORMAT_CRC_VERSION_MAJOR) {
+                    // Pass-7..10 1.3R save: no header CRC was written; the
+                    // 4 bytes just read are handler-0's zero placeholder.
+                    // Accept and seek back to header end so the handler
+                    // loop consumes the placeholder as handler-0's CRC.
+                    fileSeek(_flptr, headerEnd, SEEK_SET);
+                    _ls_error_code = 0;
+                    return 0;
                 }
+                debugPrint("\nLOADSAVE: ** Header CRC mismatch! (stored=%08x, computed=%08x) **\n",
+                    storedHeaderCrc, computedCrc);
+                _ls_error_code = 2;
+                return -1;
             }
         }
-        // Seek back past the CRC to the header end position, so subsequent
-        // handler CRC reads see the correct offset. The handler loop in
-        // lsgLoadGameInSlot starts reading from the current position.
+        // CRC verified (or headerSize <= 0). Seek back past the CRC to the
+        // header end position so subsequent handler CRC reads see the correct
+        // offset. The handler loop in lsgLoadGameInSlot starts reading from
+        // the current position.
         fileSeek(_flptr, headerEnd + 4, SEEK_SET);
-    } else {
-        // No header CRC bytes (old-format save). Seek back to header end so
-        // the handler loop starts at the correct position.
-        debugPrint("LOADSAVE: No header CRC found (old save format) — skipping header integrity check.\n");
-        fileSeek(_flptr, headerEnd, SEEK_SET);
     }
 
     _ls_error_code = 0;
@@ -3627,9 +3775,18 @@ static int _RestoreSave()
     }
 
     if (fileListLength != _map_backup_count) {
-        fileNameListFree(&fileList, 0);
-        _EraseSave();
-        return -1;
+        // save N-01 (MEDIUM): NEVER erase the slot on backup-count mismatch.
+        // A crash between _SaveBackup and _RestoreSave (or a partial-backup
+        // failure) can leave the slot all-.BAK; erasing here would destroy
+        // the player's previous save (the freshly-restored SAVE.DAT plus any
+        // still-.BAK maps). Instead, restore whatever .BAK files exist — the
+        // rename loop below handles every file present, and the caller's
+        // subsequent MapDirErase("BAK") cleans up any leftover backups.
+        debugPrint("\nLOADSAVE: ** Backup count mismatch (backup=%d, restore=%d) — restoring what exists **\n",
+            _map_backup_count, fileListLength);
+        // Fall through to the restore loop. The rename loop renames every
+        // .BAK file in the list back to .SAV; files whose .BAK is missing
+        // simply leave no .SAV (best effort, never destructive).
     }
 
     snprintf(_gmpath, sizeof(_gmpath), "%s\\%s\\%s%.2d\\", _patches, "SAVEGAME", "SLOT", _slot_cursor + 1);

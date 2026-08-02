@@ -8,6 +8,7 @@
 #include <dirent.h>
 #include <limits.h>
 #include <math.h>
+#include <memory>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -537,29 +538,28 @@ static void op_available_global_script_types(Program* program)
 // scripts. sfall globals bypassed this hook entirely — two separate global
 // var systems, only vanilla got the hook coverage.
 //
-// F-S4-M16: HOOK_SETGLOBALVAR dispatch is restricted to int-keyed int-value
-// writes (line 573). The hook interface is (int varIndex, int value) → int
-// override, which maps naturally to int-keyed int-value sfall globals.
+// M-10: HOOK_SETGLOBALVAR is NOT dispatched from set_sfall_global at all.
+// sfall's only HOOK_SETGLOBALVAR injection is at the VANILLA op_set_global_var
+// path (MiscHs.cpp:787, 0x455A6D) — never the sfall-global opcode. The old
+// code fired the hook for int-keyed int-value writes, so mods registering the
+// hook received spurious callbacks (and the possibly-overridden value was
+// stored). All sfall-global paths now store directly without hook dispatch.
 //
 // The following globals write paths bypass HOOK_SETGLOBALVAR entirely:
 //   1. String-keyed globals (both int and float values) — key is a string,
 //      which does not fit the int-keyed hook contract.
 //   2. Float-valued int-keyed globals — value is a float, which would require
 //      truncation or re-interpretation to fit the int-typed hook signature.
+//   3. Int-valued int-keyed globals — matches sfall: plain map store.
 //
-// This is a known design limitation, not a bug. The hook contract was
-// architected for the classic set_global_var(int, int) opcode and does not
-// accommodate string keys or float values. Mods that need to intercept STRING
-// or FLOAT global writes should use one of these alternative patterns:
+// Mods that need to intercept STRING or FLOAT global writes should use one of
+// these alternative patterns:
 //   (a) Store a companion int-keyed sentinel alongside the string/float value
 //       to trigger hook notification on the companion key.
 //   (b) Use a companion global script (hs_*.int) that polls or observes the
 //       relevant string/float globals via get_sfall_global_str / float.
 //   (c) Extend the hook contract in a future sfall API version to accept
 //       string keys and variant-typed values.
-//
-// The float-valued int-keyed path (line 559) and all string-keyed paths
-// store directly without hook dispatch.
 //
 // Recursion protection: the ScriptHookCall system has MAX_HOOK_CALL_DEPTH=8
 // (global) and per-type depth cap of 4, which guards against infinite
@@ -612,11 +612,13 @@ static void op_set_sfall_global(Program* program)
             }
             sfall_gl_vars_store(key, value.integerValue);
         } else if (variable.opcode == VALUE_TYPE_INT) {
-            // Fire HOOK_SETGLOBALVAR to let registered scripts inspect/override
-            // the value before storing. Mirrors the pattern used by vanilla
-            // opSetGlobalVar at interpreter_extra.cc:1276.
-            int overrideValue = scriptHooks_SetGlobalVar(variable.integerValue, value.integerValue);
-            sfall_gl_vars_store(variable.integerValue, overrideValue);
+            // M-10: sfall's only HOOK_SETGLOBALVAR injection is at the VANILLA
+            // op_set_global_var path (MiscHs.cpp:787, 0x455A6D), never the
+            // sfall-global opcode. The fork fired the hook here for int-keyed
+            // set_sfall_global, so mods registering the hook received spurious
+            // callbacks (and the possibly-overridden value was stored). Store
+            // directly without hook dispatch, matching sfall.
+            sfall_gl_vars_store(variable.integerValue, value.integerValue);
         }
     } else {
         // Reject unsupported value types (string, pointer, dynamic string).
@@ -685,14 +687,14 @@ static void op_get_sfall_global_int(Program* program)
             }
         }
 
-        // Key not found in either intVars or floatVars — push sentinel
-        // to distinguish from "found with 0".
-        // INT_MIN is chosen because no real script stores INT_MIN as a global
-        // variable value; it serves as an unambiguous "not set" indicator.
-        // This differs from original sfall 4.x which returns 0 for both
-        // "not found" and "found with 0", but CE exposes the stronger
-        // semantics since sfall_gl_vars_fetch already provides them.
-        programStackPushInteger(program, INT_MIN);
+        // M-03: sfall GetGlobalVarInternal returns 0 for missing keys
+        // (ScriptExtender.cpp:393-397) — "unset" and "stored 0" are
+        // indistinguishable. The fork's INT_MIN sentinel broke sfall mods
+        // that rely on `get_sfall_global_int(key) == 0` for unset keys
+        // (RPU gl_k_alcohl.ssl:48 `game_time - INT_MIN` overflow;
+        // epai37.ssl:210-220 unset != MALE_REG_HAIR(0) → all options shown).
+        // Push 0 for not-found, matching the float counterpart and sfall.
+        programStackPushInteger(program, 0);
     } else {
         programStackPushInteger(program, value);
     }
@@ -1666,17 +1668,22 @@ static void op_substr(Program* program)
     }
 
     if (length < 0) {
-        length += len - startPos; // cutoff at end
-        if (length == 0) {
+        // M-01: `length += len - startPos` can leave `length` still negative
+        // and then `abs(INT_MIN)` is UB; more importantly the later check
+        // `length + startPos > len` used signed int arithmetic that overflowed
+        // for length=INT_MAX (from the INT_MIN→INT_MAX guard), wrapping to a
+        // negative value so the clamp was skipped and a ~5117-byte OOB read
+        // occurred. Use 64-bit arithmetic so the cutoff-at-end computation
+        // cannot overflow, then normalize: negative → 0 (return empty).
+        long long adjusted = static_cast<long long>(length) + (len - startPos);
+        if (adjusted <= 0) {
             programStackPushString(program, buf);
             return;
         }
-        // Guard against abs(INT_MIN) which is undefined behavior.
-        if (length == INT_MIN) {
-            length = INT_MAX;
-        } else {
-            length = abs(length); // length can't be negative
+        if (adjusted > INT_MAX) {
+            adjusted = INT_MAX;
         }
+        length = static_cast<int>(adjusted);
     }
 
     // check position
@@ -1686,7 +1693,10 @@ static void op_substr(Program* program)
         return;
     }
 
-    if (length == 0 || length + startPos > len) {
+    // M-01: use 64-bit arithmetic here too — `length + startPos` overflows
+    // when a script passes a huge positive length (e.g. INT_MAX), wrapping to
+    // a negative value and defeating the clamp.
+    if (length == 0 || static_cast<long long>(length) + startPos > len) {
         length = len - startPos; // set the correct length, the length of characters goes beyond the end of the string
     }
 
@@ -2211,10 +2221,28 @@ static void op_sfall_func8(Program* program)
 // ============================================================
 
 static constexpr int kVfsMaxFiles = 100;
+// P-07: sfall caps file size at MAX_FILE_SIZE (0xA00000 = 10 MB) in both
+// FScreate (FileSystem.cpp:520) and FSresize (FileSystem.cpp:690). The fork's
+// real-disk VFS would otherwise create 2 GB sparse files (200 GB logical for
+// 100 handles) on disk. Matching sfall's documented limit.
+static constexpr int kMaxVfsFileSize = 0xA00000;
 static FILE* sfallVfsFiles[kVfsMaxFiles] = {};
 static bool sfallVfsFileOpen[kVfsMaxFiles] = {};
 // Track open mode: 0 = unopened, 1 = read-only ("rb"), 2 = read-write ("w+b").
 static int sfallVfsFileMode[kVfsMaxFiles] = {};
+// H-27 / sfall NEW-2 / M-11: separate deletable flag. sfall's VFS is
+// memory-only; on-disk files created by fs_create/fs_copy are the ONLY files
+// a script owns and may be removed at handle-free/close-all. Files opened via
+// fs_find (mode 1) — including after the fs_resize mode-1→2 reopen (F-028) —
+// must NEVER be deleted: they are pre-existing game assets. The old code
+// conflated "writable" with "deletable" via mode==2, so fs_resize's reopen
+// flip silently made fs_find'd originals deletable (compat_remove at free).
+static bool sfallVfsFileDeletable[kVfsMaxFiles] = {};
+// M-12: fs_resize(id, -1) marks the file to be saved into savegames (sfall
+// FileSystem.cpp:689-693 isSave semantics). The fork's disk-backed VFS
+// persists files itself; the flag records the contract so the call is
+// accepted instead of rejected.
+static bool sfallVfsFileIsSave[kVfsMaxFiles] = {};
 // Store the original filename for handles so fs_resize can reopen read-only
 // handles in read-write mode when needed (F-028).
 // NOTE (F-270): Filesystem paths are OWNED COPIES (via internal_strdup),
@@ -2229,6 +2257,8 @@ static int sfallVfsAllocHandle()
         if (!sfallVfsFileOpen[i]) {
             sfallVfsFileOpen[i] = true;
             sfallVfsFileMode[i] = 0;
+            sfallVfsFileDeletable[i] = false;
+            sfallVfsFileIsSave[i] = false;
             sfallVfsFilePath[i] = nullptr;
             return i;
         }
@@ -2249,7 +2279,11 @@ static void sfallVfsFreeHandle(int id)
         // should NOT delete the file — only write handles (mode 2) created via
         // fs_create/fs_copy should be deletable. The mode check prevents
         // accidental deletion of data files opened via fs_find.
-        if (sfallVfsFileMode[id] == 2 && sfallVfsFilePath[id] != nullptr) {
+        // H-27 / sfall NEW-2 / M-11: use the SEPARATE deletable flag instead of
+        // mode==2. The fs_resize mode-1→2 reopen (F-028) must not make an
+        // fs_find'd pre-existing file deletable. Only files explicitly created
+        // by fs_create/fs_copy are deletable.
+        if (sfallVfsFileDeletable[id] && sfallVfsFilePath[id] != nullptr) {
             if (compat_remove(sfallVfsFilePath[id]) != 0) {
                 debugPrint("sfallVfsFreeHandle: compat_remove failed for '%s'\n",
                     sfallVfsFilePath[id]);
@@ -2257,6 +2291,8 @@ static void sfallVfsFreeHandle(int id)
         }
         sfallVfsFileOpen[id] = false;
         sfallVfsFileMode[id] = 0;
+        sfallVfsFileDeletable[id] = false;
+        sfallVfsFileIsSave[id] = false;
         // F-270: free the owned path copy to prevent use-after-free
         if (sfallVfsFilePath[id] != nullptr) {
             internal_free(sfallVfsFilePath[id]);
@@ -2389,6 +2425,18 @@ static bool sfallVfsResolvePath(const char* rawPath, char* outBuf, size_t outBuf
         return false;
     }
 
+    // P-06: Reject Windows drive-letter paths (C:\..., c:/..., C:foo). The
+    // sibling compat_path_contains_traversal guard (platform_compat.cc:522-525)
+    // rejects drive letters but was never wired into the VFS layer, so on
+    // Windows a script could fs_create("C:\Users\victim\file.txt") and
+    // truncate/read/delete arbitrary user files outside the sandbox. Mirror
+    // that check here — a drive letter is an absolute path in Windows terms.
+    if (rawPath[0] != '\0' && rawPath[1] == ':'
+        && ((rawPath[0] >= 'A' && rawPath[0] <= 'Z')
+            || (rawPath[0] >= 'a' && rawPath[0] <= 'z'))) {
+        return false;
+    }
+
     // 3. If root is set, prepend it.
     if (sfallVfsRootDir != nullptr) {
         int written = snprintf(outBuf, outBufSize, "%s/%s", sfallVfsRootDir, rawPath);
@@ -2430,9 +2478,11 @@ static void op_fs_create(Program* program)
         return;
     }
 
-    FILE* file = compat_fopen(resolvedPath, "w+b");
-    if (file == nullptr) {
-        programPrintError("fs_create: cannot create file '%s'", resolvedPath);
+    // P-07: sfall FScreate rejects size > MAX_FILE_SIZE (0xA00000 = 10 MB).
+    // Validate BEFORE opening the file so an oversized request cannot create
+    // a sparse 2 GB file on the real disk.
+    if (size > kMaxVfsFileSize) {
+        programPrintError("fs_create: size %d exceeds sfall MAX_FILE_SIZE (0xA00000)", size);
         sfallVfsFileOpen[handle] = false;
         programStackPushInteger(program, -1);
         return;
@@ -2441,7 +2491,27 @@ static void op_fs_create(Program* program)
     // Validate size before fseek to prevent UB with size <= 0
     if (size <= 0) {
         programPrintError("fs_create: invalid size %d", size);
-        fclose(file);
+        sfallVfsFileOpen[handle] = false;
+        programStackPushInteger(program, -1);
+        return;
+    }
+
+    // sfall NEW-2: refuse to truncate pre-existing assets. sfall's VFS is
+    // memory-only — FScreate never touches an existing on-disk file. The
+    // fork's "w+b" open would truncate any real file at the resolved path
+    // (including game assets in loose-data deployments), so refuse when the
+    // target already exists. Scripts that need to overwrite their own
+    // previously-created file should fs_delete the handle first.
+    if (compat_access(resolvedPath, F_OK) == 0) {
+        programPrintError("fs_create: refusing to truncate existing file '%s'", resolvedPath);
+        sfallVfsFileOpen[handle] = false;
+        programStackPushInteger(program, -1);
+        return;
+    }
+
+    FILE* file = compat_fopen(resolvedPath, "w+b");
+    if (file == nullptr) {
+        programPrintError("fs_create: cannot create file '%s'", resolvedPath);
         sfallVfsFileOpen[handle] = false;
         programStackPushInteger(program, -1);
         return;
@@ -2468,6 +2538,7 @@ static void op_fs_create(Program* program)
 
     sfallVfsFiles[handle] = file;
     sfallVfsFileMode[handle] = 2; // read-write ("w+b")
+    sfallVfsFileDeletable[handle] = true; // script-created file may be deleted at free
     // F-270: store an owned copy to prevent use-after-free when the
     // program exits and frees its dynamicStrings backing store.
     sfallVfsFilePath[handle] = internal_strdup(resolvedPath);
@@ -2505,6 +2576,18 @@ static void op_fs_copy(Program* program)
         return;
     }
 
+    // C-06: reject identical source/destination paths. sfall's FScopy is
+    // memory-only; the fork's disk-backed "w+b" destination open would
+    // truncate the source file to 0 bytes before reading it (RPU calls
+    // fs_copy(path, path) in gl_k_goris_derobing.ssl:40 and
+    // gl_k_walking_speed.ssl:88). Compare the RESOLVED paths so different
+    // spellings that normalize to the same file are also rejected.
+    if (compat_stricmp(resolvedSrc, resolvedDst) == 0) {
+        programPrintError("fs_copy: source and destination paths are identical '%s'", resolvedSrc);
+        programStackPushInteger(program, -1);
+        return;
+    }
+
     // Open source file for reading
     FILE* srcFile = compat_fopen(resolvedSrc, "rb");
     if (srcFile == nullptr) {
@@ -2521,32 +2604,65 @@ static void op_fs_copy(Program* program)
         return;
     }
 
-    FILE* destFile = compat_fopen(resolvedDst, "w+b");
-    if (destFile == nullptr) {
-        programPrintError("fs_copy: cannot create dest '%s'", resolvedDst);
+    // C-06 / sfall NEW-E: read the ENTIRE source into memory BEFORE opening
+    // the destination with "w+b". This guarantees the source can never be
+    // truncated by the destination open, even if the two paths alias the
+    // same underlying file through hard links or case-insensitive mounts.
+    long srcSize = 0;
+    if (fseek(srcFile, 0, SEEK_END) != 0) {
+        programPrintError("fs_copy: fseek (source size) failed for '%s'", resolvedSrc);
+        fclose(srcFile);
+        sfallVfsFileOpen[handle] = false;
+        programStackPushInteger(program, -1);
+        return;
+    }
+    srcSize = ftell(srcFile);
+    if (srcSize < 0) {
+        programPrintError("fs_copy: ftell (source size) failed for '%s'", resolvedSrc);
+        fclose(srcFile);
+        sfallVfsFileOpen[handle] = false;
+        programStackPushInteger(program, -1);
+        return;
+    }
+    if (srcSize > kMaxVfsFileSize) {
+        programPrintError("fs_copy: source '%s' exceeds sfall MAX_FILE_SIZE (0xA00000)", resolvedSrc);
+        fclose(srcFile);
+        sfallVfsFileOpen[handle] = false;
+        programStackPushInteger(program, -1);
+        return;
+    }
+    if (fseek(srcFile, 0, SEEK_SET) != 0) {
+        programPrintError("fs_copy: fseek (source rewind) failed for '%s'", resolvedSrc);
         fclose(srcFile);
         sfallVfsFileOpen[handle] = false;
         programStackPushInteger(program, -1);
         return;
     }
 
-    // Copy file contents with fwrite error checking (F2-064).
-    char buf[4096];
-    size_t n;
-    bool writeError = false;
-    while ((n = fread(buf, 1, sizeof(buf), srcFile)) > 0) {
-        size_t written = fwrite(buf, 1, n, destFile);
-        if (written != n) {
-            programPrintError("fs_copy: fwrite failed (wrote %zu of %zu bytes) for '%s'",
-                written, n, resolvedDst);
-            writeError = true;
-            break;
-        }
+    std::unique_ptr<char[]> srcData(new char[srcSize > 0 ? srcSize : 1]);
+    size_t srcBytesRead = fread(srcData.get(), 1, srcSize > 0 ? static_cast<size_t>(srcSize) : 0, srcFile);
+    fclose(srcFile);
+    if (srcBytesRead != static_cast<size_t>(srcSize)) {
+        programPrintError("fs_copy: short read from source '%s' (%zu of %ld bytes)",
+            resolvedSrc, srcBytesRead, srcSize);
+        sfallVfsFileOpen[handle] = false;
+        programStackPushInteger(program, -1);
+        return;
     }
 
-    fclose(srcFile);
+    FILE* destFile = compat_fopen(resolvedDst, "w+b");
+    if (destFile == nullptr) {
+        programPrintError("fs_copy: cannot create dest '%s'", resolvedDst);
+        sfallVfsFileOpen[handle] = false;
+        programStackPushInteger(program, -1);
+        return;
+    }
 
-    if (writeError) {
+    // Copy the buffered file contents with fwrite error checking (F2-064).
+    size_t written = fwrite(srcData.get(), 1, srcBytesRead, destFile);
+    if (written != srcBytesRead) {
+        programPrintError("fs_copy: fwrite failed (wrote %zu of %zu bytes) for '%s'",
+            written, srcBytesRead, resolvedDst);
         fclose(destFile);
         sfallVfsFileOpen[handle] = false;
         compat_remove(resolvedDst);
@@ -2557,6 +2673,7 @@ static void op_fs_copy(Program* program)
     rewind(destFile); // position at start for reading
     sfallVfsFiles[handle] = destFile;
     sfallVfsFileMode[handle] = 2; // read-write ("w+b")
+    sfallVfsFileDeletable[handle] = true; // script-created copy may be deleted at free
     // F-270: store an owned copy to prevent use-after-free when the
     // program exits and frees its dynamicStrings backing store.
     sfallVfsFilePath[handle] = internal_strdup(resolvedDst);
@@ -2751,8 +2868,13 @@ static void op_fs_write_short(Program* program)
     }
 
     uint16_t value = static_cast<uint16_t>(data);
+    // M-07 (F-07): sfall FSwrite_short writes the bytes REVERSED (big-endian).
+    // The fork's native little-endian fwrite broke cross-engine file exchange.
+    unsigned char be[2];
+    be[0] = static_cast<unsigned char>((value >> 8) & 0xFF);
+    be[1] = static_cast<unsigned char>(value & 0xFF);
     // F2-064: check fwrite return value.
-    if (fwrite(&value, sizeof(value), 1, sfallVfsFiles[id]) != 1) {
+    if (fwrite(be, sizeof(be), 1, sfallVfsFiles[id]) != 1) {
         programPrintError("fs_write_short: fwrite failed on handle %d", id);
     }
 }
@@ -2774,34 +2896,25 @@ static void op_fs_write_int(Program* program)
     }
 
     int32_t value = static_cast<int32_t>(data);
+    // M-07 (F-07): sfall FSwrite_int writes the bytes REVERSED (big-endian).
+    unsigned char be[4];
+    be[0] = static_cast<unsigned char>((static_cast<uint32_t>(value) >> 24) & 0xFF);
+    be[1] = static_cast<unsigned char>((static_cast<uint32_t>(value) >> 16) & 0xFF);
+    be[2] = static_cast<unsigned char>((static_cast<uint32_t>(value) >> 8) & 0xFF);
+    be[3] = static_cast<unsigned char>(static_cast<uint32_t>(value) & 0xFF);
     // F2-064: check fwrite return value.
-    if (fwrite(&value, sizeof(value), 1, sfallVfsFiles[id]) != 1) {
+    if (fwrite(be, sizeof(be), 1, sfallVfsFiles[id]) != 1) {
         programPrintError("fs_write_int: fwrite failed on handle %d", id);
     }
 }
 
-// fs_write_float(id, data)
-static void op_fs_write_float(Program* program)
-{
-    ProgramValue pv = programStackPopValue(program);
-    int id = programStackPopInteger(program);
-
-    if (id < 0 || id >= kVfsMaxFiles || sfallVfsFiles[id] == nullptr) {
-        programPrintError("fs_write_float: invalid VFS handle %d", id);
-        return;
-    }
-
-    if (sfallVfsFileMode[id] == 1) {
-        programPrintError("fs_write_float: handle %d is read-only (opened via fs_find)", id);
-        return;
-    }
-
-    float value = pv.asFloat();
-    // F2-064: check fwrite return value.
-    if (fwrite(&value, sizeof(value), 1, sfallVfsFiles[id]) != 1) {
-        programPrintError("fs_write_float: fwrite failed on handle %d", id);
-    }
-}
+// M-07 (F-10): fs_write_float is REMOVED — sfall has no fs_write_float
+// opcode. 0x81FD is registered as fs_write_int (a duplicate of 0x81FC,
+// Opcodes.cpp:137-138); the "fs_write_float" name in the opcode-list docs
+// is a doc artifact. The old op_fs_write_float handler (which wrote a
+// native IEEE float) is deleted; scripts that need a float wire value use
+// fs_write_int with the bit pattern (matching sfall op_fs_read_float, which
+// reads an int via FSread_int and reinterprets it as a float).
 
 // fs_write_string(id, string)
 static void op_fs_write_string(Program* program)
@@ -2819,9 +2932,13 @@ static void op_fs_write_string(Program* program)
         return;
     }
 
-    // F2-064: check fputs return value.
-    if (fputs(string, sfallVfsFiles[id]) == EOF) {
-        programPrintError("fs_write_string: fputs failed on handle %d", id);
+    // M-07 (F-08): sfall FSwrite_string writes strlen+1 bytes INCLUDING the
+    // NUL terminator (FileSystem.cpp:623-628). The fork's fputs omitted the
+    // NUL, so fs_read_string never saw the terminator it expects.
+    size_t len = strlen(string);
+    // F2-064: check fwrite return value.
+    if (fwrite(string, 1, len + 1, sfallVfsFiles[id]) != len + 1) {
+        programPrintError("fs_write_string: fwrite failed on handle %d", id);
     }
 }
 
@@ -2841,15 +2958,13 @@ static void op_fs_write_bstring(Program* program)
         return;
     }
 
-    int len = static_cast<int>(strlen(string));
-    uint8_t lenByte = static_cast<uint8_t>(len > 255 ? 255 : len);
-    // F2-064: check fwrite return values.
-    if (fwrite(&lenByte, 1, 1, sfallVfsFiles[id]) != 1) {
-        programPrintError("fs_write_bstring: fwrite (length byte) failed on handle %d", id);
-        return;
-    }
-    if (fwrite(string, 1, lenByte, sfallVfsFiles[id]) != lenByte) {
-        programPrintError("fs_write_bstring: fwrite (string data) failed on handle %d", id);
+    // M-07 (F-09): sfall FSwrite_bstring writes the RAW string bytes with NO
+    // length prefix (FileSystem.cpp:630-635). The fork's 1-byte length prefix
+    // broke the sfall wire format.
+    size_t len = strlen(string);
+    // F2-064: check fwrite return value.
+    if (fwrite(string, 1, len, sfallVfsFiles[id]) != len) {
+        programPrintError("fs_write_bstring: fwrite failed on handle %d", id);
     }
 }
 
@@ -2864,8 +2979,11 @@ static void op_fs_read_byte(Program* program)
         return;
     }
 
+    // M-07 (F-04): sfall FSread_byte returns 0 past the end of the file,
+    // not -1 (FileSystem.cpp:637-641). The fork's raw fgetc pushed EOF (-1),
+    // so scripts checking for end-of-file got a negative value instead of 0.
     int value = fgetc(sfallVfsFiles[id]);
-    programStackPushInteger(program, value);
+    programStackPushInteger(program, value == EOF ? 0 : value);
 }
 
 // fs_read_short(id) -> int (-1 on error)
@@ -2879,12 +2997,16 @@ static void op_fs_read_short(Program* program)
         return;
     }
 
-    uint16_t value;
-    if (fread(&value, sizeof(value), 1, sfallVfsFiles[id]) != 1) {
-        programStackPushInteger(program, -1);
+    // M-07 (F-05): sfall FSread_short returns 0 at EOF and reads the bytes
+    // REVERSED (big-endian, FileSystem.cpp:643-654). The fork read native
+    // little-endian and pushed -1 at EOF.
+    unsigned char be[2];
+    if (fread(be, 1, sizeof(be), sfallVfsFiles[id]) != sizeof(be)) {
+        programStackPushInteger(program, 0);
         return;
     }
-    programStackPushInteger(program, static_cast<int>(value));
+    uint16_t value = (static_cast<uint16_t>(be[0]) << 8) | static_cast<uint16_t>(be[1]);
+    programStackPushInteger(program, static_cast<int>(static_cast<int16_t>(value)));
 }
 
 // fs_read_int(id) -> int (-1 on error)
@@ -2898,12 +3020,19 @@ static void op_fs_read_int(Program* program)
         return;
     }
 
-    int32_t value;
-    if (fread(&value, sizeof(value), 1, sfallVfsFiles[id]) != 1) {
-        programStackPushInteger(program, -1);
+    // M-07 (F-05): sfall FSread_int returns 0 at EOF and reads the bytes
+    // REVERSED (big-endian, FileSystem.cpp:655-665). The fork read native
+    // little-endian and pushed -1 at EOF.
+    unsigned char be[4];
+    if (fread(be, 1, sizeof(be), sfallVfsFiles[id]) != sizeof(be)) {
+        programStackPushInteger(program, 0);
         return;
     }
-    programStackPushInteger(program, value);
+    uint32_t raw = (static_cast<uint32_t>(be[0]) << 24)
+        | (static_cast<uint32_t>(be[1]) << 16)
+        | (static_cast<uint32_t>(be[2]) << 8)
+        | static_cast<uint32_t>(be[3]);
+    programStackPushInteger(program, static_cast<int>(static_cast<int32_t>(raw)));
 }
 
 // fs_read_string(id) -> string (empty string on error)
@@ -2935,9 +3064,10 @@ static void op_fs_read_string(Program* program)
 }
 
 // fs_read_bstring(id) -> string (empty string on error)
-// Reads a length-prefixed byte string from the VFS file. Reads 1 byte
-// as the length prefix, then reads that many bytes. Returns empty
-// string on error. Matches the wire format written by fs_write_bstring.
+// Reads a byte string from the VFS file. Matches the wire format written by
+// fs_write_bstring, which (per sfall FSwrite_bstring, FileSystem.cpp:630-635)
+// writes RAW string bytes with NO length prefix. Reads up to 255 bytes until
+// EOF. Returns empty string on error.
 // F-002 (M-7): Implements the missing VFS bstring read path.
 static void op_fs_read_bstring(Program* program)
 {
@@ -2949,22 +3079,12 @@ static void op_fs_read_bstring(Program* program)
         return;
     }
 
-    // Read 1-byte length prefix.
-    int lenByte = fgetc(sfallVfsFiles[id]);
-    if (lenByte == EOF || lenByte < 0) {
-        programStackPushString(program, "");
-        return;
-    }
-    unsigned char length = static_cast<unsigned char>(lenByte);
-
-    // Read 'length' bytes of string data.
+    // Read raw bytes until EOF, max 255 chars (buffer size).
     char buf[256];
     size_t nread = 0;
-    if (length > 0) {
-        nread = fread(buf, 1, length, sfallVfsFiles[id]);
-        if (nread < length) {
-            programPrintError("fs_read_bstring: short read on handle %d (expected %u, got %zu)", id, length, nread);
-        }
+    int c;
+    while (nread < sizeof(buf) - 1 && (c = fgetc(sfallVfsFiles[id])) != EOF) {
+        buf[nread++] = static_cast<char>(c);
     }
     buf[nread] = '\0';
     programStackPushString(program, buf);
@@ -2981,11 +3101,20 @@ static void op_fs_read_float(Program* program)
         return;
     }
 
-    float value;
-    if (fread(&value, sizeof(value), 1, sfallVfsFiles[id]) != 1) {
+    // M-07 (F-06): sfall op_fs_read_float reads an INT via FSread_int
+    // (big-endian, Handlers/FileSystem.cpp:75-77) and reinterprets the 4
+    // bytes as a FLOAT. The fork read a native little-endian float directly.
+    unsigned char be[4];
+    if (fread(be, 1, sizeof(be), sfallVfsFiles[id]) != sizeof(be)) {
         programStackPushFloat(program, 0.0f);
         return;
     }
+    uint32_t raw = (static_cast<uint32_t>(be[0]) << 24)
+        | (static_cast<uint32_t>(be[1]) << 16)
+        | (static_cast<uint32_t>(be[2]) << 8)
+        | static_cast<uint32_t>(be[3]);
+    float value;
+    memcpy(&value, &raw, sizeof(value));
     programStackPushFloat(program, value);
 }
 
@@ -3097,8 +3226,23 @@ static void op_fs_resize(Program* program)
         return;
     }
 
+    // M-12: sfall's FSresize treats size == -1 as "mark this file to be saved
+    // into savegames" (FileSystem.cpp:689-693, isSave=1). The fork rejected
+    // size <= 0, breaking the documented persistence idiom. Accept -1 as the
+    // mark-for-save contract (the disk-backed VFS persists files itself).
+    if (size == -1) {
+        sfallVfsFileIsSave[id] = true;
+        return;
+    }
+
     if (size <= 0) {
         programPrintError("fs_resize: invalid size %d", size);
+        return;
+    }
+
+    // P-07: sfall FSresize rejects size > MAX_FILE_SIZE (FileSystem.cpp:690).
+    if (size > kMaxVfsFileSize) {
+        programPrintError("fs_resize: size %d exceeds sfall MAX_FILE_SIZE (0xA00000)", size);
         return;
     }
 
@@ -3127,6 +3271,12 @@ static void op_fs_resize(Program* program)
             return;
         }
         sfallVfsFileMode[id] = 2; // now read-write
+        // H-27: DO NOT set sfallVfsFileDeletable[id] here. This reopen turns a
+        // read-only fs_find handle into a writable one, but the file is a
+        // pre-existing game asset — it must never be deleted at handle-free /
+        // close-all. The old code flipped mode 1→2 which sfallVfsFreeHandle
+        // treated as deletable (compat_remove), destroying the original file
+        // at game reset/exit.
     }
 
     // F-13 (ITER2-M5): Support file truncation on shrink. The old code used a
@@ -3641,6 +3791,36 @@ int sfallAnimCallbackProcedureIndex = -1;
 // sfallAnimCallbackReset() provides a manual cleanup path called from
 // sfallOpcodesExit() and sfallScriptHooksReset().
 
+// M-128: sfall binds reg_anim_callback as an ANIM_KIND_CALLBACK step in the
+// CURRENT animation sequence (Anims.cpp:127-135 → register_object_call →
+// animationRegisterCallback). The fork's single-slot global fired on ANY
+// pure-animation completion with the completing object — the registering
+// sequence's step/owner was never honored. Bind through the engine's
+// per-sequence ANIM_KIND_CALLBACK mechanism instead: the callback fires when
+// that sequence reaches its step, matching sfall.
+//
+// The engine's AnimationCallback signature is int(void*, void*). We pass the
+// program as param1 and the procedure index as param2; the trampoline
+// executes the script procedure (the same execution the old invoke path used,
+// minus the object-argument push — sfall's ExecuteCallback also executes the
+// procedure without an explicit object arg; the sequence step carries the
+// animation context).
+static int sfallAnimCallbackTrampoline(void* param1, void* param2)
+{
+    Program* program = static_cast<Program*>(param1);
+    intptr_t procIndex = reinterpret_cast<intptr_t>(param2);
+
+    if (program == nullptr || procIndex < 0 || procIndex >= program->procedureCount()) {
+        return 0;
+    }
+    if (program->exited || program->data == nullptr) {
+        return 0;
+    }
+
+    programExecuteProcedure(program, static_cast<int>(procIndex));
+    return 0;
+}
+
 static void op_reg_anim_callback(Program* program)
 {
     int procedureIndex = programStackPopInteger(program);
@@ -3651,8 +3831,26 @@ static void op_reg_anim_callback(Program* program)
         return;
     }
 
-    sfallAnimCallbackProgram = program;
-    sfallAnimCallbackProcedureIndex = procedureIndex;
+    // M-128: bind as an ANIM_KIND_CALLBACK step in the current animation
+    // sequence. animationRegisterCallback returns -1 when no sequence is
+    // being registered (e.g. outside reg_anim_begin/reg_anim_end) — the
+    // script's call is then rejected with -1, matching sfall's "executes it
+    // in the registered sequence" contract.
+    if (animationRegisterCallback(program,
+            reinterpret_cast<void*>(static_cast<intptr_t>(procedureIndex)),
+            sfallAnimCallbackTrampoline, -1) != 0) {
+        programPrintError("reg_anim_callback: no active animation sequence to bind the callback");
+        programStackPushInteger(program, -1);
+        return;
+    }
+
+    // Do NOT set the legacy single-slot globals (sfallAnimCallbackProgram /
+    // sfallAnimCallbackProcedureIndex). animation.cc's pure-animation
+    // completion paths still call sfallAnimCallbackInvoke(object) — if the
+    // globals were set, that path would ALSO fire the script proc on
+    // arbitrary completions with the wrong object (the exact M-128 defect).
+    // The ANIM_KIND_CALLBACK step bound above is the authoritative firing
+    // point, so the globals remain null and the legacy invoke path is inert.
 }
 
 void sfallAnimCallbackReset()
@@ -3808,21 +4006,24 @@ static void op_get_available_skill_points(Program* program)
 // mod_skill_points_per_level(int value)
 // Sets a modifier for skill points gained per level. The modifier is stored
 // and consumed by characterEditorUpdateLevel() in character_editor.cc.
-// I2-032: Clamped to [0, 10000] to prevent signed overflow UB when added
-// to skill points (e.g., sp += gSkillPointsPerLevelMod at character_editor.cc:5817).
+// M-172: sfall op_mod_skill_points_per_level clamps to [-100, 100]
+// (Stats.cpp:207-225) then adds the FO default 5. The fork rejected all
+// negatives (clamped to 0), so a script using the documented negative range
+// (e.g. mod_skill_points_per_level(-50)) silently no-oped. The negative range
+// is consumed correctly at character_editor.cc:5941 (sp += gSkillPointsPerLevelMod).
 int gSkillPointsPerLevelMod = 0;
-static constexpr int kMaxSkillPointsPerLevelMod = 10000;
+static constexpr int kMaxSkillPointsPerLevelMod = 100;
 
 static void op_mod_skill_points_per_level(Program* program)
 {
     int val = programStackPopInteger(program);
-    if (val < 0) {
-        programPrintError("mod_skill_points_per_level: value %d clamped to range [0, %d]", val, kMaxSkillPointsPerLevelMod);
-        val = 0;
+    if (val < -100) {
+        programPrintError("mod_skill_points_per_level: value %d clamped to range [-100, 100]", val);
+        val = -100;
     }
-    if (val > kMaxSkillPointsPerLevelMod) {
-        programPrintError("mod_skill_points_per_level: value %d clamped to range [0, %d]", val, kMaxSkillPointsPerLevelMod);
-        val = kMaxSkillPointsPerLevelMod;
+    if (val > 100) {
+        programPrintError("mod_skill_points_per_level: value %d clamped to range [-100, 100]", val);
+        val = 100;
     }
     gSkillPointsPerLevelMod = val;
     sfall_gl_vars_store("SFSkillP", gSkillPointsPerLevelMod);
@@ -4095,11 +4296,12 @@ static void op_set_skill_max(Program* program)
     if (value < 0) {
         value = 300;
     }
-    // Guard: unreasonably large skill cap would cause integer overflow in skill
-    // increment paths or display artifacts. 999 allows mod extensibility while
-    // preventing pathological values from being serialized.
-    if (value > 999) {
-        value = 999;
+    // M-171: sfall op_set_skill_max clamps to [0, 300] (Stats.cpp:411-425:
+    // `mov ecx, 300; cmp eax, ecx; cmova eax, ecx`). The fork's 999 cap
+    // allowed set_skill_max(400) to raise the skill cap above sfall's
+    // documented maximum, giving mods different skill economies.
+    if (value > 300) {
+        value = 300;
     }
     gSkillMaxCap = value;
     sfall_gl_vars_store("SFSkillM", value);
@@ -4113,19 +4315,22 @@ static void op_set_skill_max(Program* program)
 //
 // ARCHITECTURE NOTE (I2-M03): CE uses a SINGLE global gStatDescriptions[]
 // table shared across all entities (PC, NPCs, critters). The engine does
-// NOT provide per-entity stat limit storage. Consequently, all six opcodes
-// below (set_stat_max, set_stat_min, set_pc_stat_max, set_pc_stat_min,
-// set_npc_stat_max, set_npc_stat_min) write to the SAME shared table via
-// statSetMaxValue()/statSetMinValue(). The PC/NPC variants are registered
-// for script compatibility (ET Tu uses them) but are functionally identical
-// to their unqualified counterparts — the LAST call to any variant wins.
+// NOT provide per-entity stat limit storage.
 //
-// Per-entity stat caps would require a separate storage layer
-// (per-Object maps indexed by Object::id, persisted in save/load) and
-// a consumer-side lookup that checks per-entity overrides before falling
-// back to gStatDescriptions[]. This cannot be achieved by the setters
-// alone — it would be a full-stack change across stat.cc consumers.
+// M-21: sfall maintains SEPARATE PC and NPC cap tables (Stats.cpp:34-36
+// statMaximumsPC/statMaximumsNPC, both initialized from stat_data[i].maxValue)
+// and op_set_stat_max calls BOTH SetPCStatMax and SetNPCStatMax, while
+// set_pc_stat_max / set_npc_stat_max write only their own table. To make
+// get_stat_max/get_stat_min honor the isNpc argument (sfall Stats.cpp:387-396),
+// we maintain shadow PC/NPC cap tables here, updated alongside the shared
+// table by the six setters, and exposed to sfall_metarules.cc.
 // ================================================================
+
+// M-21: shadow PC/NPC stat cap tables (initialized from gStatDescriptions).
+static int sfallPcStatMaxs[STAT_COUNT];
+static int sfallNpcStatMaxs[STAT_COUNT];
+static int sfallPcStatMins[STAT_COUNT];
+static int sfallNpcStatMins[STAT_COUNT];
 
 // F-044/F-045: Clamp stat boundary values (min/max) to per-category
 // reasonable ranges. Prevents corrupted stat bounds from pathological
@@ -4191,7 +4396,11 @@ static void op_set_stat_max(Program* program)
     }
 
     value = clampStatBoundaryValue(stat, value, "set_stat_max");
+    // M-21: sfall op_set_stat_max calls BOTH SetPCStatMax and SetNPCStatMax
+    // (Stats.cpp:430-446), so update both shadow tables.
     statSetMaxValue(stat, value);
+    sfallPcStatMaxs[stat] = value;
+    sfallNpcStatMaxs[stat] = value;
 }
 
 // set_stat_min(int stat, int value) — 0x81B5
@@ -4207,15 +4416,14 @@ static void op_set_stat_min(Program* program)
 
     value = clampStatBoundaryValue(stat, value, "set_stat_min");
     statSetMinValue(stat, value);
+    sfallPcStatMins[stat] = value;
+    sfallNpcStatMins[stat] = value;
 }
 
 // set_pc_stat_max(int stat, int value) — 0x81B7
 // ETu needs this for rad resist cap at 100.
-// NOTE (F-055): CE uses a single shared gStatDescriptions[] table for all stat
-// limits, so set_pc_stat_max is functionally identical to set_stat_max.
-// PC-specific vs NPC-specific stat caps are not differentiated — the last
-// call to any set_*_stat_max/min overrides the stat cap globally.
-// Registered for compatibility so scripts do not crash.
+// M-21: writes ONLY the PC shadow table (sfall SetPCStatMax, Stats.cpp:403),
+// plus the shared engine table for runtime consumption.
 static void op_set_pc_stat_max(Program* program)
 {
     int value = programStackPopInteger(program);
@@ -4228,10 +4436,10 @@ static void op_set_pc_stat_max(Program* program)
 
     value = clampStatBoundaryValue(stat, value, "set_pc_stat_max");
     statSetMaxValue(stat, value);
+    sfallPcStatMaxs[stat] = value;
 }
 
 // set_pc_stat_min(int stat, int value) — 0x81B8
-// NOTE (F-055): See set_pc_stat_max above — CE uses a single global stat table.
 static void op_set_pc_stat_min(Program* program)
 {
     int value = programStackPopInteger(program);
@@ -4244,10 +4452,12 @@ static void op_set_pc_stat_min(Program* program)
 
     value = clampStatBoundaryValue(stat, value, "set_pc_stat_min");
     statSetMinValue(stat, value);
+    sfallPcStatMins[stat] = value;
 }
 
 // set_npc_stat_max(int stat, int value) — 0x81B9
-// NOTE (F-055): See set_pc_stat_max above — CE uses a single global stat table.
+// M-21: writes ONLY the NPC shadow table (sfall SetNPCStatMax, Stats.cpp:415),
+// plus the shared engine table for runtime consumption.
 static void op_set_npc_stat_max(Program* program)
 {
     int value = programStackPopInteger(program);
@@ -4260,10 +4470,10 @@ static void op_set_npc_stat_max(Program* program)
 
     value = clampStatBoundaryValue(stat, value, "set_npc_stat_max");
     statSetMaxValue(stat, value);
+    sfallNpcStatMaxs[stat] = value;
 }
 
 // set_npc_stat_min(int stat, int value) — 0x81BA
-// NOTE (F-055): See set_pc_stat_max above — CE uses a single global stat table.
 static void op_set_npc_stat_min(Program* program)
 {
     int value = programStackPopInteger(program);
@@ -4276,6 +4486,26 @@ static void op_set_npc_stat_min(Program* program)
 
     value = clampStatBoundaryValue(stat, value, "set_npc_stat_min");
     statSetMinValue(stat, value);
+    sfallNpcStatMins[stat] = value;
+}
+
+// M-21: sfall get_stat_max/get_stat_min accessors honoring the isNpc argument
+// (Stats.cpp:387-396: `(isNPC) ? statMaximumsNPC[stat] : statMaximumsPC[stat]`).
+// Returns -1 for an invalid stat, matching the metarule's existing error path.
+int sfallGetStatMax(int stat, bool isNpc)
+{
+    if (!statIsValid(stat)) {
+        return -1;
+    }
+    return isNpc ? sfallNpcStatMaxs[stat] : sfallPcStatMaxs[stat];
+}
+
+int sfallGetStatMin(int stat, bool isNpc)
+{
+    if (!statIsValid(stat)) {
+        return -1;
+    }
+    return isNpc ? sfallNpcStatMins[stat] : sfallPcStatMins[stat];
 }
 
 // ============================================================
@@ -5010,7 +5240,7 @@ static void op_has_fake_trait(Program* program)
 // Previously commented out; now registered. ET Tu depends on this for
 // its trait system. Uses the engine's traitsSetSelected/traitsGetSelected
 // API to check if the trait is currently selected and replace it with
-// TRAIT_COUNT (none).
+// -1 (none).
 //
 // F-056: Updated to use 3-slot traitsGetSelected/traitsSetSelected to
 // support FO1's third trait slot (gFallout1Behavior allows 3 traits).
@@ -5020,6 +5250,11 @@ static void op_has_fake_trait(Program* program)
 // metarule) to properly clean up stat/skill modifiers. Previously only
 // manipulated gSelectedTraits (2-slot engine system), leaving gameplay
 // effects from add_trait active after removal via this opcode.
+//
+// H-11: the empty-slot sentinel is -1, NOT TRAIT_COUNT (16). sfall writes
+// -1 (Perks.cpp:239-254); traitGetName(16) returns nullptr (trait.cc:161-167)
+// and the character editor (character_editor.cc:2158-2161) draws the raw
+// slot with no sanitization → fontDrawText(nullptr) crash at sheet open.
 // ============================================================
 static void op_remove_trait(Program* program)
 {
@@ -5034,13 +5269,13 @@ static void op_remove_trait(Program* program)
     traitsGetSelected(&trait1, &trait2, &trait3);
 
     if (trait1 == traitID) {
-        traitsSetSelected(TRAIT_COUNT, trait2, trait3);
+        traitsSetSelected(-1, trait2, trait3);
         debugPrint("remove_trait(%d): removed from slot 1\n", traitID);
     } else if (trait2 == traitID) {
-        traitsSetSelected(trait1, TRAIT_COUNT, trait3);
+        traitsSetSelected(trait1, -1, trait3);
         debugPrint("remove_trait(%d): removed from slot 2\n", traitID);
     } else if (trait3 == traitID) {
-        traitsSetSelected(trait1, trait2, TRAIT_COUNT);
+        traitsSetSelected(trait1, trait2, -1);
         debugPrint("remove_trait(%d): removed from slot 3\n", traitID);
     } else {
         debugPrint("remove_trait(%d): trait not currently selected (selected: %d, %d, %d)\n",
@@ -5227,6 +5462,17 @@ static void op_set_critter_hit_chance_mod(Program* program)
     CritterHitChanceEntry entry;
     entry.mod = mod;
     entry.max = max;
+    // M-14: Guard against unbounded map growth from script bugs — sibling
+    // setters (op_set_critter_skill_mod, op_set_critter_pickpocket_mod,
+    // op_mod_kill_counter) all enforce capacity. kMaxHitChanceOverrides
+    // matches the load-side cap (line ~7201), so a session exceeding it would
+    // otherwise skip the ENTIRE hit-chance override restoration on load.
+    if (static_cast<int>(gCritterHitChanceOverrides.size()) >= kMaxHitChanceOverrides
+        && gCritterHitChanceOverrides.find(critter->id) == gCritterHitChanceOverrides.end()) {
+        debugPrint("set_critter_hit_chance_mod: hit chance map full (%d entries), entry for id %d rejected\n",
+            kMaxHitChanceOverrides, critter->id);
+        return;
+    }
     gCritterHitChanceOverrides[critter->id] = entry;
     debugPrint("set_critter_hit_chance_mod(obj=%p(id=%d), max=%d, mod=%d) — per-critter override stored\n",
         static_cast<void*>(critter), critter->id, max, mod);
@@ -5363,68 +5609,87 @@ static void op_set_perk_level_mod(Program* program)
 }
 
 // Skill mod globals (0x81C7, 0x81C8).
-// F-013: Updated to match sfall spec — set_critter_skill_mod takes 3 args
-// (critter, skill, mod) and set_base_skill_mod takes 2 args (skill, mod).
-// Previously these popped only 2/1 args (missing the skill parameter) and
-// stored a single global instead of per-skill values.
+// H-23: match sfall max-cap semantics. sfall's op_set_critter_skill_mod reads
+// (critter, max) and calls SetSkillMax(obj, max) — a per-critter skill MAX CAP
+// applied as min(value, maximum) via CheckSkillMax (sfall Stats.cpp:387-396,
+// Skills.cpp:102-109, 267-281). op_set_base_skill_mod reads (max) and calls
+// SetSkillMax(0xFFFFFFFF, max) — the GLOBAL base skill max cap, which in this
+// fork is gSkillMaxCap (already clamped to by skill.cc:287-291). The fork's
+// previous 3-arg/2-arg additive per-skill maps caused real sfall calls
+// (e.g. set_critter_skill_mod(dude_obj, 100)) to abort via programFatalError
+// (PTR popped as int / stack underflow) and applied modifiers additively
+// instead of capping.
 //
-// gCritterSkillModMap: per-critter per-skill modifier storage.
-//   Outer key = critter proto ID (pid), inner key = skill index.
-// gBaseSkillModMap: global per-skill base modifier storage, set via
-//   set_base_skill_mod (0x81C8).
-// gGlobalCritterSkillModMap: global per-skill critter modifier storage,
-//   set via set_critter_skill_mod (0x81C7) when called with no critter
-//   (nullptr fallback).  Separate from gBaseSkillModMap — skillGetValue()
-//   applies base and critter modifiers independently.
-// F-042: kNoSkillModOverride sentinel (INT_MIN) distinguishes "no override
-// exists" from "explicitly set to 0", allowing per-critter mod=0 to
-// correctly override a non-zero global skill modifier.
+// Per-critter max caps are stored in gCritterSkillMaxMap (keyed by pid) and
+// exposed via sfallGetCritterSkillMax(). The consumer-side clamp belongs in
+// skill.cc's skillGetValue (coordinated with the stat/critter fix pass).
+//
+// gBaseSkillModMap / gGlobalCritterSkillModMap / gCritterSkillModMap additive
+// storage is retained for save/load compatibility but is no longer written by
+// the opcodes.
 const int kNoSkillModOverride = INT_MIN;
 static std::unordered_map<int, int> gBaseSkillModMap;
 static std::unordered_map<int, int> gGlobalCritterSkillModMap;
 static std::unordered_map<int, std::unordered_map<int, int>> gCritterSkillModMap;
+// H-23: per-critter skill MAX caps (pid → max), matching sfall SetSkillMax.
+static std::unordered_map<int, int> gCritterSkillMaxMap;
 
 static void op_set_critter_skill_mod(Program* program)
 {
-    int mod = programStackPopInteger(program);
-    int skill = programStackPopInteger(program);
+    int max = programStackPopInteger(program);
     Object* critter = static_cast<Object*>(programStackPopPointer(program));
-    if (skill < 0 || skill >= SKILL_COUNT) {
-        programPrintError("set_critter_skill_mod: skill %d out of range [0, %d)", skill, SKILL_COUNT);
-        return;
-    }
     if (critter == nullptr) {
-        // No critter object — store in global critter-skill-mod map.
-        // gGlobalCritterSkillModMap is separate from gBaseSkillModMap so
-        // skillGetValue() does not double-apply the same modifier.
-        gGlobalCritterSkillModMap[skill] = mod;
+        programPrintError("set_critter_skill_mod: expected critter object");
         return;
     }
     if (FID_TYPE(critter->fid) != OBJ_TYPE_CRITTER) {
         programPrintError("set_critter_skill_mod: object is not a critter");
         return;
     }
+    // sfall SetSkillMax stores the raw maximum; guard pathological values
+    // (negative caps would zero every skill through the min() clamp).
+    if (max < 0) {
+        programPrintError("set_critter_skill_mod: negative max %d rejected", max);
+        return;
+    }
     // Guard against unbounded map growth from script bugs. Allow existing
     // entries to be modified even at capacity; only reject new entries.
-    // kMaxCritterSkillPidEntries matches the load-side cap (line 6698).
-    if (static_cast<int>(gCritterSkillModMap.size()) >= kMaxCritterSkillPidEntries
-        && gCritterSkillModMap.find(critter->pid) == gCritterSkillModMap.end()) {
-        debugPrint("set_critter_skill_mod: critter skill mod map full (%d entries), entry for pid %d rejected\n",
+    // kMaxCritterSkillPidEntries matches the load-side cap (line ~6698).
+    if (static_cast<int>(gCritterSkillMaxMap.size()) >= kMaxCritterSkillPidEntries
+        && gCritterSkillMaxMap.find(critter->pid) == gCritterSkillMaxMap.end()) {
+        debugPrint("set_critter_skill_mod: critter skill max map full (%d entries), entry for pid %d rejected\n",
             kMaxCritterSkillPidEntries, critter->pid);
         return;
     }
-    gCritterSkillModMap[critter->pid][skill] = mod;
+    gCritterSkillMaxMap[critter->pid] = max;
 }
 
 static void op_set_base_skill_mod(Program* program)
 {
-    int mod = programStackPopInteger(program);
-    int skill = programStackPopInteger(program);
-    if (skill < 0 || skill >= SKILL_COUNT) {
-        programPrintError("set_base_skill_mod: skill %d out of range [0, %d)", skill, SKILL_COUNT);
+    int max = programStackPopInteger(program);
+    // sfall op_set_base_skill_mod → SetSkillMax(0xFFFFFFFF, max) → the GLOBAL
+    // base skill max. In this fork that is gSkillMaxCap, consumed by
+    // skillGetValue (skill.cc:287-291: `maxSkill = gSkillMaxCap > 0 ? gSkillMaxCap : 300`).
+    if (max < 0) {
+        programPrintError("set_base_skill_mod: negative max %d rejected", max);
         return;
     }
-    gBaseSkillModMap[skill] = mod;
+    gSkillMaxCap = max;
+    sfall_gl_vars_store("SFSkillM", gSkillMaxCap);
+}
+
+// H-23: returns the per-critter skill max cap for the given critter's pid,
+// or -1 if none is set (callers fall back to the global gSkillMaxCap).
+int sfallGetCritterSkillMax(Object* critter)
+{
+    if (critter == nullptr) {
+        return -1;
+    }
+    auto it = gCritterSkillMaxMap.find(critter->pid);
+    if (it != gCritterSkillMaxMap.end()) {
+        return it->second;
+    }
+    return -1;
 }
 
 // Pickpocket mod globals (0x81C9, 0x81CA).
@@ -5750,6 +6015,16 @@ static void op_get_last_target(Program* program)
 {
     Object* critter = static_cast<Object*>(programStackPopPointer(program));
 
+    // M-08: sfall returns 0 outside combat — the sources/targets are cleared
+    // on combat start AND end (AI.cpp:579-582, 589-590) and the docs state
+    // "outside of combat both functions will always return 0". The fork's
+    // global fallback returned stale gLastTarget/gLastAttacker for ANY
+    // critter outside combat. Return 0 unless combat is active.
+    if (!isInCombat()) {
+        programStackPushInteger(program, 0);
+        return;
+    }
+
     if (critter != nullptr) {
         int critterId = critter->id;
 
@@ -5786,6 +6061,12 @@ static void op_get_last_target(Program* program)
 static void op_get_last_attacker(Program* program)
 {
     Object* critter = static_cast<Object*>(programStackPopPointer(program));
+
+    // M-08: return 0 outside combat (see op_get_last_target).
+    if (!isInCombat()) {
+        programStackPushInteger(program, 0);
+        return;
+    }
 
     if (critter != nullptr) {
         int critterId = critter->id;
@@ -5824,17 +6105,31 @@ static void op_get_last_attacker(Program* program)
 // get_kill_counter (0x818C) — returns kill counter for critter type.
 // mod_kill_counter (0x818D) — modifies kill counter for critter type.
 // ET Tu uses these for tracking faction/enemy kill counts. The engine
-// maintains kill counters internally; these opcodes provide script access.
+// maintains kill counters internally (gKillsByType, incremented by
+// killsIncByType at combat.cc:5445, displayed at character_editor.cc:
+// 2361/4813, exposed to scripts via metarule3 GET_KILL_COUNT).
 // ============================================================
+// M-15: sfall's op_get_kill_counter / op_mod_kill_counter read/write the
+// engine's pc_kill_counts array directly (Handlers/Combat.cpp:41-87). The
+// fork's private gSfallKillCounters map was never populated by the engine, so
+// get_kill_counter returned 0 for engine-registered kills and mod_kill_counter
+// had no effect on the in-game tally. Use the engine API (killsGetByType /
+// killsIncByType) so both directions align. The map now stores ONLY negative
+// mod deltas (the engine has no decrement API).
 static std::unordered_map<int, int> gSfallKillCounters;
 
 static void op_get_kill_counter(Program* program)
 {
     int critterType = programStackPopInteger(program);
-    int count = 0;
+    // M-15: read the ENGINE tally. killsGetByType bounds-checks (returns 0
+    // for invalid indices, critter.cc:748-753).
+    int count = killsGetByType(critterType);
+    // Negative mod deltas (mod_kill_counter with amount < 0) cannot be applied
+    // to the engine array (no decrement API), so they live in
+    // gSfallKillCounters and are layered on top here for consistency.
     auto it = gSfallKillCounters.find(critterType);
     if (it != gSfallKillCounters.end()) {
-        count = it->second;
+        count += it->second;
     }
     programStackPushInteger(program, count);
 }
@@ -5859,8 +6154,8 @@ static void op_mod_kill_counter(Program* program)
         debugPrint("mod_kill_counter: negative critterType %d rejected\n", critterType);
         return;
     }
-    if (critterType > 0x2000000) {
-        debugPrint("mod_kill_counter: critterType %d exceeds max proto ID range\n", critterType);
+    if (critterType >= KILL_TYPE_COUNT) {
+        debugPrint("mod_kill_counter: critterType %d out of range [0, %d)\n", critterType, KILL_TYPE_COUNT);
         return;
     }
 
@@ -5873,24 +6168,33 @@ static void op_mod_kill_counter(Program* program)
         amount = -1000000;
     }
 
-    // Guard against unbounded map growth from script bugs. Allow existing
-    // entries to be modified even at capacity; only reject new entries.
-    if (static_cast<int>(gSfallKillCounters.size()) >= kMaxKillCounterEntries
-        && gSfallKillCounters.find(critterType) == gSfallKillCounters.end()) {
-        debugPrint("mod_kill_counter: kill counter map full (%d entries), new entry for critterType %d rejected\n",
-            kMaxKillCounterEntries, critterType);
-        return;
-    }
-
-    // Guard against signed integer overflow (I2-M003).
-    // amount is clamped to [-1e6, 1e6] but accumulated value can overflow.
-    int currentValue = gSfallKillCounters[critterType];
-    if (amount > 0 && currentValue > INT_MAX - amount) {
-        gSfallKillCounters[critterType] = INT_MAX;
-    } else if (amount < 0 && currentValue < INT_MIN - amount) {
-        gSfallKillCounters[critterType] = INT_MIN;
-    } else {
-        gSfallKillCounters[critterType] = currentValue + amount;
+    // M-15: apply to the ENGINE tally via the bounded engine API. The engine
+    // only exposes +1 increments (killsIncByType), so loop for positive
+    // amounts (bounded by the 1e6 clamp above). Negative amounts are applied
+    // by... the engine has no decrement API; sfall's mod_kill_counter does a
+    // direct array add which supports negatives. Keep the negative delta in a
+    // bounded private map layered on top of the engine tally so
+    // get_kill_counter remains consistent for negative mods.
+    if (amount > 0) {
+        for (int i = 0; i < amount; i++) {
+            killsIncByType(critterType);
+        }
+    } else if (amount < 0) {
+        // Guard against unbounded map growth from script bugs. Allow existing
+        // entries to be modified even at capacity; only reject new entries.
+        if (static_cast<int>(gSfallKillCounters.size()) >= kMaxKillCounterEntries
+            && gSfallKillCounters.find(critterType) == gSfallKillCounters.end()) {
+            debugPrint("mod_kill_counter: kill counter map full (%d entries), new entry for critterType %d rejected\n",
+                kMaxKillCounterEntries, critterType);
+            return;
+        }
+        // Guard against signed integer overflow (I2-M003).
+        int currentValue = gSfallKillCounters[critterType];
+        if (amount < 0 && currentValue < INT_MIN - amount) {
+            gSfallKillCounters[critterType] = INT_MIN;
+        } else {
+            gSfallKillCounters[critterType] = currentValue + amount;
+        }
     }
 }
 
@@ -6090,8 +6394,9 @@ void sfallOpcodesReset()
     sfallCritterPickpocketMax = 0;
     sfallBasePickpocketMax = 0;
 
-    // Reset per-critter skill/pickpocket mod maps (F-001, F-013).
+    // Reset per-critter skill/pickpocket mod maps (F-001, F-013, H-23).
     gCritterSkillModMap.clear();
+    gCritterSkillMaxMap.clear();
     gCritterPickpocketModMap.clear();
 
     // Reset perk add mode and selectable perks flag.
@@ -6128,6 +6433,11 @@ void sfallOpcodesReset()
         for (int stat = 0; stat < STAT_COUNT; stat++) {
             statSetMinValue(stat, sfallOriginalStatMins[stat]);
             statSetMaxValue(stat, sfallOriginalStatMaxs[stat]);
+            // M-21: restore the PC/NPC shadow cap tables alongside the shared table.
+            sfallPcStatMins[stat] = sfallOriginalStatMins[stat];
+            sfallPcStatMaxs[stat] = sfallOriginalStatMaxs[stat];
+            sfallNpcStatMins[stat] = sfallOriginalStatMins[stat];
+            sfallNpcStatMaxs[stat] = sfallOriginalStatMaxs[stat];
         }
     }
 }
@@ -6221,6 +6531,7 @@ static constexpr const char kGlVarPerkMLCnt[] = "SFPMLCt";
 static constexpr const char kGlVarBaseSkCnt[] = "SFBSMcnt";
 static constexpr const char kGlVarGlobCt[] = "SFGCnt  ";
 static constexpr const char kGlVarCrtSkCnt[] = "SFCrtSc";
+static constexpr const char kGlVarCrtSkMaxCnt[] = "SFCrtMx";
 static constexpr const char kGlVarPerkOwed[] = "SFPerkOw";
 static constexpr const char kGlVarHideRP[] = "SFHideRP";
 static constexpr const char kGlVarPerkImgCnt[] = "SFPicnt ";
@@ -6304,6 +6615,13 @@ void sfallOpcodeStateSave()
     // F-002: Save per-stat min/max bounds set via set_stat_max (0x81B4),
     // set_stat_min (0x81B5), and their PC/NPC variants. These modify
     // gStatDescriptions[] limits in stat.cc and must survive save/load.
+    // R-15 (M-21, CONFIRMED): the save format previously persisted ONLY the
+    // single shared engine value (statGetMinValue/statGetMaxValue) under
+    // SFStMn/SFStMx, and the load path wrote BOTH PC and NPC shadow tables
+    // from it — the PC/NPC cap distinction (set_pc_stat_max vs
+    // set_npc_stat_max) was lost on save/load. Now persist each shadow table
+    // under its own key (SFPcMn/SFPcMx/SFNpMn/SFNpMx). The shared SFStMn/
+    // SFStMx keys are retained for the engine table and old-save compat.
     {
         sfall_gl_vars_store(kGlVarStatCnt, STAT_COUNT);
         for (int stat = 0; stat < STAT_COUNT; stat++) {
@@ -6312,6 +6630,15 @@ void sfallOpcodeStateSave()
             sfall_gl_vars_store(key, statGetMinValue(stat));
             sprintf(key, "SFStMx%02d", stat);
             sfall_gl_vars_store(key, statGetMaxValue(stat));
+            // R-15: PC/NPC shadow tables under distinct keys.
+            sprintf(key, "SFPcMn%02d", stat);
+            sfall_gl_vars_store(key, sfallPcStatMins[stat]);
+            sprintf(key, "SFPcMx%02d", stat);
+            sfall_gl_vars_store(key, sfallPcStatMaxs[stat]);
+            sprintf(key, "SFNpMn%02d", stat);
+            sfall_gl_vars_store(key, sfallNpcStatMins[stat]);
+            sprintf(key, "SFNpMx%02d", stat);
+            sfall_gl_vars_store(key, sfallNpcStatMaxs[stat]);
         }
     }
 
@@ -6421,6 +6748,22 @@ void sfallOpcodeStateSave()
                 sfall_gl_vars_store(modKey, mod);
                 skIdx++;
             }
+            idx++;
+        }
+    }
+    // H-23: gCritterSkillMaxMap: pid → max (per-critter skill max cap).
+    // Saved with "SFCm" prefix to avoid collision with the additive maps.
+    {
+        int crtMaxCount = static_cast<int>(gCritterSkillMaxMap.size());
+        sfall_gl_vars_store(kGlVarCrtSkMaxCnt, crtMaxCount);
+        int idx = 0;
+        for (const auto& [pid, max] : gCritterSkillMaxMap) {
+            char pidKey[16] = {};
+            char maxKey[16] = {};
+            sprintf(pidKey, "SFCmP%04d", idx);
+            sprintf(maxKey, "SFCmV%04d", idx);
+            sfall_gl_vars_store(pidKey, pid);
+            sfall_gl_vars_store(maxKey, max);
             idx++;
         }
     }
@@ -6738,8 +7081,10 @@ void sfallOpcodeStateLoad()
         gPerkFrequencyOverride = val;
     }
     if (sfall_gl_vars_fetch(kGlVarSkillPts, val)) {
-        if (val < 0) val = 0;
-        if (val > kMaxSkillPointsPerLevelMod) val = kMaxSkillPointsPerLevelMod;
+        // M-172: the range is [-100, 100] — preserve negative values (the old
+        // `val < 0 → 0` clamp discarded legitimate negative mods on load).
+        if (val < -100) val = -100;
+        if (val > 100) val = 100;
         gSkillPointsPerLevelMod = val;
     }
 
@@ -6850,12 +7195,18 @@ void sfallOpcodeStateLoad()
     // set_stat_min (0x81B5), and their PC/NPC variants.
     // F-003: Apply clampStatBoundaryValue() to loaded stat bounds so crafted
     // saves cannot inject out-of-range bounds that bypass the setters.
+    // R-15 (M-21): the save format now persists the PC and NPC shadow tables
+    // under their own keys (SFPcMn/SFPcMx/SFNpMn/SFNpMx). Restore each table
+    // from its own key; older saves (no PC/NPC keys) fall back to the single
+    // shared value (previous collapse behavior), preserving backward compat.
     {
         int statCount = 0;
         if (sfall_gl_vars_fetch(kGlVarStatCnt, statCount)) {
             for (int stat = 0; stat < statCount && stat < STAT_COUNT; stat++) {
                 char key[16] = {};
                 int ival = 0;
+                int pcVal = 0;
+                int npVal = 0;
                 sprintf(key, "SFStMn%02d", stat);
                 if (sfall_gl_vars_fetch(key, ival)) {
                     ival = clampStatBoundaryValue(stat, ival, "sfallOpcodeStateLoad");
@@ -6865,6 +7216,32 @@ void sfallOpcodeStateLoad()
                 if (sfall_gl_vars_fetch(key, ival)) {
                     ival = clampStatBoundaryValue(stat, ival, "sfallOpcodeStateLoad");
                     statSetMaxValue(stat, ival);
+                }
+                // R-15: restore each shadow table from its own key; fall back
+                // to the shared engine value when the key is absent (old saves).
+                sprintf(key, "SFPcMn%02d", stat);
+                if (sfall_gl_vars_fetch(key, pcVal)) {
+                    sfallPcStatMins[stat] = clampStatBoundaryValue(stat, pcVal, "sfallOpcodeStateLoad");
+                } else {
+                    sfallPcStatMins[stat] = statGetMinValue(stat);
+                }
+                sprintf(key, "SFPcMx%02d", stat);
+                if (sfall_gl_vars_fetch(key, pcVal)) {
+                    sfallPcStatMaxs[stat] = clampStatBoundaryValue(stat, pcVal, "sfallOpcodeStateLoad");
+                } else {
+                    sfallPcStatMaxs[stat] = statGetMaxValue(stat);
+                }
+                sprintf(key, "SFNpMn%02d", stat);
+                if (sfall_gl_vars_fetch(key, npVal)) {
+                    sfallNpcStatMins[stat] = clampStatBoundaryValue(stat, npVal, "sfallOpcodeStateLoad");
+                } else {
+                    sfallNpcStatMins[stat] = statGetMinValue(stat);
+                }
+                sprintf(key, "SFNpMx%02d", stat);
+                if (sfall_gl_vars_fetch(key, npVal)) {
+                    sfallNpcStatMaxs[stat] = clampStatBoundaryValue(stat, npVal, "sfallOpcodeStateLoad");
+                } else {
+                    sfallNpcStatMaxs[stat] = statGetMaxValue(stat);
                 }
             }
         }
@@ -7018,6 +7395,23 @@ void sfallOpcodeStateLoad()
                             }
                         }
                     }
+                }
+            }
+        }
+    }
+    // H-23: gCritterSkillMaxMap: pid → max (per-critter skill max cap).
+    {
+        int crtMaxCount = 0;
+        if (sfall_gl_vars_fetch(kGlVarCrtSkMaxCnt, crtMaxCount) && crtMaxCount <= kMaxCritterSkillPidEntries) {
+            for (int idx = 0; idx < crtMaxCount; idx++) {
+                char pidKey[16] = {};
+                char maxKey[16] = {};
+                sprintf(pidKey, "SFCmP%04d", idx);
+                sprintf(maxKey, "SFCmV%04d", idx);
+                int pid = 0;
+                int max = 0;
+                if (sfall_gl_vars_fetch(pidKey, pid) && sfall_gl_vars_fetch(maxKey, max) && max >= 0) {
+                    gCritterSkillMaxMap[pid] = max;
                 }
             }
         }
@@ -7855,6 +8249,15 @@ void sfallOpcodesInit()
         sfallStatBoundsCaptured = true;
     }
 
+    // M-21: initialize the PC/NPC shadow cap tables from the shared table
+    // (sfall Stats.cpp:278: `statMaximumsPC[i] = statMaximumsNPC[i] = stat_data[i].maxValue`).
+    for (int stat = 0; stat < STAT_COUNT; stat++) {
+        sfallPcStatMaxs[stat] = statGetMaxValue(stat);
+        sfallNpcStatMaxs[stat] = statGetMaxValue(stat);
+        sfallPcStatMins[stat] = statGetMinValue(stat);
+        sfallNpcStatMins[stat] = statGetMinValue(stat);
+    }
+
     // ref. https://github.com/sfall-team/sfall/blob/71ecec3d405bd5e945f157954618b169e60068fe/artifacts/scripting/sfall%20opcode%20list.txt#L145
     // Note: we can't really implement these since address space is different.
     // We can potentially special case some of them, but we should try to avoid that.
@@ -8338,8 +8741,13 @@ void sfallOpcodesInit()
     interpreterRegisterOpcode(0x81fb, op_fs_write_short);
     // 0x81fc - void  fs_write_int(int id, int data)
     interpreterRegisterOpcode(0x81fc, op_fs_write_int);
-    // 0x81fd - void  fs_write_float(int id, int data)
-    interpreterRegisterOpcode(0x81fd, op_fs_write_float);
+    // 0x81fd - void  fs_write_int(int id, int data)  (M-07 F-10)
+    // sfall registers 0x81fd as fs_write_int — a DUPLICATE of 0x81fc
+    // (Opcodes.cpp:137-138). The opcode-list "fs_write_float" name is a
+    // doc artifact; the real sfall runtime dispatches 0x81fd to
+    // op_fs_write_int. The fork registered op_fs_write_float here, so a
+    // script calling fs_write_int via 0x81fd wrote a genuine IEEE float.
+    interpreterRegisterOpcode(0x81fd, op_fs_write_int);
     // 0x81fe - void  fs_write_string(int id, string data)
     interpreterRegisterOpcode(0x81fe, op_fs_write_string);
     // 0x8208 - void  fs_write_bstring(int id, string data)
@@ -8475,10 +8883,15 @@ void sfallOpcodesInit()
     // 0x8240 - void mark_movie_played(int id)
     interpreterRegisterOpcode(0x8240, op_mark_movie_played);
 
-    // 0x8248 - object get_last_target(object critter)
-    interpreterRegisterOpcode(0x8248, op_get_last_target);
-    // 0x8249 - object get_last_attacker(object critter)
-    interpreterRegisterOpcode(0x8249, op_get_last_attacker);
+    // H-08: sfall runtime + compiler bind 0x8248 = get_last_attacker and
+    // 0x8249 = get_last_target (sfall Opcodes.cpp:424-425; sslc enum order
+    // O_TS_GET_LAST_ATTACKER=0x8248, O_TS_GET_LAST_TARGET=0x8249). The fork
+    // followed the reversed docs-side table, so any third-party sfall mod
+    // calling get_last_target() received the attacker and vice versa.
+    // 0x8248 - object get_last_attacker(object critter)
+    interpreterRegisterOpcode(0x8248, op_get_last_attacker);
+    // 0x8249 - object get_last_target(object critter)
+    interpreterRegisterOpcode(0x8249, op_get_last_target);
     // 0x824a - void block_combat(int enable)
     interpreterRegisterOpcode(0x824A, op_block_combat);
 

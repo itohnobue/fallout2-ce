@@ -152,6 +152,21 @@ bool sfallGetExplosiveOverridePattern(int pid, int* outStartRotation, int* outEn
 // Consumer: game_dialog.cc _gdSetupFidget() for FO1 mood animation selection.
 int sfallGetTalkingHeadMood();
 
+// H-04: set_fo1_hit_chance(state) metarule state. When true, the FO2
+// (PE-2) player distance penalty in the to-hit computation is removed
+// (sfall Combat.cpp:289-295 patches the 0x4244ED branch). Consumer:
+// combat.cc _determine_to_hit / attackDetermineToHit — the (PE-2) nerf at
+// combat.cc:4778-4780 must be gated on (gFallout1Behavior ||
+// sfallGetFo1HitChance()).
+bool sfallGetFo1HitChance();
+
+// H-05: remove_wm_town_names(state) metarule state. When true, town labels
+// under worldmap circles are not drawn (sfall Worldmap.cpp:286-295 patches
+// 0x4C3FFE). Consumer: worldmap.cc wmInterfaceDrawCircleOverlaySafe
+// (worldmap.cc:6027-6168) — the name draw at 6130-6135 must be gated on
+// (!sfallGetRemoveWmTownNames()).
+bool sfallGetRemoveWmTownNames();
+
 // F-11: NPC fake perk/trait/selectable-perk accessors.
 // These expose the file-static gFakePerksNpc, gFakeTraitsNpc, and
 // gFakeSelectablePerksNpc maps for use by character_editor.cc when

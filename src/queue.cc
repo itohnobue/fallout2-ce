@@ -128,6 +128,16 @@ int queueLoad(File* stream)
             break;
         }
 
+        // M-189: eventType comes from the save file unvalidated. A crafted
+        // save can put any int32 here; gEventTypeDescriptions[type] below
+        // would be an OOB read of the static table (and the CRC is checked
+        // after the handler runs, so it cannot protect the read path).
+        if (queueListNode->type < 0 || queueListNode->type >= EVENT_TYPE_COUNT) {
+            internal_free(queueListNode);
+            rc = -1;
+            break;
+        }
+
         int objectId;
         if (fileReadInt32(stream, &objectId) == -1) {
             internal_free(queueListNode);
@@ -150,6 +160,21 @@ int queueLoad(File* stream)
         }
 
         queueListNode->owner = obj;
+
+        // R-05: keep null-owner events through load — rejecting them (the
+        // old P-01) bricked legit saves. The SCRIPT null-owner path is real:
+        // system/global scripts can be ownerless (scripts.cc:2465) and sfall's
+        // add_g_timer_event → scriptAddTimerEvent (sfall_metarules.cc:3454,
+        // scripts.cc:955) queues a SCRIPT event with the script's (null)
+        // owner; queueSave writes -2 and the event must load. (The NPC
+        // radiation-dangling mechanism once cited for P-01 is NOT reachable:
+        // every radiation path is gDude-gated and gDude carries
+        // OBJECT_NO_REMOVE — see R-05 adversarial verdict.) scriptEventProcess
+        // never dereferences obj, so the event is fully functional with a
+        // null owner. The deref-capable handlers (KNOCKOUT/WITHDRAWAL/
+        // RADIATION/FLARE/EXPLOSION/ITEM_TRICKLE/EXPLOSION_FAILURE) are
+        // null-guarded at their own sites and at the dispatch point in
+        // queueProcessEvents/queueClearByEventType.
 
         EventTypeDescription* eventTypeDescription = &(gEventTypeDescriptions[queueListNode->type]);
         if (eventTypeDescription->readProc != nullptr) {
@@ -355,6 +380,23 @@ bool queueHasEvent(Object* owner, int eventType)
     return false;
 }
 
+// R-05: returns true for event types whose handler dereferences the owner
+// unconditionally (a null owner would crash the handler). A null-owner
+// event of these types is moot — the owning object no longer exists — and
+// must never reach the handler. The owner-independent handlers (GAME_TIME,
+// MAP_UPDATE, GSOUND, SCRIPT — scriptEventProcess never derefs obj — POISON,
+// SNEAK) run fine with a null owner; DRUG is guarded inside its own handler
+// (item.cc:3157) but dropping it here is equivalent.
+static bool queueEventTypeDerefsOwner(int eventType)
+{
+    return eventType != EVENT_TYPE_GAME_TIME
+        && eventType != EVENT_TYPE_MAP_UPDATE_EVENT
+        && eventType != EVENT_TYPE_GSOUND_SFX_EVENT
+        && eventType != EVENT_TYPE_SCRIPT
+        && eventType != EVENT_TYPE_POISON
+        && eventType != EVENT_TYPE_SNEAK;
+}
+
 // 0x4A26D0 queue_process
 int queueProcessEvents()
 {
@@ -371,6 +413,25 @@ int queueProcessEvents()
         gQueueListHead = queueListNode->next;
 
         EventTypeDescription* eventTypeDescription = &(gEventTypeDescriptions[queueListNode->type]);
+
+        // R-05: a null-owner event can legitimately survive save/load (the
+        // SCRIPT path — ownerless system/global scripts, scripts.cc:2465,
+        // sfall add_g_timer_event → scriptAddTimerEvent → queueAddEvent with
+        // a null owner — queueSave writes -2 and queueLoad restores nullptr).
+        // The old P-01 reject-at-load made such saves permanently unloadable.
+        // Events are kept; handlers whose owner-deref would crash are
+        // guarded. This dispatch guard drops a moot null-owner event of a
+        // deref-capable type instead of running its handler (the event's
+        // owner no longer exists — nothing to apply the event to).
+        if (queueListNode->owner == nullptr
+            && queueEventTypeDerefsOwner(queueListNode->type)) {
+            if (eventTypeDescription->freeProc != nullptr) {
+                eventTypeDescription->freeProc(queueListNode->data);
+            }
+            internal_free(queueListNode);
+            continue;
+        }
+
         stopProcess = eventTypeDescription->handlerProc(queueListNode->owner, queueListNode->data);
 
         if (eventTypeDescription->freeProc != nullptr) {
@@ -416,7 +477,14 @@ void queueClearByEventType(int eventType, QueueEventHandler* fn)
             *ptr = curr->next;
             curr = *ptr;
 
-            if (fn != nullptr && fn(tmp->owner, tmp->data) != 1) {
+            // R-05: a null-owner event of a deref-capable type is moot —
+            // the owning object no longer exists (e.g. after save/load of a
+            // detached-script timer event). Never call the clear/map-exit
+            // handler (e.g. knockoutClear/withdrawalClear/miscItemTurnOffFromQueue)
+            // with a null owner — those dereference it. Treat the event as
+            // removed (the fn == nullptr branch below).
+            bool removeMoot = tmp->owner == nullptr && queueEventTypeDerefsOwner(eventType);
+            if (!removeMoot && fn != nullptr && fn(tmp->owner, tmp->data) != 1) {
                 *ptr = tmp;
                 ptr = &(tmp->next);
             } else {
@@ -452,6 +520,12 @@ unsigned int queueGetNextEventTime()
 // 0x4A281C queue_destroy
 static int flareEventProcess(Object* obj, void* data)
 {
+    // R-05: a null-owner FLARE event is moot — the owning object no longer
+    // exists (detached-script timer event after save/load). objectDestroy
+    // would crash on a null object.
+    if (obj == nullptr) {
+        return 1;
+    }
     objectDestroy(obj);
     return 1;
 }
@@ -471,6 +545,12 @@ static int explosionExit(Object* obj, void* data)
 // 0x4A2834
 static int explosionProcess(Object* explosive, bool animate)
 {
+    // R-05: a null-owner EXPLOSION/EXPLOSION_FAILURE event is moot — the
+    // explosive object no longer exists. Deref below would crash.
+    if (explosive == nullptr) {
+        return 1;
+    }
+
     int tile;
     int elevation;
 

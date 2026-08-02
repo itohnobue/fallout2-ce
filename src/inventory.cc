@@ -369,8 +369,8 @@ static std::pair<int, int> barterComputeTablesValue(Object* dude, Object* npc, b
 static std::pair<int, int> barterComputeTablesWeight(Object* dude, Object* npc);
 static int barterAttemptTransaction(Object* dude, Object* offerTable, Object* npc, Object* barterTable);
 static int barterGetMovedQuantity(Object* item, int maxQuantity, bool fromPlayer, bool fromInventory, bool immediate);
-static void barterMoveToTable(Object* item, int quantity, int slotIndex, int indexOffset, Object* npc, Object* sourceTable, bool fromDude);
-static void barterMoveFromTable(Object* item, int quantity, int slotIndex, Object* npc, Object* sourceTable, bool fromDude);
+static void barterMoveToTable(Object* item, int quantity, int slotIndex, int indexOffset, Object* npc, Object* sourceTable, bool fromDude, std::vector<std::pair<Object*, Object*>>* playerTableSources);
+static void barterMoveFromTable(Object* item, int quantity, int slotIndex, Object* npc, Object* sourceTable, bool fromDude, std::vector<std::pair<Object*, Object*>>* playerTableSources);
 static void barterDisplayTables(int win, Object* leftTable, Object* rightTable, int draggedSlotIndex);
 static void _container_enter(int keyCode, int inventoryWindowType);
 static void _container_exit(int keyCode, int inventoryWindowType);
@@ -560,6 +560,10 @@ static int _stack_offset[10];
 // Current critter or container for every nesting level (stack).
 // 0x59E86C stack
 static Object* _stack[10];
+
+// Target of the USE_ITEM_ON inventory window, set by inventoryOpenUseItemOn.
+// Used by _setup_inventory to scope the car intface art override (M-71).
+static Object* _use_item_on_target = nullptr;
 
 // 0x59E894 mt_wid
 static int _mt_wid;
@@ -1355,9 +1359,20 @@ static bool _setup_inventory(int inventoryWindowType)
         } else {
             // F-021: Check gCarIntfaceArtFid override set via set_car_intface_art.
             // When a valid FID override is set (>= 0), use it instead of the default.
+            // M-71: the override must only apply when the USE_ITEM_ON target is
+            // actually a car (trunk). The old code applied it to every USE_ITEM_ON
+            // window regardless of target, leaking the car background art onto all
+            // use-on dialogs. sfall's SetCarInterfaceArt is a fixed-address patch
+            // scoped to the car use window.
             FrmImage backgroundFrmImage;
-            int carIntfaceArtFid = sfallGetCarIntfaceArtFid();
-            int frmId = (carIntfaceArtFid >= 0) ? carIntfaceArtFid : windowDescription->frmId;
+            int frmId = windowDescription->frmId;
+            if (_use_item_on_target != nullptr
+                && (_use_item_on_target->pid == PROTO_ID_CAR_TRUNK || _use_item_on_target->pid == PROTO_ID_CAR)) {
+                int carIntfaceArtFid = sfallGetCarIntfaceArtFid();
+                if (carIntfaceArtFid >= 0) {
+                    frmId = carIntfaceArtFid;
+                }
+            }
             if (backgroundFrmImage.lock(buildFid(OBJ_TYPE_INTERFACE, frmId, 0, 0, 0))) {
                 blitBuffer2D(backgroundFrmImage.getBuffer(), destBuf);
             }
@@ -2695,6 +2710,10 @@ void inventoryOpenUseItemOn(Object* targetObj)
     if (inventoryCommonInit() == -1) {
         return;
     }
+
+    // M-71: remember the USE_ITEM_ON target so _setup_inventory can scope the
+    // set_car_intface_art override to car targets only.
+    _use_item_on_target = targetObj;
 
     bool isoWasEnabled = _setup_inventory(INVENTORY_WINDOW_TYPE_USE_ITEM_ON);
     _display_inventory(_stack_offset[_curr_stack], -1, INVENTORY_WINDOW_TYPE_USE_ITEM_ON);
@@ -4494,19 +4513,23 @@ int inventoryOpenLooting(Object* looter, Object* target)
                 // errors when hooks block heavy items. Items that pass the
                 // hook are cached to avoid calling it twice (hook scripts
                 // may have stateful side effects).
-                std::vector<Object*> passedItems;
+                // H-22: capture the full stack quantity per slot so the
+                // transfer moves the whole stack, not 1 unit per slot
+                // (the fork's itemMove(...,1) left N-1 behind).
+                std::vector<std::pair<Object*, int>> passedItems;
                 int filteredWeight = 0;
                 for (int i = 0; i < target->data.inventory.length; i++) {
                     Object* item = target->data.inventory.items[i].item;
                     if (scriptHooks_InventoryMove(HOOK_INVENTORYMOVE_CONTAINER, item, target)) {
-                        passedItems.push_back(item);
-                        filteredWeight += itemGetWeight(item);
+                        int quantity = target->data.inventory.items[i].quantity;
+                        passedItems.push_back({ item, quantity });
+                        filteredWeight += itemGetWeight(item) * quantity;
                     }
                 }
                 if (filteredWeight <= maxCarryWeight - currentWeight) {
-                    // Transfer only the hook-passing items.
+                    // Transfer only the hook-passing items, full stack each.
                     for (size_t i = 0; i < passedItems.size(); i++) {
-                        itemMove(target, _inven_dude, passedItems[i], 1);
+                        itemMove(target, _inven_dude, passedItems[i].first, passedItems[i].second);
                     }
                     _display_target_inventory(_target_stack_offset[_target_curr_stack], -1, _target_pud, INVENTORY_WINDOW_TYPE_LOOT);
                     _display_inventory(_stack_offset[_curr_stack], -1, INVENTORY_WINDOW_TYPE_LOOT);
@@ -4994,16 +5017,21 @@ static int barterAttemptTransaction(Object* dude, Object* offerTable, Object* np
     // SFALL: Move each item individually, honoring HOOK_INVENTORYMOVE
     // return value. Items blocked by the hook (false return) stay in
     // their respective tables.
+    // H-22: move the FULL stack quantity per slot (the fork's itemMove(...,1)
+    // left N-1 behind). Backward iteration is safe: itemRemove with the full
+    // quantity compacts only slots > i, which have already been visited.
     for (int i = barterTable->data.inventory.length - 1; i >= 0; i--) {
         Object* item = barterTable->data.inventory.items[i].item;
+        int quantity = barterTable->data.inventory.items[i].quantity;
         if (scriptHooks_InventoryMove(HOOK_INVENTORYMOVE_BARTER, item, barterTable)) {
-            itemMove(barterTable, dude, item, 1);
+            itemMove(barterTable, dude, item, quantity);
         }
     }
     for (int i = offerTable->data.inventory.length - 1; i >= 0; i--) {
         Object* item = offerTable->data.inventory.items[i].item;
+        int quantity = offerTable->data.inventory.items[i].quantity;
         if (scriptHooks_InventoryMove(HOOK_INVENTORYMOVE_BARTER, item, offerTable)) {
-            itemMove(offerTable, npc, item, 1);
+            itemMove(offerTable, npc, item, quantity);
         }
     }
     return 0;
@@ -5073,7 +5101,7 @@ static void _drag_item_loop(Object* item, bool immediate)
 }
 
 // 0x474DAC barter_move_inventory
-static void barterMoveToTable(Object* item, int quantity, int slotIndex, int indexOffset, Object* npc, Object* sourceTable, bool fromDude)
+static void barterMoveToTable(Object* item, int quantity, int slotIndex, int indexOffset, Object* npc, Object* sourceTable, bool fromDude, std::vector<std::pair<Object*, Object*>>* playerTableSources)
 {
     Rect rect;
     if (fromDude) {
@@ -5115,6 +5143,11 @@ static void barterMoveToTable(Object* item, int quantity, int slotIndex, int ind
                 }
                 if (itemMoveForce(_inven_dude, sourceTable, item, quantityToMove) == -1) {
                     inventoryDisplayMessage(26); // There is no space left for that item.
+                } else if (playerTableSources != nullptr && sourceTable != nullptr) {
+                    // M-74: record which critter this offer item came from so
+                    // a "return to talk" (T) exit restores it to the correct
+                    // owner (party-member barter pane) instead of gDude.
+                    playerTableSources->push_back({ item, _inven_dude });
                 }
             }
         }
@@ -5137,7 +5170,7 @@ static void barterMoveToTable(Object* item, int quantity, int slotIndex, int ind
 }
 
 // 0x475070 barter_move_from_table_inventory
-static void barterMoveFromTable(Object* item, int quantity, int slotIndex, Object* npc, Object* sourceTable, bool fromDude)
+static void barterMoveFromTable(Object* item, int quantity, int slotIndex, Object* npc, Object* sourceTable, bool fromDude, std::vector<std::pair<Object*, Object*>>* playerTableSources)
 {
     Rect rect;
     if (fromDude) {
@@ -5179,6 +5212,15 @@ static void barterMoveFromTable(Object* item, int quantity, int slotIndex, Objec
                 }
                 if (itemMove(sourceTable, _inven_dude, item, quantityToMove) == -1) {
                     inventoryDisplayMessage(26); // There is no space left for that item.
+                } else if (playerTableSources != nullptr && sourceTable != nullptr) {
+                    // M-74: item moved back off the offer table — drop the
+                    // recorded source so a later T-exit doesn't re-route it.
+                    for (size_t i = 0; i < playerTableSources->size(); i++) {
+                        if ((*playerTableSources)[i].first == item) {
+                            playerTableSources->erase(playerTableSources->begin() + i);
+                            break;
+                        }
+                    }
                 }
             }
         }
@@ -5365,6 +5407,11 @@ void barterProcessUI(int win, Object* barterer, Object* playerTable, Object* bar
     }
     int partyTargetIndex = 0;
 
+    // M-74: track which critter each offer-table item came from so a
+    // "return to talk" (T) exit returns items to the correct owner when the
+    // barter left pane has been switched to a party member.
+    std::vector<std::pair<Object*, Object*>> playerTableSources;
+
     bool isoWasEnabled = _setup_inventory(INVENTORY_WINDOW_TYPE_TRADE);
 
     _display_target_inventory(_target_stack_offset[_target_curr_stack], -1, _target_pud, INVENTORY_WINDOW_TYPE_TRADE);
@@ -5479,7 +5526,19 @@ void barterProcessUI(int win, Object* barterer, Object* playerTable, Object* bar
         if (keyCode == KEY_LOWERCASE_T || barterReactionModifier <= -30) {
             // T == return to talk
             itemMoveAll(bartererTable, barterer);
-            itemMoveAll(playerTable, gDude);
+            // M-74: return each offer item to the critter it came from
+            // (party-member pane) instead of unconditionally to gDude.
+            while (playerTable->data.inventory.length > 0) {
+                InventoryItem* inventoryItem = &(playerTable->data.inventory.items[0]);
+                Object* source = gDude;
+                for (const auto& [item, sourceCritter] : playerTableSources) {
+                    if (item == inventoryItem->item) {
+                        source = sourceCritter;
+                        break;
+                    }
+                }
+                itemMoveForce(playerTable, source, inventoryItem->item, inventoryItem->quantity);
+            }
             gameDialogEndBarter();
             break;
         } else if (keyCode == KEY_LOWERCASE_M) {
@@ -5536,7 +5595,7 @@ void barterProcessUI(int win, Object* barterer, Object* playerTable, Object* bar
                         if (slotIndex + _stack_offset[_curr_stack] < _pud->length) {
                             int offset = _stack_offset[_curr_stack];
                             InventoryItem* inventoryItem = &(_pud->items[_pud->length - (slotIndex + offset + 1)]);
-                            barterMoveToTable(inventoryItem->item, inventoryItem->quantity, slotIndex, offset, barterer, playerTable, true);
+                            barterMoveToTable(inventoryItem->item, inventoryItem->quantity, slotIndex, offset, barterer, playerTable, true, &playerTableSources);
                             _display_target_inventory(_target_stack_offset[_target_curr_stack], -1, _target_pud, INVENTORY_WINDOW_TYPE_TRADE);
                             _display_inventory(_stack_offset[_curr_stack], -1, INVENTORY_WINDOW_TYPE_TRADE);
                             barterDisplayTables(win, playerTable, nullptr, -1);
@@ -5554,7 +5613,7 @@ void barterProcessUI(int win, Object* barterer, Object* playerTable, Object* bar
                         if (slotIndex + _target_stack_offset[_target_curr_stack] < _target_pud->length) {
                             int stackOffset = _target_stack_offset[_target_curr_stack];
                             InventoryItem* inventoryItem = &(_target_pud->items[_target_pud->length - (slotIndex + stackOffset + 1)]);
-                            barterMoveToTable(inventoryItem->item, inventoryItem->quantity, slotIndex, stackOffset, barterer, bartererTable, false);
+                            barterMoveToTable(inventoryItem->item, inventoryItem->quantity, slotIndex, stackOffset, barterer, bartererTable, false, &playerTableSources);
                             _display_target_inventory(_target_stack_offset[_target_curr_stack], -1, _target_pud, INVENTORY_WINDOW_TYPE_TRADE);
                             _display_inventory(_stack_offset[_curr_stack], -1, INVENTORY_WINDOW_TYPE_TRADE);
                             barterDisplayTables(win, nullptr, bartererTable, -1);
@@ -5571,7 +5630,7 @@ void barterProcessUI(int win, Object* barterer, Object* playerTable, Object* bar
                         int slotIndex = keyCode - 2300;
                         if (slotIndex + gPlayerTableOffset < gPlayerTableInventory->length) {
                             InventoryItem* inventoryItem = &(gPlayerTableInventory->items[gPlayerTableInventory->length - (slotIndex + gPlayerTableOffset + 1)]);
-                            barterMoveFromTable(inventoryItem->item, inventoryItem->quantity, slotIndex, barterer, playerTable, true);
+                            barterMoveFromTable(inventoryItem->item, inventoryItem->quantity, slotIndex, barterer, playerTable, true, &playerTableSources);
                             _display_target_inventory(_target_stack_offset[_target_curr_stack], -1, _target_pud, INVENTORY_WINDOW_TYPE_TRADE);
                             _display_inventory(_stack_offset[_curr_stack], -1, INVENTORY_WINDOW_TYPE_TRADE);
                             barterDisplayTables(win, playerTable, nullptr, -1);
@@ -5588,7 +5647,7 @@ void barterProcessUI(int win, Object* barterer, Object* playerTable, Object* bar
                         int slotIndex = keyCode - 2400;
                         if (slotIndex + gBartererTableOffset < gBartererTableInventory->length) {
                             InventoryItem* inventoryItem = &(gBartererTableInventory->items[gBartererTableInventory->length - (slotIndex + gBartererTableOffset + 1)]);
-                            barterMoveFromTable(inventoryItem->item, inventoryItem->quantity, slotIndex, barterer, bartererTable, false);
+                            barterMoveFromTable(inventoryItem->item, inventoryItem->quantity, slotIndex, barterer, bartererTable, false, &playerTableSources);
                             _display_target_inventory(_target_stack_offset[_target_curr_stack], -1, _target_pud, INVENTORY_WINDOW_TYPE_TRADE);
                             _display_inventory(_stack_offset[_curr_stack], -1, INVENTORY_WINDOW_TYPE_TRADE);
                             barterDisplayTables(win, nullptr, bartererTable, -1);
@@ -5780,6 +5839,13 @@ static InventoryAmmoMoveResult _drop_ammo_into_weapon(Object* weapon, Object* am
                 *ammoItemSlot = nullptr;
             }
 
+            // M-73: weaponReload consumed the whole clip but never removed
+            // the inventory entry; the entry must be unlinked BEFORE the
+            // object is freed, otherwise _inven_from_button below re-reads
+            // the dangling entry (UAF read) and the loop can objectDestroy
+            // the same pointer again (double-free).
+            itemRemove(_inven_dude, sourceItem, 1);
+
             objectDestroy(sourceItem);
 
             isReloaded = true;
@@ -5897,11 +5963,16 @@ static int inventoryQuantitySelect(int inventoryWindowType, Object* item, int ma
                     if (keyCode != 500) {
                         soundPlayFile("ib1p1xx1");
                     }
+                    break;
                 }
-            } else {
-                soundPlayFile("iisxxxx1");
             }
-            break;
+
+            // M-72: the fork broke the loop on invalid input, returning
+            // the invalid value (e.g. 0 typed via Backspace). Callers only
+            // reject -1, so quantity 0 reached itemRemove and triggered the
+            // _obj_copy + disconnect duplication path. Upstream re-loops on
+            // out-of-range values (only a valid value breaks the loop).
+            soundPlayFile("iisxxxx1");
 
         } else if (keyCode == 5000 || keyCode == KEY_LOWERCASE_A) {
             if (keyCode == KEY_LOWERCASE_A) {

@@ -158,10 +158,14 @@ static void mf_remove_timer_event(OpcodeContext& ctx);
 static void mf_set_can_rest_on_map(OpcodeContext& ctx);
 static void mf_set_rest_mode(OpcodeContext& ctx);
 static void mf_spatial_radius(OpcodeContext& ctx);
-// F-003: UI metarules — interface bar hide/show/is_hidden
+ // F-003: UI metarules — interface bar hide/show/is_hidden
 static void mf_intface_hide(OpcodeContext& ctx);
 static void mf_intface_is_hidden(OpcodeContext& ctx);
 static void mf_intface_show(OpcodeContext& ctx);
+// H-04: set_fo1_hit_chance — removes the FO2 (PE-2) player distance penalty
+static void mf_set_fo1_hit_chance(OpcodeContext& ctx);
+// H-05: remove_wm_town_names — hides town labels under worldmap circles
+static void mf_remove_wm_town_names(OpcodeContext& ctx);
 // F-014/F-015: interface overlay and print
 static void mf_interface_overlay(OpcodeContext& ctx);
 static void mf_interface_print(OpcodeContext& ctx);
@@ -272,8 +276,17 @@ static int gMapEnterElevation = -1;
 static int gUnjamLocksTimeHours = -1;
 
 // Explosive properties set via item_make_explosive metarule.
-// Key: proto PID, Value: {pattern, radius, delay, minDamage, maxDamage}
+// H-14: sfall 4.5 arg layout is (pid, activePid, min, [max]) — Objects.cpp:
+// 422-439. The fork previously used (pid, pattern, radius, delay, min, max),
+// which misinterpreted every real sfall call: arg1 (activePid) was read as
+// pattern, arg2 (min) as radius, arg3 (max) as delay — producing zero-damage
+// auto-exploding items (delay=max, damage 0/0) or silent non-registration
+// (3-arg form rejected by the zero-damage guard). The stored override now
+// carries activePid + damage only; the fork's pattern/radius/delay extension
+// fields are retained as zero/unused for save compatibility.
+// Key: proto PID, Value: {activePid, pattern, radius, delay, minDamage, maxDamage}
 struct ExplosiveProperties {
+    int activePid;
     int pattern;
     int radius;
     int delay;
@@ -413,7 +426,7 @@ const MetaruleInfo kMetarules[] = {
     { "intface_redraw", mf_intface_redraw, 0, 1, -1, { ARG_INT } },
     { "intface_show", mf_intface_show, 0, 0 },
     { "inventory_redraw", mf_inventory_redraw, 0, 1, -1, { ARG_INT } },
-    { "item_make_explosive", mf_item_make_explosive, 3, 6, -1, { ARG_INT, ARG_INT, ARG_INT, ARG_INT, ARG_INT, ARG_INT } },
+    { "item_make_explosive", mf_item_make_explosive, 3, 4, -1, { ARG_INT, ARG_INT, ARG_INT, ARG_INT } },
     { "item_weight", mf_item_weight, 1, 1, 0, { ARG_OBJECT } },
     { "lock_is_jammed", mf_lock_is_jammed, 1, 1, 0, { ARG_OBJECT } },
     { "loot_obj", mf_loot_obj, 0, 0 },
@@ -444,6 +457,8 @@ const MetaruleInfo kMetarules[] = {
     { "set_cursor_mode", mf_set_cursor_mode, 1, 1, -1, { ARG_INT } },
     { "set_drugs_data", mf_set_drugs_data, 3, 3, -1, { ARG_INT, ARG_INT, ARG_INT } },
     { "set_dude_obj", mf_set_dude_obj, 1, 1, -1, { ARG_OBJECT } },
+    // H-04: FO1 hit-chance behavior toggle (sfall Combat.cpp:289-295).
+    { "set_fo1_hit_chance", mf_set_fo1_hit_chance, 1, 1, -1, { ARG_INT } },
     { "set_fake_perk_npc", mf_set_fake_perk_npc, 5, 5, -1, { ARG_OBJECT, ARG_STRING, ARG_INT, ARG_INT, ARG_STRING } },
     { "set_fake_trait_npc", mf_set_fake_trait_npc, 5, 5, -1, { ARG_OBJECT, ARG_STRING, ARG_INT, ARG_INT, ARG_STRING } },
     { "set_flags", mf_set_flags, 2, 2, -1, { ARG_OBJECT, ARG_INT } },
@@ -453,6 +468,8 @@ const MetaruleInfo kMetarules[] = {
     { "set_object_data", mf_set_object_data, 3, 3, -1, { ARG_OBJECT, ARG_INT, ARG_INT } },
     { "set_outline", mf_set_outline, 2, 2, -1, { ARG_OBJECT, ARG_INT } },
     { "set_quest_failure_value", mf_set_quest_failure_value, 2, 2, -1, { ARG_INT, ARG_INT } },
+    // H-05: hide town labels under worldmap circles (sfall Worldmap.cpp:286-295).
+    { "remove_wm_town_names", mf_remove_wm_town_names, 1, 1, -1, { ARG_INT } },
     { "set_rest_heal_time", mf_set_rest_heal_time, 1, 1, -1, { ARG_INT } },
     { "set_rest_mode", mf_set_rest_mode, 1, 1, -1, { ARG_INT } },
     { "set_scr_name", mf_set_scr_name, 0, 1, -1, { ARG_STRING } },
@@ -1025,7 +1042,12 @@ static int drawSfallArtImage(OpcodeContext& ctx, int window, FrmImage& image, in
         y = 0;
     }
 
-    if (x + width > windowWidth || y + height > windowHeight) {
+    // M-161: use 64-bit arithmetic for the bounds check. `x + width` with
+    // x=INT_MAX and width>0 wraps to a negative int, so the guard passed and
+    // `dest = windowGetBuffer(window) + windowWidth * y + x` became a garbage
+    // pointer that blitBufferToBufferStretch then wrote through (OOB write).
+    if (static_cast<int64_t>(x) + width > windowWidth
+        || static_cast<int64_t>(y) + height > windowHeight) {
         ctx.printError("%s() - attempt to draw beyond window bounds (%d, %d)", ctx.name(), windowWidth, windowHeight);
         return -1;
     }
@@ -1305,8 +1327,18 @@ void mf_add_extra_msg_file(OpcodeContext& ctx)
 void mf_opcode_exists(OpcodeContext& ctx)
 {
     int opcode = ctx.arg(0).asInt();
-    int opcodeIndex = opcode & 0x3FFF;
-    if (opcodeIndex < 0 || opcodeIndex >= OPCODE_MAX_COUNT) {
+
+    // P-04: Exact sfall range check, NOT a mask. sfall's OpcodeExists returns
+    // true only for opcodes in [opcodeStart, opcodeStart + opcodeCount) =
+    // [0x8000, 0x8300) (opcodeCount == 0x300; Opcodes.cpp:51,439-446). The
+    // previous `opcode & 0x3FFF` mask was wrong for type-bit words:
+    //   0x9001 & 0x3FFF = 0x1001 (>= 768)   → returned 0 (accidentally right),
+    //   0xC001 & 0x3FFF = 1                 → returned TRUE where sfall
+    //                                        returns FALSE (wrap-around bug).
+    // A mechanical flip to 0x3FF would make 0x9001 → index 1 (OPCODE_PUSH,
+    // registered) → TRUE where sfall returns FALSE — a new contract break.
+    // Re-expressing as the exact range matches sfall for every input.
+    if (opcode < 0x8000 || opcode >= 0x8000 + OPCODE_MAX_COUNT) {
         ctx.setReturn(0);
         return;
     }
@@ -1356,6 +1388,7 @@ void mf_opcode_exists(OpcodeContext& ctx)
         }
     }
 
+    const int opcodeIndex = opcode - 0x8000;
     auto opcodeHandler = gInterpreterOpcodeHandlers[opcodeIndex];
     int opcodeExists = opcodeHandler != nullptr ? 1 : 0;
     ctx.setReturn(opcodeExists);
@@ -1768,7 +1801,16 @@ void mf_string_find(OpcodeContext& ctx)
         startPos = ctx.arg(2).asInt();
     }
 
-    if (startPos < 0 || startPos >= strlen(str)) {
+    // M-16: sfall treats negative start positions as counting from the END of
+    // the string (Utils.cpp:201-218: `else if (pos < 0) { pos += len; }`;
+    // function notes.md:1145: "If negative, it indicates a position starting
+    // from the end of the string"). The fork rejected all negatives with -1.
+    int len = static_cast<int>(strlen(str));
+    if (startPos < 0) {
+        startPos += len;
+    }
+
+    if (startPos < 0 || startPos >= len) {
         debugPrint("string_find: invalid start position %d", startPos);
         ctx.setReturn(-1);
         return;
@@ -1952,7 +1994,12 @@ void mf_string_format(OpcodeContext& ctx)
         // This produces a self-contained format string (e.g. "%8d" instead of
         // "%*d") that snprintf can process correctly with the remaining value
         // argument alone.
-        if (c == '*') {
+        // M-18: only consume a format arg for '*' INSIDE a conversion. sfall's
+        // sprintf_lite copies a literal '*' through untouched (Utils.cpp:289);
+        // the fork's unconditional branch read formatArgs[valIdx] and replaced
+        // a literal '*' with decimal digits, misaligning subsequent args
+        // (string_format("5*3", 0) → "503").
+        if (c == '*' && conversion) {
             // Read the width/precision integer from formatArgs[], convert to
             // decimal string, and append the digits in place of '*'.
             // F2-05: Guard valIdx < numArgs - 1 — formatArgs has numArgs-1
@@ -2093,7 +2140,9 @@ void mf_string_format_array(OpcodeContext& ctx)
             }
             continue;
         }
-        if (c == '*') {
+        // M-18: only consume an array element for '*' INSIDE a conversion;
+        // a literal '*' is copied through (same fix as mf_string_format).
+        if (c == '*' && conversion) {
             int widthVal = (valIdx < numArgs)
                 ? formatArgs[valIdx].asInt()
                 : 0;
@@ -2299,6 +2348,40 @@ void mf_npc_engine_level_up(OpcodeContext& ctx)
     ctx.setReturn(0);
 }
 
+// H-04: set_fo1_hit_chance(bool state) — enables/disables Fallout 1 behavior
+// when calculating the player's hit chance: removes the (PE-2) distance
+// penalty (sfall Combat.cpp:289-295 patches 0x4244ED; function notes.md:1177).
+// The consumer-side gate belongs in combat.cc's to-hit computation.
+static bool gSfallFo1HitChance = false;
+
+bool sfallGetFo1HitChance()
+{
+    return gSfallFo1HitChance;
+}
+
+void mf_set_fo1_hit_chance(OpcodeContext& ctx)
+{
+    gSfallFo1HitChance = ctx.arg(0).asInt() != 0;
+    ctx.setReturn(0);
+}
+
+// H-05: remove_wm_town_names(bool state) — hides town names under the green
+// circles on the world map (sfall Worldmap.cpp:286-295 patches 0x4C3FFE;
+// function notes.md:1183). The consumer-side gate belongs in worldmap.cc's
+// live circle-overlay draw path (wmInterfaceDrawCircleOverlaySafe).
+static bool gSfallRemoveWmTownNames = false;
+
+bool sfallGetRemoveWmTownNames()
+{
+    return gSfallRemoveWmTownNames;
+}
+
+void mf_remove_wm_town_names(OpcodeContext& ctx)
+{
+    gSfallRemoveWmTownNames = ctx.arg(0).asInt() != 0;
+    ctx.setReturn(0);
+}
+
 // set_dude_obj(Object* newDude): saves the current gDude pointer and replaces it
 // with the given object. Used for cutscene player swaps (e.g., controlling another
 // character temporarily). Call real_dude_obj() to restore the original.
@@ -2310,6 +2393,17 @@ void mf_set_dude_obj(OpcodeContext& ctx)
     Object* newDude = ctx.arg(0).asObject();
     if (newDude == nullptr) {
         ctx.printError("%s() - null object argument.", ctx.name());
+        ctx.setReturn(-1);
+        return;
+    }
+    // M-20: sfall rejects non-critter objects (Objects.cpp:382-394:
+    // `if (obj == nullptr || obj->IsCritter()) { PartyControl::SwitchToCritter(obj); }
+    //  else { printOpcodeError("the object is not a critter"); setReturn(-1); }`).
+    // The fork accepted ANY non-null object, so a script passing a door/item set
+    // a non-critter as gDude — gDude is dereferenced as data.critter.* throughout
+    // the engine → out-of-bounds union reads/crash.
+    if (PID_TYPE(newDude->pid) != OBJ_TYPE_CRITTER) {
+        ctx.printError("%s() - object is not a critter.", ctx.name());
         ctx.setReturn(-1);
         return;
     }
@@ -2403,8 +2497,24 @@ void mf_set_terrain_name(OpcodeContext& ctx)
 void mf_get_terrain_name(OpcodeContext& ctx)
 {
     if (ctx.numArgs() < 2) {
-        // Zero-arg form: return the built-in terrain type name at the party's
-        // current worldmap position.
+        // Zero-arg form: return the terrain type name at the party's current
+        // worldmap position. M-67 (CONFIRMED): the zero-arg branch previously
+        // ignored gTerrainNameOverrides entirely — it returned only the
+        // built-in terrain type name (wmGetPartyTerrainName). sfall's
+        // GetCurrentTerrainName (Worldmap.cpp:714-719) checks the override map
+        // FIRST at the party's sub-tile coordinates (world_xpos/50,
+        // world_ypos/50 — WM_SUBTILE_SIZE), falling back to the built-in name.
+        int partyX = 0;
+        int partyY = 0;
+        wmGetPartyWorldPos(&partyX, &partyY);
+        // Convert pixel world position to sub-tile coordinates, matching the
+        // key convention of set_terrain_name (WM_SUBTILE_SIZE == 50).
+        const int kSubtileSize = 50;
+        auto it = gTerrainNameOverrides.find({ partyX / kSubtileSize, partyY / kSubtileSize });
+        if (it != gTerrainNameOverrides.end()) {
+            ctx.setReturn(it->second.c_str());
+            return;
+        }
         ctx.setReturn(wmGetPartyTerrainName());
         return;
     }
@@ -2873,64 +2983,64 @@ void mf_get_object_ai_data(OpcodeContext& ctx)
 }
 
 // get_stat_max(int stat, int isNpc): returns the current maximum value for a stat.
-// Uses statGetMaxValue() to read the live (possibly overridden by set_stat_max)
-// value from gStatDescriptions[], not a static default table. Previously used
-// kDefaultStatLimits which ignored dynamic overrides.
+// M-21: sfall branches on isNpc (Stats.cpp:387-396:
+// `(isNPC) ? statMaximumsNPC[stat] : statMaximumsPC[stat]`). The fork
+// discarded isNpc and always returned the shared table value; PC and NPC caps
+// are now tracked separately by the stat-cap opcodes.
 void mf_get_stat_max(OpcodeContext& ctx)
 {
     int stat = ctx.arg(0).asInt();
     bool isNpc = ctx.numArgs() > 1 && ctx.arg(1).asInt() != 0;
-    (void)isNpc;
     if (!statIsValid(stat)) {
         debugPrint("%s(): invalid stat %d", ctx.name(), stat);
         ctx.setReturn(-1);
         return;
     }
-    ctx.setReturn(statGetMaxValue(stat));
+    ctx.setReturn(sfallGetStatMax(stat, isNpc));
 }
 
 // get_stat_min(int stat, int isNpc): returns the current minimum value for a stat.
-// Uses statGetMinValue() to read the live (possibly overridden by set_stat_min)
-// value from gStatDescriptions[], not a static default table.
+// M-21: see get_stat_max.
 void mf_get_stat_min(OpcodeContext& ctx)
 {
     int stat = ctx.arg(0).asInt();
     bool isNpc = ctx.numArgs() > 1 && ctx.arg(1).asInt() != 0;
-    (void)isNpc;
     if (!statIsValid(stat)) {
         debugPrint("%s(): invalid stat %d", ctx.name(), stat);
         ctx.setReturn(-1);
         return;
     }
-    ctx.setReturn(statGetMinValue(stat));
+    ctx.setReturn(sfallGetStatMin(stat, isNpc));
 }
 
-// item_make_explosive(int pid, int pattern, int radius, int delay):
-// marks an item as explosive with the given parameters. The explosive
-// properties are stored for future integration with the explosion system.
-// Full integration requires wiring gExplosiveOverrides into the engine's
-// explosiveIsExplosive() / explosiveActivate() paths in item.cc.
+// item_make_explosive(int pid, int activePid, int min, [int max]):
+// marks an item as explosive with the given parameters, matching sfall's
+// documented 3-4 arg layout (sfall Objects.cpp:422-439:
+//   pid = arg(0); pidActive = arg(1); min = arg(2); max = (4 args) ? arg(3) : min;
+//   Explosions::AddToExplosives(pid, pidActive, min, max)).
+// The fork's previous (pid, pattern, radius, delay, min, max) layout was
+// incompatible: every real sfall call stored activePid as pattern, min as
+// radius, max as delay, and zero damage — producing zero-damage auto-exploding
+// items, losing activePid, and rejecting the 3-arg form entirely.
 void mf_item_make_explosive(OpcodeContext& ctx)
 {
     int pid = ctx.arg(0).asInt();
-    int pattern = ctx.arg(1).asInt();
-    int radius = ctx.arg(2).asInt();
-    int delay = ctx.numArgs() > 3 ? ctx.arg(3).asInt() : 0;
-    int minDamage = ctx.numArgs() > 4 ? ctx.arg(4).asInt() : 0;
-    int maxDamage = ctx.numArgs() > 5 ? ctx.arg(5).asInt() : 0;
+    int activePid = ctx.arg(1).asInt();
+    int minDamage = ctx.arg(2).asInt();
+    int maxDamage = (ctx.numArgs() > 3) ? ctx.arg(3).asInt() : minDamage;
 
-    // Guard: zero-damage explosive overrides produce a user-visible behavioral
-    // bug (explosion with no damage). Reject overrides where both damage values
-    // are zero unless the explosion has a non-zero delay (timed explosive).
-    if (minDamage <= 0 && maxDamage <= 0 && delay <= 0) {
-        debugPrint("%s(pid=%d): rejected — zero damage with no delay would produce a harmless explosion",
-            ctx.name(), pid);
-        ctx.setReturn(0);
-        return;
-    }
+    // sfall does not guard zero damage — AddToExplosives stores the values
+    // verbatim. Remove the fork's zero-damage+no-delay rejection which made
+    // every real 3-arg sfall call (min==0) silently fail.
 
-    ExplosiveProperties props = { pattern, radius, delay, minDamage, maxDamage };
+    ExplosiveProperties props = { activePid, 0, 0, 0, minDamage, maxDamage };
     gExplosiveOverrides[pid] = props;
+
+    // H-14: also register with the engine's explosive system so the item is
+    // recognized as explosive with the correct activePid and damage range
+    // (explosiveAdd, item.cc:3602; consumed by explosiveIsExplosive,
+    // explosiveIsActiveExplosive, explosiveActivate, explosiveGetDamage).
+    explosiveAdd(pid, activePid, minDamage, maxDamage);
 
     ctx.setReturn(1);
 }
@@ -2939,6 +3049,8 @@ void mf_item_make_explosive(OpcodeContext& ctx)
 // [pattern, radius, delay, minDamage, maxDamage] for the given item
 // proto ID, or 0 if no explosive override has been set.
 // Provides a script-level query API for the stored explosive properties.
+// H-14: pattern/radius/delay are retained for save compatibility but are
+// always 0 for sfall-layout calls; the meaningful fields are minDamage/maxDamage.
 void mf_get_explosive_data(OpcodeContext& ctx)
 {
     int pid = ctx.arg(0).asInt();
@@ -3751,12 +3863,16 @@ void sfall_metarule(Program* program, int args)
             metaruleInfo->name, args, metaruleInfo->minArgs, metaruleInfo->maxArgs);
         // F-54: String-returning metarules must push a string on error, not an int.
         // Pushing int-0 causes programFatalError when the caller consumes it as a string.
+        // M-23: r_get_ini_string returns strings (mf_r_get_ini_string, sfall_metarules.cc:
+        // 2152-2181) and must be in this list — its error path previously pushed int -1,
+        // crashing string consumers via programFatalError.
         if (metaruleInfo->handler == mf_string_format
             || metaruleInfo->handler == mf_string_format_array
             || metaruleInfo->handler == mf_get_terrain_name
             || metaruleInfo->handler == mf_get_town_title
             || metaruleInfo->handler == mf_string_replace
-            || metaruleInfo->handler == mf_string_to_case) {
+            || metaruleInfo->handler == mf_string_to_case
+            || metaruleInfo->handler == mf_r_get_ini_string) {
             programStackPushString(program, "");
         } else {
             programStackPushInteger(program, metaruleInfo->errorReturn);
@@ -3767,12 +3883,14 @@ void sfall_metarule(Program* program, int args)
     OpcodeContext ctx(program, metaruleInfo, args, values);
     if (!ctx.validateArguments()) {
         // F-54: String-returning metarules must push a string on error, not an int.
+        // M-23: include r_get_ini_string (see above).
         if (metaruleInfo->handler == mf_string_format
             || metaruleInfo->handler == mf_string_format_array
             || metaruleInfo->handler == mf_get_terrain_name
             || metaruleInfo->handler == mf_get_town_title
             || metaruleInfo->handler == mf_string_replace
-            || metaruleInfo->handler == mf_string_to_case) {
+            || metaruleInfo->handler == mf_string_to_case
+            || metaruleInfo->handler == mf_r_get_ini_string) {
             ctx.setReturn("");
         } else {
             ctx.setReturn(metaruleInfo->errorReturn);
@@ -3803,6 +3921,8 @@ void sfall_metarules_reset()
     gFakeTraitsNpc.clear();
     gFakeSelectablePerksNpc.clear();
     sIntfaceHiddenState = false;
+    gSfallFo1HitChance = false;
+    gSfallRemoveWmTownNames = false;
     gAddedTraits.clear();
     gAddedTraitsNpc.clear();
     gExplosiveOverrides.clear();
@@ -3818,6 +3938,14 @@ void sfall_metarules_reset()
     gNextTimerId = 1;
     gTalkingHeadMood = -1;
     gDrugDataOverrides.clear();
+    // M-22: the reset path previously zeroed gInterfaceOverlayState without
+    // destroying the overlay window, leaking a managed window slot
+    // (MAX_WINDOW_COUNT=50) on every game reset/load — after ~50 resets
+    // windowCreate fails for core UI. The create path (action 1) already
+    // destroys the prior window; mirror that here.
+    if (gInterfaceOverlayState.active && gInterfaceOverlayState.windowHandle != -1) {
+        windowDestroy(gInterfaceOverlayState.windowHandle);
+    }
     gInterfaceOverlayState = {};
     // F-M17: Reset party cooperative combat flag — clean state on new game / load.
     gPartyCooperativeCombat = false;
@@ -3846,7 +3974,7 @@ void sfall_metarules_reset()
 // On load, if the version marker doesn't match, the function returns early
 // (sfall_metarules_reset() has already restored defaults) — forward compatibility.
 
-#define METARULES_SAVE_VERSION 9
+#define METARULES_SAVE_VERSION 10
 
 // F-41: Maximum entries for save/load metarule collections.
 // Prevents infinite loops on corrupt save data with absurd count values.
@@ -3975,6 +4103,7 @@ static bool metarulesSaveExplosiveMap(File* stream, const std::map<int, Explosiv
     if (fileWriteInt32(stream, count) == -1) return false;
     for (const auto& entry : map) {
         if (fileWriteInt32(stream, entry.first) == -1) return false;
+        if (fileWriteInt32(stream, entry.second.activePid) == -1) return false;
         if (fileWriteInt32(stream, entry.second.pattern) == -1) return false;
         if (fileWriteInt32(stream, entry.second.radius) == -1) return false;
         if (fileWriteInt32(stream, entry.second.delay) == -1) return false;
@@ -3993,6 +4122,14 @@ static bool metarulesLoadExplosiveMap(File* stream, std::map<int, ExplosivePrope
     for (int i = 0; i < count; i++) {
         int pid, pattern, radius, delay, minDamage = 0, maxDamage = 0;
         if (fileReadInt32(stream, &pid) == -1) return false;
+        // H-14: version >= 10 saves store activePid first. Older saves stored
+        // the fork's (pattern, radius, delay, min, max) layout — activePid is
+        // reconstructed as 0 (no activePid) and the old fields are read into
+        // the same positions.
+        int activePid = 0;
+        if (version >= 10) {
+            if (fileReadInt32(stream, &activePid) == -1) return false;
+        }
         if (fileReadInt32(stream, &pattern) == -1) return false;
         if (fileReadInt32(stream, &radius) == -1) return false;
         if (fileReadInt32(stream, &delay) == -1) return false;
@@ -4001,7 +4138,7 @@ static bool metarulesLoadExplosiveMap(File* stream, std::map<int, ExplosivePrope
             if (fileReadInt32(stream, &minDamage) == -1) return false;
             if (fileReadInt32(stream, &maxDamage) == -1) return false;
         }
-        map[pid] = { pattern, radius, delay, minDamage, maxDamage };
+        map[pid] = { activePid, pattern, radius, delay, minDamage, maxDamage };
     }
     return true;
 }
@@ -4300,6 +4437,37 @@ bool sfall_metarules_load(File* stream)
         }
     }
     if (!metarulesLoadExplosiveMap(stream, gExplosiveOverrides, version)) return false;
+
+    // R-14 (H-14, CONFIRMED): re-register the engine's explosive vector after
+    // load. gExplosives (item.cc:186) is a file-static vector cleared by
+    // gameReset() on the load path (itemsReset → explosionsReset, item.cc:3723)
+    // and was never repopulated — only gExplosiveOverrides persists. Without
+    // this, explosiveActivate() (item.cc:3789-3816) takes the override branch
+    // (item.cc:3811-3813) and returns true WITHOUT the pid→activePid conversion,
+    // so the item keeps the inactive pid after save/load while the in-session
+    // path converts it. Re-adding each override via explosiveAdd() restores
+    // the identical in-session behavior post-load. The combat agent's R-43
+    // dedup fix (item.cc explosiveAdd) ships in the same release.
+    //
+    // F2 (R-14, CONFIRMED): guard the re-registration against the legacy v<10
+    // save layout. metarulesLoadExplosiveMap() reconstructs activePid=0 for
+    // v<10 saves (4129) — those entries have no active form, so re-adding
+    // {pid, activePid:0} would make explosiveActivate() (item.cc:3850-3851)
+    // clobber the armed item's pid to 0 (invalid) on arming. sfall rejects
+    // pidActive <= 0 (Objects.cpp:433-438: `if (pid > 0 && pidActive > 0)`);
+    // apply the equivalent guard and skip such entries. Skipped entries stay
+    // resolvable through the override map — explosiveIsExplosive() (item.cc:3816)
+    // and explosiveActivate() (item.cc:3859) take the override branch and
+    // return true WITHOUT converting, preserving the item pid and the
+    // pre-R-14 loaded-path damage resolution (sfallGetExplosiveOverrideDamage,
+    // item.cc:3930).
+    for (const auto& entry : gExplosiveOverrides) {
+        if (entry.first <= 0 || entry.second.activePid <= 0) {
+            continue;
+        }
+        explosiveAdd(entry.first, entry.second.activePid,
+            entry.second.minDamage, entry.second.maxDamage);
+    }
 
     // NPC-keyed data: keyed by CID (int), no post-load fixup needed.
     // v3+ format includes per-entry metadata (level, image, desc);

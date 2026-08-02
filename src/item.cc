@@ -386,10 +386,13 @@ int itemAdd(Object* owner, Object* itemToAdd, int quantity)
 
         ammoQuantity += ammoQuantityToAdd;
         if (ammoQuantity > capacity) {
-            // Preserve all combined rounds on the new item instead of
-            // setting only the excess. The old item is destroyed at line
-            // 400, so setting only excess would lose capacity rounds.
-            ammoSetQuantity(itemToAdd, ammoQuantity);
+            // M-75: keep only the excess rounds on the new clip. The
+            // pass-13 "fix" (7f58356) set the full combined amount and then
+            // `quantity++` added a full clip, creating rounds: a 2×10 stack
+            // + 5-round pickup became 3 clips × 10 = 30 rounds from 25.
+            // The entry's quantity++ already accounts for the new clip, so
+            // the new item must carry only the overflow (upstream behavior).
+            ammoSetQuantity(itemToAdd, ammoQuantity - capacity);
             inventory->items[index].quantity++;
         } else {
             ammoSetQuantity(itemToAdd, ammoQuantity);
@@ -410,6 +413,15 @@ int itemAdd(Object* owner, Object* itemToAdd, int quantity)
 // 0x477490
 int itemRemove(Object* owner, Object* itemToRemove, int quantity)
 {
+    // M-72: reject non-positive quantities. itemRemove(owner, item, 0) used
+    // to fall through to the else branch: it copied/disconnected the item,
+    // left the stack quantity unchanged, and (for ammo) refilled the copy to
+    // capacity — duplicating items/rounds (the quantity-0 dialog exploit).
+    // No legitimate caller passes quantity <= 0.
+    if (quantity <= 0) {
+        return -1;
+    }
+
     Inventory* inventory = &(owner->data.inventory);
     Object* item1 = critterGetItem1(owner);
     Object* item2 = critterGetItem2(owner);
@@ -780,7 +792,11 @@ int itemGetType(Object* item)
 int itemGetMaterial(Object* item)
 {
     Proto* proto;
-    protoGetProto(item->pid, &proto);
+    // M-84: protoGetProto returns -1 with proto == nullptr on failure
+    // (missing/corrupt .pro); dereferencing it crashes.
+    if (protoGetProto(item->pid, &proto) == -1) {
+        return 0;
+    }
 
     return proto->item.material;
 }
@@ -1050,7 +1066,10 @@ int itemGetInventoryFid(Object* item)
     }
 
     Proto* proto;
-    protoGetProto(item->pid, &proto);
+    // M-84: guard protoGetProto failure (null proto contract).
+    if (protoGetProto(item->pid, &proto) == -1) {
+        return -1;
+    }
 
     return proto->item.inventoryFid;
 }
@@ -1211,7 +1230,10 @@ int weaponGetAttackTypeForHitMode(Object* weapon, int hitMode)
     }
 
     Proto* proto;
-    protoGetProto(weapon->pid, &proto);
+    // M-84: guard protoGetProto failure (null proto contract).
+    if (protoGetProto(weapon->pid, &proto) == -1) {
+        return ATTACK_TYPE_UNARMED;
+    }
 
     int index;
     if (hitMode == HIT_MODE_LEFT_WEAPON_PRIMARY || hitMode == HIT_MODE_RIGHT_WEAPON_PRIMARY) {
@@ -1234,7 +1256,10 @@ int weaponGetSkillForHitMode(Object* weapon, int hitMode)
     }
 
     Proto* proto;
-    protoGetProto(weapon->pid, &proto);
+    // M-84: guard protoGetProto failure (null proto contract).
+    if (protoGetProto(weapon->pid, &proto) == -1) {
+        return SKILL_UNARMED;
+    }
 
     int index;
     if (hitMode == HIT_MODE_LEFT_WEAPON_PRIMARY || hitMode == HIT_MODE_RIGHT_WEAPON_PRIMARY) {
@@ -1292,7 +1317,10 @@ int weaponGetDamageMinMax(Object* weapon, int* minDamagePtr, int* maxDamagePtr)
     }
 
     Proto* proto;
-    protoGetProto(weapon->pid, &proto);
+    // M-84: guard protoGetProto failure (null proto contract).
+    if (protoGetProto(weapon->pid, &proto) == -1) {
+        return -1;
+    }
 
     if (minDamagePtr != nullptr) {
         *minDamagePtr = proto->item.data.weapon.minDamage;
@@ -1364,10 +1392,12 @@ int weaponGetDamage(Object* critter, int hitMode)
 // 0x478570
 int weaponGetDamageType(Object* critter, Object* weapon)
 {
-    Proto* proto;
-
     if (weapon != nullptr) {
-        protoGetProto(weapon->pid, &proto);
+        Proto* proto;
+        // M-84: guard protoGetProto failure (null proto contract).
+        if (protoGetProto(weapon->pid, &proto) == -1) {
+            return 0;
+        }
 
         return proto->item.data.weapon.damageType;
     }
@@ -1388,7 +1418,10 @@ int weaponIsTwoHanded(Object* weapon)
         return 0;
     }
 
-    protoGetProto(weapon->pid, &proto);
+    // M-84: guard protoGetProto failure (null proto contract).
+    if (protoGetProto(weapon->pid, &proto) == -1) {
+        return 0;
+    }
 
     return (proto->item.extendedFlags & PROTO_EXT_FLAG_IS_TWO_HANDED) != 0;
 }
@@ -1413,7 +1446,10 @@ int weaponGetAnimationForHitMode(Object* weapon, int hitMode)
     }
 
     Proto* proto;
-    protoGetProto(weapon->pid, &proto);
+    // M-84: guard protoGetProto failure (null proto contract).
+    if (protoGetProto(weapon->pid, &proto) == -1) {
+        return ANIM_THROW_PUNCH;
+    }
 
     int index;
     if (hitMode == HIT_MODE_LEFT_WEAPON_PRIMARY || hitMode == HIT_MODE_RIGHT_WEAPON_PRIMARY) {
@@ -1436,7 +1472,10 @@ int ammoGetCapacity(Object* ammoOrWeapon)
     }
 
     Proto* proto;
-    protoGetProto(ammoOrWeapon->pid, &proto);
+    // M-84: guard protoGetProto failure (null proto contract).
+    if (protoGetProto(ammoOrWeapon->pid, &proto) == -1) {
+        return 0;
+    }
 
     if (proto->item.type == ITEM_TYPE_AMMO) {
         return proto->item.data.ammo.quantity;
@@ -1453,7 +1492,10 @@ int ammoGetQuantity(Object* ammoOrWeapon)
     }
 
     Proto* proto;
-    protoGetProto(ammoOrWeapon->pid, &proto);
+    // M-84: guard protoGetProto failure (null proto contract).
+    if (protoGetProto(ammoOrWeapon->pid, &proto) == -1) {
+        return 0;
+    }
 
     // NOTE: Looks like the condition jumps were erased during compilation only
     // because ammo's quantity and weapon's ammo quantity coincidently stored
@@ -1474,7 +1516,10 @@ int ammoGetCaliber(Object* ammoOrWeapon)
         return 0;
     }
 
-    protoGetProto(ammoOrWeapon->pid, &proto);
+    // M-84: guard protoGetProto failure (null proto contract).
+    if (protoGetProto(ammoOrWeapon->pid, &proto) == -1) {
+        return 0;
+    }
 
     if (proto->item.type != ITEM_TYPE_AMMO) {
         if (protoGetProto(ammoOrWeapon->data.item.weapon.ammoTypePid, &proto) == -1) {
@@ -1503,7 +1548,10 @@ void ammoSetQuantity(Object* ammoOrWeapon, int quantity)
     }
 
     Proto* proto;
-    protoGetProto(ammoOrWeapon->pid, &proto);
+    // M-84: guard protoGetProto failure (null proto contract).
+    if (protoGetProto(ammoOrWeapon->pid, &proto) == -1) {
+        return;
+    }
 
     if (proto->item.type == ITEM_TYPE_AMMO) {
         ammoOrWeapon->data.item.ammo.quantity = quantity;
@@ -1534,6 +1582,12 @@ int weaponAttemptReload(Object* critter, Object* weapon)
                 if (weaponCanBeReloadedWith(weapon, ammo) != 0) {
                     int rc = weaponReload(weapon, ammo);
                     if (rc == 0) {
+                        // M-73/combat N-01 family: unlink the fully-consumed
+                        // clip from the critter's inventory BEFORE freeing it.
+                        // weaponReload only zeroes the clip's rounds; without
+                        // this, the caller's reload loop (interface.cc
+                        // _intface_item_reload) re-finds the freed entry.
+                        itemRemove(critter, ammo, 1);
                         objectDestroy(ammo);
                     }
 
@@ -1556,6 +1610,8 @@ int weaponAttemptReload(Object* critter, Object* weapon)
             if (weaponCanBeReloadedWith(weapon, ammo) != 0) {
                 int rc = weaponReload(weapon, ammo);
                 if (rc == 0) {
+                    // M-73/combat N-01 family: unlink before free (see above).
+                    itemRemove(critter, ammo, 1);
                     objectDestroy(ammo);
                 }
 
@@ -1599,10 +1655,15 @@ bool weaponCanBeReloadedWith(Object* weapon, Object* ammo)
     }
 
     Proto* weaponProto;
-    protoGetProto(weapon->pid, &weaponProto);
+    // M-84: guard protoGetProto failure (null proto contract).
+    if (protoGetProto(weapon->pid, &weaponProto) == -1) {
+        return false;
+    }
 
     Proto* ammoProto;
-    protoGetProto(ammo->pid, &ammoProto);
+    if (protoGetProto(ammo->pid, &ammoProto) == -1) {
+        return false;
+    }
 
     if (weaponProto->item.type != ITEM_TYPE_WEAPON) {
         return false;
@@ -1682,11 +1743,15 @@ int weaponGetRange(Object* critter, int hitMode)
 
     if (weapon != nullptr && hitMode != 4 && hitMode != 5 && (hitMode < 8 || hitMode > 19)) {
         Proto* proto;
-        protoGetProto(weapon->pid, &proto);
-        if (hitMode == HIT_MODE_LEFT_WEAPON_PRIMARY || hitMode == HIT_MODE_RIGHT_WEAPON_PRIMARY) {
-            range = proto->item.data.weapon.maxRange1;
+        // M-84: guard protoGetProto failure (null proto contract).
+        if (protoGetProto(weapon->pid, &proto) != -1) {
+            if (hitMode == HIT_MODE_LEFT_WEAPON_PRIMARY || hitMode == HIT_MODE_RIGHT_WEAPON_PRIMARY) {
+                range = proto->item.data.weapon.maxRange1;
+            } else {
+                range = proto->item.data.weapon.maxRange2;
+            }
         } else {
-            range = proto->item.data.weapon.maxRange2;
+            range = 1;
         }
 
         if (weaponGetAttackTypeForHitMode(weapon, hitMode) == ATTACK_TYPE_THROW) {
@@ -1731,8 +1796,10 @@ int weaponGetActionPointCost(Object* critter, int hitMode, bool aiming)
     if (hitMode == HIT_MODE_LEFT_WEAPON_RELOAD || hitMode == HIT_MODE_RIGHT_WEAPON_RELOAD) {
         if (weapon != nullptr) {
             Proto* proto;
-            protoGetProto(weapon->pid, &proto);
-            if (proto->item.data.weapon.perk == PERK_WEAPON_FAST_RELOAD) {
+            // M-84: guard protoGetProto failure (null proto contract).
+            if (protoGetProto(weapon->pid, &proto) == -1) {
+                actionPoints = 2;
+            } else if (proto->item.data.weapon.perk == PERK_WEAPON_FAST_RELOAD) {
                 actionPoints = 1;
             } else if (weapon->pid == PROTO_ID_SOLAR_SCORCHER) {
                 actionPoints = 0;
@@ -1811,7 +1878,10 @@ int weaponGetMinStrengthRequired(Object* weapon)
     }
 
     Proto* proto;
-    protoGetProto(weapon->pid, &proto);
+    // M-84: guard protoGetProto failure (null proto contract).
+    if (protoGetProto(weapon->pid, &proto) == -1) {
+        return -1;
+    }
 
     return proto->item.data.weapon.minStrength;
 }
@@ -1824,7 +1894,10 @@ int weaponGetCriticalFailureType(Object* weapon)
     }
 
     Proto* proto;
-    protoGetProto(weapon->pid, &proto);
+    // M-84: guard protoGetProto failure (null proto contract).
+    if (protoGetProto(weapon->pid, &proto) == -1) {
+        return -1;
+    }
 
     return proto->item.data.weapon.criticalFailureType;
 }
@@ -1837,7 +1910,10 @@ int weaponGetPerk(Object* weapon)
     }
 
     Proto* proto;
-    protoGetProto(weapon->pid, &proto);
+    // M-84: guard protoGetProto failure (null proto contract).
+    if (protoGetProto(weapon->pid, &proto) == -1) {
+        return -1;
+    }
 
     return proto->item.data.weapon.perk;
 }
@@ -1850,7 +1926,10 @@ int weaponGetBurstRounds(Object* weapon)
     }
 
     Proto* proto;
-    protoGetProto(weapon->pid, &proto);
+    // M-84: guard protoGetProto failure (null proto contract).
+    if (protoGetProto(weapon->pid, &proto) == -1) {
+        return -1;
+    }
 
     return proto->item.data.weapon.rounds;
 }
@@ -1863,7 +1942,10 @@ int weaponGetAnimationCode(Object* weapon)
     }
 
     Proto* proto;
-    protoGetProto(weapon->pid, &proto);
+    // M-84: guard protoGetProto failure (null proto contract).
+    if (protoGetProto(weapon->pid, &proto) == -1) {
+        return -1;
+    }
 
     return proto->item.data.weapon.animationCode;
 }
@@ -1876,7 +1958,10 @@ int weaponGetProjectilePid(Object* weapon)
     }
 
     Proto* proto;
-    protoGetProto(weapon->pid, &proto);
+    // M-84: guard protoGetProto failure (null proto contract).
+    if (protoGetProto(weapon->pid, &proto) == -1) {
+        return -1;
+    }
 
     return proto->item.data.weapon.projectilePid;
 }
@@ -1903,7 +1988,10 @@ char weaponGetSoundId(Object* weapon)
     }
 
     Proto* proto;
-    protoGetProto(weapon->pid, &proto);
+    // M-84: guard protoGetProto failure (null proto contract).
+    if (protoGetProto(weapon->pid, &proto) == -1) {
+        return '\0';
+    }
 
     return proto->item.data.weapon.soundCode & 0xFF;
 }
@@ -2012,7 +2100,10 @@ int weaponGetPrimaryActionPointCost(Object* weapon)
     }
 
     Proto* proto;
-    protoGetProto(weapon->pid, &proto);
+    // M-84: guard protoGetProto failure (null proto contract).
+    if (protoGetProto(weapon->pid, &proto) == -1) {
+        return -1;
+    }
 
     return proto->item.data.weapon.actionPointCost1;
 }
@@ -2027,7 +2118,10 @@ int weaponGetSecondaryActionPointCost(Object* weapon)
     }
 
     Proto* proto;
-    protoGetProto(weapon->pid, &proto);
+    // M-84: guard protoGetProto failure (null proto contract).
+    if (protoGetProto(weapon->pid, &proto) == -1) {
+        return -1;
+    }
 
     return proto->item.data.weapon.actionPointCost2;
 }
@@ -2318,7 +2412,10 @@ int miscItemGetMaxCharges(Object* miscItem)
     }
 
     Proto* proto;
-    protoGetProto(miscItem->pid, &proto);
+    // M-84: guard protoGetProto failure (null proto contract).
+    if (protoGetProto(miscItem->pid, &proto) == -1) {
+        return 0;
+    }
 
     return proto->item.data.misc.charges;
 }
@@ -2358,7 +2455,10 @@ int miscItemGetPowerType(Object* miscItem)
     }
 
     Proto* proto;
-    protoGetProto(miscItem->pid, &proto);
+    // M-84: guard protoGetProto failure (null proto contract).
+    if (protoGetProto(miscItem->pid, &proto) == -1) {
+        return 0;
+    }
 
     return proto->item.data.misc.powerType;
 }
@@ -2373,7 +2473,10 @@ int miscItemGetPowerTypePid(Object* miscItem)
     }
 
     Proto* proto;
-    protoGetProto(miscItem->pid, &proto);
+    // M-84: guard protoGetProto failure (null proto contract).
+    if (protoGetProto(miscItem->pid, &proto) == -1) {
+        return -1;
+    }
 
     return proto->item.data.misc.powerTypePid;
 }
@@ -2386,7 +2489,10 @@ bool miscItemUsesCharges(Object* miscItem)
     }
 
     Proto* proto;
-    protoGetProto(miscItem->pid, &proto);
+    // M-84: guard protoGetProto failure (null proto contract).
+    if (protoGetProto(miscItem->pid, &proto) == -1) {
+        return false;
+    }
 
     return proto->item.data.misc.charges != 0;
 }
@@ -2445,6 +2551,13 @@ int miscItemConsumeCharge(Object* item)
 // 0x4795F0
 int miscItemTrickleEventProcess(Object* item, void* data)
 {
+    // R-05: a null-owner ITEM_TRICKLE event is moot — the item no longer
+    // exists (detached-script timer event after save/load). Derefs below
+    // (item->pid, objectGetOwner) would crash on a null item.
+    if (item == nullptr) {
+        return 0;
+    }
+
     // NOTE: Uninline.
     if (miscItemConsumeCharge(item) == 0) {
         int delay;
@@ -2598,6 +2711,12 @@ int miscItemTurnOff(Object* item)
 // 0x479954
 int miscItemTurnOffFromQueue(Object* obj, void* data)
 {
+    // R-05: a null-owner ITEM_TRICKLE event is moot — the item no longer
+    // exists. miscItemTurnOff → objectGetOwner dereferences the item.
+    if (obj == nullptr) {
+        return 1;
+    }
+
     miscItemTurnOff(obj);
     return 1;
 }
@@ -2654,7 +2773,10 @@ int containerGetMaxSize(Object* container)
     }
 
     Proto* proto;
-    protoGetProto(container->pid, &proto);
+    // M-84: guard protoGetProto failure (null proto contract).
+    if (protoGetProto(container->pid, &proto) == -1) {
+        return 0;
+    }
 
     return proto->item.data.container.maxSize;
 }
@@ -2939,7 +3061,10 @@ UseItemResultCode drugItemTakeDrug(Object* critter, Object* item)
     }
 
     Proto* proto;
-    protoGetProto(item->pid, &proto);
+    // M-84: guard protoGetProto failure (null proto contract).
+    if (protoGetProto(item->pid, &proto) == -1) {
+        return USE_ITEM_RESULT_ERROR;
+    }
 
     if (item->pid == PROTO_ID_JET_ANTIDOTE) {
         if (dudeIsAddicted(PROTO_ID_JET)) {
@@ -3074,6 +3199,45 @@ int drugEffectEventRead(File* stream, void** dataPtr)
     // _drug_effect_allowed() — it does not need to survive save/load.
     drugEffectEvent->drugPid = 0;
 
+    // P-02/R-07: the stat/modifier arrays come from the save file unvalidated.
+    // With the C-05 bonus-stat clamp removed (bonus stats are signed deltas),
+    // a crafted save can inject arbitrary values:
+    //   - stats[i] outside the writable set → OOB/arbitrary stat write via
+    //     critterSetBonusStat (a non-current stat index ≥ SAVEABLE_STAT_COUNT
+    //     falls through to the CURRENT_* switch and returns -5, but indexes
+    //     below SAVEABLE_STAT_COUNT write into bonusStats[] without bounds);
+    //   - stats[i] == STAT_CURRENT_HIT_POINTS with an INT_MIN/INT_MAX
+    //     modifier → arbitrary HP delta / instant death via
+    //     critterAdjustHitPoints.
+    // The drug-valid stat set is [0, SPECIAL_STAT_COUNT) — the SPECIAL stats
+    // plus derived combat stats a legitimate drug effect can target. The
+    // CURRENT_* pseudo-stats (35/36/37) are NOT legitimate save-loaded drug
+    // targets: stat 35 (CURRENT_HIT_POINTS) with a negative modifier routes
+    // through critterAdjustHitPoints → critterKill (instant death), stat 36
+    // (CURRENT_POISON_LEVEL) with +1000 routes through critterAdjustPoison →
+    // negative-delay poison loop (critter.cc:329-377), stat 37
+    // (CURRENT_RADIATION_LEVEL) likewise. Runtime-created drug events remain
+    // trusted — the vanilla chem-death special case in _perform_drug_effect
+    // (item.cc:2952) stays for them; save-loaded events are proto-detached
+    // (drugPid is zeroed above), so the read path cannot validate them and
+    // rejects the CURRENT_* set. This also folds in R-20: AGE (33) and
+    // GENDER (34) are excluded — no legitimate drug targets identity stats.
+    // -1 (no effect) is the only special value.
+    // Modifier magnitudes are clamped to a generous ±1000 (vanilla drug
+    // amounts are ≤ ~50) so a crafted extreme cannot bypass the bounds.
+    for (int i = 0; i < 3; i++) {
+        int stat = drugEffectEvent->stats[i];
+        if (stat != -1 && !(stat >= 0 && stat < SPECIAL_STAT_COUNT)) {
+            drugEffectEvent->stats[i] = -1;
+            drugEffectEvent->modifiers[i] = 0;
+        }
+        if (drugEffectEvent->modifiers[i] < -1000) {
+            drugEffectEvent->modifiers[i] = -1000;
+        } else if (drugEffectEvent->modifiers[i] > 1000) {
+            drugEffectEvent->modifiers[i] = 1000;
+        }
+    }
+
     *dataPtr = drugEffectEvent;
     return 0;
 
@@ -3120,6 +3284,12 @@ int withdrawalClear(Object* obj, void* data)
 {
     WithdrawalEvent* withdrawalEvent = (WithdrawalEvent*)data;
 
+    // R-05: a null-owner WITHDRAWAL event is moot — the owning critter no
+    // longer exists. performWithdrawalEnd dereferences obj->pid.
+    if (obj == nullptr) {
+        return 0;
+    }
+
     if (objectIsPartyMember(obj)) {
         return 0;
     }
@@ -3160,6 +3330,13 @@ static int _item_wd_clear_all(Object* obj, void* data)
 int withdrawalEventProcess(Object* obj, void* data)
 {
     WithdrawalEvent* withdrawalEvent = (WithdrawalEvent*)data;
+
+    // R-05: a null-owner WITHDRAWAL event is moot — the owning critter no
+    // longer exists (detached-script timer event after save/load).
+    // performWithdrawalStart/End dereference obj->pid.
+    if (obj == nullptr) {
+        return 0;
+    }
 
     if (withdrawalEvent->active) {
         performWithdrawalStart(obj, withdrawalEvent->perk, withdrawalEvent->pid);
@@ -3601,6 +3778,21 @@ void weaponSetRocketExplosionRadius(int value)
 
 void explosiveAdd(int pid, int activePid, int minDamage, int maxDamage)
 {
+    // R-43 (R-14 half): dedup by pid — sfall's AddToExplosives erases then
+    // pushes (latest wins). The engine's gExplosives vector is consulted
+    // FIRST in explosiveGetDamage/explosiveActivate, so without dedup a
+    // repeated item_make_explosive (or the load-time re-registration that
+    // restores gExplosives from gExplosiveOverrides) would grow the vector
+    // unboundedly and leave the FIRST stale entry winning in
+    // explosiveGetDamage. Replace the existing entry so the newest
+    // registration always wins, matching sfall.
+    for (auto it = gExplosives.begin(); it != gExplosives.end(); ++it) {
+        if (it->pid == pid) {
+            gExplosives.erase(it);
+            break;
+        }
+    }
+
     ExplosiveDescription explosiveDescription;
     explosiveDescription.pid = pid;
     explosiveDescription.activePid = activePid;
@@ -3692,20 +3884,37 @@ bool explosiveSetDamage(int pid, int minDamage, int maxDamage)
 
 bool explosiveGetDamage(int pid, int* minDamagePtr, int* maxDamagePtr)
 {
-    if (pid == PROTO_ID_DYNAMITE_I) {
+    // H-15: explosiveActivate() converts the vanilla _I pids to their _II
+    // "active" forms (DYNAMITE_I 51 → DYNAMITE_II 206, PLASTIC_EXPLOSIVES_I
+    // 85 → PLASTIC_EXPLOSIVES_II 209) before queueAddEvent, so by the time
+    // queue.cc:490 queries the damage the explosive carries the _II pid.
+    // The old code only handled the _I pids (plus sfall customs), so every
+    // vanilla timed explosive detonated with 0/0 damage (the =0 init made it
+    // deterministic after f40c961). Map the _II pids to the same base values.
+    if (pid == PROTO_ID_DYNAMITE_I || pid == PROTO_ID_DYNAMITE_II) {
         if (minDamagePtr) *minDamagePtr = gDynamiteMinDamage;
         if (maxDamagePtr) *maxDamagePtr = gDynamiteMaxDamage;
         return true;
     }
 
-    if (pid == PROTO_ID_PLASTIC_EXPLOSIVES_I) {
+    if (pid == PROTO_ID_PLASTIC_EXPLOSIVES_I || pid == PROTO_ID_PLASTIC_EXPLOSIVES_II) {
         if (minDamagePtr) *minDamagePtr = gPlasticExplosiveMinDamage;
         if (maxDamagePtr) *maxDamagePtr = gPlasticExplosiveMaxDamage;
         return true;
     }
 
     for (const auto& explosive : gExplosives) {
-        if (explosive.pid == pid) {
+        // R-14 (F1, CONFIRMED): match BOTH the registered (inactive) pid and
+        // the converted active pid. explosiveActivate() (item.cc:3849-3853)
+        // rewrites the item pid to explosive.activePid before queueAddEvent,
+        // so the detonation lookup at queue.cc:570 carries the ACTIVE pid.
+        // Matching only explosive.pid (the inactive pid) missed it, and the
+        // override map below is keyed by the inactive pid too — both lookups
+        // failed → 0/0 damage after the R-14 load re-registration. sfall's
+        // GetDamage matches item.pidActive == pid (Explosions.cpp:184); this
+        // mirrors explosiveIsActiveExplosive (item.cc:3827). Vanilla pids are
+        // handled by the branches above, so no conflict with the _I/_II forms.
+        if (explosive.pid == pid || explosive.activePid == pid) {
             if (minDamagePtr) *minDamagePtr = explosive.minDamage;
             if (maxDamagePtr) *maxDamagePtr = explosive.maxDamage;
             return true;

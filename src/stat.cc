@@ -34,6 +34,13 @@ namespace fallout {
 
 extern int gXPTableMode;
 
+// M-54/R-06: XP table parsed from ddraw.ini [Misc] XPTable=... by combat.cc's
+// combatInit(). gXPTable[i] holds the XP required to reach level i+2
+// (sfall semantics: xpTable[level] with level 1 = 0). gXPTableMode is 1 when
+// the table is populated; pcGetExperienceForLevel() applies it (stat.cc:772).
+extern int gXPTable[PC_LEVEL_MAX];
+extern int gXPTableCount;
+
 // Provides metadata about stats.
 typedef struct StatDescription {
     char* name;
@@ -521,13 +528,12 @@ int critterSetBaseStat(Object* critter, int stat, int value)
         protoGetProto(critter->pid, &proto);
         proto->critter.data.baseStats[stat] = value;
 
-        // F2-040: Mark proto dirty for NPC targets so stat mutations
-        // survive LRU cache eviction. set_proto_data opcode already does
-        // this, but engine-level mutators like critterSetBaseStat were not.
-        // gDude uses GCD files, not proto files — skip marking for gDude.
-        if (critter != gDude) {
-            protoMarkDirty(critter->pid);
-        }
+        // H-24: Base stat mutations are runtime cache state, matching the
+        // original engine and sfall semantics. NPC base stat changes are NOT
+        // written back to .pro on exit/eviction; scripts that need persistent
+        // proto edits must use the set_proto_data opcode (which marks dirty
+        // explicitly). This was previously protoMarkDirty() for NPCs — that
+        // shadowed gameplay mutations into the world's .pro files on disk.
 
         if (stat >= STAT_STRENGTH && stat <= STAT_LUCK) {
             critterUpdateDerivedStats(critter);
@@ -574,6 +580,22 @@ int critterDecBaseStat(Object* critter, int stat)
 }
 
 // 0x4AF63C
+//
+// CONTRACT (C-05 / N-03 / H-24 — do not regress):
+// bonusStats[stat] is a SIGNED DELTA (modifier) added to the base stat at
+// read time in critterGetStat(). It is NOT an absolute value and MUST NOT
+// be validated against gStatDescriptions[].minimumValue/maximumValue on the
+// write path. Legitimate values are:
+//   - negative: radiation penalties, addiction penalties, drug wear-off,
+//     armor removal (AC/DR/DT), level-down HP;
+//   - zero: reset/clear (editor GCD reset, drug expiry back to baseline);
+//   - positive: drugs, perks, armor bonuses.
+// The effective stat is bounded by the READ-SIDE display clamp in
+// critterGetStat() (stat.cc:423-426) — that is the single validation point.
+// Bonus stats are TRANSIENT runtime state: do NOT call protoMarkDirty here
+// (that would persist transient deltas into NPC .pro files on disk —
+// sfall and the original engine keep bonus stats memory-only). Scripts that
+// explicitly want persistent proto edits use the set_proto_data opcode.
 int critterSetBonusStat(Object* critter, int stat, int value)
 {
     if (!statIsValid(stat)) {
@@ -585,30 +607,9 @@ int critterSetBonusStat(Object* critter, int stat, int value)
     }
 
     if (stat >= 0 && stat < SAVEABLE_STAT_COUNT) {
-        // UF-H-020: Add min/max value clamping matching critterSetBaseStat
-        // pattern. Without this, bonus stat modifiers can be set to
-        // arbitrary values even though the final stat via critterGetStat is
-        // clamped. Reject out-of-range values to prevent stale garbage from
-        // persisting in proto data.
-        if (value < gStatDescriptions[stat].minimumValue) {
-            return -2;
-        }
-
-        if (value > gStatDescriptions[stat].maximumValue) {
-            return -3;
-        }
-
         Proto* proto;
         protoGetProto(critter->pid, &proto);
         proto->critter.data.bonusStats[stat] = value;
-
-        // F2-040: Mark proto dirty for NPC targets so stat mutations
-        // survive LRU cache eviction. set_proto_data opcode already does
-        // this, but engine-level mutators like critterSetBonusStat were not.
-        // gDude uses GCD files, not proto files — skip marking for gDude.
-        if (critter != gDude) {
-            protoMarkDirty(critter->pid);
-        }
 
         if (stat >= STAT_STRENGTH && stat <= STAT_LUCK) {
             critterUpdateDerivedStats(critter);
@@ -653,7 +654,15 @@ void critterUpdateDerivedStats(Object* critter)
     protoGetProto(critter->pid, &proto);
     CritterProtoData* data = &(proto->critter.data);
 
-    data->baseStats[STAT_MAXIMUM_HIT_POINTS] = strength + endurance * 2 + 15;
+    // M-176: MAX_HP must be derived from BASE stats only (plus traits), not
+    // from critterGetStat (which includes transient bonus stats from drugs,
+    // radiation, addiction, armor). sfall's default HPDependOnBonusStats=0
+    // matches this. Using bonus-inclusive stats here lets a temporary
+    // STR/END bonus inflate the base MAX_HP, and a later debuff recalc
+    // (via critterSetBonusStat → critterUpdateDerivedStats) leaves current
+    // HP above max — permanent HP loss on the next heal/clamp. 104f461
+    // regressed this from critterGetBaseStatWithTraitModifier to critterGetStat.
+    data->baseStats[STAT_MAXIMUM_HIT_POINTS] = critterGetBaseStatWithTraitModifier(critter, STAT_STRENGTH) + critterGetBaseStatWithTraitModifier(critter, STAT_ENDURANCE) * 2 + 15;
     data->baseStats[STAT_MAXIMUM_ACTION_POINTS] = agility / 2 + 5;
     data->baseStats[STAT_ARMOR_CLASS] = agility;
     data->baseStats[STAT_MELEE_DAMAGE] = std::max(strength - 5, 1);
@@ -745,14 +754,28 @@ int pcGetExperienceForNextLevel()
     return pcGetExperienceForLevel(gPcStatValues[PC_STAT_LEVEL] + 1);
 }
 
-// Returns the effective PC level cap, gated by gFallout1Behavior.
+// Returns the effective PC level cap, gated by gFallout1Behavior and the
+// configured XP table.
 // In FO1 mode (gFallout1Behavior=true), the level cap is 21.
 // In FO2 mode (gFallout1Behavior=false), the cap is PC_LEVEL_MAX (99).
 // F-002: PC_LEVEL_MAX was previously used unconditionally at all
 // call sites, allowing level 99 even in FO1 mode.
+// F4: When an XP table is present (gXPTableMode >= 1), levels beyond the table
+// are unreachable — pcGetExperienceForLevel() returns -1 for them (stat.cc:787)
+// and the level-up loop gate `newXp < -1` (stat.cc:921) is never true for real
+// XP, so an unbounded FO2 cap would free-run past the table to 99 with the
+// per-level HP bonus on every level-up. Bound the cap at gXPTableCount + 1 (the
+// last table entry's level is the highest reachable), mirroring sfall's engine
+// cap write SafeWrite8(0x4AFB1B, numLevels + 1) (sfall Modules/Stats.cpp:323).
+// gXPTableCount is at most PC_LEVEL_MAX - 1 (combat.cc:2102), so
+// gXPTableCount + 1 <= PC_LEVEL_MAX — the FO2 cap is unchanged for a full table.
 int statGetLevelCap()
 {
-    return gFallout1Behavior ? 21 : PC_LEVEL_MAX;
+    int cap = gFallout1Behavior ? 21 : PC_LEVEL_MAX;
+    if (gXPTableMode >= 1) {
+        cap = std::min(cap, gXPTableCount + 1);
+    }
+    return cap;
 }
 
 // Returns exp to reach given level.
@@ -764,12 +787,18 @@ int pcGetExperienceForLevel(int level)
         return -1;
     }
 
-    // TODO: When gXPTableMode >= 1, load XP values from an external file
-    // (e.g., data/XPTable.dat) using a pre-computed lookup table. For now,
-    // the mode flag is parsed but the hardcoded formula remains.
+    // M-54/R-06: apply the XP table parsed by combat.cc's combatInit() when
+    // gXPTableMode is set. gXPTable[i] holds the XP required to reach level
+    // i+2, so the threshold for `level` is gXPTable[level - 2]. A level that
+    // falls outside the table (including level 1 and levels beyond the last
+    // table entry) is unreachable, matching the -1 "no more levels" contract
+    // used when level >= statGetLevelCap().
     if (gXPTableMode >= 1) {
-        // Fall through to hardcoded formula for now.
-        // Full file-based table loading to be implemented later.
+        int index = level - 2;
+        if (index >= 0 && index < gXPTableCount) {
+            return gXPTable[index];
+        }
+        return -1; // beyond the table -> level unreachable
     }
 
     int halfLevel = level / 2;

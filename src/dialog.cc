@@ -2,6 +2,7 @@
 
 #include <string.h>
 
+#include "game_dialog.h"
 #include "memory_manager.h"
 #include "mouse.h"
 #include "movie.h"
@@ -412,6 +413,19 @@ int _dialogStart(Program* a1)
         return 1;
     }
 
+    // M-202: _tods == -1 denotes "no dialog active" (siblings _endDialog,
+    // _dialogRestart, _dialogGotoReply all guard on it). The first dialog
+    // must target slot 0; the old code indexed `_dialog[_tods]` with
+    // _tods == -1, writing 36 bytes before the array (out-of-bounds). The
+    // increment that used to live at the end of this function is folded
+    // into the slot selection so the slot written here is the slot the
+    // reply/option readers (which index `_dialog[_tods]`) will use.
+    if (_tods == -1) {
+        _tods = 0;
+    } else {
+        _tods++;
+    }
+
     ptr = &(_dialog[_tods]);
     ptr->field_0 = a1;
     ptr->field_4 = nullptr;
@@ -420,8 +434,6 @@ int _dialogStart(Program* a1)
     ptr->field_10 = -1;
     ptr->field_14 = 1;
     ptr->field_10 = 1;
-
-    _tods++;
 
     return 0;
 }
@@ -484,37 +496,36 @@ int dialogSetReplyTitle(const char* a1)
     return 0;
 }
 
-// Forward declaration: defined in game_dialog.cc:1201.
-// F-030: Properly wired from _dialogReply below.
-int _replyAddNew(const char* a1, const char* a2);
-
 // 0x430EFC dialogReply
 int _dialogReply(const char* a1, const char* a2)
 {
-    // Guard against calling _replyAddNew when no reply structure has been
-    // allocated yet. field_C is initialized to -1 at _dialogStart:419 and
-    // is never changed. _dialogOption at line 503 and _dialogOptionProc at
-    // line 515 have this same guard; without it, _getReply (called by
-    // _replyAddNew) indexes _dialog[_tods].field_4 with field_C = -1,
-    // causing an out-of-bounds array access.
-    if (_dialog[_tods].field_C == -1) {
-        return 0;
+    // H-26: Route the legacy say_reply opcode (0x8052) into the functional
+    // gdialog machinery instead of the vestigial `_dialog[]` reply store,
+    // which has no rendering path (dialogGo is a stub). The previous
+    // `field_C == -1` guard always fired — field_C is set to -1 by
+    // _dialogStart and never advanced — so say_reply/say_option silently
+    // discarded every registration. Shipped Et Tu content (BARSTOW.int)
+    // mixes legacy say_* opcodes into an active gdialog session; the reply
+    // text arrives as the string argument (a2 for sayReply(msgList, text)).
+    const char* text = (a2 != nullptr) ? a2 : a1;
+    if (text != nullptr) {
+        gameDialogSetTextReply(nullptr, -4, text);
     }
 
-    // F-030: Wire the reply into the dialog system. _replyAddNew has proper
-    // bounds checking (dialog depth limit) at game_dialog.cc:1201-1211.
-    _replyAddNew(a1, a2);
     return 0;
 }
 
 // 0x430F04 dialogOption
 int _dialogOption(const char* a1, const char* a2)
 {
-    if (_dialog[_tods].field_C == -1) {
-        return 0;
+    // H-26: See _dialogReply. sayOption(text, proc) with a string second
+    // argument routes here; the text is a1. Register as a text option with
+    // no proc identifier (proc-name options are silently ignored by the
+    // gdialog machinery).
+    const char* text = (a2 != nullptr) ? a2 : a1;
+    if (text != nullptr) {
+        gameDialogAddTextOptionWithProcIdentifier(-4, text, nullptr, 50);
     }
-
-    _replyAddOption(a1, a2, 0);
 
     return 0;
 }
@@ -522,11 +533,11 @@ int _dialogOption(const char* a1, const char* a2)
 // 0x430F38 dialogOptionProc
 int _dialogOptionProc(const char* a1, int a2)
 {
-    if (_dialog[_tods].field_C == -1) {
-        return 1;
+    // H-26: See _dialogReply. sayOption(text, proc) with an integer second
+    // argument routes here; a1 is the option text and a2 the procedure id.
+    if (a1 != nullptr) {
+        gameDialogAddTextOptionWithProc(-4, a1, a2, 50);
     }
-
-    _replyAddOptionProc(a1, a2, 0);
 
     return 0;
 }
@@ -534,8 +545,33 @@ int _dialogOptionProc(const char* a1, int a2)
 // 0x430FD4 dialogMessage
 int dialogMessage(const char* a1, const char* a2, int timeout)
 {
-    // TODO: Incomplete.
-    return -1;
+    // H-26: Implement the missing dialogMessage. The legacy say_message
+    // opcode (0x8054) is used by shipped Et Tu content — GUARD.int and
+    // BARSTOW.int decompile to `sayMessage(0, message_str(7, 102))`, and
+    // talking to the Shady Sands guard executes it. The old stub returned
+    // -1 unconditionally, so every say_message call reached
+    // programFatalError("Error setting option.") and aborted the dialog
+    // script. Route through the functional gdialog message machinery:
+    // opSayMessage resolves the second argument to a string when it is
+    // message_str(...), so a2 carries the message text. Display it as the
+    // reply and add the auto [Done] option, mirroring gsay_message
+    // (_op_gsay_message).
+    if (gGameDialogSpeaker == nullptr) {
+        // No active gdialog session to render into; keep the historical
+        // failure instead of silently discarding the message.
+        return -1;
+    }
+
+    const char* text = (a2 != nullptr) ? a2 : a1;
+    if (text == nullptr) {
+        return -1;
+    }
+
+    gameDialogSetTextReply(nullptr, -4, text);
+    gameDialogAddMessageOptionWithProcIdentifier(-2, -2, nullptr, 50);
+    _gdialogSayMessage();
+
+    return 0;
 }
 
 // 0x431088 dialogGo

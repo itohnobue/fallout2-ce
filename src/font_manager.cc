@@ -227,6 +227,29 @@ static int interfaceFontLoad(int font_index)
 
     int glyphDataSize = fileSize - 2060;
 
+    // Validate the glyph table against the file-provided data area: a crafted
+    // .aaf must not reference offsets/rows outside the glyph data (the
+    // renderer walks data + offset and writes into the destination for
+    // height*width bytes), and a glyph taller than maxHeight would move the
+    // renderer's write pointer before the destination buffer (P-10).
+    if (glyphDataSize <= 0) {
+        fileClose(stream);
+        return -1;
+    }
+
+    for (int index = 0; index < 256; index++) {
+        InterfaceFontGlyph* glyph = &(fontDescriptor->glyphs[index]);
+        if (glyph->width < 0 || glyph->height < 0 || glyph->height > fontDescriptor->maxHeight || glyph->offset < 0) {
+            fileClose(stream);
+            return -1;
+        }
+
+        if (glyph->offset > glyphDataSize || glyph->height * glyph->width > glyphDataSize - glyph->offset) {
+            fileClose(stream);
+            return -1;
+        }
+    }
+
     fontDescriptor->data = (unsigned char*)internal_malloc_safe(glyphDataSize, __FILE__, __LINE__); // FONTMGR.C, 259
     if (fontDescriptor->data == nullptr) {
         fileClose(stream);
@@ -305,7 +328,9 @@ static int interfaceFontGetCharacterWidthImpl(int ch)
     if (ch == ' ') {
         width = gCurrentInterfaceFontDescriptor->wordSpacing;
     } else {
-        width = gCurrentInterfaceFontDescriptor->glyphs[ch].width;
+        // Mask: callers may pass a negative char (e.g. window.cc's unmasked
+        // *pch), which would index the glyph array before its start (M-200).
+        width = gCurrentInterfaceFontDescriptor->glyphs[ch & 0xFF].width;
     }
 
     return width;

@@ -2,12 +2,17 @@
 //
 // Tests:
 //   1. windowWordWrap / windowFreeWordList — word wrap algorithm correctness
-//      (copied from src/window.cc:1127-1211 since window.cc has 40+ engine
-//       dependencies that make full linking impractical)
+//      (copied from src/window.cc since window.cc has 40+ engine
+//       dependencies that make full linking impractical). The mirror is kept
+//       in sync with production: the M-99 guards (pch==start word-skip and
+//       '\n' advance) were ported to production from this mirror.
 //   2. Enum/constant validation — ManagedButtonMouseEvent,
 //      ManagedButtonRightMouseEvent, TextAlignment, MANAGED_WINDOW_COUNT
 //   3. Text color conversion — scriptWindowSetTextColor / scriptWindowGetTextColor
 //   4. Font manager function pointers — validate stubability for wordWrap
+//   5. Mirror regression guards for the window/UI findings: H-12 display-buf
+//      source clamps, M-104 color component clamps, M-102 _fillBuf3x3 chunk
+//      guard, P-14 windowDrawText negative-coordinate clamp.
 //
 // This file does NOT link window.cc (too many engine deps). It mirrors the
 // word-wrap algorithm with test font stubs to validate correctness, similar
@@ -445,6 +450,258 @@ TEST_CASE("windowWordWrap — zero maxLength")
     // is defined by the loop logic — no crash is the main test.
     CHECK(len >= 0);  // should not crash
     testWindowFreeWordList(result, len);
+}
+
+TEST_CASE("windowWordWrap — first char wider than maxLength (M-99 no infinite loop)")
+{
+    // M-99: production windowWordWrap hung when the first character was
+    // wider than maxLength — width > maxLength with pch == start meant the
+    // wrap branch produced an empty substring and never advanced pch. The
+    // pch == start word-skip guard (ported to production from this mirror)
+    // advances out of the current word.
+    fontGetCharacterWidth = testGetCharacterWidth;
+    fontGetLetterSpacing = testGetLetterSpacing;
+    gTestCharacterWidth = 10;  // each char is wider than maxLength
+    gTestLetterSpacing = 1;
+
+    char text[] = "abcde";
+    int len = -1;
+    // Without the guard this call would never return.
+    char** result = testWindowWordWrap(text, 5, 0, &len);
+    CHECK(len == 1);
+    CHECK(strcmp(result[0], "abcde") == 0);
+    testWindowFreeWordList(result, len);
+}
+
+TEST_CASE("windowWordWrap — newline with small maxLength (M-99 no infinite loop)")
+{
+    // M-99: production windowWordWrap hung on any string containing '\n' when
+    // a wrap landed on the newline — after emitting the substring it did not
+    // advance past the '\n', so start stayed at the newline forever. The
+    // '\n' advance guard (ported to production from this mirror) skips it.
+    fontGetCharacterWidth = testGetCharacterWidth;
+    fontGetLetterSpacing = testGetLetterSpacing;
+    gTestCharacterWidth = 1;
+    gTestLetterSpacing = 1;
+
+    char text[] = "ab\ncd";
+    int len = -1;
+    char** result = testWindowWordWrap(text, 2, 0, &len);
+    CHECK(len == 2);
+    CHECK(strcmp(result[0], "ab") == 0);
+    CHECK(strcmp(result[1], "cd") == 0);
+    testWindowFreeWordList(result, len);
+}
+
+// ============================================================
+// H-12 mirror: scriptWindowDisplayBuf source-offset clamping
+// ============================================================
+// Mirrors the guard logic added to production scriptWindowDisplayBuf
+// (window.cc): negative destX/destY are converted to source offsets, then
+// both the offsets and the copy extents are clamped against the source
+// dimensions so the blit never reads before/past the source buffer.
+
+static bool testDisplayBufClamp(int srcWidth, int srcHeight, int destX, int destY, int* destWidth, int* destHeight, int* srcOffsetX, int* srcOffsetY)
+{
+    *srcOffsetX = 0;
+    *srcOffsetY = 0;
+
+    if (destX < 0) {
+        *srcOffsetX = -destX;
+        *destWidth += destX;
+        destX = 0;
+    }
+
+    if (destY < 0) {
+        *srcOffsetY = -destY;
+        *destHeight += destY;
+        destY = 0;
+    }
+
+    if (*srcOffsetX >= srcWidth || *srcOffsetY >= srcHeight) {
+        return false;
+    }
+
+    if (*destWidth > srcWidth - *srcOffsetX) {
+        *destWidth = srcWidth - *srcOffsetX;
+    }
+
+    if (*destHeight > srcHeight - *srcOffsetY) {
+        *destHeight = srcHeight - *srcOffsetY;
+    }
+
+    return *destWidth > 0 && *destHeight > 0;
+}
+
+TEST_CASE("H-12: scriptWindowDisplayBuf — negative offset within source bounds")
+{
+    int destWidth = 5;
+    int destHeight = 5;
+    int srcOffsetX = 0;
+    int srcOffsetY = 0;
+    // destX = -3 of a 10×10 source: srcOffsetX becomes 3, still in bounds.
+    bool ok = testDisplayBufClamp(10, 10, -3, -2, &destWidth, &destHeight, &srcOffsetX, &srcOffsetY);
+    CHECK(ok == true);
+    CHECK(srcOffsetX == 3);
+    CHECK(srcOffsetY == 2);
+}
+
+TEST_CASE("H-12: scriptWindowDisplayBuf — negative offset beyond source is rejected")
+{
+    int destWidth = 5;
+    int destHeight = 5;
+    int srcOffsetX = 0;
+    int srcOffsetY = 0;
+    // destX = -20 of a 10×10 source: srcOffsetX would be 20 ≥ srcWidth.
+    // Pre-fix this read `src + srcOffsetY * srcWidth + srcOffsetX` (OOB read).
+    bool ok = testDisplayBufClamp(10, 10, -20, -2, &destWidth, &destHeight, &srcOffsetX, &srcOffsetY);
+    CHECK(ok == false);
+}
+
+TEST_CASE("H-12: scriptWindowDisplayBuf — copy width capped to remaining source")
+{
+    int destWidth = 15;
+    int destHeight = 3;
+    int srcOffsetX = 0;
+    int srcOffsetY = 0;
+    // destX = -5 → srcOffsetX = 5, then destWidth=15 would read 20 columns of
+    // a 10-wide source; the clamp caps it to srcWidth - srcOffsetX = 5.
+    bool ok = testDisplayBufClamp(10, 10, -5, 0, &destWidth, &destHeight, &srcOffsetX, &srcOffsetY);
+    CHECK(ok == true);
+    CHECK(srcOffsetX == 5);
+    CHECK(destWidth == 5);
+}
+
+// ============================================================
+// M-104 mirror: color component clamping
+// ============================================================
+// Mirrors scriptWindowColorComponent (window.cc): script floats are clamped
+// to [0, 1] before the 5-bit conversion so the _colorTable index stays
+// within the 32768-entry table.
+
+static int testColorComponent(float component)
+{
+    if (component < 0.0f) {
+        component = 0.0f;
+    } else if (component > 1.0f) {
+        component = 1.0f;
+    }
+
+    return (int)(component * 31.0f);
+}
+
+TEST_CASE("M-104: color component clamping — out-of-range floats")
+{
+    // fill(2.0, 0, 0) pre-fix produced (int)(62.0)<<10 = 63488 → OOB read.
+    CHECK(testColorComponent(2.0f) == 31);
+    CHECK(testColorComponent(100.0f) == 31);
+    // Negative components index before the table pre-fix.
+    CHECK(testColorComponent(-1.0f) == 0);
+    CHECK(testColorComponent(-100.0f) == 0);
+    // Max index after clamping: 31|(31<<5)|(31<<10) = 32767 < 32768.
+    int maxIndex = (testColorComponent(1.0f) << 10) | (testColorComponent(1.0f) << 5) | testColorComponent(1.0f);
+    CHECK(maxIndex == 32767);
+}
+
+TEST_CASE("M-104: color component clamping — in-range unchanged")
+{
+    CHECK(testColorComponent(0.0f) == 0);
+    CHECK(testColorComponent(0.5f) == 15);
+    CHECK(testColorComponent(1.0f) == 31);
+}
+
+// ============================================================
+// M-102 mirror: _fillBuf3x3 chunk guard
+// ============================================================
+// Mirrors the guard added to production _fillBuf3x3 (window.cc): chunk
+// dimensions derived from a source smaller than 3×3 are zero, which would
+// make the copy loops non-terminating (x += 0); chunks are also clamped to
+// the destination so trailing dest + ... - chunk expressions stay in-bounds.
+
+static bool testFillBuf3x3Chunks(int srcWidth, int srcHeight, int destWidth, int destHeight, int* chunkWidth, int* chunkHeight)
+{
+    *chunkWidth = srcWidth / 3;
+    *chunkHeight = srcHeight / 3;
+
+    if (*chunkWidth <= 0 || *chunkHeight <= 0) {
+        return false;
+    }
+
+    if (*chunkWidth > destWidth) {
+        *chunkWidth = destWidth;
+    }
+
+    if (*chunkHeight > destHeight) {
+        *chunkHeight = destHeight;
+    }
+
+    return true;
+}
+
+TEST_CASE("M-102: _fillBuf3x3 — tiny source rejected (no infinite loop)")
+{
+    int chunkWidth = 0;
+    int chunkHeight = 0;
+    // srcWidth < 3 → chunkWidth = 0 → pre-fix loops never advanced (x += 0).
+    CHECK(testFillBuf3x3Chunks(2, 100, 100, 100, &chunkWidth, &chunkHeight) == false);
+    CHECK(testFillBuf3x3Chunks(100, 2, 100, 100, &chunkWidth, &chunkHeight) == false);
+    CHECK(testFillBuf3x3Chunks(2, 2, 100, 100, &chunkWidth, &chunkHeight) == false);
+}
+
+TEST_CASE("M-102: _fillBuf3x3 — chunk clamped to destination")
+{
+    int chunkWidth = 0;
+    int chunkHeight = 0;
+    // srcWidth=300 → chunkWidth=100 > destWidth=10 → clamped to 10, so the
+    // trailing dest + destWidth * (destHeight - chunkHeight) + x expressions
+    // stay non-negative (pre-fix wrote before the destination).
+    CHECK(testFillBuf3x3Chunks(300, 300, 10, 10, &chunkWidth, &chunkHeight) == true);
+    CHECK(chunkWidth == 10);
+    CHECK(chunkHeight == 10);
+}
+
+TEST_CASE("M-102: _fillBuf3x3 — normal chunks unchanged")
+{
+    int chunkWidth = 0;
+    int chunkHeight = 0;
+    CHECK(testFillBuf3x3Chunks(300, 300, 300, 300, &chunkWidth, &chunkHeight) == true);
+    CHECK(chunkWidth == 100);
+    CHECK(chunkHeight == 100);
+}
+
+// ============================================================
+// P-14 mirror: windowDrawText negative-coordinate clamping
+// ============================================================
+// Mirrors the clamp added to production windowDrawText (window_manager.cc):
+// negative x/y are clamped to 0 so the buffer pointer never points before
+// the heap window buffer (covers the worldmap town-map config vector).
+
+static int testWindowDrawTextBufferOffset(int x, int y, int windowWidth)
+{
+    if (x < 0) {
+        x = 0;
+    }
+
+    if (y < 0) {
+        y = 0;
+    }
+
+    return x + y * windowWidth;
+}
+
+TEST_CASE("P-14: windowDrawText — negative coordinates clamped to zero")
+{
+    // Pre-fix: buf = window->buffer + x + y*width computed before the y guard;
+    // negative x/y pointed before the heap buffer.
+    CHECK(testWindowDrawTextBufferOffset(-100, -50, 640) == 0);
+    CHECK(testWindowDrawTextBufferOffset(-1, 0, 640) == 0);
+    CHECK(testWindowDrawTextBufferOffset(0, -1, 640) == 0);
+}
+
+TEST_CASE("P-14: windowDrawText — positive coordinates unchanged")
+{
+    CHECK(testWindowDrawTextBufferOffset(10, 20, 640) == 10 + 20 * 640);
+    CHECK(testWindowDrawTextBufferOffset(0, 0, 640) == 0);
 }
 
 
@@ -1049,5 +1306,120 @@ TEST_CASE("N2-048: get_num_i buffer — clear path (empty string)")
     CHECK(allocPostFork >= needed);
     // The clear path is not the overflow trigger — only when
     // the number fills exactly maxChars digits.
+}
+
+// ============================================================
+// R-11 mirror: caller-2108 group -1 handling (window_manager.cc)
+// ============================================================
+// The pass-1 fix changed _button_check_group's contract: it returns -1 when
+// (1) a radio-group callback destroyed the passed-in button
+// (buttonGetButton(savedId) == nullptr — window N-04), or (2) a non-radio
+// group is full and its func callback was invoked (the button may still be
+// alive — the rejection callback). Callers 2049/2066 abort cleanly on -1,
+// but caller 2108 drew through the possibly-freed clickedButton, moving the
+// N-04 UAF from ~2115 to ~2110 instead of closing it (R-11, CONFIRMED
+// MEDIUM). The re-fix saves the button id, re-fetches via buttonGetButton on
+// -1, and draws only when the button survived — preserving the non-radio
+// group-full rejection draw while never drawing through a freed pointer.
+//
+// This mirror validates that control flow (same pattern as the other mirrors
+// in this file — window_manager.cc cannot link in tests). The draw recorder
+// fails the test if a destroyed button is ever drawn, which is exactly the
+// deref the R-11 re-fix must prevent.
+
+struct R11TestButton {
+    int id;
+    bool live;        // false = destroyed by a group callback
+    int normalImage;  // sentinel for the normal-state image
+};
+
+static R11TestButton gR11ButtonA = { 1001, true, 111 };
+static R11TestButton gR11ButtonB = { 1002, true, 222 };
+
+static int gR11DrawCount = 0;
+static int gR11DrawnButtonId = -1;
+static int gR11DrawnImage = -1;
+
+// Mirror of buttonGetButton(btn, ...): walks the live buttons.
+static R11TestButton* r11ButtonGetButton(int btn)
+{
+    R11TestButton* candidates[] = { &gR11ButtonA, &gR11ButtonB };
+    for (R11TestButton* candidate : candidates) {
+        if (candidate->live && candidate->id == btn) {
+            return candidate;
+        }
+    }
+
+    return nullptr;
+}
+
+// Mirror of _button_draw: records the draw; fails the test if a destroyed
+// button is ever drawn (the exact UAF the N-04/R-11 fix must prevent).
+static void r11DrawButton(R11TestButton* button, int image)
+{
+    REQUIRE(button != nullptr);
+    CHECK(button->live);  // drawing a destroyed button = the moved UAF
+
+    gR11DrawCount++;
+    gR11DrawnButtonId = button->id;
+    gR11DrawnImage = image;
+}
+
+// The fixed caller-2108 block (window_manager.cc): the button id is saved
+// BEFORE _button_check_group — the group callbacks run inside it and may
+// free clickedButton, so no member of clickedButton may be read after it
+// returns. On -1, re-fetch by saved id and draw only if the button survived.
+static void r11HandleGroupMinusOne(R11TestButton* clickedButton, bool groupReturnedMinusOne)
+{
+    int savedClickedButtonId = clickedButton->id;
+    if (!groupReturnedMinusOne) {
+        return;
+    }
+
+    R11TestButton* liveClickedButton = r11ButtonGetButton(savedClickedButtonId);
+    if (liveClickedButton != nullptr) {
+        r11DrawButton(liveClickedButton, liveClickedButton->normalImage);
+    }
+}
+
+TEST_CASE("R-11: group -1 with button destroyed by callback — draw skipped (N-04 UAF closed)")
+{
+    // Reset state: button A is the clicked button; a CHECKED group member's
+    // up-proc destroyed it mid-_button_check_group (the CONFIRMED N-04
+    // trigger). buttonGetButton for A's id now returns nullptr, so
+    // _button_check_group returns -1 with clickedButton freed.
+    gR11ButtonA = { 1001, true, 111 };
+    gR11ButtonB = { 1002, true, 222 };
+    gR11DrawCount = 0;
+
+    gR11ButtonA.live = false;  // group callback freed the button
+
+    r11HandleGroupMinusOne(&gR11ButtonA, true);
+
+    // Pre-fix (R-11): the caller drew _button_draw(clickedButton, ...) with
+    // the freed pointer — a UAF read/write. Post-fix: the id was captured
+    // before the group call, the re-fetch returns nullptr, so no draw occurs
+    // and the handler just aborts the walk.
+    CHECK(gR11DrawCount == 0);
+}
+
+TEST_CASE("R-11: group -1 with button alive — rejection draw preserved (non-radio group full)")
+{
+    // Reset state: button A is the clicked button; the non-radio group is
+    // full, so func was invoked and -1 returned with the button still alive.
+    gR11ButtonA = { 1001, true, 111 };
+    gR11ButtonB = { 1002, true, 222 };
+    gR11DrawCount = 0;
+    gR11DrawnButtonId = -1;
+    gR11DrawnImage = -1;
+
+    r11HandleGroupMinusOne(&gR11ButtonA, true);
+
+    // The re-fetch succeeds, so the normal (unchecked) image is drawn — this
+    // is the legacy rejection feedback that a naive "skip draw on -1" would
+    // have regressed (both review opinions flagged this).
+    CHECK(gR11DrawCount == 1);
+    CHECK(gR11DrawnButtonId == gR11ButtonA.id);
+    CHECK(gR11DrawnImage == gR11ButtonA.normalImage);
 }
 

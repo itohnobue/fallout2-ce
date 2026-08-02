@@ -45,6 +45,17 @@ void datafileSetLoader(DatafileLoader* loader)
 // 0x42EE84 datafileConvertData
 void datafileRemapPixelsRgb8(uint8_t* data, uint8_t* palette, int width, int height)
 {
+    // M-168: Validate dimensions before iterating width*height over the
+    // buffer. The caller passes a buffer allocated for bytesPerLine*height
+    // (pcxRead); when width > bytesPerLine (malformed PCX) the remap loop
+    // reads/writes out of bounds, and width*height can overflow to a
+    // negative value for large headers (silently skipping the remap). The
+    // pcxRead path is now guarded (H-16), but datafileReadRaw can also be
+    // reached through a custom loader, so keep the loop in bounds here.
+    if (data == nullptr || width <= 0 || height <= 0) {
+        return;
+    }
+
     uint8_t indexedPalette[INDEXED_PALETTE_MAX];
 
     indexedPalette[0] = 0;
@@ -68,6 +79,10 @@ void datafileRemapPixelsRgb8(uint8_t* data, uint8_t* palette, int width, int hei
 // 0x42EEF8 datafileConvertDataVGA
 void datafileRemapPixelsRgb6(uint8_t* data, uint8_t* palette, int width, int height)
 {
+    if (data == nullptr || width <= 0 || height <= 0) {
+        return;
+    }
+
     uint8_t indexedPalette[INDEXED_PALETTE_MAX];
 
     indexedPalette[0] = 0;

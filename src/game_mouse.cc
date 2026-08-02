@@ -1182,7 +1182,18 @@ void _gmouse_handle_event(int mouseX, int mouseY, int mouseState)
                         inputGetInput();
 
                         if (_game_user_wants_to_quit != GAME_QUIT_REQUEST_NONE) {
-                            actionMenuItems[actionIndex] = 0;
+                            // Clamp in-loop: actionIndex can drift outside the
+                            // 9-element menu array while the player moves the
+                            // mouse; the post-loop clamp alone would be too
+                            // late for this write (M-112).
+                            int quitIndex = actionIndex;
+                            if (quitIndex < 0) {
+                                quitIndex = 0;
+                            }
+                            if (quitIndex >= actionMenuItemsCount) {
+                                quitIndex = actionMenuItemsCount - 1;
+                            }
+                            actionMenuItems[quitIndex] = 0;
                         }
 
                         int updatedMouseX;

@@ -1591,7 +1591,12 @@ static void opGetTileInDirection(Program* program)
     int tile = -1;
 
     if (origin != -1) {
-        if (rotation < ROTATION_COUNT) {
+        // M-49: rotation must also be >= 0. The lower bound was missing —
+        // rotation == -1 passed `rotation < ROTATION_COUNT` and reached
+        // tileGetTileInDirection, where `_dir_tile[parity][rotation]`
+        // (tile.cc:188, int[2][6]) read 4 bytes before the array for
+        // parity == 0 (or the previous row for parity == 1).
+        if (rotation >= 0 && rotation < ROTATION_COUNT) {
             if (distance != 0) {
                 tile = tileGetTileInDirection(origin, rotation, distance);
                 if (tile < -1) {
@@ -1911,7 +1916,12 @@ static void opAttackComplex(Program* program)
     }
 
     if (_gdialogActive()) {
-        // TODO: Might be an error, program flag is not removed.
+        // M-50: clear the CHILD_CALL flag before returning. Every other early
+        // return in this handler clears it (1891/1897/1903/1909); the leak
+        // here left PROGRAM_FLAG_CHILD_CALL set permanently, so the dispatch
+        // loop's break mask (interpreter.cc:3047) and scriptExecProc's guard
+        // (scripts.cc:1398) would make the script permanently inert.
+        program->flags &= ~PROGRAM_FLAG_CHILD_CALL;
         return;
     }
 
@@ -2109,7 +2119,17 @@ static void opMetarule3(Program* program)
         if (1) {
             if ((param1.opcode & VALUE_TYPE_MASK) != VALUE_TYPE_INT
                 || (param2.opcode & VALUE_TYPE_MASK) != VALUE_TYPE_INT
-                || param3.opcode != VALUE_TYPE_PTR) {
+                || (param3.opcode != VALUE_TYPE_PTR
+                    // H-19: accept INT-0 as null, consistent with
+                    // programStackPopPointer (interpreter.cc:3661-3663) which
+                    // treats VALUE_TYPE_INT && integerValue == 0 as nullptr.
+                    // The strict `param3.opcode != VALUE_TYPE_PTR` check added
+                    // in pass 12 (be8dcbe2) rejected the compiler-emitted
+                    // 0xC001 INT word for the literal-0 idiom used by RPU
+                    // (14 call sites of tile_get_next_critter(..., 0)),
+                    // making every tile scan return empty. ProgramValue is a
+                    // union, so INT-0 aliases pointerValue == nullptr.
+                    && !(param3.opcode == VALUE_TYPE_INT && param3.integerValue == 0))) {
                 break;
             }
             int tile = param1.integerValue;
@@ -3650,9 +3670,16 @@ static void opMetarule(Program* program)
             }
             if (PID_TYPE(object->pid) == OBJ_TYPE_CRITTER) {
                 Proto* proto;
-                protoGetProto(object->pid, &proto);
-                if ((proto->critter.data.flags & CRITTER_BARTER) != 0) {
-                    result = 1;
+                // H-25: protoGetProto nulls the out-param and returns -1 on
+                // every failure (unloadable pid). The sibling guard at
+                // game_dialog.cc:4016 (_gdCanBarter) proves the convention;
+                // deref'ing proto here is a null deref for objects whose .pro
+                // cannot load (modded maps / objectCreateWithFidPid returning
+                // success on proto failure).
+                if (protoGetProto(object->pid, &proto) != -1) {
+                    if ((proto->critter.data.flags & CRITTER_BARTER) != 0) {
+                        result = 1;
+                    }
                 }
             }
         }

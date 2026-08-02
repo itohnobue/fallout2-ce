@@ -1145,7 +1145,11 @@ TEST_CASE("I2F-035: contentConfigLookupSfallInt — known migration keys")
         CHECK(val == -1); // not found without config file
     }
 
-    SUBCASE("WorldMapSlots (Misc → worldmap) returns -1 without config") {
+    SUBCASE("WorldMapSlots (Misc) returns -1 — P-19 removed the dead mapping") {
+        // P-19: the WorldMapSlots → worldmap.encounter_slots mapping was
+        // removed (the target had zero consumers). WorldMapSlots is served
+        // by the gSfallConfig default of 21 (H-06) through the
+        // op_get_ini_setting fallback tier, not by the content bridge.
         int val = contentConfigLookupSfallInt("Misc", "WorldMapSlots");
         CHECK(val == -1);
     }

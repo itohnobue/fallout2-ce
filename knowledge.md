@@ -1,5 +1,5 @@
 # Knowledge Base
-Last updated: 2026-08-01T16:39:40.515818
+Last updated: 2026-08-02T23:38:25.893998
 
 ## [dis-20260704144725-9b3649]
 Category: discovery
@@ -394,3 +394,53 @@ Tags: fallout2-ce, audit, production
 Changed: 2026-07-11T00:07:05.541138
 
 fallout2-ce-extended audit pass 17 complete: 106 verified findings fixed across 300-agent workflow. RPU crash root cause was interpreter.cc:3218 missing procedure index bounds check in opProcCall. Build: cmake --preset macos-arm64-debug. Tests: ctest --test-dir out/build/macos-arm64-debug — 84 tests. Commit: 2fabd98
+
+## [got-20260802233748-f0cc36]
+Category: gotcha
+Tags: regression, stat, fallout2-ce
+Changed: 2026-08-02T23:37:48.334877
+
+fallout2-ce-extended: VALUE-SEMANTICS MISMATCH when copying guard patterns to sibling functions. Pass-13 7f58356 mirrored critterSetBaseStat's absolute-value min/max write-side clamp onto critterSetBonusStat, which stores SIGNED DELTAS (negative=radiation/addiction/drug-wear-off/armor-removal/level-down-HP, zero=reset, positive=drugs/perks/armor) — rejected all legit 0/negative deltas, breaking radiation death, drug expiry, addiction, editor reset, sfall scripts; 77fe02f protoMarkDirty persisted transient deltas into NPC .pro files (permanent corruption). C-05 CRITICAL + stat N-03 HIGH. Lesson: when copying a guard to a sibling function verify the VALUE SEMANTICS match (absolute vs signed-delta vs sentinel); validation belongs at the single point where semantics are known (read-side/effective value), not at storage; a function with no documented contract gets re-'hardened' into regression by every audit pass — write the contract comment (fix: delete clamp + remove protoMarkDirty + read-side clamp stays).
+
+## [got-20260802233750-8b7803]
+Category: gotcha
+Tags: regression, memory, fallout2-ce
+Changed: 2026-08-02T23:37:50.526040
+
+fallout2-ce-extended: INCOMPLETE-FIX CLUSTERS — fix families, not sites. Pass-17 2fabd98 fixed only 1 of 5 _GNW_check_buttons UAF sites (H-13; +window N-04 group-callback, N-01 6th site, P-08 later); M-142 fixed tile roof but missed the floor twin; M-84 found ~32 unguarded protoGetProto derefs + H-25 null deref; H-16 PCX overflow's twin underflow (art NEW-01) and H-17 DAT dataSize's twin (P-16 tuple validation) and M-77 tile-load root covering map NEW-2 + P-17 all surfaced in later passes. Lesson: when fixing an OOB/UAF/bounds defect, grep the WHOLE family (sibling functions, twin paths, reverse polarity, same-root callers) in one pass — one-site fixes leave siblings the next audit re-finds; a root-cause fix at load (object.cc:438 tile validation) closes multiple sites.
+
+## [got-20260802233757-cc4207]
+Category: gotcha
+Tags: save-format, regression, backward-compat, fallout2-ce
+Changed: 2026-08-02T23:37:57.328671
+
+fallout2-ce-extended: ANY persistent-format change MUST bump the format version — handler count 27→28 (lightSave/lightLoad added, C-04), header-CRC added ungated (C-03, pass-11 0e4b74e claimed F2-21 but had no version gate), save CRC read-back on wb stream (C-02) — together made every old save abort or reject CORRUPT; M-62 mid-stream float broke 1.2R alignment. Fix shape (confirmed): VERSION_MINOR 3→4, version-selected handler lists (legacy 27 vs 28), header CRC verified unconditionally in the CRC era. Corollary: NEVER gate a checksum/protection read on the SAME version field it protects (save NEW-3 — a single versionMajor 3→2 byte flip disables all CRC). This confirms the earlier dis-20260704144725-9b3649 prediction that LOAD_SAVE_HANDLER_COUNT=27 was a hardcoded positional chain with decorative version check.
+
+## [got-20260802233802-266820]
+Category: gotcha
+Tags: sfall-compat, regression, fallout2-ce
+Changed: 2026-08-02T23:38:02.495724
+
+fallout2-ce-extended: sfall-compat divergence — verify compat layers against the REFERENCE SOURCE (sfall C++ modules: FileSystem.cpp, Stats.cpp, MiscHs.cpp, hooks.yml), NOT docs or the fork's own comments. Pass-18 evidence: P-05/H-03 — fork comment claimed LocalMapEnter=2, sfall reference proves arg0=1 LocalMapEnter / special in arg2 / forced encounters never fire HOOK_ENCOUNTER; M-64 — fork treats WorldMapFPSPatch as FPS divisor (1000/1 = 1000ms → ~1 FPS world map with shipped Et Tu ddraw.ini) where sfall treats it as boolean enable + WorldMapDelay2; sfall NEW-2/P-06/P-07 — fork VFS writes real disk (fs_delete flips handle, fs_create truncates) where sfall is in-memory; sfall N-02 — HOOK_GAMEMODECHANGE arg0 rationale wrong; P-04 — mf_opcode_exists needs exact sfall range [0x8000,0x8300) not 0x3FF mask. Every divergence broke mod compatibility. Lesson: when a compat shim differs from reference behavior, the reference source wins — read it, don't reason from comments/docs.
+
+## [got-20260802233804-2cfe0e]
+Category: gotcha
+Tags: regression, review, fallout2-ce
+Changed: 2026-08-02T23:38:04.676961
+
+fallout2-ce-extended: FIX AGENTS OVER-APPLY SCOPE — post-fix review of pass-1/2 fixes found the fixes themselves regressed: R-01 duplicate default argument on aiHaveAmmo (build-breaking, introduced BY the combat N-01 fix), R-02 walkability polarity over-flipped beyond the finding (map N-01 fix inverted the terminal return that was already correct), R-11 UAF moved 2115→2110 not closed, F1/F2 load re-registration clobber (R-14 fix introduced activePid=0 clobber + damage-lookup inversion), R-06 apply block landed as a silent no-op, F4 short-table XP runaway in the R-06 fix, F3 broken test SUBCASE in the R-15 fix. Lesson: touch ONLY the cited lines — do not 'fix forward' beyond the finding; polarity/scope over-application and moved-not-closed bugs are the #1 fix-introduced regression class; the adversarial post-fix review catches what the fix agent's self-check misses.
+
+## [got-20260802233813-e1e53b]
+Category: gotcha
+Tags: regression, memory, fallout2-ce
+Changed: 2026-08-02T23:38:13.129852
+
+fallout2-ce-extended: DEFENSIVE GUARDS ADDED WITH INVERTED POLARITY convert latent UB into deterministic crashes — the 'fix' makes things worse. map N-01: f874424 added wmWorldPosInvalid guards that return false ('not invalid' → walk continues) for exactly the OOB coords they were meant to catch → deterministic null deref at worldmap.cc:4923 (the only unguarded site). Same class in one pass: M-55 (_check_ranged_miss final guard was ==0, roll==SUCCESS only for solid critters → always false), M-68 (wmDrawCursorStopped !=0 misclassified the -1 idle sentinel as walking), R-02 (follow-up over-flipped the terminal walkability return ==0/!=0, stopped the party on step 1; only byte-diff vs upstream CE caught it). Lesson: when adding a guard for invalid input, verify WHICH return value the caller treats as 'stop/bail' — a guard that returns 'valid' for invalid input is worse than no guard; check the callers' expectation, and diff against upstream semantics.
+
+## [got-20260802233825-7c4b0a]
+Category: gotcha
+Tags: test, regression, fallout2-ce
+Changed: 2026-08-02T23:38:25.892371
+
+fallout2-ce-extended: CODIFYING MIRROR TESTS invert regression detection — test mirrors that duplicate production logic can diverge AND can encode the bug as expected behavior, making CI validate the regression. Examples: M-088/test_map.cc:447 asserted the .edg EOF bug as correct (P-15, PRIOR_FIX 78a8373); F-55/test_fixes_saveload.cc encoded the 0x3FFF opcode-mask bug (R-09: 0xC001 & 0x3FFF = 1 < 768 CHECK fails); UF-H-020/test_misc_ui_config_fixes.cc asserted critterSetBonusStat bonus-0→-2 (the C-05 clamp bug); test_stat blessed the XPTable no-op (R-06); M-99 windowWordWrap test had guards production lacked. Lesson: rewrite the codifying mirror in the SAME pass as the fix (converts it to regression-detecting — a future re-add FAILS CI); mirrors give false confidence — prefer production-linked tests or periodic mirror-vs-production drift checks.
+

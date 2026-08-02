@@ -16,6 +16,67 @@
 
 namespace fallout {
 
+// save NEW-2 (MEDIUM): CRC32 (IEEE 802.3) machinery for the sfallgv.sav
+// trailer. Mirrors the algorithm used for SAVE.DAT handler/header CRCs in
+// loadsave.cc (which keeps its copy file-static). The sfallgv.sav payload is
+// protected by a 4-byte CRC32 trailer so bit-flips in script-visible state
+// are detected on load instead of loading silently as correct.
+static unsigned int _sfall_crc32_table[256];
+static bool _sfall_crc32_table_init = false;
+
+static void _sfallCrc32Init()
+{
+    if (_sfall_crc32_table_init) return;
+    for (unsigned int i = 0; i < 256; i++) {
+        unsigned int crc = i;
+        for (int j = 0; j < 8; j++) {
+            crc = (crc >> 1) ^ (0xEDB88320u & -(crc & 1));
+        }
+        _sfall_crc32_table[i] = crc;
+    }
+    _sfall_crc32_table_init = true;
+}
+
+// Incremental CRC32 update. Pass the previous crc (start with 0xFFFFFFFFu)
+// and finish with a final XOR of 0xFFFFFFFFu.
+static unsigned int _sfallCrc32Update(unsigned int crc, const unsigned char* data, size_t len)
+{
+    _sfallCrc32Init();
+    for (size_t i = 0; i < len; i++) {
+        crc = _sfall_crc32_table[(crc ^ data[i]) & 0xFF] ^ (crc >> 8);
+    }
+    return crc;
+}
+
+// Compute CRC32 over the range [start, end) of the stream by seeking back and
+// reading in chunks (the same read-back pattern SAVE.DAT uses for its CRCs).
+// The stream must be open for reading (or "w+b" for the save side).
+static bool _sfallCrc32ComputeStreamRange(File* stream, long start, long end, unsigned int* outCrc)
+{
+    if (end < start) {
+        return false;
+    }
+    if (fileSeek(stream, start, SEEK_SET) != 0) {
+        return false;
+    }
+
+    unsigned int crc = 0xFFFFFFFFu;
+    unsigned char buffer[4096];
+    long remaining = end - start;
+    while (remaining > 0) {
+        size_t chunk = static_cast<size_t>(remaining < static_cast<long>(sizeof(buffer)) ? remaining : static_cast<long>(sizeof(buffer)));
+        if (fileRead(buffer, 1, chunk, stream) != chunk) {
+            return false;
+        }
+        crc = _sfallCrc32Update(crc, buffer, chunk);
+        remaining -= static_cast<long>(chunk);
+    }
+    crc ^= 0xFFFFFFFFu;
+
+    *outCrc = crc;
+    return true;
+}
+
 // Config key for global script path globs (RPU places scripts under
 // scripts/sfall/ in addition to the default scripts/).  Comma-separated.
 static constexpr const char* kGlobalScriptPathsKey = "GlobalScriptPaths";
@@ -251,6 +312,15 @@ void sfallLoadMods()
 
 bool sfallSaveGameData(File* stream)
 {
+    // save NEW-2 (MEDIUM): The whole sfallgv.sav payload is protected by a
+    // 4-byte CRC32 trailer, mirroring the SAVE.DAT handler-CRC approach.
+    // Record the payload start so the trailer can be computed over exactly the
+    // bytes written below (gl_vars .. metarules).
+    long payloadStart = fileTell(stream);
+    if (payloadStart == -1) {
+        return false;
+    }
+
     // Store current runtime opcode state into the sfall global vars map
     // before serializing, so it's included in sfallgv.sav.
     sfallOpcodeStateSave();
@@ -291,6 +361,30 @@ bool sfallSaveGameData(File* stream)
         return false;
     }
 
+    // save NEW-2 (MEDIUM): Append the CRC32 trailer over the payload written
+    // above. The stream is opened "w+b" by the caller (loadsave.cc sfallgv
+    // temp open) so the read-back succeeds. A save whose trailer cannot be
+    // computed or written must fail loudly — a silent omission would produce
+    // an sfallgv.sav that loads without any integrity check.
+    long payloadEnd = fileTell(stream);
+    if (payloadEnd == -1 || payloadEnd < payloadStart) {
+        debugPrint("LOADSAVE (SFALL): ** Error computing sfallgv.sav trailer bounds **\n");
+        return false;
+    }
+
+    unsigned int trailerCrc = 0;
+    if (!_sfallCrc32ComputeStreamRange(stream, payloadStart, payloadEnd, &trailerCrc)) {
+        debugPrint("LOADSAVE (SFALL): ** Error computing sfallgv.sav CRC trailer **\n");
+        return false;
+    }
+    if (fileSeek(stream, payloadEnd, SEEK_SET) != 0) {
+        return false;
+    }
+    if (fileWriteUInt32(stream, trailerCrc) == -1) {
+        debugPrint("LOADSAVE (SFALL): ** Error writing sfallgv.sav CRC trailer **\n");
+        return false;
+    }
+
     return true;
 }
 
@@ -313,6 +407,16 @@ bool sfallSaveGameData(File* stream)
 // completes, so arrays are fully available to global/start scripts.
 bool sfallLoadGameData(File* stream)
 {
+    // save NEW-2 (MEDIUM): Record the payload start. The CRC32 trailer (if
+    // present) is verified over exactly the payload bytes read below. Old
+    // sfallgv.sav files written before the trailer was added load without
+    // verification (backward compatible — same trust model as pre-CRC
+    // SAVE.DAT saves).
+    long payloadStart = fileTell(stream);
+    if (payloadStart == -1) {
+        return false;
+    }
+
     if (!sfall_gl_vars_load(stream)) {
         debugPrint("LOADSAVE (SFALL): ** Error loading global vars **\n");
         return false;
@@ -364,6 +468,33 @@ bool sfallLoadGameData(File* stream)
     if (!sfall_metarules_load(stream)) {
         debugPrint("LOADSAVE (SFALL): ** Error loading metarules **\n");
         return false;
+    }
+
+    // save NEW-2 (MEDIUM): Verify the CRC32 trailer. The trailer was appended
+    // by sfallSaveGameData; a save written before that change has no trailer
+    // and is accepted without verification (old format). A save WITH a trailer
+    // that fails verification is corrupt — report it so the caller resets
+    // sfall state instead of loading silently-corrupted script-visible state.
+    long payloadEnd = fileTell(stream);
+    if (payloadEnd == -1 || payloadEnd < payloadStart) {
+        return false;
+    }
+
+    unsigned int storedCrc = 0;
+    bool haveTrailer = (fileReadUInt32(stream, &storedCrc) == 0);
+    if (haveTrailer) {
+        unsigned int computedCrc = 0;
+        if (!_sfallCrc32ComputeStreamRange(stream, payloadStart, payloadEnd, &computedCrc)) {
+            debugPrint("LOADSAVE (SFALL): ** Error computing sfallgv.sav CRC **\n");
+            return false;
+        }
+        if (computedCrc != storedCrc) {
+            debugPrint("LOADSAVE (SFALL): ** sfallgv.sav CRC mismatch! (stored=%08x, computed=%08x) **\n",
+                storedCrc, computedCrc);
+            return false;
+        }
+        // Seek past the trailer so the stream position is consistent.
+        fileSeek(stream, payloadEnd + 4, SEEK_SET);
     }
 
     return true;

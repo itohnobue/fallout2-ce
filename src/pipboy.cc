@@ -1036,6 +1036,23 @@ int pipboyGetWindow()
     return windowGetWindow(gPipboyWindow) != nullptr ? gPipboyWindow : -1;
 }
 
+// M-181: holodisk-list page count (known holodisks per page). The status-page
+// navigation must use this, not the quest-location page count (global
+// totalPages): pipboyWindowRenderHolodiskList computes its own local `totalPages`
+// that shadows the global, so the quest count never reaches the nav, and the
+// old code blocked right-side paging whenever quest locations were on their
+// last page (including the common 1-page quest list).
+static int pipboyGetHolodiskPageCount()
+{
+    int knownHolodisksCount = 0;
+    for (int index = 0; index < gHolodisksCount; index++) {
+        if (gGameGlobalVars[gHolodiskDescriptions[index].gvar] != 0) {
+            knownHolodisksCount++;
+        }
+    }
+    return (knownHolodisksCount + PIPBOY_STATUS_HOLODISK_LINES - 1) / PIPBOY_STATUS_HOLODISK_LINES;
+}
+
 // 0x497BD8
 static void pipboyWindowHandleStatus(int userInput)
 {
@@ -1087,9 +1104,24 @@ static void pipboyWindowHandleStatus(int userInput)
             if (userInput < 1025 || userInput > 1027) {
                 return;
             }
-            // Ensure navigation stays within valid page range
-            if ((_view_page_quest <= 0 && gPipboyMouseX < 459) || (_view_page_quest >= totalPages - 1 && gPipboyMouseX >= 459)) {
-                return; // Prevent navigation if already at min/max page (and click)
+            // M-181: page-range guard. The old guard used only the
+            // quest-location page count (totalPages) for BOTH sides, so with
+            // quests on their last page (e.g. a single-page quest list) the
+            // right-side holodisk navigation was blocked even when the
+            // holodisk list had more pages. Evaluate each side against its own
+            // page count; handlePipboyPageNavigation clamps each page
+            // independently.
+            int holodiskTotalPages = pipboyGetHolodiskPageCount();
+            if (gPipboyMouseX < 459) {
+                // Back: block only when both sides are already on page 0.
+                if (_view_page_quest <= 0 && _view_page_holodisk <= 0) {
+                    return; // Prevent navigation if already at min page (and click)
+                }
+            } else {
+                // More: block only when both sides are already on their last page.
+                if (_view_page_quest >= totalPages - 1 && _view_page_holodisk >= holodiskTotalPages - 1) {
+                    return; // Prevent navigation if already at max page (and click)
+                }
             }
 
             // Destroy old buttons before changing pages
@@ -1107,10 +1139,12 @@ static void pipboyWindowHandleStatus(int userInput)
 
             // Destroy old buttons before changing pages
             pipboyWindowDestroyButtons();
+            // M-181: use the holodisk page count (not the quest-location
+            // totalPages) for the holodisk navigation.
             handlePipboyPageNavigation( // handle changing holodisk pages
                 gPipboyMouseX,
                 459, &_view_page_holodisk,
-                totalPages,
+                pipboyGetHolodiskPageCount(),
                 pipboyWindowHandleStatus,
                 []() {
                     pipboyWindowCreateButtons(2, gPipboyQuestLocationsCount + gPipboyWindowHolodisksCount + 1, true); // Ensure new buttons match the new page
@@ -1259,6 +1293,18 @@ static void pipboyWindowQuestList(int selectedLocationIndex)
                 }
             }
         }
+    }
+
+    // M-180: the search loop above can exhaust with index == gQuestsCount
+    // (one past the heap array) when no quest matches the selected location,
+    // and the deref below would read past the allocation. With no quest data
+    // at all there is nothing meaningful to display — clear buttons and bail.
+    if (gQuestsCount <= 0) {
+        pipboyWindowDestroyButtons();
+        return;
+    }
+    if (index >= gQuestsCount) {
+        index = gQuestsCount - 1;
     }
 
     // Clear previous buttons
@@ -1431,7 +1477,11 @@ static void pipboyWindowRenderQuestLocationList(int selectedQuestLocation)
 
     // Ensure that we don't go out of bounds
     if (startIndex >= gPipboyQuestLocationsCount) {
-        startIndex = gPipboyQuestLocationsCount - 1; // Adjust to the last item if we're beyond the list size
+        // M-179: with no quest locations (count == 0) this clamp produced -1
+        // and the render loop below executed once with index -1, reading
+        // gPipboyQuestLocations[-1] and drawing a garbage pointer. Keep the
+        // index valid (0) so the loop body does not run.
+        startIndex = gPipboyQuestLocationsCount > 0 ? gPipboyQuestLocationsCount - 1 : 0;
     }
     if (endIndex > gPipboyQuestLocationsCount) {
         endIndex = gPipboyQuestLocationsCount; // Ensure we don't exceed the list size

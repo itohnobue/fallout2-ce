@@ -61,6 +61,15 @@ bool oggDecoderDecode(File* stream, AudioFileInfo* info, unsigned char** dataPtr
         goto done;
     }
 
+    // M-132: stb_vorbis_stream_length_in_samples saturates near 2^32; values
+    // in [2^30, 2^31-1] pass the <= 0 check and overflow the signed int
+    // product `totalSamples * channels` (for channels == 2), turning the
+    // allocation size negative and aborting the game with an OOM error.
+    // Cap the count so the product stays within int range.
+    if (totalSamples > 0x7FFFFFFF / vorbisInfo.channels) {
+        goto done;
+    }
+
     sampleCount = totalSamples * vorbisInfo.channels;
     decodedData = reinterpret_cast<short*>(internal_malloc_safe(sizeof(short) * sampleCount, __FILE__, __LINE__));
 

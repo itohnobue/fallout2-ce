@@ -3,6 +3,7 @@
 #include <assert.h>
 #include <iterator>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <string_view>
 
@@ -40,6 +41,13 @@ namespace {
         { "IFACE", "IFACE_BAR_WIDTH", GAME_CONFIG_UI_KEY, GAME_CONFIG_IFACE_BAR_WIDTH_KEY },
         { "IFACE", "IFACE_BAR_SIDE_ART", GAME_CONFIG_UI_KEY, GAME_CONFIG_IFACE_BAR_SIDE_ART_KEY },
         { "IFACE", "IFACE_BAR_SIDES_ORI", GAME_CONFIG_UI_KEY, GAME_CONFIG_IFACE_BAR_SIDES_ORI_KEY },
+        // P-18: EDGE_CLIPPING_ON is the sibling of IGNORE_MAP_EDGES — both
+        // are read by the HRP edge subsystem (map_edge.cc:399-403 consults
+        // settings.ui.edg_support AND settings.ui.ignore_map_edges). The
+        // old table migrated IGNORE_MAP_EDGES but not EDGE_CLIPPING_ON, so
+        // a migrated HRP user who disabled edge clipping (EDGE_CLIPPING_ON=0)
+        // silently got edge loading re-enabled (edg_support defaults true).
+        { "MAPS", "EDGE_CLIPPING_ON", GAME_CONFIG_UI_KEY, "edg_support" },
         { "MAPS", "IGNORE_MAP_EDGES", GAME_CONFIG_UI_KEY, GAME_CONFIG_IGNORE_MAP_EDGES_KEY },
         { "STATIC_SCREENS", "SPLASH_SCRN_SIZE", GAME_CONFIG_UI_KEY, GAME_CONFIG_SPLASH_SCREEN_SIZE_KEY },
         { "MOVIES", "MOVIE_SIZE", GAME_CONFIG_UI_KEY, GAME_CONFIG_MOVIE_ASPECT_FIT_KEY },
@@ -241,16 +249,16 @@ namespace {
         // content_config worldmap section for et tu compatibility.
         { kSfallMisc, "StartXPos", CONTENT_CONFIG_WORLDMAP_SECTION, "start_x_pos" },
         { kSfallMisc, "StartYPos", CONTENT_CONFIG_WORLDMAP_SECTION, "start_y_pos" },
-        { kSfallMisc, "ViewXPos", CONTENT_CONFIG_WORLDMAP_SECTION, "view_x_pos" },
-        { kSfallMisc, "ViewYPos", CONTENT_CONFIG_WORLDMAP_SECTION, "view_y_pos" },
-        // WorldMapSlots — migrated to worldmap encounter_slots. Scripts
-        // can access this value via get_ini_setting and the config bridge
-        // (contentConfigLookupSfallInt) when ddraw.ini is not present.
-        { kSfallMisc, "WorldMapSlots", CONTENT_CONFIG_WORLDMAP_SECTION, "encounter_slots" },
-        // ElevatorsFile — migrated to worldmap elevators_file. The
-        // elevator system reads this from gSfallConfig; the migration
-        // preserves the value for use via the config bridge and future
-        // consumers that read from gContentConfig.
+        // P-19: ViewXPos/ViewYPos/WorldMapSlots migration rows removed —
+        // the targets (worldmap view_x_pos/view_y_pos/encounter_slots) have
+        // zero consumers anywhere in src/ (verified by grep); the sfall
+        // starting world-map viewport patch and the WorldMapSlots feature
+        // (cities-list scroll height) are unimplemented. encounter_slots was
+        // the structural root of H-06 (the config bridge returned a value
+        // for an inert feature). WorldMapSlots is now served by the
+        // gSfallConfig default of 21 (H-06) through the op_get_ini_setting
+        // fallback tier. ElevatorsFile remains — elevator.cc reads it from
+        // gSfallConfig and the bridge keeps the value script-accessible.
         { kSfallMisc, "ElevatorsFile", CONTENT_CONFIG_WORLDMAP_SECTION, "elevators_file" },
 
         // BoxBarCount migration intentionally removed — `add_iface_tag` metarule provides
@@ -321,11 +329,16 @@ static bool contentConfigMigrateFromSfall(Config* sfallConfig, const char* conte
     configRead(&migratedConfig, contentConfigFilePath, false);
 
     bool migrated = false;
-    // Migrate start year/month/day only when explicitly set (not the sfall -1 sentinel)
-    // AND when the value differs from what's already in the patch file.
+    // Migrate start year/month/day only when explicitly set (not the sfall -1 sentinel).
+    // M-38: Do NOT skip values that equal defaultValue — matching the UH-05
+    // behavior of the main loop below. The old `value != defaultValue` guard
+    // meant reverting ddraw.ini StartYear back to the CE default (2241) — or
+    // deleting the key — never propagated: a stale non-default value stayed in
+    // game#patch.cfg forever. The comparison against existingValue below still
+    // avoids rewriting the patch file when nothing changed.
     auto migrateStartInt = [&](const char* sfallKey, const char* targetKey, int defaultValue) {
         int value;
-        if (configGetInt(sfallConfig, "Misc", sfallKey, &value) && value >= 0 && value != defaultValue) {
+        if (configGetInt(sfallConfig, "Misc", sfallKey, &value) && value >= 0) {
             char buf[32];
             snprintf(buf, sizeof(buf), "%d", value);
             char* existingValue;
@@ -360,6 +373,37 @@ static bool contentConfigMigrateFromSfall(Config* sfallConfig, const char* conte
                 configSetString(&migratedConfig, entry.targetSection, entry.targetKey, value);
                 migrated = true;
             }
+        }
+    }
+
+    // M-199: Migrate ddraw.ini [Misc] SkipOpeningMovies → fallout2.cfg
+    // [ui] skip_opening_movies. This key cannot go through
+    // kSfallMigrationEntries: it lives in the SETTINGS config (fallout2.cfg,
+    // read by main.cc:93 / game.cc:202 via settings.ui.skip_opening_movies),
+    // not in game.cfg — a table entry would write a [ui] section that no
+    // consumer reads. SFALL_COMPATIBILITY.md:29 documents the manual move;
+    // this makes it automatic. The live settings struct is updated too so the
+    // current session sees the value (settingsInit already ran before
+    // contentConfigInit).
+    {
+        char* skipOpeningMoviesValue = nullptr;
+        if (configGetString(sfallConfig, kSfallMisc, "SkipOpeningMovies", &skipOpeningMoviesValue)
+            && skipOpeningMoviesValue != nullptr && skipOpeningMoviesValue[0] != '\0') {
+            int skipValue = atoi(skipOpeningMoviesValue);
+            int existingSkip = -1;
+            // Persist to fallout2.cfg (gGameConfig) only when the value differs,
+            // avoiding file churn on every launch.
+            if (!configGetInt(&gGameConfig, GAME_CONFIG_UI_KEY, "skip_opening_movies", &existingSkip)
+                || existingSkip != skipValue) {
+                configSetInt(&gGameConfig, GAME_CONFIG_UI_KEY, "skip_opening_movies", skipValue);
+                if (gGameConfigInitialized && gGameConfigFilePath[0] != '\0') {
+                    if (!configWriteEx(&gGameConfig, gGameConfigFilePath, CONFIG_RETAIN_ALL)) {
+                        debugPrint("Failed to write SkipOpeningMovies migration to %s!\n", gGameConfigFilePath);
+                    }
+                }
+            }
+            // Update the live setting for the current session.
+            settings.ui.skip_opening_movies = skipValue;
         }
     }
 

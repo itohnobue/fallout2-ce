@@ -937,14 +937,33 @@ bool _art_fid_valid(int fid)
 // 0x419998
 int _art_alias_num(int index)
 {
-    return _anon_alias[index];
+    // art N-1: Clamp the frmId against the critters list length, mirroring
+    // artBuildFilePath:666. `_anon_alias` is allocated for
+    // gArtListDescriptions[OBJ_TYPE_CRITTER].fileNamesLength entries; a
+    // modded/crafted critter frmId >= that length reads out of bounds
+    // (heap OOB read). Returning 0 yields a deterministic alias so callers
+    // (e.g. hitLocationGetName at combat.cc:6060) produce a resolvable
+    // message number instead of garbage.
+    int frmId = index & 0xFFF;
+    if (frmId >= gArtListDescriptions[OBJ_TYPE_CRITTER].fileNamesLength) {
+        return 0;
+    }
+    return _anon_alias[frmId];
 }
 
 // 0x4199AC
 int artCritterFidShouldRun(int fid)
 {
     if (FID_TYPE(fid) == OBJ_TYPE_CRITTER) {
-        return gArtCritterFidShoudRunData[fid & 0xFFF];
+        // art N-1: Bound the frmId before indexing the run-flag array.
+        // gArtCritterFidShoudRunData is sized by the critters list length
+        // (artInit:197); `fid & 0xFFF` is a raw 12-bit frmId that can exceed
+        // it for modded/crafted critters (heap OOB read). Out-of-range
+        // critters fall back to "don't run", matching the non-critter case.
+        int frmId = fid & 0xFFF;
+        if (frmId < gArtListDescriptions[OBJ_TYPE_CRITTER].fileNamesLength) {
+            return gArtCritterFidShoudRunData[frmId];
+        }
     }
 
     return 0;
@@ -967,7 +986,18 @@ int artAliasFid(int fid)
             // NOTE: Original code is slightly different. It uses many mutually
             // mirrored bitwise operators. Probably result of some macros for
             // getting/setting individual bits on fid.
-            return (fid & 0x70000000) | ((anim << 16) & 0xFF0000) | 0x1000000 | (fid & 0xF000) | (_anon_alias[fid & 0xFFF] & 0xFFF);
+            //
+            // art N-1: Bound the frmId before reading _anon_alias (third
+            // unguarded instance; _anon_alias is sized by the critters list
+            // length). artBuildFilePath's :666 check runs after this call, so
+            // the read here was previously reachable with an out-of-range
+            // frmId. Out-of-range frmIds contribute alias 0.
+            int frmId = fid & 0xFFF;
+            int alias = 0;
+            if (frmId < gArtListDescriptions[OBJ_TYPE_CRITTER].fileNamesLength) {
+                alias = _anon_alias[frmId] & 0xFFF;
+            }
+            return (fid & 0x70000000) | ((anim << 16) & 0xFF0000) | 0x1000000 | (fid & 0xF000) | alias;
         }
     }
 
@@ -1126,6 +1156,25 @@ static int artReadHeader(Art* art, File* stream)
     // CE: Fix malformed `frm` files with `dataSize` set to 0 in Nevada.
     if (art->dataSize == 0) {
         art->dataSize = fileGetSize(stream);
+    }
+
+    // M-160: Validate dataSize and dataOffsets before any caller derives a
+    // buffer size or a write target from them. dataSize and dataOffsets are
+    // raw int32 file fields. Without validation:
+    //   - negative dataSize bypasses the `== 0` fix above, collapsing the
+    //     artGetDataSize allocation to ~sizeof(Art) while artReadFrameData
+    //     keeps writing file-driven frame data past it (heap overflow).
+    //   - dataOffsets[i] >= dataSize points the artRead write target
+    //     `data + sizeof(Art) + dataOffsets[i] + padding[i]` past the
+    //     allocated data region (heap overflow).
+    //   - negative dataOffsets[i] point the write target before the buffer.
+    if (art->dataSize < 0) {
+        return -1;
+    }
+    for (int index = 0; index < ROTATION_COUNT; index++) {
+        if (art->dataOffsets[index] < 0 || art->dataOffsets[index] >= art->dataSize) {
+            return -1;
+        }
     }
 
     return 0;

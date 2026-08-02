@@ -90,7 +90,11 @@ TEST_CASE("Implemented hooks — all enabled hooks IDs are sequential and < HOOK
 TEST_CASE("EncounterHookEventType enum values")
 {
     CHECK(static_cast<int>(EncounterHookEventType::RandomEncounter) == 0);
-    CHECK(static_cast<int>(EncounterHookEventType::LocalMapEnter) == 2);
+    // H-03/P-05: LocalMapEnter == 1 matches sfall's HOOK_ENCOUNTER arg0
+    // encoding (0=random, 1=player enters from world map, special in arg2).
+    // The old value 2 (86e6c4d) inverted the contract and broke Et Tu's
+    // gl_worldmap.ssl handler.
+    CHECK(static_cast<int>(EncounterHookEventType::LocalMapEnter) == 1);
 }
 
 TEST_CASE("EncounterHookResult enum values")
@@ -206,8 +210,8 @@ TEST_CASE("Deliberately absent hooks — gap verification")
     // Gap: HOOK_STDPROCEDURE_END(41) → HOOK_ENCOUNTER(43): slot 42 is TARGETOBJECT (IMPLEMENTED)
     CHECK(static_cast<int>(HOOK_ENCOUNTER) - static_cast<int>(HOOK_STDPROCEDURE_END) == 2);
 
-    // Gap: HOOK_ENCOUNTER(43) → HOOK_CANUSEWEAPON(48): slots 44(ADJUSTPOISON), 45(ADJUSTRADS),
-    //   46(ROLLCHECK), 47(BESTWEAPON) — all absent
+    // Gap: HOOK_ENCOUNTER(43) → HOOK_CANUSEWEAPON(48): slots 44(ADJUSTPOISON),
+    //   45(ADJUSTRADS — M-26 implemented), 46(ROLLCHECK), 47(BESTWEAPON)
     CHECK(static_cast<int>(HOOK_CANUSEWEAPON) - static_cast<int>(HOOK_ENCOUNTER) == 5);
 }
 
@@ -226,14 +230,14 @@ TEST_CASE("Deliberately absent hooks — gap verification")
 TEST_CASE("HOOK_COUNT consistency — implemented + absent + reserved = 62")
 {
     // From sfall_script_hooks.h enum (not commented out):
-    // 43 implemented hooks: 0,1,2,4,5,6,7,8,10,11,16,17,18,19,20,
+    // 44 implemented hooks: 0,1,2,4,5,6,7,8,10,11,16,17,18,19,20,
     //   21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,38,39,
-    //   40,41,42,43,48,49,50,51,52,53
-    // Phase 7 added HOOK_DIALOG(49) through HOOK_MESSAGE(53): +5 → 43.
+    //   40,41,42,43,45,48,49,50,51,52,53
+    //   (M-26 enabled HOOK_ADJUSTRADS=45 with a fire site in critterAdjustRadiation)
     //
-    // 8 deliberately absent (commented out with rationale):
+    // 7 deliberately absent (commented out with rationale):
     //   3(DEATHANIM1), 9(REMOVEINVENOBJ),
-    //   37(SUBCOMBATDAMAGE), 44(ADJUSTPOISON), 45(ADJUSTRADS),
+    //   37(SUBCOMBATDAMAGE), 44(ADJUSTPOISON),
     //   46(ROLLCHECK), 47(BESTWEAPON), 61(BUILDSFXWEAPON)
     // NOTE: HOOK_FINDTARGET=7 is IMPLEMENTED (active fire sites at
     //   combat_ai.cc:1836,1874,1934). Previous test incorrectly listed it as absent.
@@ -242,14 +246,14 @@ TEST_CASE("HOOK_COUNT consistency — implemented + absent + reserved = 62")
     //
     // 7 reserved: 54-60 (49-53 now implemented as Phase 7 hook types)
     //
-    // Total: 43 + 8 + 4 + 7 = 62 = HOOK_COUNT
+    // Total: 44 + 7 + 4 + 7 = 62 = HOOK_COUNT
 
     // Verify HOOK_COUNT covers all categories
     CHECK(static_cast<int>(HOOK_COUNT) == 62);
 
     // Verify the number of defined (implemented) hook IDs in the enum
-    constexpr int kImplementedHookIds = 43;
-    constexpr int kCommentedOutAbsent = 8;
+    constexpr int kImplementedHookIds = 44;
+    constexpr int kCommentedOutAbsent = 7;
     constexpr int kObsoleteHexSlots = 4;     // 12-15 (commented out, not in enum)
     constexpr int kReservedSlots = 7;        // 54-60 (49-53 now implemented)
 
@@ -262,7 +266,7 @@ TEST_CASE("HOOK_COUNT consistency — implemented + absent + reserved = 62")
     // in scriptHooks[] but their trigger sites are external.
     constexpr int kExternalHooks = 2; // HOOK_KEYPRESS + HOOK_MOUSECLICK
     constexpr int kGameEngineHooks = kImplementedHookIds - kExternalHooks;
-    CHECK(kGameEngineHooks == 41); // 43 - 2 = 41 engine-internal hooks
+    CHECK(kGameEngineHooks == 42); // 44 - 2 = 42 engine-internal hooks
 }
 
 // =================================================================
@@ -510,17 +514,16 @@ TEST_CASE("H-022: DescriptionObj — nullptr string treated as no override")
     CHECK(result == engineDesc); // engine description preserved
 }
 
-TEST_CASE("H-022: DescriptionObj — examiner may be null (documented at L1149)")
+TEST_CASE("H-022/M-24: DescriptionObj — arg0 is the examined object (sfall contract)")
 {
-    // Production doc at sfall_script_hooks.cc:1149:
-    // "Critter arg0 - the critter performing the examination (may be null)"
-    // This test verifies the NULL-accepting contract for arg0.
-    // The production code passes examiner directly to ScriptHookCall constructor
-    // which stores ProgramValue (null object → integer 0), so it's safe.
-    // Since we can't test nullptr passing with mirrors, we verify the contract
-    // is documented and the fast-path (empty hook list) does not crash.
+    // M-24: the argument layout was corrected to match sfall's
+    // HOOK_DESCRIPTIONOBJ (ObjectHs.cpp:160-175) — scripts receive ONLY the
+    // examined object as arg0 (previously {examiner, target, description},
+    // which made Et Tu's DescriptionObj_handler read the EXAMINER's pid and
+    // the farm-parts description override never fired). The hook's ret0
+    // string-override contract is unchanged and covered by the mirrors above.
     CHECK(static_cast<int>(HOOK_DESCRIPTIONOBJ) == 34);
-    // HOOK_DESCRIPTIONOBJ exists and is documented as null-safe for arg0
+    // HOOK_DESCRIPTIONOBJ exists and is documented as exposing the object
 }
 
 // =================================================================
@@ -1313,15 +1316,15 @@ TEST_CASE("F-09: Sneak — both pointers must be non-null")
 // =================================================================
 // F-016 / I2F-008: EncounterHookEventType completeness
 // =================================================================
-// The existing test at line 92 verifies LocalMapEnter == 2.
+// The existing test at line 92 verifies LocalMapEnter == 1 (H-03).
 // This test adds ForcedEncounter == 256 verification, completing
 // the enum value coverage for all three encounter event types.
 
 TEST_CASE("F-016/I2F-008: EncounterHookEventType — ForcedEncounter == 256")
 {
-    // sfall convention: 0x100 (256) = forced encounter.
-    // CE passes this directly as arg0 to HOOK_ENCOUNTER scripts
-    // (see sfall_script_hooks.cc:723).
+    // CE-internal marker for the worldmap.cc forced-encounter call site.
+    // sfall N-01: the hook NEVER fires for forced encounters, so 256 is
+    // never sent to scripts as arg0.
     CHECK(static_cast<int>(EncounterHookEventType::ForcedEncounter) == 256);
 }
 
@@ -1336,14 +1339,13 @@ TEST_CASE("F-016/I2F-008: EncounterHookEventType — all three values are distin
           static_cast<int>(EncounterHookEventType::ForcedEncounter));
 }
 
-TEST_CASE("F-016/I2F-008: EncounterHookEventType — script-visible values are non-zero for enter/forced")
+TEST_CASE("F-016/I2F-008: EncounterHookEventType — LocalMapEnter arg0 is sfall-compatible (1)")
 {
-    // Scripts distinguish event types by checking arg0. Both LocalMapEnter
-    // (2) and ForcedEncounter (256) must be non-zero so scripts can
-    // differentiate from RandomEncounter (0). After the fix, the SSL test
-    // script uses `event_type == 2` for worldmap entry rerouting.
-    CHECK(static_cast<int>(EncounterHookEventType::LocalMapEnter) != 0);
-    CHECK(static_cast<int>(EncounterHookEventType::ForcedEncounter) != 0);
+    // H-03/P-05: scripts see arg0 == 1 when the player enters a local map
+    // from the world map (sfall hooks.yml:731). 86e6c4d's value 2 inverted
+    // this and killed Et Tu's gl_worldmap.ssl local-enter branch.
+    CHECK(static_cast<int>(EncounterHookEventType::LocalMapEnter) == 1);
+    CHECK(static_cast<int>(EncounterHookEventType::RandomEncounter) == 0);
 }
 
 // =================================================================

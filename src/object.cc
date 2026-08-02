@@ -453,6 +453,20 @@ int objectRead(Object* obj, File* stream)
     if (fileReadInt32(stream, &(obj->sid)) == -1) return -1;
     if (fileReadInt32(stream, &(obj->scriptIndex)) == -1) return -1;
 
+    // M-77/M-78: tile and rotation are read raw from the save file. A crafted
+    // or corrupt save can supply out-of-range values that later index the
+    // gObjectListHeadByTile[HEX_GRID_SIZE] array (_obj_insert/objectGetListNode/
+    // objectFindFirstAtLocation) or the art->xOffsets[ROTATION_COUNT] tables,
+    // and that also breaks the automap decode/pixelOffset assumptions (map
+    // NEW-2 / P-17). Normalize invalid values: tile becomes -1 (floating
+    // object), rotation becomes 0.
+    if (obj->tile < -1 || obj->tile >= HEX_GRID_SIZE) {
+        obj->tile = -1;
+    }
+    if (obj->rotation < 0 || obj->rotation >= ROTATION_COUNT) {
+        obj->rotation = 0;
+    }
+
     obj->outline = 0;
     obj->owner = nullptr;
 
@@ -507,8 +521,15 @@ static int objectLoadAllInternal(File* stream)
         return -1;
     }
 
+    // M-76: null/reset after free. Without this, a load where objectCount == 0
+    // (or a failed load after a prior success) leaves a dangling non-null
+    // gObjectFids with a stale length, defeating the `== nullptr` guard in
+    // _obj_preload_art_cache and leading to a double free at line ~3295 and a
+    // length-0 OOB read at line ~3255.
     if (gObjectFids != nullptr) {
         internal_free(gObjectFids);
+        gObjectFids = nullptr;
+        gObjectFidsLength = 0;
     }
 
     if (objectCount != 0) {
@@ -551,7 +572,13 @@ static int objectLoadAllInternal(File* stream)
             }
 
             objectListNode->obj->outline = 0;
-            gObjectFids[gObjectFidsLength++] = objectListNode->obj->fid;
+            // M-76: the per-elevation counts are also file-controlled; a
+            // crafted save whose sum of objectCountAtElevation exceeds the
+            // declared objectCount would write past the gObjectFids buffer.
+            // Drop the overflow entries.
+            if (gObjectFidsLength < objectCount) {
+                gObjectFids[gObjectFidsLength++] = objectListNode->obj->fid;
+            }
 
             if (objectListNode->obj->sid != -1) {
                 Script* script;
@@ -1680,7 +1707,10 @@ int objectSetRotation(Object* obj, int direction, Rect* dirtyRect)
         return -1;
     }
 
-    if (direction >= ROTATION_COUNT) {
+    // M-78: the guard only checked the upper bound, so a negative direction
+    // (script-supplied, e.g. op_anim with a negative frame) was stored and
+    // later indexed art->xOffsets[obj->rotation]/yOffsets at 4 call sites.
+    if (direction < 0 || direction >= ROTATION_COUNT) {
         return -1;
     }
 
@@ -2294,6 +2324,14 @@ Object* objectFindNextAtElevation()
 // 0x48B5A8 obj_find_first_at_tile
 Object* objectFindFirstAtLocation(int elevation, int tile)
 {
+    // M-79: siblings (_obj_blocking_at etc.) validate the tile before indexing
+    // gObjectListHeadByTile; this site was missed. Script-supplied tile values
+    // (opTileContainsObjectWithPid / metarule3(…TILE_GET_NEXT_CRITTER)) can be
+    // out of range.
+    if (!hexGridTileIsValid(tile)) {
+        return nullptr;
+    }
+
     gObjectFindElevation = elevation;
     gObjectFindTile = tile;
 
@@ -2411,6 +2449,12 @@ void objectGetRect(Object* obj, Rect* rect)
 // 0x48B7F8 obj_occupied
 bool _obj_occupied(int tile, int elevation)
 {
+    // M-79: sibling functions validate the tile before indexing
+    // gObjectListHeadByTile; this site was missed.
+    if (!hexGridTileIsValid(tile)) {
+        return false;
+    }
+
     ObjectListNode* objectListNode = gObjectListHeadByTile[tile];
     while (objectListNode != nullptr) {
         if (objectListNode->obj->elevation == elevation
@@ -2623,6 +2667,12 @@ int _obj_scroll_blocking_at(int tile, int elev)
 // 0x48BB88 obj_sight_blocking_at
 Object* _obj_sight_blocking_at(Object* excludeObj, int tile, int elevation)
 {
+    // M-79: sibling functions validate the tile before indexing
+    // gObjectListHeadByTile; this site was missed.
+    if (!hexGridTileIsValid(tile)) {
+        return nullptr;
+    }
+
     ObjectListNode* objectListNode = gObjectListHeadByTile[tile];
     while (objectListNode != nullptr) {
         Object* object = objectListNode->obj;
@@ -3200,6 +3250,17 @@ char* objectGetDescription(Object* obj)
 void _obj_preload_art_cache(int flags)
 {
     if (gObjectFids == nullptr) {
+        return;
+    }
+
+    // M-76: with zero fids recorded (objectCount > 0 but no object written,
+    // or a load that was reset), the code below reads gObjectFids[v12 - 1]
+    // (index -1) before qsort and then frees the array. Nothing to warm —
+    // release and bail.
+    if (gObjectFidsLength == 0) {
+        internal_free(gObjectFids);
+        gObjectFids = nullptr;
+        gObjectFidsLength = 0;
         return;
     }
 

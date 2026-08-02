@@ -259,7 +259,12 @@ int lipsLoad(const char* audioFileName, const char* headFileName)
         *sep = '\0';
     }
 
-    strcpy(audioBaseName, audioFileName);
+    // M-197: audioFileName comes from the dialog MSG audio field (bounded only
+    // by MESSAGE_LIST_ITEM_FIELD_MAX_SIZE, 1024) while audioBaseName is a
+    // 16-byte stack buffer. Copy bounded; the sibling copy below (file_name)
+    // already uses strncpy.
+    strncpy(audioBaseName, audioFileName, sizeof(audioBaseName) - 1);
+    audioBaseName[sizeof(audioBaseName) - 1] = '\0';
 
     sep = strchr(audioBaseName, '.');
     if (sep != nullptr) {
@@ -326,6 +331,11 @@ int lipsLoad(const char* audioFileName, const char* headFileName)
             unsigned char phoneme = gLipsData.phonemes[i];
             if (phoneme >= PHONEME_COUNT) {
                 debugPrint("\nLoad error: Speech phoneme %d is invalid (%d)!", i, phoneme);
+                // M-196: clamp invalid phonemes to a valid index instead of
+                // storing them. gLipsCurrentPhoneme is an unsigned char (0-255)
+                // and the consumer indexes the int[PHONEME_COUNT] table with it
+                // (game_dialog.cc:3224), so bytes 42..255 would read OOB.
+                gLipsData.phonemes[i] = 0;
             }
         }
     }
@@ -395,7 +405,14 @@ int lipsLoad(const char* audioFileName, const char* headFileName)
     _lips_make_speech();
 
     _head_marker_current = 0;
-    gLipsCurrentPhoneme = gLipsData.phonemes[0];
+    // M-196/M-198: clamp the initial phoneme — it can be garbage when the LIP
+    // fill loop was skipped (missing file) or hold an invalid byte from a
+    // malformed LIP, and the consumer indexes the int[PHONEME_COUNT] table.
+    unsigned char currentPhoneme = gLipsData.phonemes[0];
+    if (currentPhoneme >= PHONEME_COUNT) {
+        currentPhoneme = 0;
+    }
+    gLipsCurrentPhoneme = currentPhoneme;
 
     return 0;
 }
@@ -472,6 +489,14 @@ int lipsFree()
         internal_free(gLipsData.markers);
         gLipsData.markers = nullptr;
     }
+
+    // M-198: reset the counts read from the LIP file. lipsLoad allocates the
+    // arrays using field_24/field_2C and only fills them when the file stream
+    // is non-null; without this reset a subsequent load with a missing .lip
+    // re-allocates with the stale counts, skips the fill, and line 398 reads
+    // uninitialized heap (which then indexes the phoneme lookup table).
+    gLipsData.field_24 = 0;
+    gLipsData.field_2C = 0;
 
     return 0;
 }

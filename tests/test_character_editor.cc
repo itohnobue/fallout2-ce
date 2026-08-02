@@ -18,6 +18,7 @@
 #include <cctype>
 #include <climits>
 #include <cstring>
+#include <string>
 #include <vector>
 
 #include "stat_defs.h"
@@ -93,6 +94,12 @@ static int g_testPerkFrequencyOverride = 0;
 
 // character_editor.cc:791
 static std::vector<TestCustomKarmaFolderDescription> g_testCustomKarmaFolderDescriptions;
+
+// Mirrors gCharacterEditorEmptyDescription (character_editor.cc:656) — a
+// MUTABLE empty string that the R-16 write-safe routing returns for null or
+// empty descriptions. Must be a writable array (not a literal) because the
+// card draws write into the description buffer.
+static char g_testCharacterEditorEmptyDescription[] = "";
 
 // ================================================================
 // Test-local function mirrors matching production logic
@@ -1527,5 +1534,294 @@ TEST_CASE("N2-015: perk dialog — state transitions across all three branches")
         int rc2 = testMirrorPerkDialogBranch(hasFreePerk, 1);
         CHECK(rc2 == 1);
         CHECK(hasFreePerk == 0);
+    }
+}
+
+// ================================================================
+// Stage 6 regression mirrors — H-11 / M-59 / M-61 (Stage 6 FIX)
+//
+// These mirror the exact invariants introduced by the Stage 6 character-editor
+// fixes so the guard logic is regression-tested. See tmp/s6-fix-char-editor-report.md
+// for the full finding context (H-11 reader sentinel, M-59 negative-id print
+// UB, M-61 Mutate count mismatch).
+// ================================================================
+
+constexpr int TEST_TRAIT_COUNT = 16;
+
+// Mirrors the H-11 fixed folder-view trait reader in
+// characterEditorDrawPerksFolder (character_editor.cc:2158-2169). A trait
+// slot is rendered only when it is a real engine trait id
+// (trait >= 0 && trait < TRAIT_COUNT). The empty-slot sentinel -1 (written by
+// op_remove_trait, sfall semantics), the pre-fix TRAIT_COUNT(16) sentinel, and
+// negative (fake) trait ids are all treated as empty — traitGetName returns
+// nullptr for them and drawing it crashed fontDrawText at character-sheet open.
+static bool test_editorTraitIsRenderable(int trait)
+{
+    return trait >= 0 && trait < TEST_TRAIT_COUNT;
+}
+
+TEST_CASE("H-11: folder-view trait reader renders only real trait ids")
+{
+    SUBCASE("valid trait ids are renderable")
+    {
+        CHECK(test_editorTraitIsRenderable(0));
+        CHECK(test_editorTraitIsRenderable(TEST_TRAIT_SKILLED));
+        CHECK(test_editorTraitIsRenderable(TEST_TRAIT_GIFTED));
+        CHECK(test_editorTraitIsRenderable(TEST_TRAIT_COUNT - 1));
+    }
+
+    SUBCASE("empty sentinel -1 is not renderable")
+    {
+        CHECK_FALSE(test_editorTraitIsRenderable(-1));
+    }
+
+    SUBCASE("pre-fix TRAIT_COUNT(16) sentinel is not renderable")
+    {
+        CHECK_FALSE(test_editorTraitIsRenderable(TEST_TRAIT_COUNT));
+    }
+
+    SUBCASE("negative fake-trait ids are not renderable")
+    {
+        CHECK_FALSE(test_editorTraitIsRenderable(-2));
+        CHECK_FALSE(test_editorTraitIsRenderable(-10));
+    }
+
+    SUBCASE("out-of-range positive ids are not renderable")
+    {
+        CHECK_FALSE(test_editorTraitIsRenderable(TEST_TRAIT_COUNT + 1));
+        CHECK_FALSE(test_editorTraitIsRenderable(100));
+    }
+}
+
+// Mirrors the M-59 fixed character-print loop in characterPrintToFile
+// (character_editor.cc:4681-4692): only real engine trait ids
+// [0, TRAIT_COUNT) are printed. Invalid ids (negative fake-trait ids persisted
+// by the pre-fix Mutate path, or the H-11 TRAIT_COUNT sentinel) are skipped —
+// traitGetName returns nullptr for them and snprintf("%s", nullptr) is UB.
+static int test_editorCountPrintableTraits(const int* tempTraits, int maxCount)
+{
+    int printable = 0;
+    for (int index = 0; index < maxCount; index++) {
+        int trait = tempTraits[index];
+        if (trait >= 0 && trait < TEST_TRAIT_COUNT) {
+            printable++;
+        }
+    }
+    return printable;
+}
+
+TEST_CASE("M-59: character print skips invalid trait ids")
+{
+    SUBCASE("all-valid FO2 traits print fully")
+    {
+        int traits[3] = { 3, 7, -1 };
+        CHECK(test_editorCountPrintableTraits(traits, 2) == 2);
+    }
+
+    SUBCASE("negative fake-trait id is skipped")
+    {
+        int traits[3] = { 3, -2, -1 };
+        CHECK(test_editorCountPrintableTraits(traits, 3) == 1);
+    }
+
+    SUBCASE("TRAIT_COUNT sentinel is skipped")
+    {
+        int traits[3] = { 3, TEST_TRAIT_COUNT, -1 };
+        CHECK(test_editorCountPrintableTraits(traits, 3) == 1);
+    }
+
+    SUBCASE("all-invalid prints nothing")
+    {
+        int traits[3] = { -1, -1, TEST_TRAIT_COUNT };
+        CHECK(test_editorCountPrintableTraits(traits, 3) == 0);
+    }
+}
+
+// Mirrors the M-61 fixed Mutate phase-2 count (character_editor.cc:6970-6982).
+// The count passed to perkDialogHandleInput must equal the number of entries
+// actually filled by perkDialogDrawTraits(a1 != 0): TRAIT_COUNT minus the
+// selected backup traits (2 in FO2, 3 in FO1), plus active fake traits. The
+// pre-fix formula (16 - gCharacterEditorTempTraitCount) overcounted by 1 in
+// FO2 (14 filled vs 15 passed), so KEY_END landed on a zeroed stale option
+// (name == nullptr) → fontDrawText(nullptr) crash at render.
+static int test_mutatePhase2Count(int backupCount, int fakeTraitCount)
+{
+    int count = TEST_TRAIT_COUNT - backupCount + fakeTraitCount;
+    if (count < 0) {
+        count = 0;
+    } else if (count > TEST_PERK_COUNT) {
+        count = TEST_PERK_COUNT;
+    }
+    return count;
+}
+
+TEST_CASE("M-61: Mutate phase-2 count equals filled trait entries")
+{
+    SUBCASE("FO2 with 2 backup traits and no fakes: 14 filled")
+    {
+        CHECK(test_mutatePhase2Count(2, 0) == 14);
+    }
+
+    SUBCASE("FO1 with 3 backup traits and no fakes: 13 filled")
+    {
+        CHECK(test_mutatePhase2Count(3, 0) == 13);
+    }
+
+    SUBCASE("fake traits add to the count")
+    {
+        CHECK(test_mutatePhase2Count(2, 2) == 16);
+    }
+
+    SUBCASE("pre-fix formula overcounted FO2 (15 != 14 filled)")
+    {
+        // Old: count = 16 - gCharacterEditorTempTraitCount (=1 after a removal
+        // in FO2) → 15, but only 14 entries are filled. The fix uses 14.
+        CHECK(test_mutatePhase2Count(2, 0) == 14);
+        CHECK_FALSE(test_mutatePhase2Count(2, 0) == 15);
+    }
+
+    SUBCASE("count never exceeds the picker capacity")
+    {
+        CHECK(test_mutatePhase2Count(2, 200) == TEST_PERK_COUNT);
+    }
+}
+
+TEST_CASE("M-61: KEY_END navigation stays within filled count")
+{
+    SUBCASE("FO2 count=14: last rendered index 13 < 14, no stale entry")
+    {
+        int count = test_mutatePhase2Count(2, 0); // 14
+
+        // perkDialogHandleInput KEY_END (character_editor.cc, case KEY_END):
+        // count > 11 → topLine = count - 11, currentLine = 10.
+        int topLine = count - 11;
+        int currentLine = 10;
+        int lastRenderedIndex = topLine + currentLine;
+        CHECK(topLine == 3);
+        CHECK(lastRenderedIndex == 13);
+        CHECK(lastRenderedIndex < count);          // in-bounds
+        CHECK(topLine + 11 == count);              // render bound == count
+    }
+
+    SUBCASE("FO1 count=13: last rendered index 12 < 13")
+    {
+        int count = test_mutatePhase2Count(3, 0); // 13
+
+        int topLine = count - 11;
+        int currentLine = 10;
+        CHECK(topLine == 2);
+        CHECK(topLine + currentLine == 12);
+        CHECK(topLine + currentLine < count);
+    }
+}
+
+// ================================================================
+// Stage 6 pass-2 regression mirrors — R-03 / R-16 (FIX pass 2)
+//
+// R-03: perkDialogDrawPerks list draw (character_editor.cc:6802) passed the
+// raw option-list name to fontDrawText with no null guard. Fake perks created
+// by op_set_fake_perk / op_set_selectable_perk leave entry.name nullptr when
+// the script omits the name, and the qsort comparator sorts null names last —
+// so with a short list the null-named fake perk is drawn on the first frame,
+// dereferencing nullptr in textFontDrawImpl (text_font.cc:340) → SIGSEGV. The
+// fix mirrors the trait twin (7202-7205): optionName ? optionName : "(unknown)".
+//
+// R-16: traitGetDescription (trait.cc:178) / perkGetDescription (perk.cc:617)
+// / skillGetDescription (skill.cc:541) return the "" string LITERAL for
+// valid-but-unloaded entries. The card draws write into the description buffer
+// during word-wrap rendering (characterEditorDrawCardWithOptions 5199-5202,
+// perkDialogDrawCard 7293-7298), so a literal would be written to read-only
+// memory (UB). The fix routes any null-or-empty description through the
+// mutable gCharacterEditorEmptyDescription buffer.
+// ================================================================
+
+// Mirrors the R-03 fixed perk-list draw name selection: a null option name is
+// replaced by "(unknown)" before fontDrawText. Mirrors the trait twin at
+// character_editor.cc:7202-7205.
+static const char* test_perkListDrawName(const char* optionName)
+{
+    return optionName != nullptr ? optionName : "(unknown)";
+}
+
+TEST_CASE("R-03: perk list draw never passes a null name to fontDrawText")
+{
+    SUBCASE("non-null names pass through unchanged")
+    {
+        CHECK(test_perkListDrawName("Awareness") == std::string("Awareness"));
+        CHECK(test_perkListDrawName("") == std::string(""));
+    }
+
+    SUBCASE("null fake-perk name falls back to (unknown)")
+    {
+        CHECK(test_perkListDrawName(nullptr) == std::string("(unknown)"));
+    }
+
+    SUBCASE("full short list with a null-named fake perk draws (unknown) on the first frame")
+    {
+        // op_set_fake_perk leaves entry.name nullptr; qsort (comparator at
+        // 7213-7221) sorts null names last, so a short list (count <= 11)
+        // draws the null-named fake perk on the first visible frame.
+        const char* optionList[3] = { "Awareness", "Healer", nullptr };
+        for (int index = 0; index < 3; index++) {
+            const char* drawName = test_perkListDrawName(optionList[index]);
+            REQUIRE(drawName != nullptr);   // fontDrawText contract
+            CHECK(std::string(drawName) != std::string());
+            if (optionList[index] == nullptr) {
+                CHECK(std::string(drawName) == std::string("(unknown)"));
+            }
+        }
+    }
+
+    SUBCASE("empty-name fake perk (script passes empty string) also draws safely")
+    {
+        CHECK(test_perkListDrawName("") == std::string(""));
+        CHECK(std::string(test_perkListDrawName("")) != std::string("(unknown)"));
+    }
+}
+
+// Mirrors the R-16 fixed description routing (characterEditorWriteSafeDescription,
+// character_editor.cc:665-671): null or empty descriptions are routed through
+// the mutable gCharacterEditorEmptyDescription so the word-wrap draw's
+// description[ending] = '\0' write never lands on a string literal.
+static const char* test_writeSafeDescription(const char* description)
+{
+    if (description == nullptr || description[0] == '\0') {
+        return g_testCharacterEditorEmptyDescription;
+    }
+    return description;
+}
+
+TEST_CASE("R-16: empty descriptions are routed through a mutable buffer, never the literal")
+{
+    SUBCASE("nullptr description routes to the mutable empty buffer")
+    {
+        CHECK(test_writeSafeDescription(nullptr) == g_testCharacterEditorEmptyDescription);
+    }
+
+    SUBCASE("empty literal routes to the mutable empty buffer")
+    {
+        // traitGetDescription/perkGetDescription return the "" literal for
+        // valid-but-unloaded entries — the write must not land on it.
+        const char* emptyLiteral = "";
+        CHECK(test_writeSafeDescription(emptyLiteral) == g_testCharacterEditorEmptyDescription);
+        CHECK(test_writeSafeDescription(emptyLiteral) != emptyLiteral);
+    }
+
+    SUBCASE("non-empty descriptions pass through unchanged")
+    {
+        const char* realDescription = "Real description";
+        CHECK(test_writeSafeDescription(realDescription) == realDescription);
+    }
+
+    SUBCASE("the routed buffer is writable (card draw writes description[ending] = '\\0')")
+    {
+        // The card draws (characterEditorDrawCardWithOptions 5199-5202,
+        // perkDialogDrawCard 7293-7298) write into the description buffer. The
+        // mutable buffer must survive the write — a literal would be UB.
+        char* routed = const_cast<char*>(g_testCharacterEditorEmptyDescription);
+        char c = routed[0];
+        routed[0] = '\0';
+        CHECK(routed[0] == '\0');
+        routed[0] = c;
     }
 }

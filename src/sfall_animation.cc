@@ -120,23 +120,22 @@ void mf_reg_anim_animate_and_move(OpcodeContext& ctx)
         return;
     }
 
-    // sfall: reg_anim_animate_and_move wraps the movement in
-    // reg_anim_begin/reg_anim_end and uses proper pathfinding via
-    // animationRegisterMoveToTile (which handles obstacles, unlike
-    // the straight-line variant). The anim parameter is respected
-    // by choosing between walk and run movement types.
+    // M-34: sfall reg_anim_animate_and_move uses STRAIGHT-LINE movement with
+    // the animId passed through — `register_object_animate_and_move_straight(
+    // obj, tile, obj->elevation, animId, delay)` (Anims.cpp:136-145). The old
+    // comment claimed sfall "uses proper pathfinding via
+    // animationRegisterMoveToTile" — factually false. The fork used
+    // animationRegisterMoveToTile (pathfinding, hardcoded ANIM_WALK) and
+    // discarded the anim parameter, breaking the sfall contract for
+    // third-party mods. Use animationRegisterMoveToTileStraight, which
+    // respects the anim argument (animation.cc:806-838).
     int result = reg_anim_begin(ANIMATION_REQUEST_RESERVED);
     if (result != 0) {
         ctx.setReturn(-1);
         return;
     }
 
-    // -1 actionPoints = unlimited (script-driven movement, not AP-gated).
-    // The anim parameter is passed as delay since animationRegisterMoveToTile
-    // hardcodes ANIM_WALK; the caller's anim override is intentionally
-    // deferred to future RunToTile integration.
-    (void)anim;
-    if (animationRegisterMoveToTile(object, tile, object->elevation, -1, delay) != 0) {
+    if (animationRegisterMoveToTileStraight(object, tile, object->elevation, anim, delay) != 0) {
         reg_anim_end();
         ctx.setReturn(-1);
         return;
