@@ -724,6 +724,11 @@ static int _partyMemberRecoverLoadInstance(PartyMemberListItem* a1)
     if (a1->vars != nullptr) {
         script->localVarsOffset = mapAllocLocalVars(script->localVarsCount);
         memcpy(gMapLocalVars + script->localVarsOffset, a1->vars, sizeof(int) * script->localVarsCount);
+
+        // 552505e: a1->vars was allocated during partyMemberSaveProtos and
+        // never freed here — free it after copying into the map local vars.
+        internal_free(a1->vars);
+        a1->vars = nullptr;
     }
 
     return 0;
@@ -994,6 +999,18 @@ bool objectIsPartyMember(Object* object)
     return isPartyMember;
 }
 
+// 843803e: whether a party member pid can equip armor (biped bodies, except
+// Marcus who has a fixed appearance).
+bool partyMemberPidCanEquipArmor(int pid)
+{
+    Proto* proto;
+    if (protoGetProto(pid, &proto) == -1) {
+        return false;
+    }
+
+    return proto->critter.data.bodyType == BODY_TYPE_BIPED && pid != PROTO_ID_MARCUS;
+}
+
 // Returns number of active critters in the party.
 //
 // 0x495010 getPartyMemberCount
@@ -1235,6 +1252,12 @@ static int _partyMemberItemRecover(PartyMemberListItem* a1)
     if (a1->vars != nullptr) {
         script->localVarsOffset = mapAllocLocalVars(script->localVarsCount);
         memcpy(gMapLocalVars + script->localVarsOffset, a1->vars, sizeof(int) * script->localVarsCount);
+
+        // 552505e (same leak class as _partyMemberRecoverLoadInstance): the
+        // vars buffer allocated in _partyMemberItemSave is copied into the
+        // map local vars and then the node is freed without freeing vars.
+        internal_free(a1->vars);
+        a1->vars = nullptr;
     }
 
     return 0;
@@ -1710,7 +1733,7 @@ int _partyMemberIncLevels(int pid)
         snprintf(str, sizeof(str), text, name);
         displayMonitorAddMessage(str);
 
-        debugPrint(str);
+        debugPrint("%s", str);
 
         // Individual message
         msg.num = 9000 + 10 * memberIndex + levelUpInfo->level - 1;

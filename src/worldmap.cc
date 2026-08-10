@@ -675,6 +675,7 @@ static bool wmGameTimeIncrement(int ticksToAdd);
 static int wmGrabTileWalkMask(int tileIdx);
 static bool wmWorldPosInvalid(int x, int y);
 static void wmPartyInitWalking(int x, int y);
+static bool wmTravelTickDue(unsigned int now);
 static void wmPartyWalkingStep();
 static void wmInterfaceScrollTabsStart(int delta);
 static void wmInterfaceScrollTabsStop();
@@ -899,11 +900,25 @@ static const int wmRndCursorFids[WORLD_MAP_ENCOUNTER_FRM_COUNT] = {
 };
 
 #define MAX_TRAIL_LENGTH 1000
+#define TRAIL_MARKER_STYLE_COUNT 4
+
+typedef struct TrailMarkerStyle {
+    int length;
+    int spacing;
+} TrailMarkerStyle;
 
 typedef struct {
     int x;
     int y;
 } TrailDot;
+
+typedef struct TrailMarkerState {
+    bool hasPattern;
+    int dotCount;
+    TrailDot dots[MAX_TRAIL_LENGTH];
+    int remainingDots;
+    int remainingSpacing;
+} TrailMarkerState;
 
 // 0x51DE94 wmLabelList
 static int* wmLabelList = nullptr;
@@ -1005,6 +1020,84 @@ static bool wmFaded = false;
 static int wmForceEncounterMapId = -1;
 static unsigned int wmForceEncounterFlags = 0;
 static int worldmapTrailMarkers;
+static TrailMarkerState trailMarkerState = {};
+// 8b1efef: encounter_detection metarule — when disabled, random encounters
+// trigger without the player's detection chance.
+static bool wmEncounterDetectionEnabled = true;
+// 9f5a047: encounter_intros metarule — when disabled, the display-monitor
+// encounter intro message ("You encounter: ...") is suppressed.
+static bool wmEncounterIntrosEnabled = true;
+
+// 8b1efef: encounter_detection metarule.
+void wmSetEncounterDetection(bool enabled)
+{
+    wmEncounterDetectionEnabled = enabled;
+}
+
+// 9f5a047: encounter_intros metarule.
+void wmSetEncounterIntros(bool enabled)
+{
+    wmEncounterIntrosEnabled = enabled;
+}
+
+// 30bf0c3: travel_delay — ms between world-map travel simulation updates
+// (0 = every rendered frame). Complementary to the sfall WorldMapDelay2
+// frame-rate cap applied below in the main loop.
+static int worldmapTravelDelay;
+static unsigned int wmLastTravelTick;
+
+static const unsigned char worldmapTrailMarkerColor = 134;
+static const TrailMarkerStyle worldmapTrailMarkerStyles[TRAIL_MARKER_STYLE_COUNT] = {
+    { 1, 2 },
+    { 2, 1 },
+    { 1, 3 },
+    { 1, 2 },
+};
+
+static void wmAddTrailDot(TrailDot* trailDots, int* trailDotCount, int x, int y)
+{
+    if (*trailDotCount < MAX_TRAIL_LENGTH) {
+        trailDots[(*trailDotCount)++] = { x, y };
+    } else {
+        memmove(trailDots, trailDots + 1, sizeof(TrailDot) * (MAX_TRAIL_LENGTH - 1));
+        trailDots[MAX_TRAIL_LENGTH - 1] = { x, y };
+    }
+}
+
+static void wmAddTrailMarker(int terrainId, int x, int y)
+{
+    int styleIndex = std::clamp(terrainId, 0, TRAIL_MARKER_STYLE_COUNT - 1);
+    const TrailMarkerStyle* style = &(worldmapTrailMarkerStyles[styleIndex]);
+
+    if (!trailMarkerState.hasPattern) {
+        trailMarkerState.hasPattern = true;
+        trailMarkerState.remainingDots = style->length;
+        trailMarkerState.remainingSpacing = style->spacing;
+    } else {
+        trailMarkerState.remainingDots = std::min(trailMarkerState.remainingDots, style->length);
+        trailMarkerState.remainingSpacing = std::min(trailMarkerState.remainingSpacing, style->spacing);
+    }
+
+    if (trailMarkerState.remainingDots <= 0 && trailMarkerState.remainingSpacing > 0) {
+        trailMarkerState.remainingSpacing--;
+        if (trailMarkerState.remainingSpacing == 0) {
+            trailMarkerState.remainingDots = style->length;
+        }
+        return;
+    }
+
+    trailMarkerState.remainingDots--;
+    trailMarkerState.remainingSpacing = style->spacing;
+    wmAddTrailDot(trailMarkerState.dots, &(trailMarkerState.dotCount), x, y);
+}
+
+static void wmResetTrailMarkers()
+{
+    trailMarkerState.hasPattern = false;
+    trailMarkerState.dotCount = 0;
+    trailMarkerState.remainingDots = 0;
+    trailMarkerState.remainingSpacing = 0;
+}
 
 static inline bool cityIsValid(int city)
 {
@@ -1053,6 +1146,9 @@ int wmWorldMap_init()
 
     // SFALL
     configGetBool(&gContentConfig, CONTENT_CONFIG_WORLDMAP_SECTION, "town_map_hotkeys_fix", &gTownMapHotkeysFix, true);
+    // 30bf0c3: et tu travel_delay — throttles travel simulation, not frames.
+    configGetInt(&gContentConfig, CONTENT_CONFIG_WORLDMAP_SECTION, "travel_delay", &worldmapTravelDelay, 0);
+    worldmapTravelDelay = std::clamp(worldmapTravelDelay, 0, 150);
     configGetInt(&gContentConfig, CONTENT_CONFIG_WORLDMAP_SECTION, "trail_markers", &worldmapTrailMarkers, 0);
 
     // M-64: sfall treats WorldMapFPSPatch as a boolean enable and uses
@@ -1134,6 +1230,9 @@ static int wmGenDataInit()
 
     wmForceEncounterMapId = -1;
     wmForceEncounterFlags = 0;
+    wmEncounterDetectionEnabled = true;
+    wmEncounterIntrosEnabled = true;
+    wmResetTrailMarkers();
 
     return 0;
 }
@@ -1189,6 +1288,9 @@ static int wmGenDataReset()
 
     wmForceEncounterMapId = -1;
     wmForceEncounterFlags = 0;
+    wmEncounterDetectionEnabled = true;
+    wmEncounterIntrosEnabled = true;
+    wmResetTrailMarkers();
 
     return 0;
 }
@@ -1401,6 +1503,8 @@ int wmWorldMap_save(File* stream)
 // 0x4BD28C wmWorldMap_load
 int wmWorldMap_load(File* stream)
 {
+    wmResetTrailMarkers();
+
     if (fileReadBool(stream, &gDidMeetFrankHorrigan) == -1) return -1;
     if (fileReadInt32(stream, &(wmGenData.currentAreaId)) == -1) return -1;
     if (fileReadInt32(stream, &(wmGenData.worldPosX)) == -1) return -1;
@@ -3495,6 +3599,8 @@ static int wmWorldMapFunc(int a1)
 {
     ScopedGameMode gm(GameMode::kWorldmap);
 
+    wmResetTrailMarkers();
+
     wmFadeOut();
 
     if (wmInterfaceInit() == -1) {
@@ -3511,6 +3617,7 @@ static int wmWorldMapFunc(int a1)
     unsigned int partyHealTime = 0;
     int map = -1;
     int rc = 0;
+    wmLastTravelTick = getTicks();
 
     while (true) {
         sharedFpsLimiter.mark();
@@ -3542,7 +3649,7 @@ static int wmWorldMapFunc(int a1)
 
         int mouseEvent = mouseGetEvent();
 
-        if (wmGenData.isWalking) {
+        if (wmGenData.isWalking && wmTravelTickDue(now)) {
             wmPartyWalkingStep();
 
             if (wmGenData.isInCar) {
@@ -3817,7 +3924,9 @@ static int wmWorldMapFunc(int a1)
                            WM_TOWN_LIST_X + WM_TOWN_LIST_WIDTH,
                            WM_TOWN_LIST_Y + WM_TOWN_LIST_HEIGHT)) {
                 if (wheelY != 0) {
-                    wmInterfaceScrollTabsStart(wheelY > 0 ? WM_TOWN_LIST_SLOT_HEIGHT : -WM_TOWN_LIST_SLOT_HEIGHT);
+                    // e90b688: scrolling up (positive wheelY) must move the
+                    // list up — the pre-fix direction was inverted.
+                    wmInterfaceScrollTabsStart(wheelY > 0 ? -WM_TOWN_LIST_SLOT_HEIGHT : WM_TOWN_LIST_SLOT_HEIGHT);
                 }
             }
         }
@@ -4085,54 +4194,58 @@ static int wmRndEncounterOccurred(int* mapToLoadPtr)
     }
 
     bool randomEncounterIsDetected = false;
-    if (frequency > chance) {
-        int outdoorsman = partyGetBestSkillValue(SKILL_OUTDOORSMAN);
-        Object* scanner = objectGetCarriedObjectByPid(gDude, PROTO_ID_MOTION_SENSOR);
-        if (scanner != nullptr) {
-            if (gDude == scanner->owner) {
-                outdoorsman += 20;
+    // 8b1efef: encounter_detection metarule disables the player's chance to
+    // detect a random encounter before it triggers (FO1 behavior).
+    if (wmEncounterDetectionEnabled) {
+        if (frequency > chance) {
+            int outdoorsman = partyGetBestSkillValue(SKILL_OUTDOORSMAN);
+            Object* scanner = objectGetCarriedObjectByPid(gDude, PROTO_ID_MOTION_SENSOR);
+            if (scanner != nullptr) {
+                if (gDude == scanner->owner) {
+                    outdoorsman += 20;
+                }
             }
-        }
 
-        if (outdoorsman > 95) {
-            outdoorsman = 95;
-        }
+            if (outdoorsman > 95) {
+                outdoorsman = 95;
+            }
 
-        TileInfo* tile;
-        // NOTE: Uninline.
-        wmFindCurTileFromPos(wmGenData.worldPosX, wmGenData.worldPosY, &tile);
-        debugPrint("\nEncounter Difficulty Mod: %d", tile->encounterDifficultyModifier);
+            TileInfo* tile;
+            // NOTE: Uninline.
+            wmFindCurTileFromPos(wmGenData.worldPosX, wmGenData.worldPosY, &tile);
+            debugPrint("\nEncounter Difficulty Mod: %d", tile->encounterDifficultyModifier);
 
-        outdoorsman += tile->encounterDifficultyModifier;
+            outdoorsman += tile->encounterDifficultyModifier;
 
-        if (randomBetween(1, 100) < outdoorsman) {
-            randomEncounterIsDetected = true;
+            if (randomBetween(1, 100) < outdoorsman) {
+                randomEncounterIsDetected = true;
 
-            int xp = 100 - outdoorsman;
-            if (xp > 0) {
-                // SFALL: Display actual xp received.
-                debugPrint("WorldMap: Giving Player [%d] Experience For Catching Rnd Encounter!", xp);
+                int xp = 100 - outdoorsman;
+                if (xp > 0) {
+                    // SFALL: Display actual xp received.
+                    debugPrint("WorldMap: Giving Player [%d] Experience For Catching Rnd Encounter!", xp);
 
-                int xpGained;
-                pcAddExperience(xp, &xpGained);
+                    int xpGained;
+                    pcAddExperience(xp, &xpGained);
 
-                // F-108: FO2-specific message ID 8500. FO1 does not display
-                // encounter detection XP messages.
-                if (!gFallout1Behavior) {
-                    MessageListItem messageListItem;
-                    char* text = getmsg(&gMiscMessageList, &messageListItem, 8500);
-                    if (strlen(text) < 110) {
-                        char formattedText[120];
-                        snprintf(formattedText, sizeof(formattedText), text, xpGained);
-                        displayMonitorAddMessage(formattedText);
-                    } else {
-                        debugPrint("WorldMap: Error: Rnd Encounter string too long!");
+                    // F-108: FO2-specific message ID 8500. FO1 does not display
+                    // encounter detection XP messages.
+                    if (!gFallout1Behavior) {
+                        MessageListItem messageListItem;
+                        char* text = getmsg(&gMiscMessageList, &messageListItem, 8500);
+                        if (strlen(text) < 110) {
+                            char formattedText[120];
+                            snprintf(formattedText, sizeof(formattedText), text, xpGained);
+                            displayMonitorAddMessage(formattedText);
+                        } else {
+                            debugPrint("WorldMap: Error: Rnd Encounter string too long!");
+                        }
                     }
                 }
             }
+        } else {
+            randomEncounterIsDetected = true;
         }
-    } else {
-        randomEncounterIsDetected = true;
     }
 
     wmGenData.oldWorldPosX = wmGenData.worldPosX;
@@ -4350,15 +4463,17 @@ int wmSetupRandomEncounter()
     EncounterTable* encounterTable = &(wmEncounterTableList[wmGenData.encounterTableId]);
     EncounterTableEntry* encounterTableEntry = &(encounterTable->entries[wmGenData.encounterEntryId]);
 
-    // SFALL: Display encounter description in one line.
-    char formattedText[512];
-    snprintf(formattedText, sizeof(formattedText),
-        "%s %s",
-        getmsg(&wmMsgFile, &messageListItem, 2998),
-        getmsg(&wmMsgFile, &messageListItem, 3000 + 50 * wmGenData.encounterTableId + wmGenData.encounterEntryId));
+    // 9f5a047: encounter_intros metarule disables the display-monitor
+    // encounter intro message. Combined with the F-023 FO1 behavior (FO1
+    // does not display "You encounter: [name]").
+    if (wmEncounterIntrosEnabled && !gFallout1Behavior) {
+        // SFALL: Display encounter description in one line.
+        char formattedText[512];
+        snprintf(formattedText, sizeof(formattedText),
+            "%s %s",
+            getmsg(&wmMsgFile, &messageListItem, 2998),
+            getmsg(&wmMsgFile, &messageListItem, 3000 + 50 * wmGenData.encounterTableId + wmGenData.encounterEntryId));
 
-    // F-023: FO1 does not display "You encounter: [name]" message.
-    if (!gFallout1Behavior) {
         displayMonitorAddMessage(formattedText);
     }
 
@@ -4999,6 +5114,7 @@ static void wmPartyInitWalking(int x, int y)
     wmGenData.walkDestinationY = y;
     wmGenData.currentAreaId = -1;
     wmGenData.isWalking = true;
+    wmLastTravelTick = getTicks();
 
     int dx = abs(x - wmGenData.worldPosX);
     int dy = abs(y - wmGenData.worldPosY);
@@ -5036,6 +5152,28 @@ static void wmPartyInitWalking(int x, int y)
     if (!wmCursorIsVisible()) {
         wmInterfaceCenterOnParty();
     }
+}
+
+// 30bf0c3: returns true when a travel-simulation update is due, throttling
+// wmPartyWalkingStep calls to worldmapTravelDelay ms while input/rendering
+// continue at the normal frame rate.
+static bool wmTravelTickDue(unsigned int now)
+{
+    if (worldmapTravelDelay == 0) {
+        return true;
+    }
+
+    if (getTicksBetween(now, wmLastTravelTick) < worldmapTravelDelay) {
+        return false;
+    }
+
+    wmLastTravelTick += worldmapTravelDelay;
+    if (getTicksBetween(now, wmLastTravelTick) >= worldmapTravelDelay) {
+        // Drop accumulated ticks after a stall instead of advancing in bursts.
+        wmLastTravelTick = now;
+    }
+
+    return true;
 }
 
 // 0x4C1F90 wmPartyWalkingStep
@@ -5114,6 +5252,18 @@ static void wmPartyWalkingStep()
                 wmGenData.walkWorldPosMainAxisStepY,
                 nullptr,
                 false);
+        }
+
+        // 0b1d155: drop a travel marker on the current terrain when trail
+        // markers are enabled (Fallout 1 behavior).
+        if (worldmapTrailMarkers) {
+            SubtileInfo* markerSubtile;
+            // M-70 pattern: wmFindCurSubTileFromPos returns null when the
+            // position is outside the tile grid (4264-4273); the guard above
+            // already bailed on a null currentSubtile, this is defense-in-depth.
+            if (wmFindCurSubTileFromPos(wmGenData.worldPosX, wmGenData.worldPosY, &markerSubtile) == 0 && markerSubtile != nullptr) {
+                wmAddTrailMarker(markerSubtile->terrain, wmGenData.worldPosX, wmGenData.worldPosY);
+            }
         }
 
         wmGenData.walkDistance -= 1;
@@ -5204,7 +5354,9 @@ static int wmInterfaceInit()
 
     _map_save_in_game(true);
 
-    const char* backgroundSoundFileName = wmGenData.isInCar ? "20car" : "23world";
+    const char* backgroundSoundFileName = gameSoundGetMusicOverride(
+        wmGenData.isInCar ? "worldmap_car_music" : "worldmap_music",
+        wmGenData.isInCar ? "20car" : "23world");
     _gsound_background_play_level_music(backgroundSoundFileName, GSOUND_LIMIT_AFTER);
 
     // CE: Hide entire interface, not just indicator bar, and disable tile
@@ -6489,70 +6641,23 @@ static int wmDrawCursorStopped()
     // Dotted Trail logic
 
     if (worldmapTrailMarkers) {
-        static bool wasWalking = false;
-        static uint32_t lastTrailDropTick = 0;
-        const int baseCooldown = 25; // base time between potential dot drops
-        static int trailDotCount = 0;
-        static TrailDot trailDots[MAX_TRAIL_LENGTH];
-        static int patternCounter = 0;
-
         // Clear the trail when player stops - needs to be done when reloading map too
-        if (wasWalking && !isWalkingNow) {
-            trailDotCount = 0;
-        }
-        wasWalking = isWalkingNow;
-
-        if (isWalkingNow) {
-            uint32_t now = getTicks();
-            if (now - lastTrailDropTick >= baseCooldown) {
-                lastTrailDropTick = now;
-                patternCounter++;
-
-                // Figure out current terrain difficulty
-                wmPartyFindCurSubTile();
-                int difficulty = 1;
-                if (wmGenData.currentSubtile) {
-                    Terrain* t = &wmTerrainTypeList[wmGenData.currentSubtile->terrain];
-                    difficulty = t->difficulty;
-                    if (difficulty < 1) difficulty = 1;
-                }
-
-                // Decide whether to drop on this step, based on terrain (difficulty)
-                bool shouldDrop;
-                if (difficulty >= 4) {
-                    shouldDrop = (patternCounter % 4) != 0; // Drop 3 out of every 4 steps --- used?
-                } else if (difficulty == 3) {
-                    shouldDrop = (patternCounter % 3) != 0; // Drop 2 out of every 3
-                } else if (difficulty == 2) {
-                    shouldDrop = (patternCounter % 2) == 0; // Drop every other step
-                } else {
-                    shouldDrop = (patternCounter % 3) == 0; // Drop only once every 3 steps
-                }
-
-                if (shouldDrop) {
-                    int cx = wmGenData.worldPosX;
-                    int cy = wmGenData.worldPosY;
-                    if (trailDotCount < MAX_TRAIL_LENGTH) {
-                        trailDots[trailDotCount++] = { cx, cy };
-                    } else {
-                        // shift left, add more dots
-                        memmove(trailDots, trailDots + 1, sizeof(TrailDot) * (MAX_TRAIL_LENGTH - 1));
-                        trailDots[MAX_TRAIL_LENGTH - 1] = { cx, cy };
-                    }
-                }
-            }
+        if (!isWalkingNow) {
+            wmResetTrailMarkers();
         }
 
         // Render the trail dots
-        for (int i = 0; i < trailDotCount; i++) {
-            int x = trailDots[i].x;
-            int y = trailDots[i].y;
+        for (int i = 0; i < trailMarkerState.dotCount; i++) {
+            int x = trailMarkerState.dots[i].x;
+            int y = trailMarkerState.dots[i].y;
             if (x >= wmWorldOffsetX && x < wmWorldOffsetX + WM_VIEW_WIDTH
                 && y >= wmWorldOffsetY && y < wmWorldOffsetY + WM_VIEW_HEIGHT) {
+                int screenY = WM_VIEW_Y - wmWorldOffsetY + y;
+                int screenX = WM_VIEW_X - wmWorldOffsetX + x;
                 unsigned char* dst = wmBkWinBuf
-                    + WM_WINDOW_WIDTH * (WM_VIEW_Y - wmWorldOffsetY + y)
-                    + (WM_VIEW_X - wmWorldOffsetX + x);
-                *dst = 136; // bright-red palette index? - not matching perfectly, what palette is being used?
+                    + WM_WINDOW_WIDTH * screenY
+                    + screenX;
+                *dst = worldmapTrailMarkerColor;
             }
         }
     }

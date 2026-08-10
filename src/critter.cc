@@ -26,6 +26,7 @@
 #include "random.h"
 #include "reaction.h"
 #include "scripts.h"
+#include "sfall_object_name.h"
 #include "sfall_script_hooks.h"
 #include "skill.h"
 #include "stat.h"
@@ -238,6 +239,12 @@ char* critterGetName(Object* obj)
 {
     if (obj == gDude) {
         return gDudeName;
+    }
+
+    char* overrideName = sfallObjectNameGet(obj);
+    if (overrideName != nullptr) {
+        _name_critter = overrideName;
+        return overrideName;
     }
 
     if (obj->scriptIndex == -1) {
@@ -1065,6 +1072,34 @@ int critterGetBodyType(Object* critter)
     Proto* proto;
     protoGetProto(critter->pid, &proto);
     return proto->critter.data.bodyType;
+}
+
+// 843803e: physical/art capability check for a critter wielding a weapon.
+// Checks crippled limbs and weapon art existence only. Callers that expose
+// weapon usability decisions must still call scriptHooks_CanUseWeapon with
+// the final result.
+bool critterCanUseWeapon(Object* critter, Object* weapon, int hitMode)
+{
+    if (critter == nullptr || weapon == nullptr || itemGetType(weapon) != ITEM_TYPE_WEAPON) {
+        return false;
+    }
+
+    int damageFlags = critter->data.critter.combat.results;
+    if ((damageFlags & DAM_CRIP_ARM_ANY) == DAM_CRIP_ARM_ANY) {
+        // both limbs are crippled
+        return false;
+    }
+
+    if ((damageFlags & DAM_CRIP_ARM_ANY) != 0 && weaponIsTwoHanded(weapon)) {
+        return false;
+    }
+
+    // verify art exists
+    int rotation = critter->rotation + 1;
+    int animationCode = weaponGetAnimationCode(weapon);
+    int weaponAnimationCode = weaponGetAnimationForHitMode(weapon, hitMode);
+    int fid = buildFid(OBJ_TYPE_CRITTER, critter->fid & 0xFFF, weaponAnimationCode, animationCode, rotation);
+    return artExists(fid);
 }
 
 int critterBuildGorisFid(Object* critter, int frmId)

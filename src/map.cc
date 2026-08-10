@@ -895,7 +895,10 @@ static int mapLoad(File* stream)
         if (backgoundSoundIsPlaying()) {
             // Use the sfall sound path so the map-loading ambience does not depend
             // on the native background music loader.
-            mapLoadSoundId = scriptSoundPlay("sound\\music\\WIND2.ACM", SCRIPT_SOUND_MODE_LOOP);
+            const char* mapLoadingSound = gameSoundGetMusicOverride("map_loading_sound", "wind2");
+            char mapLoadingSoundPath[COMPAT_MAX_PATH];
+            snprintf(mapLoadingSoundPath, sizeof(mapLoadingSoundPath), "sound\\music\\%s.ACM", mapLoadingSound);
+            mapLoadSoundId = scriptSoundPlay(mapLoadingSoundPath, SCRIPT_SOUND_MODE_LOOP);
         }
     }
     isoDisable();
@@ -903,6 +906,12 @@ static int mapLoad(File* stream)
     _gmouse_disable_scrolling();
 
     int savedMouseCursorId = gameMouseGetCursor();
+    // 772d8cd: reset the cursor if it was in view scrolling mode (e.g. after
+    // auto-entering a non-hostile encounter) — otherwise it gets stuck in
+    // that mode on the new map.
+    if (savedMouseCursorId >= MOUSE_CURSOR_SCROLL_NW && savedMouseCursorId <= MOUSE_CURSOR_SCROLL_W_INVALID) {
+        savedMouseCursorId = MOUSE_CURSOR_ARROW;
+    }
     gameMouseSetCursor(MOUSE_CURSOR_WAIT_PLANET);
     fileSetReadProgressHandler(gameMouseRefreshImmediately, 32768);
     tileDisable();
@@ -1028,7 +1037,10 @@ static int mapLoad(File* stream)
     }
 
     lightSetAmbientIntensity(LIGHT_INTENSITY_MAX, false);
-    objectSetLocation(gDude, gCenterTile, gElevation, nullptr);
+    // 21a98be: place the PC on the entering tile, not the centered tile —
+    // on large screens gCenterTile may be offset from gEnteringTile, which
+    // misplaced the PC at map load.
+    objectSetLocation(gDude, gEnteringTile, gElevation, nullptr);
     objectSetRotation(gDude, gEnteringRotation, nullptr);
     gMapHeader.index = wmMapMatchNameToIdx(gMapHeader.name);
 
@@ -1611,14 +1623,18 @@ int _map_save_in_game(bool isLeavingMap)
         strcpy(gMapHeader.name, name);
 
         automapSaveCurrent();
+    }
 
-        if (isLeavingMap) {
-            gMapHeader.name[0] = '\0';
-            _obj_remove_all();
-            _proto_remove_all();
-            _square_reset();
-            gameTimeScheduleUpdateEvent();
-        }
+    // 68c203c: run the map cleanup for ALL leaving-map paths, including
+    // non-savable random-encounter maps. Previously the cleanup only ran
+    // inside the savable branch, so leaving a random encounter left the
+    // map objects/protos/squares in memory until the next map load.
+    if (isLeavingMap) {
+        gMapHeader.name[0] = '\0';
+        _obj_remove_all();
+        _proto_remove_all();
+        _square_reset();
+        gameTimeScheduleUpdateEvent();
     }
 
     return 0;

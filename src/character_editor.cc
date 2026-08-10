@@ -577,6 +577,11 @@ static char gCharacterEditorFolderCardString[256];
 // 0x56FC60 skillsav
 static int gCharacterEditorSkillsBackup[SKILL_COUNT];
 
+// 97fcb9e: base skill value of the 4th tagged skill at the moment it was
+// tagged. Used as the minimum for the decrement button so retagging cannot
+// de-level the skill below where it was when tagged.
+static int tagSkill4LevelBase = -1;
+
 // 0x56FCA8 editor_message_file
 static MessageList gCharacterEditorMessageList;
 
@@ -835,6 +840,7 @@ int characterEditorShow(bool isCreationMode)
     const char* lines[] = { line2 };
 
     gCharacterEditorIsCreationMode = isCreationMode;
+    tagSkill4LevelBase = -1;
 
     characterEditorSavePlayer();
 
@@ -5122,6 +5128,8 @@ static void characterEditorRestorePlayer()
 
     cur_hp = critterGetHitPoints(gDude);
     critterAdjustHitPoints(gDude, gCharacterEditorHitPointsBackup - cur_hp);
+
+    tagSkill4LevelBase = -1;
 }
 
 // 0x43A9CC itostndn
@@ -5463,7 +5471,12 @@ static void characterEditorHandleAdjustSkillButtonPressed(int keyCode)
                     rc = -1;
                 }
             } else if (keyCode == 523) {
-                if (skillGetValue(gDude, gCharacterEditorCurrentSkill) <= gCharacterEditorSkillsBackup[gCharacterEditorCurrentSkill]) {
+                int minimumSkillValue = gCharacterEditorSkillsBackup[gCharacterEditorCurrentSkill];
+                if (tagSkill4LevelBase != -1 && gCharacterEditorCurrentSkill == gCharacterEditorTempTaggedSkills[NUM_TAGGED_SKILLS - 1]) {
+                    minimumSkillValue = tagSkill4LevelBase;
+                }
+
+                if (skillGetValue(gDude, gCharacterEditorCurrentSkill) <= minimumSkillValue) {
                     rc = 0;
                 } else {
                     if (skillSub(gDude, gCharacterEditorCurrentSkill) == -2) {
@@ -7108,11 +7121,16 @@ static bool perkDialogHandleTagPerk()
     if (rc != 1) {
         memcpy(gCharacterEditorTempTaggedSkills, gCharacterEditorTaggedSkillsBackup, sizeof(gCharacterEditorTempTaggedSkills));
         skillsSetTagged(gCharacterEditorTaggedSkillsBackup, NUM_TAGGED_SKILLS);
+        tagSkill4LevelBase = -1;
         return false;
     }
 
-    gCharacterEditorTempTaggedSkills[3] = gPerkDialogOptionList[gPerkDialogTopLine + gPerkDialogCurrentLine].value;
+    Skill tagSkill = static_cast<Skill>(gPerkDialogOptionList[gPerkDialogTopLine + gPerkDialogCurrentLine].value);
+    gCharacterEditorTempTaggedSkills[NUM_TAGGED_SKILLS - 1] = tagSkill;
     skillsSetTagged(gCharacterEditorTempTaggedSkills, NUM_TAGGED_SKILLS);
+    // 97fcb9e: remember the skill value at tagging time so the decrement
+    // button cannot lower the newly tagged skill below it.
+    tagSkill4LevelBase = skillGetValue(gDude, tagSkill);
 
     return true;
 }

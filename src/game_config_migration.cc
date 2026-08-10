@@ -1,5 +1,6 @@
 #include "game_config_migration.h"
 
+#include <algorithm>
 #include <assert.h>
 #include <iterator>
 #include <stdio.h>
@@ -10,6 +11,7 @@
 #include "content_config.h"
 #include "debug.h"
 #include "game_config.h"
+#include "game_movie.h"
 #include "platform_compat.h"
 #include "settings.h"
 #include "sfall_config.h"
@@ -171,6 +173,7 @@ namespace {
 
     constexpr char kSfallMisc[] = "Misc";
     constexpr char kSfallInterface[] = "Interface";
+    constexpr char kSfallSound[] = "Sound";
 
     struct SfallMigrationEntry {
         const char* sfallSection;
@@ -202,6 +205,7 @@ namespace {
         // [dialog]
         { kSfallMisc, "DialogueFix", CONTENT_CONFIG_DIALOG_SECTION, "no_exit_hotkey", "1" },
         { kSfallMisc, "DialogGenderWords", CONTENT_CONFIG_DIALOG_SECTION, "gender_words", "0" },
+        { kSfallMisc, "StartGDialogFix", CONTENT_CONFIG_DIALOG_SECTION, "start_gdialog_fix", "0" },
         // [main_menu]
         { kSfallMisc, "VersionString", CONTENT_CONFIG_MAIN_MENU_SECTION, "version_string" },
         { kSfallMisc, "MainMenuFontColour", CONTENT_CONFIG_MAIN_MENU_SECTION, "font_color", "0" },
@@ -210,6 +214,13 @@ namespace {
         { kSfallMisc, "MainMenuOffsetY", CONTENT_CONFIG_MAIN_MENU_SECTION, "offset_y", "0" },
         { kSfallMisc, "MainMenuCreditsOffsetX", CONTENT_CONFIG_MAIN_MENU_SECTION, "credits_offset_x", "0" },
         { kSfallMisc, "MainMenuCreditsOffsetY", CONTENT_CONFIG_MAIN_MENU_SECTION, "credits_offset_y", "0" },
+        // [sound]
+        { kSfallSound, "MainMenuMusic", CONTENT_CONFIG_SOUND_SECTION, "main_menu_music", "07desert" },
+        { kSfallSound, "WorldMapMusic", CONTENT_CONFIG_SOUND_SECTION, "worldmap_music", "23world" },
+        { kSfallSound, "WorldMapCarMusic", CONTENT_CONFIG_SOUND_SECTION, "worldmap_car_music", "20car" },
+        { kSfallSound, "EndGameMovieMusic0", CONTENT_CONFIG_SOUND_SECTION, "endgame_movie_music0", "akiss" },
+        { kSfallSound, "EndGameMovieMusic1", CONTENT_CONFIG_SOUND_SECTION, "endgame_movie_music1", "10labone" },
+        { kSfallSound, "MapLoadingSound", CONTENT_CONFIG_SOUND_SECTION, "map_loading_sound", "wind2" },
         // [movies]
         { kSfallMisc, "MovieTimer_artimer1", CONTENT_CONFIG_MOVIES_SECTION, "artimer1", "90" },
         { kSfallMisc, "MovieTimer_artimer2", CONTENT_CONFIG_MOVIES_SECTION, "artimer2", "180" },
@@ -306,6 +317,73 @@ static_assert(sfallMigrationEntriesNoDuplicates(),
     "kSfallMigrationEntries contains duplicate (sfallSection, sfallKey) pairs. "
     "Remove the duplicate entry and verify kSfallContentMappings in content_config.cc.");
 
+// 68ff38e: migrate sfall [Misc] Movie1..Movie32 overrides to game.cfg
+// [movies] movie1..movie32. Default file names are not migrated (the
+// [movies] defaults in game.cfg already cover them).
+    static bool contentConfigMigrateSfallMovieOverrides(Config* sfallConfig, Config* migratedConfig)
+    {
+        assert(sfallConfig != nullptr && migratedConfig != nullptr);
+
+        bool migrated = false;
+        for (int index = 0; index < GAME_MOVIE_MAX_COUNT; index++) {
+            char sfallKey[16];
+            snprintf(sfallKey, sizeof(sfallKey), "Movie%d", index + 1);
+
+            char* value;
+            if (!configGetString(sfallConfig, kSfallMisc, sfallKey, &value) || value[0] == '\0') {
+                continue;
+            }
+
+            const char* defaultFileName = gameMovieGetDefaultFileName(index);
+            if (defaultFileName != nullptr && strcmp(value, defaultFileName) == 0) {
+                continue;
+            }
+
+            char targetKey[16];
+            snprintf(targetKey, sizeof(targetKey), "movie%d", index + 1);
+
+            if (gameConfigHasKey(migratedConfig, CONTENT_CONFIG_MOVIES_SECTION, targetKey)) {
+                continue;
+            }
+
+            configSetString(migratedConfig, CONTENT_CONFIG_MOVIES_SECTION, targetKey, value);
+            migrated = true;
+        }
+
+        return migrated;
+    }
+
+    // 97f9a3b: when sfall Fallout1Behavior is enabled, migrate the FO1
+    // endgame movie configuration (skip the auto movie after slideshow;
+    // male movie 10, female movie 11).
+    static bool contentConfigMigrateSfallFallout1MovieBehavior(Config* sfallConfig, Config* migratedConfig)
+    {
+        assert(sfallConfig != nullptr && migratedConfig != nullptr);
+
+        bool enabled = false;
+        if (!configGetBool(sfallConfig, kSfallMisc, "Fallout1Behavior", &enabled) || !enabled) {
+            return false;
+        }
+
+        bool migrated = false;
+        if (!gameConfigHasKey(migratedConfig, CONTENT_CONFIG_MOVIES_SECTION, "endgame_play_after_slideshow")) {
+            configSetInt(migratedConfig, CONTENT_CONFIG_MOVIES_SECTION, "endgame_play_after_slideshow", 0);
+            migrated = true;
+        }
+
+        if (!gameConfigHasKey(migratedConfig, CONTENT_CONFIG_MOVIES_SECTION, "endgame_movie_male")) {
+            configSetInt(migratedConfig, CONTENT_CONFIG_MOVIES_SECTION, "endgame_movie_male", 10);
+            migrated = true;
+        }
+
+        if (!gameConfigHasKey(migratedConfig, CONTENT_CONFIG_MOVIES_SECTION, "endgame_movie_female")) {
+            configSetInt(migratedConfig, CONTENT_CONFIG_MOVIES_SECTION, "endgame_movie_female", 11);
+            migrated = true;
+        }
+
+        return migrated;
+    }
+
 } // anonymous namespace
 
 // Migrate sfall settings from ddraw.ini to game.cfg.
@@ -329,6 +407,29 @@ static bool contentConfigMigrateFromSfall(Config* sfallConfig, const char* conte
     configRead(&migratedConfig, contentConfigFilePath, false);
 
     bool migrated = false;
+
+    // 30bf0c3: migrate sfall WorldMapFPSPatch + WorldMapDelay2 to game.cfg
+    // [worldmap] travel_delay. Only migrates when WorldMapFPSPatch is
+    // enabled (sfall semantics: it is a boolean enable).
+    {
+        bool worldMapFpsPatch = false;
+        if (configGetBool(sfallConfig, kSfallMisc, "WorldMapFPSPatch", &worldMapFpsPatch) && worldMapFpsPatch) {
+            int travelDelay = 66;
+            configGetInt(sfallConfig, kSfallMisc, "WorldMapDelay2", &travelDelay);
+            travelDelay = std::clamp(travelDelay, 1, 150);
+            configSetInt(&migratedConfig, CONTENT_CONFIG_WORLDMAP_SECTION, "travel_delay", travelDelay);
+            migrated = true;
+        }
+    }
+
+    // 97f9a3b: when sfall Fallout1Behavior is enabled, migrate the FO1
+    // endgame movie sequence (skip auto movie after slideshow; male movie 10,
+    // female movie 11). CE does not provide a single Fallout1Behavior switch,
+    // so only the movie portion is configured here.
+    if (contentConfigMigrateSfallFallout1MovieBehavior(sfallConfig, &migratedConfig)) {
+        migrated = true;
+    }
+
     // Migrate start year/month/day only when explicitly set (not the sfall -1 sentinel).
     // M-38: Do NOT skip values that equal defaultValue — matching the UH-05
     // behavior of the main loop below. The old `value != defaultValue` guard
@@ -352,6 +453,7 @@ static bool contentConfigMigrateFromSfall(Config* sfallConfig, const char* conte
     migrateStartInt("StartYear", "year", 2241);
     migrateStartInt("StartMonth", "month", 6);
     migrateStartInt("StartDay", "day", 24);
+    migrateStartInt("StartTime", "time", 824);
 
     for (const auto& entry : kSfallMigrationEntries) {
         char* value;
@@ -374,6 +476,13 @@ static bool contentConfigMigrateFromSfall(Config* sfallConfig, const char* conte
                 migrated = true;
             }
         }
+    }
+
+    // 68ff38e: sfall Movie1..Movie32 overrides are per-slot with no 1:1 table
+    // entry (the default names must not be migrated), so they get their own
+    // migration pass.
+    if (contentConfigMigrateSfallMovieOverrides(sfallConfig, &migratedConfig)) {
+        migrated = true;
     }
 
     // M-199: Migrate ddraw.ini [Misc] SkipOpeningMovies → fallout2.cfg

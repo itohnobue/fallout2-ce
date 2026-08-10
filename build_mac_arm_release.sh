@@ -63,7 +63,8 @@ warn()   { echo "[build-macos] WARNING: $*" >&2; }
 die()    { echo "[build-macos] ERROR: $*" >&2; exit 1; }
 
 resolve_script_dir() {
-    SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+    SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)" || \
+        die "Cannot resolve the script's directory (invoked as: $0)."
     PROJECT_DIR="$SCRIPT_DIR"
 }
 
@@ -147,7 +148,8 @@ resolve_signing_identity() {
     # Auto-resolve from team ID via keychain lookup
     local identities
     identities=$(security find-identity -v -p codesigning 2>/dev/null | \
-        awk -F'"' -v tid="$SIGNING_TEAM_ID" '$0 ~ tid {print $2}')
+        awk -F'"' -v tid="$SIGNING_TEAM_ID" '$0 ~ tid {print $2}') || \
+        die "Failed to query codesigning identities from the keychain."
 
     if [[ -z "$identities" ]]; then
         {
@@ -159,10 +161,10 @@ resolve_signing_identity() {
     fi
 
     local count
-    count=$(echo "$identities" | wc -l | tr -d '[:space:]')
+    count=$(printf '%s\n' "$identities" | wc -l | tr -d '[:space:]')
     if [[ "$count" -gt 1 ]]; then
         warn "Multiple identities match team ID $SIGNING_TEAM_ID:"
-        echo "$identities" >&2
+        printf '%s\n' "$identities" >&2
         die "Set SIGNING_IDENTITY explicitly to specify which one to use."
     fi
 
@@ -185,11 +187,23 @@ build() {
         rm -rf -- "$BUILD_DIR"
     fi
 
+    # Warn if a stale cache exists from a different generator (CMake errors
+    # with "generator does not match"; --clean is the fix).
+    if [[ -f "$BUILD_DIR/CMakeCache.txt" ]]; then
+        cached_generator=$(grep '^CMAKE_GENERATOR:' "$BUILD_DIR/CMakeCache.txt" 2>/dev/null || true)
+        cached_generator=${cached_generator##*=}
+        if [[ -n "$cached_generator" && "$cached_generator" != "Xcode" ]]; then
+            warn "Build dir uses generator '$cached_generator' (expected Xcode). Run with --clean to reconfigure."
+        fi
+    fi
+
     log "Configuring with preset '$PRESET'..."
-    cmake --preset "$PRESET" -S "$PROJECT_DIR"
+    cmake --preset "$PRESET" -S "$PROJECT_DIR" || \
+        die "CMake configuration failed (preset: $PRESET)."
 
     log "Building with preset '$PRESET' (configuration: $CONFIGURATION)..."
-    cmake --build --preset "$PRESET"
+    cmake --build --preset "$PRESET" || \
+        die "CMake build failed (preset: $PRESET, configuration: $CONFIGURATION)."
 
     APP_PATH="$BUILD_DIR/$CONFIGURATION/$APP_NAME.app"
     if [[ ! -d "$APP_PATH" ]]; then
@@ -211,9 +225,12 @@ sign_app() {
     resolve_signing_identity
 
     log "Signing .app bundle: $APP_PATH"
-    codesign --force --deep --options runtime --timestamp \
+    # NOTE: --deep is DEPRECATED for SIGNING as of macOS 13.0 (man codesign).
+    # Nested code is signed individually; --verify below still uses --deep --strict,
+    # which is the correct use of --deep (verification).
+    codesign --force --options runtime --timestamp \
         --sign "$SIGNING_IDENTITY" \
-        "$APP_PATH"
+        "$APP_PATH" || die "Code signing failed for $APP_PATH"
 
     log "Verifying .app code signature..."
     local verify_output
@@ -224,9 +241,9 @@ sign_app() {
 
     log "Code signature verified."
     log "Signature details:"
-    codesign -dvvv "$APP_PATH" 2>/dev/null | while IFS= read -r line; do
+    codesign -dvvv "$APP_PATH" 2>&1 | while IFS= read -r line; do
         log "  $line"
-    done
+    done || warn "Could not dump code-signing details (non-fatal)."
 }
 
 # ── DMG creation ───────────────────────────────────────────────────
@@ -238,7 +255,7 @@ create_dmg() {
     staging_dir=$(mktemp -d) || die "Failed to create staging directory"
 
     # Set up cleanup trap for the staging dir
-    trap 'rm -rf "$staging_dir"' EXIT
+    trap 'rm -rf "$staging_dir"' EXIT INT TERM
 
     # Copy the SIGNED .app into staging (preserves the signature — no re-sign)
     log "Copying signed .app to staging..."
@@ -262,9 +279,9 @@ create_dmg() {
         die "Failed to create DMG"
     fi
 
-    # Clean up staging
+    # Clean up staging and clear ALL traps (set at the top of this function)
     rm -rf "$staging_dir"
-    trap - EXIT
+    trap - EXIT INT TERM
 
     # Verify DMG was created
     if [[ ! -f "$DMG_PATH" ]]; then
@@ -306,7 +323,7 @@ verify_outputs() {
     fi
 
     local app_in_dmg
-    app_in_dmg=$(find "$mount_point" -name "*.app" -maxdepth 2 -type d | head -1)
+    app_in_dmg=$(find "$mount_point" -maxdepth 2 -type d -name "*.app" -print 2>/dev/null | head -1 || true)
     if [[ -z "$app_in_dmg" ]]; then
         hdiutil detach "$mount_point" 2>/dev/null || true
         rmdir "$mount_point" 2>/dev/null || true
@@ -398,7 +415,8 @@ main() {
     if [[ "${SKIP_SIGNING:-0}" != "1" ]]; then
         resolve_signing_identity
         log "Signing DMG..."
-        codesign --force --sign "$SIGNING_IDENTITY" "$DMG_PATH"
+        codesign --force --sign "$SIGNING_IDENTITY" "$DMG_PATH" || \
+            die "DMG signing failed."
         log "DMG signed."
     else
         log "Skipping DMG signing (SKIP_SIGNING=1)"

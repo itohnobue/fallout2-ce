@@ -516,12 +516,16 @@ TEST_CASE("Only guard 5 (all pass) enables migration")
 
 TEST_CASE("F-054: kSfallMigrationEntryCount matches production header")
 {
-    // The header declares 56 migration entries (P-19: ViewXPos/ViewYPos/
+    // The header declares 63 migration entries (P-19: ViewXPos/ViewYPos/
     // WorldMapSlots rows removed — dead targets, zero consumers; WorldMapSlots
-    // served by the gSfallConfig default of 21 per H-06). Our mirror tests
-    // verify 8 entries (the most commonly used ones). The full table of 56
-    // entries exists in game_config_migration.cc and content_config.cc.
-    CHECK(kSfallMigrationEntryCount == 56);
+    // served by the gSfallConfig default of 21 per H-06; then +7 new entries
+    // from the upstream incorporation: StartGDialogFix + 6 Sound section rows
+    // [MainMenuMusic, WorldMapMusic, WorldMapCarMusic, EndGameMovieMusic0,
+    // EndGameMovieMusic1, MapLoadingSound] — count verified by the production
+    // static_assert in game_config_migration.cc:292). Our mirror tests verify
+    // 8 entries (the most commonly used ones). The full table of 63 entries
+    // exists in game_config_migration.cc and content_config.cc.
+    CHECK(kSfallMigrationEntryCount == 63);
     CHECK(kSfallMigrationEntryCount > 0);
 }
 
@@ -544,10 +548,10 @@ TEST_CASE("F-054: contentConfigTryMigrateFromSfall is linkable")
 
 TEST_CASE("F-054: mirror entry count matches covered production entries")
 {
-    // Our mirror tests 8 sfall→content entries out of 58 total.
+    // Our mirror tests 8 sfall→content entries out of 63 total.
     // The 8 tested entries are the most commonly referenced in mods.
     constexpr int kMirrorTestEntries = 8;
-    constexpr int kTotalProductionEntries = 58;
+    constexpr int kTotalProductionEntries = 63;
 
     CHECK(kMirrorTestEntries > 0);
     CHECK(kMirrorTestEntries < kTotalProductionEntries);

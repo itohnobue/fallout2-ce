@@ -1,7 +1,10 @@
 #include "dinput.h"
 
+#include "debug.h"
+#include "settings.h"
 #include "sfall_kb_helpers.h"
 #include "svga.h"
+#include "win32.h"
 
 namespace fallout {
 
@@ -21,6 +24,7 @@ bool directInputInit()
     mouseDeviceRefreshWindowMapping();
 
     if (!mouseDeviceInit()) {
+        debugPrint("directInputInit: mouseDeviceInit failed: %s\n", SDL_GetError());
         goto err;
     }
 
@@ -53,8 +57,11 @@ bool mouseDeviceInitMode()
     // "Absolute mode" means cursor position is controlled by the OS, and we read it directly.
     // Mouse sensitivity settings can only apply in relative mode.
 
-    // TODO: add setting for mouse capture (relative mode) in windowed, differentiated from the web version.
-    bool wantsRelativeMode = screenIsFullscreen();
+    // 4e0b94e: relative (captured) mode in windowed mode is opt-in via
+    // screen.mouse_lock. gProgramIsActive avoids capturing while unfocused.
+    // 82cb826: only exclusive fullscreen forces capture — windowed fullscreen
+    // (borderless) follows the mouse_lock setting.
+    bool wantsRelativeMode = gProgramIsActive && (screenIsExclusiveFullscreen() || settings.screen.mouse_lock);
 
     if (wantsRelativeMode) {
         // M-186: verify SDL_SetRelativeMouseMode BEFORE marking relative mode

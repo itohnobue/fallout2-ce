@@ -7,6 +7,7 @@
 #include "art.h"
 #include "audio.h"
 #include "combat.h"
+#include "content_config.h"
 #include "debug.h"
 #include "game_config.h"
 #include "input.h"
@@ -647,6 +648,15 @@ int backgroundSoundGetDuration()
 */
 int backgroundSoundLoad(const char* fileName, GameSoundReadLimitMode readLimitMode, GameSoundStorageType storageType, GameSoundLoopingMode loopingMode)
 {
+    // f7841ee: guard against overlong file names before the strcpy into
+    // gBackgroundSoundFileName below.
+    if (fileName == nullptr || strlen(fileName) >= sizeof(gBackgroundSoundFileName)) {
+        if (gGameSoundDebugEnabled) {
+            debugPrint("Background sound file name is too long.\n");
+        }
+        return -1;
+    }
+
     _background_storage_requested = storageType;
     _background_loop_requested = loopingMode;
 
@@ -728,6 +738,15 @@ int _gsound_background_play_level_music(const char* fileName, GameSoundReadLimit
     }
 
     return backgroundSoundLoad(fileName, readLimitMode, GSOUND_STREAM, GSOUND_LOOP);
+}
+
+// f7841ee: resolve a music override from game.cfg [sound]; falls back to the
+// built-in default when the key is missing or empty.
+const char* gameSoundGetMusicOverride(const char* key, const char* defaultValue)
+{
+    char* value = nullptr;
+    configGetString(&gContentConfig, CONTENT_CONFIG_SOUND_SECTION, key, &value, nullptr);
+    return value != nullptr && value[0] != '\0' ? value : defaultValue;
 }
 
 // 0x450AB4

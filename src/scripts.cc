@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <vector>
 
 #include "actions.h"
 #include "animation.h"
@@ -300,6 +301,17 @@ static char gDebugScriptFileName[20];
 static int gStartYear;
 static int gStartMonth;
 static int gStartDay;
+
+// 0c4c997: configurable starting game time (game.cfg [start] time, HHMM).
+static constexpr int startTimeToTicks(int time)
+{
+    return ((time / 100) * 60 + time % 100) * 600;
+}
+
+static constexpr int kDefaultStartTime = 824;
+static constexpr int kDefaultStartTimeTicks = startTimeToTicks(kDefaultStartTime);
+
+static int gStartTimeTicks;
 
 static int gMovieTimerArtimer1;
 static int gMovieTimerArtimer2;
@@ -1064,6 +1076,12 @@ static int scriptsHandleElevatorRequest(bool closeDoorsBeforeMapTransition)
         return -1;
     }
 
+    // 41f09fa: ESC cancelation leaves tile == -1 — bail out before any door
+    // animation or map transition so the player stays where they were.
+    if (tile == -1) {
+        return -1;
+    }
+
     automapSaveCurrent();
 
     if (map == gMapHeader.index) {
@@ -1145,10 +1163,12 @@ int scriptsHandleRequests()
         gameDialogEnter(gScriptsRequestedDialogWith, 0);
     }
 
-    if ((gScriptsRequests & SCRIPT_REQUEST_ENDGAME) != 0) {
-        gScriptsRequests &= ~SCRIPT_REQUEST_ENDGAME;
-        endgamePlaySlideshow();
-        endgamePlayMovie();
+    // 97f9a3b: the movie after the slideshow is configurable
+    // (endgame_play_after_slideshow); the slideshow itself always runs.
+    if (scriptsHandlePendingEndgameSlideshow()) {
+        if (endgameShouldPlayMovieAfterSlideshow()) {
+            endgamePlayMovie();
+        }
     }
 
     if ((gScriptsRequests & SCRIPT_REQUEST_LOOTING) != 0) {
@@ -1164,6 +1184,20 @@ int scriptsHandleRequests()
     DeleteAllTempArrays();
 
     return 0;
+}
+
+// 97f9a3b: consume a pending ENDGAME request and run the slideshow. Returns
+// true when the request was pending. Extracted so opEndgameMovie and the
+// request loop can share the slideshow path.
+bool scriptsHandlePendingEndgameSlideshow()
+{
+    if ((gScriptsRequests & SCRIPT_REQUEST_ENDGAME) == 0) {
+        return false;
+    }
+
+    gScriptsRequests &= ~SCRIPT_REQUEST_ENDGAME;
+    endgamePlaySlideshow();
+    return true;
 }
 
 // 0x4A43A0
@@ -1500,6 +1534,17 @@ int scriptExecProc(int sid, int proc)
 
     programExecuteProcedure(program, procedureIndex);
 
+    // 7604061: if the script was removed during execution (scriptRemove →
+    // swap-and-pop), the script and its object may be gone. Do not fire the
+    // end hook with dangling object pointers and do not touch `script`.
+    {
+        Script* rechecked;
+        if (scriptGetScript(hookCachedSid, &rechecked) == -1) {
+            return 0;
+        }
+        script = rechecked;
+    }
+
     // HOOK_STDPROCEDURE_END
     scriptHooks_StdProcedure(proc, self, source, target, fixedParam, true);
 
@@ -1645,6 +1690,9 @@ int _scr_find_str_run_info(int scriptIndex, int* /*unused*/, int sid)
 int scriptsGetFileName(int scriptIndex, char* name, size_t size)
 {
     if (!scriptsIsValidScriptIndex(scriptIndex)) {
+        if (size != 0) {
+            name[0] = '\0';
+        }
         return -1;
     }
 
@@ -1656,6 +1704,15 @@ int scriptsGetFileName(int scriptIndex, char* name, size_t size)
     if (override != nullptr && override[0] != '\0') {
         snprintf(name, size, "%s", override);
         return 0;
+    }
+
+    // f832d78: a blank line in scripts.lst produces an empty entry — fail
+    // instead of returning a bare ".int".
+    if (gScriptsListEntries[scriptIndex].name[0] == '\0') {
+        if (size != 0) {
+            name[0] = '\0';
+        }
+        return -1;
     }
 
     snprintf(name, size, "%s.int", gScriptsListEntries[scriptIndex].name);
@@ -1763,6 +1820,18 @@ int scriptsInit()
     configGetInt(&gContentConfig, CONTENT_CONFIG_START_SECTION, "month", &gStartMonth, 6);
     configGetInt(&gContentConfig, CONTENT_CONFIG_START_SECTION, "day", &gStartDay, 24);
 
+    // 0c4c997: starting game time in 24-hour HHMM format (default 824 = 8:24
+    // AM). Invalid hour/minute values fall back to the default.
+    int startTime;
+    configGetInt(&gContentConfig, CONTENT_CONFIG_START_SECTION, "time", &startTime, kDefaultStartTime, 10);
+    int startTimeHour = startTime / 100;
+    int startTimeMinute = startTime % 100;
+    if (startTimeHour < 0 || startTimeHour > 23 || startTimeMinute < 0 || startTimeMinute > 59) {
+        gStartTimeTicks = kDefaultStartTimeTicks;
+    } else {
+        gStartTimeTicks = startTimeToTicks(startTime);
+    }
+
     // Two-source-of-truth: gFallout1Behavior is set from gContentConfig here.
     // Runtime script changes via set_ini_setting("ddraw.ini|Misc|Fallout1Behavior", ...)
     // are synced back to gContentConfig in sfall_ini.cc via configSetInt(), so both
@@ -1835,7 +1904,7 @@ int _scr_game_init()
     gGameModeEnabled = 1;
     gGameTime = 1;
     scriptsResetUniqueObjectIdCounter();
-    gameTimeSetTime(302400);
+    gameTimeSetTime(gStartTimeTicks);
     tickersAdd(_doBkProcesses);
 
     if (scriptsSetDudeScript() == -1) {
@@ -2825,11 +2894,13 @@ bool scriptsExecSpatialProc(Object* object, int tile, int elevation)
 
     int builtTile = builtTileCreate(tile, elevation);
 
+    // 7604061: snapshot the matching spatial script ids before executing any
+    // of them. A spatial script that removes itself (or another script) during
+    // SCRIPT_PROC_SPATIAL can free the extent list this loop walks, and the
+    // scriptExecProc re-check would be reading freed memory.
+    std::vector<int> spatialScriptIds;
     for (Script* script = scriptGetFirstSpatialScript(elevation); script != nullptr; script = scriptGetNextSpatialScript()) {
-        if (builtTile == script->sp.built_tile) {
-            // NOTE: Uninline.
-            scriptSetObjects(script->sid, object, nullptr);
-        } else {
+        if (builtTile != script->sp.built_tile) {
             if (script->sp.radius == 0) {
                 continue;
             }
@@ -2838,12 +2909,17 @@ bool scriptsExecSpatialProc(Object* object, int tile, int elevation)
             if (distance > script->sp.radius) {
                 continue;
             }
-
-            // NOTE: Uninline.
-            scriptSetObjects(script->sid, object, nullptr);
         }
 
-        scriptExecProc(script->sid, SCRIPT_PROC_SPATIAL);
+        spatialScriptIds.push_back(script->sid);
+    }
+
+    for (int sid : spatialScriptIds) {
+        // NOTE: Uninline.
+        if (scriptSetObjects(sid, object, nullptr) == -1) {
+            continue;
+        }
+        scriptExecProc(sid, SCRIPT_PROC_SPATIAL);
     }
 
     gSpatialsEnabled = true;

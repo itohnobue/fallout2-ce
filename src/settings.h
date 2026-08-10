@@ -4,6 +4,7 @@
 #include <string>
 
 #include "game_config.h"
+#include "svga.h"
 
 namespace fallout {
 
@@ -31,7 +32,11 @@ struct SystemSettings {
 struct ScreenSettings {
     int resolution_x = 640;
     int resolution_y = 480;
-    bool windowed = false;
+    // 82cb826: WindowMode (0 = fullscreen, 1 = windowed, 2 = borderless
+    // windowed fullscreen).
+    WindowMode windowed = WindowMode::Fullscreen;
+    // 4e0b94e: lock the mouse to the game window in windowed mode.
+    bool mouse_lock = false;
     int scale = 1;
 };
 
@@ -94,6 +99,18 @@ struct UISettings {
     bool enable_high_resolution_stencil = true;
     // Maximum number of columns in inventory and loot windows
     int inventory_columns = 1;
+
+    // 8e60a2f/cb6a8ad: loot weight/size indicator.
+    // 0 - No indicator, vanilla
+    // 1 - Simple indicator
+    // 2 - Detailed indicator, works with inventory_columns > 1 only
+    // 3 - Size indicator for containers
+    int loot_weight_indicator = 1;
+
+    // 0   - Container indicator is always visible
+    // XX  - Container indicator is visible when size reaches XX percent
+    // 100 - Container indicator is visible when fully loaded
+    int loot_container_size_indicator_threshold = 50;
 };
 
 // These are settings handled by preferences UI and saved in save games.

@@ -8,6 +8,7 @@
 
 #include "art.h"
 #include "color.h"
+#include "content_config.h"
 #include "credits.h"
 #include "cycle.h"
 #include "db.h"
@@ -84,6 +85,7 @@ static void endgameEndingRefreshSubtitles();
 static void endgameEndingSubtitlesFree();
 static void _endgame_movie_callback();
 static void _endgame_movie_bk_process();
+static void endgamePlayConfiguredMovie();
 static int endgameEndingInit();
 static void endgameEndingFree();
 static int endgameDeathEndingValidate(int* percentage);
@@ -333,18 +335,28 @@ void endgamePlayMovie()
         if (gender == GENDER_MALE) {
             backgroundSoundLoad("elder", GSOUND_LIMIT_AFTER, GSOUND_STREAM, GSOUND_NO_LOOP);
         } else {
-            backgroundSoundLoad("akiss", GSOUND_LIMIT_AFTER, GSOUND_STREAM, GSOUND_NO_LOOP);
+            backgroundSoundLoad(gameSoundGetMusicOverride("endgame_movie_music0", "akiss"), GSOUND_LIMIT_AFTER, GSOUND_STREAM, GSOUND_NO_LOOP);
         }
     } else {
         // FO2: default endgame movie.
-        backgroundSoundLoad("akiss", GSOUND_LIMIT_AFTER, GSOUND_STREAM, GSOUND_NO_LOOP);
+        backgroundSoundLoad(gameSoundGetMusicOverride("endgame_movie_music0", "akiss"), GSOUND_LIMIT_AFTER, GSOUND_STREAM, GSOUND_NO_LOOP);
     }
 
     inputPauseForTocks(3000);
 
-    // FO1: no credits scroll after endgame; FO2: show credits.
-    if (!gFallout1Behavior) {
-        creditsOpen("credits.txt", -1, false);
+    // 97f9a3b: play a configured pre-credit movie (default none; FO1 style
+    // uses 10 for male and 11 for female).
+    endgamePlayConfiguredMovie();
+
+    // 97f9a3b: credits file is configurable (endgame_credits_file). Empty
+    // skips credits. FO1 mode (F-023 fork behavior) still skips credits.
+    const char* creditsFilePath = "credits.txt";
+    char* configuredCreditsFilePath;
+    if (configGetString(&gContentConfig, CONTENT_CONFIG_MOVIES_SECTION, "endgame_credits_file", &configuredCreditsFilePath)) {
+        creditsFilePath = configuredCreditsFilePath;
+    }
+    if (!gFallout1Behavior && creditsFilePath[0] != '\0') {
+        creditsOpen(creditsFilePath, -1, false);
     }
 
     backgroundSoundDelete();
@@ -361,6 +373,32 @@ void endgamePlayMovie()
 
     // I2-096: Reset re-entrancy guard when movie completes normally.
     gEndgameInProgress = false;
+}
+
+// 97f9a3b: whether the endgame_movie request should auto-play the movie
+// after the slideshow (endgame_play_after_slideshow).
+bool endgameShouldPlayMovieAfterSlideshow()
+{
+    bool enabled;
+    configGetBool(&gContentConfig, CONTENT_CONFIG_MOVIES_SECTION, "endgame_play_after_slideshow", &enabled, true);
+    return enabled;
+}
+
+// 97f9a3b: play the configured pre-credit movie for the dude's gender.
+static void endgamePlayConfiguredMovie()
+{
+    int movie = -1;
+
+    int gender = critterGetStat(gDude, STAT_GENDER);
+    if (gender == GENDER_FEMALE) {
+        configGetInt(&gContentConfig, CONTENT_CONFIG_MOVIES_SECTION, "endgame_movie_female", &movie, -1);
+    } else {
+        configGetInt(&gContentConfig, CONTENT_CONFIG_MOVIES_SECTION, "endgame_movie_male", &movie, -1);
+    }
+
+    if (movie >= 0 && movie < GAME_MOVIE_MAX_COUNT) {
+        gameMoviePlay(movie, GAME_MOVIE_FADE_IN | GAME_MOVIE_PAUSE_MUSIC);
+    }
 }
 
 // 0x43F8C4 gameOverConfim
@@ -1009,7 +1047,7 @@ static void _endgame_movie_callback()
 static void _endgame_movie_bk_process()
 {
     if (_endgame_maybe_done) {
-        backgroundSoundLoad("10labone", GSOUND_LIMIT_BEFORE, GSOUND_STREAM, GSOUND_LOOP);
+        backgroundSoundLoad(gameSoundGetMusicOverride("endgame_movie_music1", "10labone"), GSOUND_LIMIT_BEFORE, GSOUND_STREAM, GSOUND_LOOP);
         backgroundSoundSetEndCallback(nullptr);
         tickersRemove(_endgame_movie_bk_process);
     }

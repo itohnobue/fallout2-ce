@@ -38,12 +38,14 @@
 #include "platform_compat.h"
 #include "proto_instance.h"
 #include "queue.h"
+#include "reaction.h"
 #include "scripts.h"
 #include "sfall_animation.h"
 #include "sfall_arrays.h" // For CreateTempArray, SetArray
 #include "sfall_global_scripts.h"
 #include "sfall_global_vars.h"
 #include "sfall_ini.h"
+#include "sfall_object_name.h"
 #include "sfall_opcodes.h"
 #include "sfall_script_hooks.h"
 #include "skilldex.h"
@@ -131,7 +133,9 @@ static void mf_get_terrain_name(OpcodeContext& ctx);
 static void mf_set_worldmap_heal_time(OpcodeContext& ctx);
 static void mf_set_rest_heal_time(OpcodeContext& ctx);
 static void mf_set_quest_failure_value(OpcodeContext& ctx);
+static void mf_set_reaction_thresholds(OpcodeContext& ctx);
 static void mf_set_scr_name(OpcodeContext& ctx);
+static void mf_set_party_member_cc_msg_ids(OpcodeContext& ctx);
 static void mf_has_fake_perk_npc(OpcodeContext& ctx);
 static void mf_has_fake_trait_npc(OpcodeContext& ctx);
 static void mf_set_fake_perk_npc(OpcodeContext& ctx);
@@ -166,6 +170,13 @@ static void mf_intface_show(OpcodeContext& ctx);
 static void mf_set_fo1_hit_chance(OpcodeContext& ctx);
 // H-05: remove_wm_town_names — hides town labels under worldmap circles
 static void mf_remove_wm_town_names(OpcodeContext& ctx);
+// 8b1efef: encounter_detection — disables random-encounter detection chance
+static void mf_encounter_detection(OpcodeContext& ctx);
+// 9f5a047: encounter_intros — disables the "You encounter: ..." message
+static void mf_encounter_intros(OpcodeContext& ctx);
+// f7367f4: rest_option customization
+static void mf_rest_option_msgs(OpcodeContext& ctx);
+static void mf_set_rest_option(OpcodeContext& ctx);
 // F-014/F-015: interface overlay and print
 static void mf_interface_overlay(OpcodeContext& ctx);
 static void mf_interface_print(OpcodeContext& ctx);
@@ -468,10 +479,16 @@ const MetaruleInfo kMetarules[] = {
     { "set_object_data", mf_set_object_data, 3, 3, -1, { ARG_OBJECT, ARG_INT, ARG_INT } },
     { "set_outline", mf_set_outline, 2, 2, -1, { ARG_OBJECT, ARG_INT } },
     { "set_quest_failure_value", mf_set_quest_failure_value, 2, 2, -1, { ARG_INT, ARG_INT } },
+    { "set_reaction_thresholds", mf_set_reaction_thresholds, 2, 2, -1, { ARG_INT, ARG_INT } },
+    { "set_party_member_cc_msg_ids", mf_set_party_member_cc_msg_ids, 3, 3, -1, { ARG_INT, ARG_INT, ARG_INT } },
     // H-05: hide town labels under worldmap circles (sfall Worldmap.cpp:286-295).
     { "remove_wm_town_names", mf_remove_wm_town_names, 1, 1, -1, { ARG_INT } },
+    { "encounter_detection", mf_encounter_detection, 1, 1, -1, { ARG_INT } },
+    { "encounter_intros", mf_encounter_intros, 1, 1, -1, { ARG_INT } },
+    { "rest_option_msgs", mf_rest_option_msgs, 1, 1, -1, { ARG_INT } },
     { "set_rest_heal_time", mf_set_rest_heal_time, 1, 1, -1, { ARG_INT } },
     { "set_rest_mode", mf_set_rest_mode, 1, 1, -1, { ARG_INT } },
+    { "set_rest_option", mf_set_rest_option, 2, 2, -1, { ARG_INT, ARG_INT } },
     { "set_scr_name", mf_set_scr_name, 0, 1, -1, { ARG_STRING } },
     { "set_selectable_perk_npc", mf_set_selectable_perk_npc, 5, 5, -1, { ARG_OBJECT, ARG_STRING, ARG_INT, ARG_INT, ARG_STRING } },
     { "set_terrain_name", mf_set_terrain_name, 3, 3, -1, { ARG_INT, ARG_INT, ARG_STRING } },
@@ -2382,6 +2399,41 @@ void mf_remove_wm_town_names(OpcodeContext& ctx)
     ctx.setReturn(0);
 }
 
+// 8b1efef: encounter_detection(bool) — disable random-encounter detection.
+void mf_encounter_detection(OpcodeContext& ctx)
+{
+    wmSetEncounterDetection(ctx.arg(0).asInt() != 0);
+}
+
+// 9f5a047: encounter_intros(bool) — disable the "You encounter: ..." message.
+static void mf_encounter_intros(OpcodeContext& ctx)
+{
+    wmSetEncounterIntros(ctx.arg(0).asInt() != 0);
+}
+
+// f7367f4: rest_option_msgs(base_msg_id) — change the base message id used
+// for Pip-Boy rest option labels.
+static void mf_rest_option_msgs(OpcodeContext& ctx)
+{
+    int baseMessageId = ctx.arg(0).asInt();
+
+    if (!pipboyRestOptionMsgsSetBase(baseMessageId)) {
+        ctx.printError("%s() - invalid base message id (%d).", ctx.name(), baseMessageId);
+    }
+}
+
+// f7367f4: set_rest_option(rest_option, value) — change the wake hour for
+// rest options 8-11 (morning, noon, evening, midnight).
+static void mf_set_rest_option(OpcodeContext& ctx)
+{
+    int restOption = ctx.arg(0).asInt();
+    int value = ctx.arg(1).asInt();
+
+    if (!pipboyRestOptionSet(restOption, value)) {
+        ctx.printError("%s() - invalid rest option (%d) or wake hour (%d).", ctx.name(), restOption, value);
+    }
+}
+
 // set_dude_obj(Object* newDude): saves the current gDude pointer and replaces it
 // with the given object. Used for cutscene player swaps (e.g., controlling another
 // character temporarily). Call real_dude_obj() to restore the original.
@@ -2565,6 +2617,34 @@ void mf_set_quest_failure_value(OpcodeContext& ctx)
     ctx.setReturn(0);
 }
 
+// d6d58ab/5f7fffd: set_reaction_thresholds(neutral, good) — override the
+// reaction values considered neutral/good in reactionTranslateValue.
+void mf_set_reaction_thresholds(OpcodeContext& ctx)
+{
+    int neutralThreshold = ctx.arg(0).asInt();
+    int goodThreshold = ctx.arg(1).asInt();
+
+    reactionSetThresholds(neutralThreshold, goodThreshold);
+}
+
+// b8e169e: set_party_member_cc_msg_ids(pid, start, end) — override the
+// combat-control update message range for a party member pid. Picks
+// randomly from the inclusive contiguous range.
+void mf_set_party_member_cc_msg_ids(OpcodeContext& ctx)
+{
+    int pid = ctx.arg(0).asInt();
+    int startMsgId = ctx.arg(1).asInt();
+    int endMsgId = ctx.arg(2).asInt();
+
+    if (endMsgId < startMsgId) {
+        ctx.printError("%s() - end msg id must be greater than or equal to start msg id.", ctx.name());
+        ctx.setReturn(-1);
+        return;
+    }
+
+    gameDialogSetPartyMemberCcMsgIds(pid, startMsgId, endMsgId);
+}
+
 // get_quest_failure_value(int gvar): returns the failure threshold for the given
 // GVAR, or -1 if no threshold has been set. Mirrors the set_quest_failure_value
 // metarule — provides a script-level query API for the stored mapping.
@@ -2585,6 +2665,15 @@ void mf_get_quest_failure_value(OpcodeContext& ctx)
 // stored here for future integration with script name display logic.
 void mf_set_scr_name(OpcodeContext& ctx)
 {
+    // 1066311: per-sid override consumed by critterGetName() so et tu /
+    // sfall scripts can rename critters (e.g. the dude).
+    int sid = scriptGetSid(ctx.program());
+    if (sid != -1) {
+        sfallObjectNameSet(sid, ctx.numArgs() > 0 ? ctx.stringArg(0) : "");
+    }
+
+    // Fork behavior: keep the script-file-name override (used by
+    // scriptsGetFileName and serialized in the metarule save format).
     if (ctx.numArgs() == 0) {
         gScriptNameOverride.clear();
     } else {

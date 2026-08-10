@@ -308,6 +308,13 @@ void wmClearCanRestOnTile(int elevation, int tile);
 void wmSetRestMode(int mode);
 int wmGetRestMode();
 
+// 8b1efef: encounter_detection metarule — disable the player's chance to
+// detect random encounters before they trigger.
+void wmSetEncounterDetection(bool enabled);
+// 9f5a047: encounter_intros metarule — disable the "You encounter: ..."
+// display-monitor message.
+void wmSetEncounterIntros(bool enabled);
+
 // CE/SFALL: map enter position override (F-011, F-071).
 void wmSetMapEnterPosition(int x, int y, int elevation);
 bool wmHasMapEnterPosition();

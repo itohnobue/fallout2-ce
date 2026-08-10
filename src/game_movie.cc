@@ -1,9 +1,13 @@
 #include "game_movie.h"
 
+#include <array>
+#include <assert.h>
 #include <stdio.h>
 #include <string.h>
+#include <string>
 
 #include "color.h"
+#include "content_config.h"
 #include "cycle.h"
 #include "debug.h"
 #include "game.h"
@@ -25,12 +29,17 @@
 namespace fallout {
 
 static char* gameMovieBuildSubtitlesFilePath(char* movieFilePath);
+static bool gameMovieFindFilePath(char* movieFilePath, size_t movieFilePathSize, const char* movieFileName);
+static bool gameMovieFindFilePathInDir(char* movieFilePath, size_t movieFilePathSize, const char* dir, const char* movieFileName);
+static void gameMovieInitFileNames();
+static bool gameMovieIsValidFileName(const char* fileName);
+static void gameMovieLoadConfigFileNames();
 
 // 0x50352A
 static const float flt_50352A = 0.032258064f;
 
 // 0x518DA0 movie_list
-static const char* gMovieFileNames[MOVIE_COUNT] = {
+static const char* movieDefaultFileNames[MOVIE_COUNT] = {
     "iplogo.mve",
     "intro.mve",
     "elder.mve",
@@ -49,6 +58,10 @@ static const char* gMovieFileNames[MOVIE_COUNT] = {
     "artimer4.mve",
     "credits.mve",
 };
+
+// 68ff38e: runtime movie file names — defaults plus [movies] game.cfg
+// overrides and set_movie_path (0x8177) overrides.
+static std::array<std::string, GAME_MOVIE_MAX_COUNT> movieFileNames;
 
 // 0x518DE4 subtitlePalList
 static const char* gMoviePaletteFilePaths[MOVIE_COUNT] = {
@@ -96,6 +109,11 @@ int gameMoviesInit()
 
     movieSetBuildSubtitleFilePathProc(gameMovieBuildSubtitlesFilePath);
 
+    // 68ff38e: (re)initialize the runtime file name table from defaults,
+    // then apply [movies] game.cfg overrides.
+    gameMovieInitFileNames();
+    gameMovieLoadConfigFileNames();
+
     memset(gGameMoviesSeen, 0, sizeof(gGameMoviesSeen));
 
     gGameMovieIsPlaying = false;
@@ -137,12 +155,18 @@ int gameMoviesSave(File* stream)
 // 0x44E690 gmovie_play
 int gameMoviePlay(int movie, int flags)
 {
+    // 68ff38e: movies 17..31 are script-playable slots; anything out of
+    // range (or a slot with no configured file) is an error.
+    if (movie < 0 || movie >= GAME_MOVIE_MAX_COUNT || movieFileNames[movie].empty()) {
+        debugPrint("\ngmovie_play() - Error: Invalid movie %d\n", movie);
+        return -1;
+    }
+
     gGameMovieIsPlaying = true;
 
-    const char* movieFileName = gMovieFileNames[movie];
+    const char* movieFileName = movieFileNames[movie].c_str();
     debugPrint("\nPlaying movie: %s\n", movieFileName);
 
-    const char* language = settings.system.language.c_str();
     char movieFilePath[COMPAT_MAX_PATH];
     int movieFileSize;
     bool movieFound = false;
@@ -156,18 +180,12 @@ int gameMoviePlay(int movie, int flags)
         movieFound = dbGetFileSize(movieFilePath, &movieFileSize) == 0;
     }
 
-    if (!movieFound && compat_stricmp(language, ENGLISH) != 0) {
-        snprintf(movieFilePath, sizeof(movieFilePath), "art\\%s\\cuts\\%s", language, gMovieFileNames[movie]);
-        movieFound = dbGetFileSize(movieFilePath, &movieFileSize) == 0;
+    if (!movieFound) {
+        movieFound = gameMovieFindFilePath(movieFilePath, sizeof(movieFilePath), movieFileName);
     }
 
     if (!movieFound) {
-        snprintf(movieFilePath, sizeof(movieFilePath), "art\\cuts\\%s", gMovieFileNames[movie]);
-        movieFound = dbGetFileSize(movieFilePath, &movieFileSize) == 0;
-    }
-
-    if (!movieFound) {
-        debugPrint("\ngmovie_play() - Error: Unable to open %s\n", gMovieFileNames[movie]);
+        debugPrint("\ngmovie_play() - Error: Unable to open %s\n", movieFileName);
         gGameMovieIsPlaying = false;
         return -1;
     }
@@ -215,7 +233,7 @@ int gameMoviePlay(int movie, int flags)
     int oldFont;
     if (subtitlesEnabled) {
         const char* subtitlesPaletteFilePath;
-        if (gMoviePaletteFilePaths[movie] != nullptr) {
+        if (movie < MOVIE_COUNT && gMoviePaletteFilePaths[movie] != nullptr) {
             subtitlesPaletteFilePath = gMoviePaletteFilePaths[movie];
         } else {
             subtitlesPaletteFilePath = "art\\cuts\\subtitle.pal";
@@ -274,7 +292,9 @@ int gameMoviePlay(int movie, int flags)
     _movieUpdate();
     paletteSetEntries(gPaletteBlack);
 
-    gGameMoviesSeen[movie] = 1;
+    // 68ff38e: only mark the built-in movies as seen — extra slots have no
+    // gGameMoviesSeen bit and must not write out of bounds.
+    gameMovieMarkSeen(movie);
 
     colorCycleEnable();
 
@@ -327,9 +347,43 @@ void gameMovieFadeOut()
     }
 }
 
+// 68ff38e: default (unconfigured) file name for a built-in movie, used by
+// the config migration to detect non-default overrides.
+const char* gameMovieGetDefaultFileName(int movie)
+{
+    if (movie < 0 || movie >= MOVIE_COUNT) {
+        return nullptr;
+    }
+
+    return movieDefaultFileNames[movie];
+}
+
+// 68ff38e: set a movie file name at runtime (set_movie_path, 0x8177).
+bool gameMovieSetPath(int movie, const char* fileName)
+{
+    if (movie < 0 || movie >= GAME_MOVIE_MAX_COUNT || !gameMovieIsValidFileName(fileName)) {
+        return false;
+    }
+
+    movieFileNames[movie] = fileName;
+    return true;
+}
+
+// 68ff38e: mark a built-in movie as seen (mark_movie_played, 0x8240).
+void gameMovieMarkSeen(int movie)
+{
+    if (movie >= 0 && movie < MOVIE_COUNT) {
+        gGameMoviesSeen[movie] = 1;
+    }
+}
+
 // 0x44EB04 gmovie_has_been_played
 bool gameMovieIsSeen(int movie)
 {
+    if (movie < 0 || movie >= MOVIE_COUNT) {
+        return false;
+    }
+
     return gGameMoviesSeen[movie] == 1;
 }
 
@@ -359,6 +413,68 @@ static char* gameMovieBuildSubtitlesFilePath(char* movieFilePath)
     strcpy(gGameMovieSubtitlesFilePath + strlen(gGameMovieSubtitlesFilePath), ".SVE");
 
     return gGameMovieSubtitlesFilePath;
+}
+
+// 68ff38e: resolve a movie file through the localized directory first, then
+// the default art\cuts directory.
+static bool gameMovieFindFilePath(char* movieFilePath, size_t movieFilePathSize, const char* movieFileName)
+{
+    assert(movieFilePath != nullptr);
+    assert(movieFileName != nullptr);
+
+    const char* language = settings.system.language.c_str();
+    if (compat_stricmp(language, ENGLISH) != 0) {
+        char localizedDir[COMPAT_MAX_PATH];
+        snprintf(localizedDir, sizeof(localizedDir), "art\\%s\\cuts", language);
+        if (gameMovieFindFilePathInDir(movieFilePath, movieFilePathSize, localizedDir, movieFileName)) {
+            return true;
+        }
+    }
+
+    return gameMovieFindFilePathInDir(movieFilePath, movieFilePathSize, "art\\cuts", movieFileName);
+}
+
+static bool gameMovieFindFilePathInDir(char* movieFilePath, size_t movieFilePathSize, const char* dir, const char* movieFileName)
+{
+    snprintf(movieFilePath, movieFilePathSize, "%s\\%s", dir, movieFileName);
+
+    int movieFileSize;
+    return dbGetFileSize(movieFilePath, &movieFileSize) == 0;
+}
+
+// 68ff38e: reset the runtime table to the built-in defaults.
+static void gameMovieInitFileNames()
+{
+    for (auto& fileName : movieFileNames) {
+        fileName.clear();
+    }
+
+    for (int index = 0; index < MOVIE_COUNT; index++) {
+        movieFileNames[index] = movieDefaultFileNames[index];
+    }
+}
+
+// 68ff38e: a movie override must be a plain file name — reject path
+// components to avoid scripts pointing movies at arbitrary files.
+static bool gameMovieIsValidFileName(const char* fileName)
+{
+    return fileName != nullptr
+        && fileName[0] != '\0'
+        && strpbrk(fileName, "\\/:") == nullptr;
+}
+
+// 68ff38e: apply [movies] movie1..movie32 overrides from game.cfg.
+static void gameMovieLoadConfigFileNames()
+{
+    char key[16];
+    for (int index = 0; index < GAME_MOVIE_MAX_COUNT; index++) {
+        snprintf(key, sizeof(key), "movie%d", index + 1);
+
+        char* fileName;
+        if (configGetString(&gContentConfig, CONTENT_CONFIG_MOVIES_SECTION, key, &fileName) && fileName[0] != '\0') {
+            gameMovieSetPath(index, fileName);
+        }
+    }
 }
 
 } // namespace fallout

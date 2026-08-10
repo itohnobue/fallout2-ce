@@ -2364,26 +2364,9 @@ static Object* _ai_best_weapon(Object* attacker, Object* weapon1, Object* weapon
 // 0x4298EC
 static bool _ai_can_use_weapon(Object* critter, Object* weapon, int hitMode)
 {
-    bool result = true;
-
-    int damageFlags = critter->data.critter.combat.results;
-    if ((damageFlags & DAM_CRIP_ARM_LEFT) != 0 && (damageFlags & DAM_CRIP_ARM_RIGHT) != 0) {
-        result = false;
-    }
-
-    if (result && (damageFlags & DAM_CRIP_ARM_ANY) != 0 && weaponIsTwoHanded(weapon)) {
-        result = false;
-    }
-
-    if (result) {
-        int rotation = critter->rotation + 1;
-        int animationCode = weaponGetAnimationCode(weapon);
-        int weaponAnimationCode = weaponGetAnimationForHitMode(weapon, hitMode);
-        int fid = buildFid(OBJ_TYPE_CRITTER, critter->fid & 0xFFF, weaponAnimationCode, animationCode, rotation);
-        if (!artExists(fid)) {
-            result = false;
-        }
-    }
+    // 843803e: shared physical/art capability check (also used by the
+    // party-equipment UI).
+    bool result = critterCanUseWeapon(critter, weapon, hitMode);
 
     AiPacket* ai = aiGetPacket(critter);
     // SFALL: Fix I2-30 — aiGetPacket can return nullptr when the critter
@@ -4051,6 +4034,28 @@ void _combatai_check_retaliation(Object* a1, Object* a2)
     }
 }
 
+// 44067b1: perception-distance modifier for a sneaking dude target. Only
+// ever applies when the target is gDude — for non-critter targets the
+// SKILL_SNEAK read was an OOB proto access on non-critters.
+static int adjustPerceptionDistanceForDudeSneak(int maxDistance, Object* target)
+{
+    if (target != gDude) {
+        return maxDistance;
+    }
+
+    if (dudeIsSneaking()) {
+        int sneak = skillGetValue(gDude, SKILL_SNEAK);
+        maxDistance /= 4;
+        if (sneak > 120) {
+            maxDistance -= 1;
+        }
+    } else if (dudeHasState(DUDE_STATE_SNEAKING)) {
+        maxDistance = maxDistance * 2 / 3;
+    }
+
+    return maxDistance;
+}
+
 // 0x42BA04
 PerceptionResult isWithinPerceptionDetailed(Object* critter, Object* target, PerceptionType type)
 {
@@ -4060,23 +4065,13 @@ PerceptionResult isWithinPerceptionDetailed(Object* critter, Object* target, Per
 
     int distance = objectGetDistanceBetween(target, critter);
     int perception = critterGetStat(critter, STAT_PERCEPTION);
-    int sneak = skillGetValue(target, SKILL_SNEAK);
     if (_can_see(critter, target)) {
         int maxDistance = perception * 5;
         if ((target->flags & OBJECT_TRANS_GLASS) != 0) {
             maxDistance /= 2;
         }
 
-        if (target == gDude) {
-            if (dudeIsSneaking()) {
-                maxDistance /= 4;
-                if (sneak > 120) {
-                    maxDistance -= 1;
-                }
-            } else if (dudeHasState(DUDE_STATE_SNEAKING)) {
-                maxDistance = maxDistance * 2 / 3;
-            }
-        }
+        maxDistance = adjustPerceptionDistanceForDudeSneak(maxDistance, target);
 
         if (distance <= maxDistance) {
             return scriptHooks_WithinPerception(critter, target, type, PERCEPTION_IN_RANGE);
@@ -4090,16 +4085,7 @@ PerceptionResult isWithinPerceptionDetailed(Object* critter, Object* target, Per
         maxDistance = perception;
     }
 
-    if (target == gDude) {
-        if (dudeIsSneaking()) {
-            maxDistance /= 4;
-            if (sneak > 120) {
-                maxDistance -= 1;
-            }
-        } else if (dudeHasState(DUDE_STATE_SNEAKING)) {
-            maxDistance = maxDistance * 2 / 3;
-        }
-    }
+    maxDistance = adjustPerceptionDistanceForDudeSneak(maxDistance, target);
 
     if (distance <= maxDistance) {
         return scriptHooks_WithinPerception(critter, target, type, PERCEPTION_IN_RANGE);

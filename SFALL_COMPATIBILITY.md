@@ -38,6 +38,29 @@ The following settings were moved into [`fallout2.cfg`](files/fallout2.cfg) inst
 | `Misc` | `UseWalkDistance` | `qol` | `use_walk_distance` |
 | `Misc` | `AutoOpenDoors` | `qol` | `auto_open_doors` |
 
+The following settings were moved into [`<DAT>/config/game.cfg`](files/ce.dat/config/game.cfg):
+
+| ddraw.ini section | ddraw.ini key | game.cfg section | game.cfg key |
+| --- | --- | --- | --- |
+| `Misc` | `StartGDialogFix` | `dialog` | `start_gdialog_fix` |
+| `Sound` | `MainMenuMusic` | `sound` | `main_menu_music` |
+| `Sound` | `WorldMapMusic` | `sound` | `worldmap_music` |
+| `Sound` | `WorldMapCarMusic` | `sound` | `worldmap_car_music` |
+| `Sound` | `EndGameMovieMusic0` | `sound` | `endgame_movie_music0` |
+| `Sound` | `EndGameMovieMusic1` | `sound` | `endgame_movie_music1` |
+| `Sound` | `MapLoadingSound` | `sound` | `map_loading_sound` |
+| `Misc` | `Movie1` - `Movie32` | `movies` | `movie1` - `movie32` |
+| `Misc` | `Fallout1Behavior` movie behavior | `movies` | `endgame_play_after_slideshow`, `endgame_movie_male`, `endgame_movie_female` |
+| `Misc` | `WorldMapFPSPatch` + `WorldMapDelay2` | `worldmap` | `travel_delay` |
+
+Unlike sfall, `travel_delay` throttles only world-map travel simulation. Input,
+rendering, and world-map scripts continue at the normal frame rate.
+
+CE does not provide a single `Fallout1Behavior` compatibility switch. The movie
+portion can be configured directly: set `endgame_play_after_slideshow=0`,
+`endgame_movie_male=10`, and `endgame_movie_female=11` for the sfall Fallout 1
+movie sequence. Time-limit and item-weight behavior are separate features.
+
 ### Speed Control (`[Speed]` section of `ddraw.ini`)
 
 CE supports sfall's game speed multiplier via the `[Speed]` section of `ddraw.ini`:
@@ -102,12 +125,24 @@ See [`https://sfall-team.github.io/sfall/`](https://sfall-team.github.io/sfall/)
 | Locks | lock_is_jammed<br>unjam_lock<br>set_unjam_locks_time | partial | lock_is_jammed registered and implemented (sfall_metarules.cc:2167, checks OBJ_JAMMED flag). unjam_lock fully implemented (sfall_metarules.cc:2661, wraps engine's objectUnjamLock). set_unjam_locks_time: registered and consumed in mapLoadSaved (map.cc) — overrides default 24-hour unjam threshold. |
 | INI settings | get_ini_setting<br>get_ini_string<br>get_ini_section<br>get_ini_sections<br>get_ini_config<br>get_ini_config_db<br>set_ini_setting | ✅ | `modified_ini` is intentionally omitted as deprecated. |
 | Objects and scripts | set_self<br>set_dude_obj<br>real_dude_obj<br>remove_script<br>get/set_script<br>obj_is_carrying_obj<br>loot_obj<br>dialog_obj<br>obj_under_cursor<br>get/set_object_data<br>get/set_flags<br>set_unique_id<br>set_scr_name<br>obj_is_openable<br>get/set_proto_data<br>get_object_ai_data | implemented: set_self, set_dude_obj, real_dude_obj, get/set/remove_script, obj_is_carrying_obj, loot_obj, dialog_obj, obj_under_cursor, get_object_data, set_object_data (metarule), get_flags, set_flags, set_unique_id, set_scr_name, obj_is_openable, get_proto_data, set_proto_data, get_object_ai_data (type 0) | set_dude_obj/real_dude_obj/set_object_data/set_scr_name are implemented as metarules. get_object_ai_data type 0 (AI packet number) implemented; types 1-2 (AI flags, procedure) implemented via aiPacketGetFlags/aiPacketGetProcedure accessors. |
-| Other / Game management | set_movie_path<br>stop/resume_game<br>mark_movie_played<br>game_loaded<br>get_game_mode<br>get_uptime<br>signal_close_game | ✅ | mark_movie_played (0x8240) registered as safe no-op (CE movie tracking is internal). stop/resume_game (0x8222,0x8223) registered as safe no-ops. game_loaded, get_game_mode, get_uptime, signal_close_game fully implemented. |
+| Other / Game management | set_movie_path<br>stop/resume_game<br>mark_movie_played<br>game_loaded<br>get_game_mode<br>get_uptime<br>signal_close_game | ✅ | set_movie_path (0x8177) implemented — runtime override + game.cfg `[movies] movie1..movie32` config (68ff38e). mark_movie_played (0x8240) fully implemented via gameMovieMarkSeen. stop/resume_game (0x8222,0x8223) registered as safe no-ops. game_loaded, get_game_mode, get_uptime, signal_close_game fully implemented. |
 | Gameplay tweaks | set_pickpocket_max<br>set_hit_chance_max<br>set_xp_mod<br>set_critter_hit_chance_mod<br>set_base_hit_chance_mod<br>set_hp_per_level_mod<br>gdialog_get_barter_mod<br>get/set_unspent_ap_bonus<br>get/set_unspent_ap_perk_bonus<br>set_base_pickpocket_mod<br>set_critter_pickpocket_mod<br>get/set_inven_ap_cost<br>set_drugs_data<br>get_kill_counter<br>mod_kill_counter<br>set_pipboy_available | ✅ | gdialog_get_barter_mod, get/set_unspent_ap{_perk}_bonus, get/set_inven_ap_cost, set_xp_mod, set_hit_chance_max, set_base_hit_chance_mod fully implemented. set_critter_hit_chance_mod (0x81C5) implemented: per-critter modifier consumed in attackDetermineToHit() (combat.cc) via sfallGetCritterHitChanceMod(), additive with global set_base_hit_chance_mod. set_hp_per_level_mod consumed at stat.cc:859,912. Pickpocket modifiers (0x81A0, 0x81C9, 0x81CA) fully integrated — consumed in skillsPerformStealing() (skill.cc) via sfallGetPickpocket*() accessors. Cap uses sfallGetPickpocketMax() with 95 fallback. |
 | NPCs | inc_npc_level<br>get_npc_level<br>npc_engine_level_up | implemented: inc_npc_level (0x81A5), get_npc_level (0x8241), npc_engine_level_up (metarule) | get_npc_level delegates to partyMemberGetLevel. npc_engine_level_up controls auto-leveling. |
 | Hero Appearance | set_dm/df_model<br>hero_select_win<br>set_hero_race<br>set_hero_style | implemented: set_dm_model (0x8175), set_df_model (0x8176), hero_select_win (0x8213), set_hero_race (0x8214), set_hero_style (0x8215) | set_hero_race/set_hero_style implemented (sfall_opcodes.cc:3764,3773) — store values via sfall global vars. No config flag needed — feature is always-on. |
 | Events | add_g_timer_event<br>remove_timer_event<br>create_spatial<br>spatial_radius | ✅ | All 4 opcodes registered and fully implemented. add_g_timer_event (sfall_metarules.cc:2496), remove_timer_event (sfall_metarules.cc:2267), create_spatial (sfall_opcodes.cc:4141), spatial_radius (sfall_metarules.cc:2233). |
 | Other | get_year<br>active_hand<br>toggle_active_hand<br>get/set_viewport_x/y<br>get_light_level<br>message_str_game<br>sneak_success<br>unwield_slot<br>add_extra_msg_file<br>get_metarule_table<br>metarule_exist<br> | ✅ | get/set_viewport_x/y (0x81A6-0x81A9) registered as safe stubs (CE renders with SDL2, scroll is engine-managed). `input_funcs_available`, `nb_create_char` are deprecated in sfall and intentionally absent in CE. `sneak_success` registered and implemented (sfall_opcodes.cc:3683). `add_extra_msg_file` supports the 2-arg form (filename, fileNumber). |
+
+### CE-only metarules
+
+CE defines several metarules that are not supported in Sfall. Include [ce.h](files/ce.h) for the #defines.
+
+| Name | Definition |
+| --- | --- |
+| `encounter_intros(toggle)` | Enable or disable the display-monitor random encounter intro message, for example `You encounter: ...`. This does not affect the separate encounter detection dialog. |
+| `set_reaction_thresholds(neutral, good)` | Set thresholds for reactions considered "neutral" and "good". Defaults: FO1 -25/25, FO2 -51/49 (fork keeps the original per-game thresholds). |
+| `set_party_member_cc_msg_ids(pid, start_msg_id, end_msg_id)` | Override party-member combat-control update messages for a pid. Picks randomly from the inclusive contiguous range. Default fallback ranges are 670-674 for humans and 677-678 for the hardcoded dog pid list. |
+| `rest_option_msgs(base_msg_id)` | Change the base message id used for Pip-Boy rest option labels. CE reads the rest labels from `base_msg_id` through `base_msg_id + 13`; the default Fallout 2 range is 302-315 (FO1 mode: 321-334). |
+| `set_rest_option(rest_option, value)` | Change the wake hour for Pip-Boy rest options 8-11: morning, noon, evening, and midnight. `value` is an hour from 0-23. Defaults are 8, 12, 18, and 0 (FO1 morning default: 6). |
 
 ## Hooks
 

@@ -54,6 +54,7 @@ typedef struct ElevatorDescription {
 static int elevatorWindowInit(int elevator);
 static void elevatorWindowFree();
 static int elevatorGetLevelFromKeyCode(int elevator, int keyCode);
+static int elevatorGetLevelFromEscKey(int elevator, int map);
 
 // 0x43E950 grph_id_2
 static const int gElevatorFrmIds[ELEVATOR_FRM_COUNT] = {
@@ -402,12 +403,19 @@ int elevatorSelectLevel(int elevator, int* mapPtr, int* elevationPtr, int* tileP
     windowRefresh(gElevatorWindow);
 
     bool done = false;
+    bool skipGauge = false;
     int keyCode;
     while (!done) {
         sharedFpsLimiter.mark();
 
         keyCode = inputGetInput();
         if (keyCode == KEY_ESCAPE) {
+            // 41f09fa: on ESC, resolve the exit for the current map/elevation
+            // so the caller does not interpret the cancel as a destination
+            // change (RPU: door closes behind the player with glitchy
+            // graphics). skipGauge skips the floor gauge animation below.
+            keyCode = elevatorGetLevelFromEscKey(elevator, *mapPtr);
+            skipGauge = true;
             done = true;
         }
 
@@ -427,7 +435,7 @@ int elevatorSelectLevel(int elevator, int* mapPtr, int* elevationPtr, int* tileP
         sharedFpsLimiter.throttle();
     }
 
-    if (keyCode != KEY_ESCAPE) {
+    if (!skipGauge) {
         keyCode -= 500;
 
         if (*elevationPtr != keyCode) {
@@ -476,7 +484,7 @@ int elevatorSelectLevel(int elevator, int* mapPtr, int* elevationPtr, int* tileP
     elevatorWindowFree();
     touch_set_touchscreen_mode(false);
 
-    if (keyCode != KEY_ESCAPE) {
+    if (keyCode >= 0) {
         const ElevatorDescription* description = &(elevatorDescription[keyCode]);
         *mapPtr = description->map;
         *elevationPtr = description->elevation;
@@ -658,6 +666,21 @@ static int elevatorGetLevelFromKeyCode(int elevator, int keyCode)
         }
     }
     return 0;
+}
+
+// 41f09fa: when ESC cancels the floor selection, resolve the exit level whose
+// map/elevation matches the current position, so the caller keeps the player
+// where they were instead of treating the cancel as a destination change.
+// Returns -1 when no matching exit is found (caller then skips any update).
+static int elevatorGetLevelFromEscKey(int elevator, int map)
+{
+    const ElevatorDescription* exits = gElevatorDescriptions[elevator];
+    for (int index = 0; index < ELEVATOR_LEVEL_MAX; index++) {
+        if (exits[index].map == map && exits[index].elevation == gElevation) {
+            return index;
+        }
+    }
+    return -1;
 }
 
 void elevatorsInit()

@@ -18,6 +18,10 @@ int pipboySave(File* stream);
 int pipboyLoad(File* stream);
 int pipboyGetWindow();
 
+// f7367f4: rest_option customization (rest_option_msgs / set_rest_option metarules).
+bool pipboyRestOptionMsgsSetBase(int baseMessageId);
+bool pipboyRestOptionSet(int restOption, int value);
+
 extern MessageList gPipboyMessageList;
 int pipboyMessageListInit();
 void pipboyMessageListFree();

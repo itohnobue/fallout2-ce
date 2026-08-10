@@ -10,6 +10,7 @@
 #include "color.h"
 #include "combat.h"
 #include "combat_ai.h"
+#include "content_config.h"
 #include "critter.h"
 #include "debug.h"
 #include "dialog.h"
@@ -391,11 +392,7 @@ static int gGameDialogReactionOrFidget;
 // 0x453FD0 dbg_error
 static void scriptPredefinedError(Program* program, const char* name, int error)
 {
-    char string[260];
-
-    snprintf(string, sizeof(string), "Script Error: %s: op_%s: %s", program->name, name, _dbg_error_strs[error]);
-
-    debugPrint(string);
+    debugPrint("Script Error: %s: op_%s: %s", program->name, name, _dbg_error_strs[error]);
 }
 
 // 0x45400C int_debug
@@ -405,10 +402,12 @@ static void scriptError(const char* format, ...)
 
     va_list argptr;
     va_start(argptr, format);
-    vsnprintf(string, sizeof(string), format, argptr);
+    if (vsnprintf(string, sizeof(string), format, argptr) < 0) {
+        string[0] = '\0';
+    }
     va_end(argptr);
 
-    debugPrint(string);
+    debugPrint("%s", string);
 }
 
 // 0x45404C scripts_tile_is_visible
@@ -568,9 +567,7 @@ static void opOverrideMapStart(Program* program)
     int y = programStackPopInteger(program);
     int x = programStackPopInteger(program);
 
-    char text[60];
-    snprintf(text, sizeof(text), "OVERRIDE_MAP_START: x: %d, y: %d", x, y);
-    debugPrint(text);
+    debugPrint("OVERRIDE_MAP_START: x: %d, y: %d", x, y);
 
     int tile = 200 * y + x;
     int previousTile = gCenterTile;
@@ -1992,8 +1989,16 @@ static void opStartGameDialog(Program* program)
     gameDialogSetBackground(backgroundId);
     gGameDialogReactionOrFidget = reactionLevel;
 
-    if (gGameDialogHeadFid != -1) {
-        int npcReactionValue = reactionGetValue(gGameDialogSpeaker);
+    // SFALL (5dc9135): use the start_gdialog target instead of the current
+    // dialog speaker, which can be null outside talk_p_proc. Previously
+    // reactionGetValue(gGameDialogSpeaker) dereferenced a null speaker when
+    // start_gdialog was called from any other procedure. The optional
+    // start_gdialog_fix config honors an explicit mood argument unless it
+    // is -1 (modder-controlled sfall behavior).
+    bool startGameDialogFix = false;
+    configGetBool(&gContentConfig, CONTENT_CONFIG_DIALOG_SECTION, "start_gdialog_fix", &startGameDialogFix);
+    if (gGameDialogHeadFid != -1 && (!startGameDialogFix || reactionLevel == -1)) {
+        int npcReactionValue = reactionGetValue(obj);
         int npcReactionType = reactionTranslateValue(npcReactionValue);
         switch (npcReactionType) {
         case NPC_REACTION_BAD:
@@ -5055,6 +5060,10 @@ static void opMoveObjectInventoryToObject(Program* program)
 static void opEndgameMovie(Program* program)
 {
     program->flags |= PROGRAM_FLAG_CHILD_CALL;
+    // 97f9a3b: a pending ENDGAME slideshow request is consumed before the
+    // movie so scripts that call endgame_movie without a prior
+    // endgame_slideshow still get the full sequence.
+    scriptsHandlePendingEndgameSlideshow();
     endgamePlayMovie();
     program->flags &= ~PROGRAM_FLAG_CHILD_CALL;
 }

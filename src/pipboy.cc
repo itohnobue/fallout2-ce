@@ -1,6 +1,7 @@
 #include "pipboy.h"
 
 #include <algorithm>
+#include <assert.h>
 #include <ctype.h>
 #include <stdio.h>
 #include <string.h>
@@ -150,6 +151,12 @@ typedef enum PipboyRestDuration {
     PIPBOY_REST_DURATION_COUNT_WITHOUT_PARTY = PIPBOY_REST_DURATION_COUNT - 1,
 } PipboyRestDuration;
 
+// f7367f4: configurable wake hours for the until-morning/noon/evening/
+// midnight rest options (set_rest_option metarule). The morning default is
+// resolved at reset time so FO1 keeps its F-027 6 AM wake hour.
+static constexpr int PIPBOY_REST_DURATION_WAKE_HOUR_COUNT = PIPBOY_REST_DURATION_UNTIL_MIDNIGHT - PIPBOY_REST_DURATION_UNTIL_MORNING + 1;
+static constexpr int kDefaultPipboyRestDurationBaseMessageId = 302;
+
 typedef enum PipboyFrm {
     PIPBOY_FRM_LITTLE_RED_BUTTON_UP,
     PIPBOY_FRM_LITTLE_RED_BUTTON_DOWN,
@@ -234,6 +241,8 @@ static bool pipboyRest(int hours, int minutes, int kind);
 static bool _Check4Health(int minutes);
 static bool _AddHealth();
 static void _ClacTime(int* hours, int* minutes, int wakeUpHour);
+static int pipboyRestOptionWakeHour(int restOption);
+static void pipboyRestOptionsReset();
 static int pipboyRenderScreensaver();
 static int questInit();
 static void questFree();
@@ -280,6 +289,10 @@ int gHolodisksCount = 0;
 //
 // 0x51C138 currentAlarmTypeCount
 int gPipboyRestOptionsCount = PIPBOY_REST_DURATION_COUNT;
+
+// f7367f4: rest_option customization state.
+static int pipboyRestDurationBaseMessageId = kDefaultPipboyRestDurationBaseMessageId;
+static int pipboyRestDurationWakeHours[PIPBOY_REST_DURATION_WAKE_HOUR_COUNT];
 
 // 0x51C13C bk_enable_5
 bool gPipboyWindowIsoWasEnabled = false;
@@ -895,12 +908,14 @@ static void _pip_init_()
 // pip_init
 void pipboyInit()
 {
+    pipboyRestOptionsReset();
     _pip_init_();
 }
 
 // NOTE: Uncollapsed 0x497918.
 void pipboyReset()
 {
+    pipboyRestOptionsReset();
     _pip_init_();
 }
 
@@ -1785,6 +1800,13 @@ static int _PrintAMelevList(int selectedMap)
     int totalEntries = 0;
     int elevationsListSize = 0;
     const int maxEntriesPerPage = PIPBOY_AUTOMAP_SUB_LINES;
+    // ceecc3e: guard _amcty_indx (the selected automap index) before
+    // indexing automapHeader->offsets with it — with more than 160 maps
+    // (RPU) the index can exceed AUTOMAP_MAP_COUNT and read out of bounds.
+    int mapCount = std::min(wmMapMaxCount(), AUTOMAP_MAP_COUNT);
+    if (_amcty_indx < 0 || _amcty_indx >= mapCount) {
+        return 0;
+    }
 
     // First pass: Count total valid entries
     for (int elevation = 0; elevation < ELEVATION_COUNT; elevation++) {
@@ -1793,7 +1815,6 @@ static int _PrintAMelevList(int selectedMap)
         }
     }
 
-    int mapCount = wmMapMaxCount();
     for (int map = 0; map < mapCount; map++) {
         if (map == _amcty_indx || _get_map_idx_same(_amcty_indx, map) == -1) {
             continue;
@@ -1907,7 +1928,10 @@ static int _PrintAMList(int selectedLocation)
 
     int count = 0;
 
-    int mapCount = wmMapMaxCount();
+    // ceecc3e: clamp to AUTOMAP_MAP_COUNT — automapHeader->offsets is
+    // sized [AUTOMAP_MAP_COUNT][ELEVATION_COUNT]; with > 160 maps (RPU)
+    // wmMapMaxCount() can exceed it and read out of bounds.
+    int mapCount = std::min(wmMapMaxCount(), AUTOMAP_MAP_COUNT);
     for (int map = 0; map < mapCount; map++) {
         int elevation;
         for (elevation = 0; elevation < ELEVATION_COUNT; elevation++) {
@@ -2026,7 +2050,9 @@ static void pipboyHandleVideoArchive(int a1)
             }
         }
 
-        if (movie <= MOVIE_COUNT) {
+        // 68ff38e: strict bound — movie can reach MOVIE_COUNT when the loop
+        // above exhausts, which would index gGameMoviesSeen out of bounds.
+        if (movie < MOVIE_COUNT) {
             gameMoviePlay(movie, GAME_MOVIE_FADE_IN | GAME_MOVIE_FADE_OUT | GAME_MOVIE_PAUSE_MUSIC);
         } else {
             debugPrint("\n ** Selected movie not found in list! **\n");
@@ -2144,25 +2170,20 @@ static void pipboyHandleAlarmClock(int eventCode)
             pipboyRest(duration - 1, 0, 0);
             break;
         case PIPBOY_REST_DURATION_UNTIL_MORNING:
-            // F-027: FO1 wakes at 6, FO2 wakes at 8.
-            _ClacTime(&hours, &minutes, gFallout1Behavior ? 6 : 8);
-            pipboyRest(hours, minutes, 0);
-            break;
         case PIPBOY_REST_DURATION_UNTIL_NOON:
-            _ClacTime(&hours, &minutes, 12);
-            pipboyRest(hours, minutes, 0);
-            break;
         case PIPBOY_REST_DURATION_UNTIL_EVENING:
-            _ClacTime(&hours, &minutes, 18);
-            pipboyRest(hours, minutes, 0);
-            break;
-        case PIPBOY_REST_DURATION_UNTIL_MIDNIGHT:
-            _ClacTime(&hours, &minutes, 0);
-            if (pipboyRest(hours, minutes, 0) == 0) {
+        case PIPBOY_REST_DURATION_UNTIL_MIDNIGHT: {
+            // f7367f4: wake hour is configurable (set_rest_option). The
+            // default morning wake hour preserves F-027 (FO1 wakes at 6,
+            // FO2 at 8) via the reset-time default table.
+            int wakeUpHour = pipboyRestOptionWakeHour(duration);
+            _ClacTime(&hours, &minutes, wakeUpHour);
+            if (pipboyRest(hours, minutes, 0) == 0 && wakeUpHour == 0) {
                 pipboyDrawNumber(0, 4, PIPBOY_WINDOW_TIME_X, PIPBOY_WINDOW_TIME_Y);
+                windowRefresh(gPipboyWindow);
             }
-            windowRefresh(gPipboyWindow);
             break;
+        }
         case PIPBOY_REST_DURATION_UNTIL_HEALED:
         case PIPBOY_REST_DURATION_UNTIL_PARTY_HEALED:
             pipboyRest(0, 0, duration);
@@ -2204,14 +2225,9 @@ static void pipboyWindowRenderRestOptions(int a1)
     // NOTE: I don't know if this +1 was a result of compiler optimization or it
     // was written like this in the first place.
     for (int option = 1; option < gPipboyRestOptionsCount + 1; option++) {
-        // 302 - Rest for ten minutes (FO2) / 321 - Rest for ten minutes (FO1)
-        // NOTE: The FO1 rest offset 321 may be off-by-one (original FO1 PIPBOY.MSG
-        // may define rest options starting at 320, not 321). This offset is used as-is
-        // since the exact FO1 PIPBOY.MSG layout cannot be verified against the original
-        // game files. If rest text appears shifted by one entry in FO1 mode, try 320.
-        // ...
-        // 315 - Rest until party is healed
-        text = getmsg(&gPipboyMessageList, &gPipboyMessageListItem, (gFallout1Behavior ? 321 : 302) + option - 1);
+        // f7367f4: base message id is configurable (rest_option_msgs).
+        // Default resolves to 321 in FO1 mode (F-027) and 302 in FO2.
+        text = getmsg(&gPipboyMessageList, &gPipboyMessageListItem, pipboyRestDurationBaseMessageId + option - 1);
         int color = option == a1 ? _colorTable[32747] : _colorTable[992];
 
         pipboyDrawText(text, 0, color);
@@ -2599,6 +2615,52 @@ static void _ClacTime(int* hours, int* minutes, int wakeUpHour)
     } else {
         *hours = 24;
     }
+}
+
+// f7367f4: set the base message id used by pipboyWindowRenderRestOptions
+// (rest_option_msgs metarule).
+bool pipboyRestOptionMsgsSetBase(int baseMessageId)
+{
+    if (baseMessageId <= 0) {
+        return false;
+    }
+
+    pipboyRestDurationBaseMessageId = baseMessageId;
+    return true;
+}
+
+// f7367f4: set the wake hour for a rest option (set_rest_option metarule).
+bool pipboyRestOptionSet(int restOption, int value)
+{
+    if (restOption < PIPBOY_REST_DURATION_UNTIL_MORNING || restOption > PIPBOY_REST_DURATION_UNTIL_MIDNIGHT) {
+        return false;
+    }
+
+    if (value < 0 || value > 23) {
+        return false;
+    }
+
+    pipboyRestDurationWakeHours[restOption - PIPBOY_REST_DURATION_UNTIL_MORNING] = value;
+    return true;
+}
+
+static int pipboyRestOptionWakeHour(int restOption)
+{
+    assert(restOption >= PIPBOY_REST_DURATION_UNTIL_MORNING);
+    assert(restOption <= PIPBOY_REST_DURATION_UNTIL_MIDNIGHT);
+
+    return pipboyRestDurationWakeHours[restOption - PIPBOY_REST_DURATION_UNTIL_MORNING];
+}
+
+// f7367f4: restore the default rest-option configuration. Morning wake hour
+// keeps the F-027 per-game default (FO1 6 AM, FO2 8 AM).
+static void pipboyRestOptionsReset()
+{
+    pipboyRestDurationBaseMessageId = gFallout1Behavior ? 321 : kDefaultPipboyRestDurationBaseMessageId;
+    pipboyRestDurationWakeHours[PIPBOY_REST_DURATION_UNTIL_MORNING - PIPBOY_REST_DURATION_UNTIL_MORNING] = gFallout1Behavior ? 6 : 8;
+    pipboyRestDurationWakeHours[PIPBOY_REST_DURATION_UNTIL_NOON - PIPBOY_REST_DURATION_UNTIL_MORNING] = 12;
+    pipboyRestDurationWakeHours[PIPBOY_REST_DURATION_UNTIL_EVENING - PIPBOY_REST_DURATION_UNTIL_MORNING] = 18;
+    pipboyRestDurationWakeHours[PIPBOY_REST_DURATION_UNTIL_MIDNIGHT - PIPBOY_REST_DURATION_UNTIL_MORNING] = 0;
 }
 
 // 0x49A0C8

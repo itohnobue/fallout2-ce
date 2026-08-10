@@ -33,11 +33,18 @@ typedef enum GameMovie {
     MOVIE_COUNT,
 } GameMovie;
 
+// 68ff38e: total playable movie slots, including the extra script-playable
+// slots beyond the 17 built-in movies (sfall Movie1..Movie32).
+constexpr int GAME_MOVIE_MAX_COUNT = 32;
+
 int gameMoviesInit();
 void gameMoviesReset();
 int gameMoviesLoad(File* stream);
 int gameMoviesSave(File* stream);
 int gameMoviePlay(int movie, int flags);
+const char* gameMovieGetDefaultFileName(int movie);
+bool gameMovieSetPath(int movie, const char* fileName);
+void gameMovieMarkSeen(int movie);
 void gameMovieFadeOut();
 bool gameMovieIsSeen(int movie);
 bool gameMovieIsPlaying();

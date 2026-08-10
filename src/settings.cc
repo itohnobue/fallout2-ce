@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <functional>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 namespace fallout {
@@ -44,6 +45,16 @@ static void settingsRead(const char* section, const char* key, int& value)
     }
 }
 
+// 82cb826: enum read (WindowMode) for settings.screen.windowed.
+template <typename T, std::enable_if_t<std::is_enum<T>::value, int> = 0>
+static void settingsRead(const char* section, const char* key, T& value)
+{
+    int v;
+    if (configGetInt(&gGameConfig, section, key, &v)) {
+        value = static_cast<T>(v);
+    }
+}
+
 static void settingsRead(const char* section, const char* key, bool& value)
 {
     bool v;
@@ -68,6 +79,13 @@ static void settingsWrite(const char* section, const char* key, const std::strin
 static void settingsWrite(const char* section, const char* key, int value)
 {
     configSetInt(&gGameConfig, section, key, value);
+}
+
+// 82cb826: enum write (WindowMode) for settings.screen.windowed.
+template <typename T, std::enable_if_t<std::is_enum<T>::value, int> = 0>
+static void settingsWrite(const char* section, const char* key, T value)
+{
+    configSetInt(&gGameConfig, section, key, static_cast<int>(value));
 }
 
 static void settingsWrite(const char* section, const char* key, bool value)
@@ -145,7 +163,8 @@ void initSettingsRegistry(bool isMapper)
 #define SECT screen
     SETTING_P(resolution_x, clamp(640, 7680));
     SETTING_P(resolution_y, clamp(480, 4320));
-    SETTING(windowed);
+    SETTING_P(windowed, clamp(WindowMode::Fullscreen, WindowMode::WindowedFullscreen));
+    SETTING(mouse_lock);
     SETTING_P(scale, clamp(1, 4));
 #undef SECT
 
@@ -172,6 +191,8 @@ void initSettingsRegistry(bool isMapper)
     SETTING(extend_ap_bar);
     SETTING(expand_barter_window);
     SETTING_P(inventory_columns, clamp(1, 2));
+    SETTING_P(loot_weight_indicator, clamp(0, 3));
+    SETTING_P(loot_container_size_indicator_threshold, clamp(0, 100));
 #undef SECT
 
 #define SECT preferences

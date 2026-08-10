@@ -38,6 +38,26 @@ struct GlobalScriptsState {
 
 static GlobalScriptsState* state = nullptr;
 
+// f832d78: return true when the given file name is a regular game script
+// (listed in scripts.lst). Such scripts must not be loaded as global
+// scripts — sfall semantics, and prevents et tu problems since many FO1
+// scripts start with GL*.
+static bool sfall_gl_scr_is_game_script(const char* fileName)
+{
+    for (int index = 0; index < scriptsGetListLength(); index++) {
+        char gameScriptFileName[100];
+        if (scriptsGetFileName(index, gameScriptFileName, sizeof(gameScriptFileName)) == -1) {
+            continue;
+        }
+
+        if (compat_stricmp(fileName, gameScriptFileName) == 0) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 // F-058: Game load counter for game_loaded() tri-state return.
 // Incremented each time a game is loaded (loadsave.cc). Used by
 // sfall_gl_scr_is_loaded() to distinguish:
@@ -79,6 +99,10 @@ bool sfall_gl_scr_init()
         int userFilesLength = fileNameListInit(globStr.c_str(), &files);
         if (userFilesLength != 0) {
             for (int index = 0; index < userFilesLength; index++) {
+                // f832d78: skip files that are regular game scripts.
+                if (sfall_gl_scr_is_game_script(files[index])) {
+                    continue;
+                }
                 char path[COMPAT_MAX_PATH];
                 snprintf(path, sizeof(path), "%s\\%s", userDir.c_str(), files[index]);
                 uniquePaths.insert(std::string { path });
@@ -96,6 +120,10 @@ bool sfall_gl_scr_init()
     int filesLength = fileNameListInit(scriptPath, &files);
     if (filesLength != 0) {
         for (int index = 0; index < filesLength; index++) {
+            // f832d78: skip files that are regular game scripts.
+            if (sfall_gl_scr_is_game_script(files[index])) {
+                continue;
+            }
             char path[COMPAT_MAX_PATH];
             snprintf(path, sizeof(path), "%s\\%s", dir, files[index]);
             uniquePaths.insert(std::string { path });
@@ -109,6 +137,10 @@ bool sfall_gl_scr_init()
     int sfallFilesLength = fileNameListInit(sfallScriptPath, &files);
     if (sfallFilesLength != 0) {
         for (int index = 0; index < sfallFilesLength; index++) {
+            // f832d78: skip files that are regular game scripts.
+            if (sfall_gl_scr_is_game_script(files[index])) {
+                continue;
+            }
             char path[COMPAT_MAX_PATH];
             snprintf(path, sizeof(path), "%s\\%s", sfallDir, files[index]);
             uniquePaths.insert(std::string { path });

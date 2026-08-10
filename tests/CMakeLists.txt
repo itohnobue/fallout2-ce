@@ -10,7 +10,10 @@ add_library(test_stubs STATIC
     test_common_stubs.cc
 )
 target_include_directories(test_stubs PUBLIC "${CMAKE_SOURCE_DIR}/src")
-target_link_libraries(test_stubs PUBLIC doctest)
+# SDL2 is needed for header includes: test_common_stubs.cc includes
+# settings.h -> svga.h -> SDL.h (WindowMode type added by upstream
+# incorporation 82cb826).
+target_link_libraries(test_stubs PUBLIC doctest ${SDL2_LIBRARIES})
 
 # ---- Source-under-test library ----
 # Compiles only the translation units needed for unit tests.

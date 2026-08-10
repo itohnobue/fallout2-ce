@@ -2,12 +2,15 @@
 
 #include "content_config.h"
 #include "display_monitor.h"
+#include "game_dialog.h"
 #include "interface.h"
 #include "inventory.h"
+#include "reaction.h"
 #include "script_sound.h"
 #include "sfall_config.h"
 #include "sfall_global_scripts.h"
 #include "sfall_global_vars.h"
+#include "sfall_object_name.h"
 #include "sfall_opcodes.h"
 #include "sfall_script_hooks.h"
 #include "stat.h"
@@ -39,7 +42,10 @@ void sfallOnGameExit()
 void sfallOnGameReset()
 {
     inventoryResetInvenApCost();
+    gameDialogResetPartyMemberCcMsgIds();
+    reactionResetThresholds();
     scriptSoundReset();
+    sfallObjectNameReset();
     statResetUnspentApBonuses();
 
     // Close all VFS file handles to prevent handle exhaustion across
@@ -141,7 +147,7 @@ void sfallOnCombatEnd()
 
 void sfallOnBeforeMapLoad()
 {
-    return;
+    sfallObjectNameReset();
 }
 
 } // namespace fallout

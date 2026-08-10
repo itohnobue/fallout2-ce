@@ -854,10 +854,8 @@ void _obj_render_pre_roof(Rect* rect, int elevation)
                     if ((objectListNode->obj->flags & OBJECT_HIDDEN) == 0) {
                         _obj_render_object(objectListNode->obj, &updatedRect, lightIntensity);
 
-                        if ((objectListNode->obj->outline & OUTLINE_TYPE_MASK) != 0) {
-                            if ((objectListNode->obj->outline & OUTLINE_DISABLED) == 0 && _outlineCount < 100) {
-                                _outlinedObjects[_outlineCount++] = objectListNode->obj;
-                            }
+                        if (objectHasVisibleOutline(objectListNode->obj) && _outlineCount < 100) {
+                            _outlinedObjects[_outlineCount++] = objectListNode->obj;
                         }
                     }
                 }
@@ -892,10 +890,8 @@ void _obj_render_pre_roof(Rect* rect, int elevation)
                 if ((objectListNode->obj->flags & OBJECT_HIDDEN) == 0) {
                     _obj_render_object(object, &updatedRect, lightIntensity);
 
-                    if ((objectListNode->obj->outline & OUTLINE_TYPE_MASK) != 0) {
-                        if ((objectListNode->obj->outline & OUTLINE_DISABLED) == 0 && _outlineCount < 100) {
-                            _outlinedObjects[_outlineCount++] = objectListNode->obj;
-                        }
+                    if (objectHasVisibleOutline(objectListNode->obj) && _outlineCount < 100) {
+                        _outlinedObjects[_outlineCount++] = objectListNode->obj;
                     }
                 }
             }
@@ -1464,6 +1460,14 @@ int objectSetLocation(Object* obj, int tile, int elevation, Rect* rect)
             if (elevation == elev) {
                 if (FID_TYPE(obj->fid) == OBJ_TYPE_MISC) {
                     if (isExitGridPid(obj->pid)) {
+                        // b9dd399: hidden exit grids (e.g. doors placed over
+                        // them) must not trigger a map transition when the
+                        // player is moved onto their tile.
+                        if ((obj->flags & OBJECT_HIDDEN) != 0) {
+                            objectListNode = objectListNode->next;
+                            continue;
+                        }
+
                         ObjectData* data = &(obj->data);
 
                         MapTransition transition;
@@ -1918,7 +1922,7 @@ int objectHide(Object* object, Rect* rect)
 
     object->flags |= OBJECT_HIDDEN;
 
-    if ((object->outline & OUTLINE_TYPE_MASK) != 0) {
+    if (objectHasOutline(object)) {
         object->outline |= OUTLINE_DISABLED;
     }
 
@@ -1956,7 +1960,7 @@ int objectDisableOutline(Object* object, Rect* rect)
         return -1;
     }
 
-    if ((object->outline & OUTLINE_TYPE_MASK) != 0) {
+    if (objectHasOutline(object)) {
         object->outline |= OUTLINE_DISABLED;
     }
 
@@ -2386,10 +2390,7 @@ void objectGetRect(Object* obj, Rect* rect)
         return;
     }
 
-    bool isOutlined = false;
-    if ((obj->outline & OUTLINE_TYPE_MASK) != 0) {
-        isOutlined = true;
-    }
+    bool isOutlined = objectHasOutline(obj);
 
     CacheEntry* artHandle;
     Art* art = artLock(obj->fid, &artHandle);
@@ -2958,7 +2959,7 @@ int objectSetOutline(Object* obj, int outlineType, Rect* rect)
         return -1;
     }
 
-    if ((obj->outline & OUTLINE_TYPE_MASK) != 0) {
+    if (objectHasOutline(obj)) {
         return -1;
     }
 

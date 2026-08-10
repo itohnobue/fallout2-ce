@@ -235,8 +235,11 @@ int _interpretOutput(const char* format, ...)
     va_start(args, format);
     const int rc = vsnprintf(string, sizeof(string), format, args);
     va_end(args);
+    if (rc < 0) {
+        string[0] = '\0';
+    }
 
-    debugPrint(string);
+    debugPrint("%s", string);
 
     return rc;
 }
@@ -278,7 +281,10 @@ static char* programGetCurrentProcedureName(Program* program)
 static void programPrintError(const char* format, va_list args)
 {
     char string[260];
-    vsnprintf(string, sizeof(string), format, args);
+    if (vsnprintf(string, sizeof(string), format, args) < 0) {
+        string[0] = '\0';
+    }
+
     debugPrint("\nError during execution: %s\n", string);
 
     if (gInterpreterCurrentProgram == nullptr) {
@@ -2403,9 +2409,7 @@ static void opCall(Program* program)
             // M-45: corrupted nameOffset. Treat as an unresolvable external
             // procedure (matches the "not found" path below) instead of
             // passing null into _hashName/compat_stricmp.
-            char err[260];
-            snprintf(err, sizeof(err), "External procedure not found\n");
-            _interpretOutput(err);
+            _interpretOutput("External procedure not found\n");
             return;
         }
         int externalProcedureAddress;
@@ -2422,9 +2426,7 @@ static void opCall(Program* program)
                 programFatalError("External procedure cannot take arguments in call context");
             }
         } else {
-            char err[260];
-            snprintf(err, sizeof(err), "External procedure %s not found\n", procedureIdentifier);
-            _interpretOutput(err);
+            _interpretOutput("External procedure %s not found\n", procedureIdentifier);
         }
     } else {
         program->instructionPointer = stackReadInt32(ptr, offsetof(Procedure, bodyOffset));
@@ -2686,9 +2688,7 @@ static void opStoreExternalVariable(Program* program)
     }
 
     if (externalVariableSetValue(program, identifier, value)) {
-        char err[256];
-        snprintf(err, sizeof(err), "External variable %s does not exist\n", identifier);
-        programFatalError(err);
+        programFatalError("External variable %s does not exist\n", identifier);
     }
 }
 
@@ -2706,9 +2706,7 @@ static void opFetchExternalVariable(Program* program)
 
     ProgramValue value;
     if (externalVariableGetValue(program, identifier, value) != 0) {
-        char err[256];
-        snprintf(err, sizeof(err), "External variable %s does not exist\n", identifier);
-        programFatalError(err);
+        programFatalError("External variable %s does not exist\n", identifier);
     }
 
     programStackPushValue(program, value);
@@ -2735,9 +2733,7 @@ static void opExportProcedure(Program* program)
     const int procedureAddress = stackReadInt32(proc_ptr, offsetof(Procedure, bodyOffset));
 
     if (externalProcedureCreate(program, procedureName, procedureAddress, argumentCount) != 0) {
-        char err[256];
-        snprintf(err, sizeof(err), "Error exporting procedure %s", procedureName);
-        programFatalError(err);
+        programFatalError("Error exporting procedure %s", procedureName);
     }
 }
 
@@ -2754,9 +2750,7 @@ static void opExportVariable(Program* program)
     }
 
     if (externalVariableCreate(program, identifier)) {
-        char err[256];
-        snprintf(err, sizeof(err), "External variable %s already exists", identifier);
-        programFatalError(err);
+        programFatalError("External variable %s already exists", identifier);
     }
 }
 
@@ -2935,11 +2929,9 @@ static void opCheckProcedureArgumentCount(Program* program)
     const int actualArgumentCount = stackReadInt32(program->procedures + 4 + 24 * procedureIndex, offsetof(Procedure, argCount));
     if (actualArgumentCount != expectedArgumentCount) {
         const char* identifier = programGetIdentifier(program, stackReadInt32(program->procedures + 4 + 24 * procedureIndex, offsetof(Procedure, nameOffset)));
-        char err[260];
         // M-45: guard against null identifier (corrupted name offset) —
-        // snprintf("%s", nullptr) is UB.
-        snprintf(err, sizeof(err), "Wrong number of args to procedure %s\n", identifier != nullptr ? identifier : "<unknown>");
-        programFatalError(err);
+        // passing null as a "%s" argument is UB.
+        programFatalError("Wrong number of args to procedure %s\n", identifier != nullptr ? identifier : "<unknown>");
     }
 }
 
@@ -2973,9 +2965,7 @@ static void opLookupStringProc(Program* program)
         procedurePtr += sizeof(Procedure);
     }
 
-    char err[260];
-    snprintf(err, sizeof(err), "Couldn't find string procedure %s\n", procedureNameToLookup);
-    programFatalError(err);
+    programFatalError("Couldn't find string procedure %s\n", procedureNameToLookup);
 }
 
 // 0x46C7DC
@@ -3075,8 +3065,6 @@ void _interpretClose()
 // 0x46CCA4
 void programInterpret(Program* program, int numInstructions)
 {
-    char err[260];
-
     Program* const oldCurrentProgram = gInterpreterCurrentProgram;
 
     if (!interpreterEnabled) {
@@ -3161,8 +3149,7 @@ void programInterpret(Program* program, int numInstructions)
         program->flags |= (opcode << 16);
 
         if (!((opcode >> 8) & 0x80)) {
-            snprintf(err, sizeof(err), "Bad opcode %x %c %d.", opcode, opcode, opcode);
-            programFatalError(err);
+            programFatalError("Bad opcode %x %c %d.", opcode, opcode, opcode);
         }
 
         // C-01: 10-bit decode mask. The 0x3FFF (14-bit) mask introduced in
@@ -3175,13 +3162,11 @@ void programInterpret(Program* program, int numInstructions)
         // words (indices 768-1023).
         const unsigned int opcodeIndex = opcode & 0x3FF;
         if (opcodeIndex >= OPCODE_MAX_COUNT) {
-            snprintf(err, sizeof(err), "Opcode index %x out of bounds (max %d).", opcodeIndex, OPCODE_MAX_COUNT);
-            programFatalError(err);
+            programFatalError("Opcode index %x out of bounds (max %d).", opcodeIndex, OPCODE_MAX_COUNT);
         }
         OpcodeHandler* handler = gInterpreterOpcodeHandlers[opcodeIndex];
         if (handler == nullptr) {
-            snprintf(err, sizeof(err), "Undefined opcode %x.", opcode);
-            programFatalError(err);
+            programFatalError("Undefined opcode %x.", opcode);
         }
 
         handler(program);
@@ -3280,11 +3265,9 @@ void programExecuteProcedureAsync(Program* program, int procedureIndex)
     int externalProcedureAddress;
     int externalProcedureArgumentCount;
     int procedureFlags;
-    char err[256];
 
     if (procedureIndex < 0 || procedureIndex >= program->procedureCount()) {
-        snprintf(err, sizeof(err), "programExecuteProcedureAsync: procedureIndex %d out of bounds (count: %d)\n", procedureIndex, program->procedureCount());
-        _interpretOutput(err);
+        _interpretOutput("programExecuteProcedureAsync: procedureIndex %d out of bounds (count: %d)\n", procedureIndex, program->procedureCount());
         return;
     }
 
@@ -3294,8 +3277,7 @@ void programExecuteProcedureAsync(Program* program, int procedureIndex)
         procedureIdentifier = programGetIdentifier(program, stackReadInt32(procedurePtr, offsetof(Procedure, nameOffset)));
         if (procedureIdentifier == nullptr) {
             // M-45: corrupted name offset — bail before _hashName(null).
-            snprintf(err, sizeof(err), "External procedure not found\n");
-            _interpretOutput(err);
+            _interpretOutput("External procedure not found\n");
             return;
         }
         externalProgram = externalProcedureGetProgram(procedureIdentifier, &externalProcedureAddress, &externalProcedureArgumentCount);
@@ -3307,13 +3289,11 @@ void programExecuteProcedureAsync(Program* program, int procedureIndex)
                 // synchronous twin (programExecuteProcedure) keeps
                 // setupExternalCall inside the argCount == 0 branch; this
                 // path must not execute the external with a corrupted stack.
-                snprintf(err, sizeof(err), "External procedure cannot take arguments in interrupt context");
-                _interpretOutput(err);
+                _interpretOutput("External procedure cannot take arguments in interrupt context");
                 return;
             }
         } else {
-            snprintf(err, sizeof(err), "External procedure %s not found\n", procedureIdentifier);
-            _interpretOutput(err);
+            _interpretOutput("External procedure %s not found\n", procedureIdentifier);
             return;
         }
 
@@ -3392,7 +3372,6 @@ void programExecuteProcedure(Program* program, int procedureIndex)
     int externalProcedureAddress;
     int externalProcedureArgumentCount;
     int procedureFlags;
-    char err[256];
     jmp_buf env;
 
     if (program == nullptr || program->procedures == nullptr) {
@@ -3400,8 +3379,7 @@ void programExecuteProcedure(Program* program, int procedureIndex)
     }
 
     if (procedureIndex < 0 || procedureIndex >= program->procedureCount()) {
-        snprintf(err, sizeof(err), "programExecuteProcedure: procedureIndex %d out of bounds (count: %d)\n", procedureIndex, program->procedureCount());
-        programFatalError(err);
+        programFatalError("programExecuteProcedure: procedureIndex %d out of bounds (count: %d)\n", procedureIndex, program->procedureCount());
     }
 
     procedurePtr = program->procedures + 4 + sizeof(Procedure) * procedureIndex;
@@ -3411,8 +3389,7 @@ void programExecuteProcedure(Program* program, int procedureIndex)
         procedureIdentifier = programGetIdentifier(program, stackReadInt32(procedurePtr, offsetof(Procedure, nameOffset)));
         if (procedureIdentifier == nullptr) {
             // M-45: corrupted name offset — bail before _hashName(null).
-            snprintf(err, sizeof(err), "External procedure not found\n");
-            _interpretOutput(err);
+            _interpretOutput("External procedure not found\n");
             return;
         }
         externalProgram = externalProcedureGetProgram(procedureIdentifier, &externalProcedureAddress, &externalProcedureArgumentCount);
@@ -3424,12 +3401,10 @@ void programExecuteProcedure(Program* program, int procedureIndex)
                 programInterpret(externalProgram, -1);
                 memcpy(externalProgram->env, env, sizeof(env));
             } else {
-                snprintf(err, sizeof(err), "External procedure cannot take arguments in interrupt context");
-                _interpretOutput(err);
+                _interpretOutput("External procedure cannot take arguments in interrupt context");
             }
         } else {
-            snprintf(err, sizeof(err), "External procedure %s not found\n", procedureIdentifier);
-            _interpretOutput(err);
+            _interpretOutput("External procedure %s not found\n", procedureIdentifier);
         }
     } else {
         procedureAddress = stackReadInt32(procedurePtr, offsetof(Procedure, bodyOffset));

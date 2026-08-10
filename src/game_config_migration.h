@@ -18,7 +18,9 @@ void contentConfigTryMigrateFromSfall(const char* contentConfigPath);
 // P-19: reduced 59 → 56 — ViewXPos/ViewYPos/WorldMapSlots rows removed
 // (dead targets, zero consumers; WorldMapSlots now served by the
 // gSfallConfig default of 21 per H-06).
-inline constexpr size_t kSfallMigrationEntryCount = 56;
+// 5dc9135/68ff38e/f7841ee: 56 → 63 — StartGDialogFix (dialog) + 6 [sound]
+// music override rows added.
+inline constexpr size_t kSfallMigrationEntryCount = 63;
 
 } // namespace fallout
 

@@ -8197,17 +8197,12 @@ static void op_set_palette(Program* program)
 // mark_movie_played(int id) — 0x8240
 // Marks a movie as played so it won't play again.
 //
-// UH-60 FIX: gGameMoviesSeen[] is file-static in game_movie.cc and has no
-// public setter. Until gameMovieMarkSeen() is added to game_movie.h/cc,
-// this opcode persists marked movies via sfall_gl_vars under the
-// "MvSeen%03d" key pattern. These survive save/load (global vars are
-// saved to sfallgv.sav).
-//
-// Integration gap: gameMovieIsSeen() in game_movie.cc does NOT check
-// these sfall-side marks. Scripts using mark_movie_played must also
-// query get_sfall_global_int("MvSeen%03d", movieId) to check marks.
-// Full integration requires adding gameMovieMarkSeen() and modifying
-// gameMovieIsSeen() to check both sources.
+// UH-60 FIX: gGameMoviesSeen[] is file-static in game_movie.cc. The mark is
+// applied through gameMovieMarkSeen() (68ff38e) which sets the in-memory
+// seen bit (persisted by gameMoviesSave), AND mirrored into sfall_gl_vars
+// under the "SFMvSeen%03d" key pattern so scripts can still query the mark
+// via get_sfall_global_int after loading (the global vars survive save/load
+// in sfallgv.sav).
 // ============================================================
 static void op_mark_movie_played(Program* program)
 {
@@ -8216,12 +8211,11 @@ static void op_mark_movie_played(Program* program)
         programPrintError("mark_movie_played: movie ID %d out of range [0, %d)", movieId, MOVIE_COUNT);
         return;
     }
-    // UH-60: Persist the mark via sfall_gl_vars so it survives save/load.
-    // gameMovieMarkSeen() in game_movie.h/cc would be the ideal fix.
+    gameMovieMarkSeen(movieId);
     char key[16] = {};
     sprintf(key, "SFMvSeen%03d", movieId);
     sfall_gl_vars_store(key, 1);
-    debugPrint("mark_movie_played: movie %d marked as seen (sfall_gl_vars)", movieId);
+    debugPrint("mark_movie_played: movie %d marked as seen", movieId);
 }
 
 // ============================================================

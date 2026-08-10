@@ -15,6 +15,7 @@
 #include "db.h"
 #include "debug.h"
 #include "game_config.h"
+#include "game_movie.h"
 #include "input.h"
 #include "interpreter.h"
 #include "object.h"
@@ -201,6 +202,15 @@ int fileNameListInit(const char* /*pattern*/, char*** /*fileNames*/)
 
 void fileNameListFree(char*** /*fileNames*/, int /*unused*/)
 {
+}
+
+// game_config_migration.cc's contentConfigMigrateSfallMovieOverrides calls
+// gameMovieGetDefaultFileName to skip migrating sfall MovieN overrides that
+// match the engine default. game_movie.cc is not linked into the test build,
+// so provide a stub that reports no known defaults (nullptr for every movie).
+const char* gameMovieGetDefaultFileName(int /*movie*/)
+{
+    return nullptr;
 }
 
 } // namespace fallout
@@ -607,6 +617,26 @@ Script* scriptGetFirstSpatialScript(int /*elevation*/)
 Script* scriptGetNextSpatialScript()
 {
     return nullptr;
+}
+
+// =============================================================
+// scripts.h stubs — script list enumeration
+// =============================================================
+// sfall_global_scripts.cc's sfall_gl_scr_is_game_script iterates the
+// loaded scripts list. scripts.cc is not linked into the test build,
+// so provide a stub reporting an empty list (length 0 — the caller's
+// loop never iterates).
+int scriptsGetListLength()
+{
+    return 0;
+}
+
+int scriptsGetFileName(int /*scriptIndex*/, char* name, size_t size)
+{
+    if (size != 0) {
+        name[0] = '\0';
+    }
+    return -1;
 }
 
 // =============================================================

@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <string>
+#include <unordered_map>
 
 #include "actions.h"
 #include "animation.h"
@@ -188,6 +189,16 @@ static int _Dogs[4] = {
     0x1000180,
     0x100007A,
 };
+
+// b8e169e: per-pid combat-control update message range override
+// (set_party_member_cc_msg_ids). When present, _gdPickAIUpdateMsg picks
+// from the configured range instead of the hardcoded dog/human ranges.
+// (Local struct — combat_ai.cc's AiMessageRange is file-local there.)
+typedef struct AiMessageRange {
+    int start;
+    int end;
+} AiMessageRange;
+static std::unordered_map<int, AiMessageRange> partyMemberCcMsgIds;
 
 // 0x5186D4 dialog_state_fix
 static int _dialog_state_fix = 0;
@@ -4064,6 +4075,12 @@ void gameDialogCombatControlButtonOnMouseUp(int btn, int keyCode)
 // 0x4492D0
 int _gdPickAIUpdateMsg(Object* critter)
 {
+    // b8e169e: per-pid override takes precedence (set_party_member_cc_msg_ids).
+    auto it = partyMemberCcMsgIds.find(critter->pid);
+    if (it != partyMemberCcMsgIds.end()) {
+        return randomBetween(it->second.start, it->second.end);
+    }
+
     int pids[4];
     memcpy(pids, _Dogs, sizeof(pids));
 
@@ -4074,6 +4091,18 @@ int _gdPickAIUpdateMsg(Object* critter)
     }
 
     return 670 + randomBetween(0, 4);
+}
+
+void gameDialogSetPartyMemberCcMsgIds(int pid, int startMsgId, int endMsgId)
+{
+    assert(startMsgId <= endMsgId);
+
+    partyMemberCcMsgIds[pid] = { startMsgId, endMsgId };
+}
+
+void gameDialogResetPartyMemberCcMsgIds()
+{
+    partyMemberCcMsgIds.clear();
 }
 
 // 0x449330
@@ -4161,7 +4190,10 @@ void partyMemberControlWindowHandleEvents()
                 dialogMode = GAME_DIALOG_MODE_TALK;
                 return;
             } else if (keyCode == KEY_LOWERCASE_A) {
-                if (gGameDialogSpeaker->pid != 0x10000A1) {
+                // 843803e: allow equipping armor for any biped party member
+                // (except Marcus who has a fixed appearance), not just
+                // PROTO_ID_MARCUS' exclusion.
+                if (partyMemberPidCanEquipArmor(gGameDialogSpeaker->pid)) {
                     Object* armor = _ai_search_inven_armor(gGameDialogSpeaker);
                     if (armor != nullptr) {
                         inventoryEquip(gGameDialogSpeaker, armor, 0);
