@@ -86,6 +86,16 @@ bool messageListFilterBadwords(MessageList* messageList);
 
 void messageListFilterGenderWords(MessageList* messageList, Gender gender);
 
+// SFALL: FemaleDialogMsgs — returns the localized directory to use for
+// dialog/cutscene message files given the player's gender and the setting:
+//   - female player + gFemaleDialogMsgs >= 1: "dialog" -> "dialog_female"
+//   - female player + gFemaleDialogMsgs >= 2: "cuts" -> "cuts_female"
+// All other combinations return |baseDir| unchanged. Callers must fall back
+// to |baseDir| when loading from the returned directory fails — the female
+// dirs are absent on English installs (and some translations ship only one of
+// the two), so the feature must never break normal message loading.
+const char* messageListGetLocalizedDir(const char* baseDir, bool isCutscene, bool isFemale);
+
 bool messageListRepositoryInit();
 void messageListRepositoryReset();
 void messageListRepositoryExit();

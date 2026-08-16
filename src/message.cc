@@ -17,6 +17,7 @@
 #include "proto_types.h"
 #include "random.h"
 #include "settings.h"
+#include "sfall_config.h"
 
 namespace fallout {
 
@@ -343,6 +344,36 @@ bool _message_make_path(char* dest, size_t size, const char* path)
     snprintf(dest, size, "%s\\%s\\%s", "text", settings.system.language.c_str(), path);
 
     return true;
+}
+
+// SFALL: FemaleDialogMsgs — selects the localized subdirectory for
+// dialog/cutscene message files. Mirrors sfall's ddraw.ini option
+// ("Set to 1 to load alternative dialog msg files from
+// text\<language>\dialog_female\ for female PC. Set to 2 to also load
+// subtitle files from text\<language>\cuts_female\ for female PC."):
+//   - female player + gFemaleDialogMsgs >= 1 selects "dialog_female" for
+//     dialog messages ("dialog")
+//   - female player + gFemaleDialogMsgs >= 2 selects "cuts_female" for
+//     cutscene subtitle messages ("cuts")
+// Any other combination returns |baseDir| unchanged. Callers must fall back
+// to |baseDir| when loading from the returned directory fails — the female
+// dirs are absent on English installs (and czech/german/hungarian/swedish
+// ship only cuts_female), so the feature must never break normal loading.
+const char* messageListGetLocalizedDir(const char* baseDir, bool isCutscene, bool isFemale)
+{
+    if (baseDir == nullptr || !isFemale || gFemaleDialogMsgs <= 0) {
+        return baseDir;
+    }
+
+    if (isCutscene) {
+        if (gFemaleDialogMsgs >= 2 && compat_stricmp(baseDir, "cuts") == 0) {
+            return "cuts_female";
+        }
+    } else if (compat_stricmp(baseDir, "dialog") == 0) {
+        return "dialog_female";
+    }
+
+    return baseDir;
 }
 
 // 0x484D10 message_find

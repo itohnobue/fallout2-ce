@@ -24,6 +24,7 @@
 #include "loadsave.h"
 #include "mainmenu.h"
 #include "map.h"
+#include "message.h"
 #include "mouse.h"
 #include "object.h"
 #include "palette.h"
@@ -35,6 +36,7 @@
 #include "settings.h"
 #include "sfall_callbacks.h"
 #include "sfall_global_scripts.h"
+#include "stat.h"
 #include "svga.h"
 #include "text_font.h"
 #include "window.h"
@@ -628,11 +630,26 @@ static int _mainDeathGrabTextFile(const char* fileName, char* dest, int destSize
     }
 
     char path[COMPAT_MAX_PATH];
-    snprintf(path, sizeof(path), "text\\%s\\cuts\\%s%s", settings.system.language.c_str(), p + 1, ".TXT");
+    // SFALL: FemaleDialogMsgs — a female player loads death-voiceover
+    // subtitles from cuts_female when the option is >=2. The player object
+    // may not exist yet in some call paths, so treat a missing gDude as
+    // non-female (mirrors gameMovieBuildSubtitlesFilePath).
+    bool isFemale = gDude != nullptr && critterGetStat(gDude, STAT_GENDER) == GENDER_FEMALE;
+    const char* cutsDir = messageListGetLocalizedDir("cuts", true, isFemale);
+    snprintf(path, sizeof(path), "text\\%s\\%s\\%s%s", settings.system.language.c_str(), cutsDir, p + 1, ".TXT");
 
     File* stream = fileOpen(path, "rt");
     if (stream == nullptr) {
-        return -1;
+        // SFALL: FemaleDialogMsgs fallback — the cuts_female dir may be absent
+        // (English installs ship no cuts_female); retry from the normal cuts
+        // dir before giving up.
+        if (compat_stricmp(cutsDir, "cuts") != 0) {
+            snprintf(path, sizeof(path), "text\\%s\\cuts\\%s%s", settings.system.language.c_str(), p + 1, ".TXT");
+            stream = fileOpen(path, "rt");
+        }
+        if (stream == nullptr) {
+            return -1;
+        }
     }
 
     int written = 0;

@@ -14,13 +14,16 @@
 #include "game_mouse.h"
 #include "game_sound.h"
 #include "input.h"
+#include "message.h"
 #include "mouse.h"
 #include "movie.h"
 #include "movie_effect.h"
+#include "object.h"
 #include "palette.h"
 #include "platform_compat.h"
 #include "settings.h"
 #include "sfall_opcodes.h"
+#include "stat.h"
 #include "svga.h"
 #include "text_font.h"
 #include "touch.h"
@@ -399,7 +402,15 @@ static char* gameMovieBuildSubtitlesFilePath(char* movieFilePath)
         path = separator + 1;
     }
 
-    snprintf(gGameMovieSubtitlesFilePath, sizeof(gGameMovieSubtitlesFilePath), "text\\%s\\cuts\\%s", settings.system.language.c_str(), path);
+    // SFALL: FemaleDialogMsgs — a female player loads movie subtitles from
+    // cuts_female when the option is >=2; falls back to the normal cuts dir
+    // when the female file is absent (English installs ship no cuts_female).
+    // The player object may not exist yet (boot movies play before character
+    // creation), so treat a missing gDude as non-female.
+    bool isFemale = gDude != nullptr && critterGetStat(gDude, STAT_GENDER) == GENDER_FEMALE;
+    const char* cutsDir = messageListGetLocalizedDir("cuts", true, isFemale);
+
+    snprintf(gGameMovieSubtitlesFilePath, sizeof(gGameMovieSubtitlesFilePath), "text\\%s\\%s\\%s", settings.system.language.c_str(), cutsDir, path);
 
     char* pch = strrchr(gGameMovieSubtitlesFilePath, '.');
     if (pch != nullptr && *pch != '\0') {
@@ -407,6 +418,22 @@ static char* gameMovieBuildSubtitlesFilePath(char* movieFilePath)
     }
 
     strcpy(gGameMovieSubtitlesFilePath + strlen(gGameMovieSubtitlesFilePath), ".SVE");
+
+    // SFALL: FemaleDialogMsgs fallback — probe the female subtitle file; when
+    // it is absent rebuild the path from the normal cuts dir so subtitles keep
+    // working (gameMoviePlay pre-checks dbGetFileSize before enabling the
+    // subtitle flag, so the probe must reflect the final path).
+    if (compat_stricmp(cutsDir, "cuts") != 0) {
+        int subtitleFileSize;
+        if (dbGetFileSize(gGameMovieSubtitlesFilePath, &subtitleFileSize) != 0) {
+            snprintf(gGameMovieSubtitlesFilePath, sizeof(gGameMovieSubtitlesFilePath), "text\\%s\\cuts\\%s", settings.system.language.c_str(), path);
+            pch = strrchr(gGameMovieSubtitlesFilePath, '.');
+            if (pch != nullptr && *pch != '\0') {
+                *pch = '\0';
+            }
+            strcpy(gGameMovieSubtitlesFilePath + strlen(gGameMovieSubtitlesFilePath), ".SVE");
+        }
+    }
 
     return gGameMovieSubtitlesFilePath;
 }

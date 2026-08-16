@@ -1204,7 +1204,12 @@ const MetaruleInfo kMetarules[] = {
     { "set_iface_tag_text", mf_set_iface_tag_text, 3, 3, -1, { ARG_INT, ARG_STRING, ARG_INT } },
     { "set_ini_setting", mf_set_ini_setting, 2, 2, -1, { ARG_STRING, ARG_INTSTR } },
     { "set_map_enter_position", mf_set_map_enter_position, 3, 3, -1, { ARG_INT, ARG_INT, ARG_INT } },
-    { "set_object_data", mf_set_object_data, 3, 3, -1, { ARG_OBJECT, ARG_INT, ARG_INT } },
+    // set_object_data arg2 is ARG_ANY (upstream 5774372): the value may be an
+    // int (most fields) or an Object* (C_ATTACK_SOURCE/WEAPON/TARGET/MAIN_TARGET/
+    // TARGET1-6 and OBJ_DATA_WHO_HIT_ME take object values — e.g. et-tu
+    // gl_z_throwing_hex.ssl:130 passes dude_obj). ARG_INT would reject objects
+    // in validateArguments() before setAttackData/setObjectData can type-check.
+    { "set_object_data", mf_set_object_data, 3, 3, -1, { ARG_OBJECT, ARG_INT, ARG_ANY } },
     { "set_outline", mf_set_outline, 2, 2, -1, { ARG_OBJECT, ARG_INT } },
     { "set_quest_failure_value", mf_set_quest_failure_value, 2, 2, -1, { ARG_INT, ARG_INT } },
     { "set_reaction_thresholds", mf_set_reaction_thresholds, 2, 2, -1, { ARG_INT, ARG_INT } },
@@ -3195,63 +3200,73 @@ void mf_real_dude_obj(OpcodeContext& ctx)
     ctx.setReturn(gSavedOriginalDude);
 }
 
-// set_object_data(Object* obj, int offset, int value): writes an int value at the
-// given byte offset within the Object struct. Uses a SAFETY WHITELIST — only offsets
-// corresponding to known-safe primitive int fields are allowed. Arbitrary memory writes
-// are rejected with error -1.
+// set_object_data(Object* obj, int offset, mixed value): sets the sfall field at
+// the given offset. Mirrors the upstream routing (upstream 5774372, sfall
+// Metarule.cpp): if arg0 is the active attack data (combat_data() or
+// HOOK_COMBATDAMAGE arg12) the write goes through the typed setAttackData()
+// field setter (combat-gated like mf_get_object_data); otherwise arg0 is treated
+// as an Object* and the write goes through the typed setObjectData() field setter.
 //
-// Safe offsets map to the first 11 contiguous int fields in the Object struct:
-//   id(0), tile(4), x(8), y(12), sx(16), sy(20), frame(24), rotation(28),
-//   fid(32), flags(36), elevation(40)
+// SAFETY — why the raw-byte whitelist was replaced:
+// The pre-sync fork implementation only permitted raw 4-byte writes to the first
+// 11 primitive int fields of the Object struct (offsets 0-40 step 4) in order to
+// prevent arbitrary memory corruption. setAttackData()/setObjectData() are
+// type-checked field setters with strictly narrower memory effects:
+//   - every offset is dispatched through a fixed enum table (AttackDataField at
+//     :93-139, ObjectDataField at :68-91) — there is NO pointer arithmetic on
+//     caller-supplied offsets, so out-of-bounds writes are structurally impossible
+//     (fieldArrayIndex() asserts the target index < EXPLOSION_TARGET_COUNT);
+//   - every write targets a named member of the Attack/Object struct layout;
+//   - every value is validated before assignment (intDataValue/objectDataValue
+//     type checks, hitModeIsValid/hitLocationIsValid enum range checks,
+//     AroundNumber clamped to [0, EXPLOSION_TARGET_COUNT]);
+//   - unsupported offsets and invalid value types return false and the metarule
+//     reports "unsupported offset or value type" (-1) instead of writing.
+// The trade-off is that raw offsets the sfall field table does not cover (e.g.
+// the x/y/sx/sy struct members at 0x08-0x14) are no longer writable — this
+// matches upstream sfall, whose OBJ_DATA_* surface (define_extra.h) does not
+// expose those members either.
 void mf_set_object_data(OpcodeContext& ctx)
 {
-    Object* ptr = ctx.arg(0).asObject();
-    int rawOffset = ctx.arg(1).asInt();
-    int value = ctx.arg(2).asInt();
+    const ProgramValue& dataPtr = ctx.arg(0);
+    const int offset = ctx.arg(1).asInt();
 
+    Attack* attack = activeAttackData(dataPtr);
+    if (attack != nullptr) {
+        if (!isInCombat()) {
+            ctx.printError("%s() - attack data is only available in combat.", ctx.name());
+            ctx.setReturn(-1);
+            return;
+        }
+
+        bool changed = setAttackData(attack, static_cast<AttackDataField>(offset), ctx.arg(2));
+        if (!changed) {
+            ctx.printError("%s() - unsupported offset or value type.", ctx.name());
+            ctx.setReturn(-1);
+            return;
+        }
+
+        ctx.setReturn(0);
+        return;
+    }
+
+    Object* object = dataPtr.asObject();
     // asObject() returns nullptr for integer 0 and non-pointer types.
     // Guard against null dereference — peer functions in this file
     // have the same guard.
-    if (ptr == nullptr) {
+    if (object == nullptr) {
         ctx.printError("%s(): object is null (asObject() returned nullptr)", ctx.name());
         ctx.setReturn(-1);
         return;
     }
 
-    if (rawOffset < 0 || rawOffset % 4 != 0) {
-        ctx.printError("%s(): bad offset %d (must be non-negative, multiple of 4)", ctx.name(), rawOffset);
+    bool changed = setObjectData(object, static_cast<ObjectDataField>(offset), ctx.arg(2));
+    if (!changed) {
+        ctx.printError("%s() - unsupported offset or value type.", ctx.name());
         ctx.setReturn(-1);
         return;
     }
 
-    // Safety whitelist: only allow writes to the first 11 primitive int fields
-    // of the Object struct. All other offsets (including the complex ObjectData
-    // member at offset 44+) are rejected to prevent memory corruption.
-    //
-    // NOTE: These offsets assume the Object struct layout:
-    //   int id, tile, x, y, sx, sy, frame, rotation, fid, flags, elevation;
-    //   ObjectData data; // starts at offset 44
-    // If the struct layout changes, this whitelist must be updated.
-    static const int kSafeOffsets[] = {
-        0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40
-    };
-    static const int kSafeOffsetCount = sizeof(kSafeOffsets) / sizeof(kSafeOffsets[0]);
-
-    bool allowed = false;
-    for (int i = 0; i < kSafeOffsetCount; i++) {
-        if (rawOffset == kSafeOffsets[i]) {
-            allowed = true;
-            break;
-        }
-    }
-
-    if (!allowed) {
-        ctx.printError("%s(): offset %d is not in the safety whitelist. Only primitive int fields (0-40 step 4) are writable.", ctx.name(), rawOffset);
-        ctx.setReturn(-1);
-        return;
-    }
-
-    *reinterpret_cast<int*>(reinterpret_cast<unsigned char*>(ptr) + rawOffset) = value;
     ctx.setReturn(0);
 }
 

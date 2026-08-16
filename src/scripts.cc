@@ -3326,11 +3326,31 @@ static int scriptsGetMessageList(int messageListId, MessageList** messageListPtr
         }
 
         char path[COMPAT_MAX_PATH];
-        snprintf(path, sizeof(path), "dialog\\%s.msg", scriptName);
+        // SFALL: FemaleDialogMsgs — a female player loads dialog messages from
+        // the dialog_female dir when the option is enabled (>=1). Guard gDude
+        // (script message load can run before character creation in edge
+        // paths) — treat a missing player as non-female.
+        bool isFemale = gDude != nullptr && critterGetStat(gDude, STAT_GENDER) == GENDER_FEMALE;
+        const char* dialogDir = messageListGetLocalizedDir("dialog", false, isFemale);
+        snprintf(path, sizeof(path), "%s\\%s.msg", dialogDir, scriptName);
 
         if (!messageListLoad(messageList, path)) {
-            debugPrint("\nError loading script dialog message file!");
-            return -1;
+            if (compat_stricmp(dialogDir, "dialog") != 0) {
+                // SFALL: FemaleDialogMsgs fallback — the dialog_female dir may
+                // be absent (English installs ship no dialog_female, and some
+                // translations ship only cuts_female); retry from the normal
+                // dialog dir before giving up.
+                messageListFree(messageList);
+                messageListInit(messageList);
+                snprintf(path, sizeof(path), "dialog\\%s.msg", scriptName);
+                if (!messageListLoad(messageList, path)) {
+                    debugPrint("\nError loading script dialog message file!");
+                    return -1;
+                }
+            } else {
+                debugPrint("\nError loading script dialog message file!");
+                return -1;
+            }
         }
 
         if (!messageListFilterBadwords(messageList)) {
@@ -3339,8 +3359,14 @@ static int scriptsGetMessageList(int messageListId, MessageList** messageListPtr
         }
 
         // SFALL: Gender-specific words.
-        Gender gender = static_cast<Gender>(critterGetStat(gDude, STAT_GENDER));
-        messageListFilterGenderWords(messageList, gender);
+        // Guard gDude identically to the FemaleDialogMsgs site above (script
+        // message load can run before character creation in edge paths) — a
+        // missing player skips the gender-word filter, matching the
+        // non-female default used for the dialog-dir selection.
+        if (gDude != nullptr) {
+            Gender gender = static_cast<Gender>(critterGetStat(gDude, STAT_GENDER));
+            messageListFilterGenderWords(messageList, gender);
+        }
     }
 
     *messageListPtr = messageList;

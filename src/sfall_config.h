@@ -32,9 +32,28 @@ namespace fallout {
 #define SFALL_CONFIG_USE_FILESYSTEM_OVERRIDE_KEY "UseFileSystemOverride"
 #define SFALL_CONFIG_OVERRIDE_ART_CACHE_SIZE_KEY "OverrideArtCacheSize"
 #define SFALL_CONFIG_EXTRA_SAVE_SLOTS_KEY "ExtraSaveSlots"
+#define SFALL_CONFIG_PROCESSOR_IDLE_KEY "ProcessorIdle"
+#define SFALL_CONFIG_BOX_BAR_COLOURS_KEY "BoxBarColours"
+#define SFALL_CONFIG_ART_CACHE_SIZE_KEY "ArtCacheSize"
+#define SFALL_CONFIG_FEMALE_DIALOG_MSGS_KEY "FemaleDialogMsgs"
 // H-06: WorldMapSlots — RPU gl_k_modini.ssl requires this to be 21; CE's
 // default is 21 so the ddraw.ini fallback tier satisfies RPU out of the box.
 #define SFALL_CONFIG_WORLDMAP_SLOTS_KEY "WorldMapSlots"
+
+// Art cache size (MB) used when [Misc] OverrideArtCacheSize=1 and no explicit
+// [Misc] ArtCacheSize key is present. Mirrors sfall's fixed behavior: sfall
+// does NOT have an ArtCacheSize key — OverrideArtCacheSize=1 sets the cache
+// to a fixed 261 MB ("Changed OverrideArtCacheSize to set the art cache size
+// to 261 instead of 256", sfall-readme.txt:361; the option exists "to fix
+// F2RP EPA crashes", sfall-readme.txt:1727). RPU ships OverrideArtCacheSize=1
+// with no ArtCacheSize key, so 261 is what RPU's config requests. 261 also
+// stays above CE's own 32 MB default (settings.h:21) — the previous default
+// of 20 MB was below it, dropping the cache on RPU installs.
+#define SFALL_CONFIG_ART_CACHE_SIZE_DEFAULT 261
+// Clamp bounds (MB) for the art cache size, mirroring the CE
+// settings.system.art_cache_size clamp (src/settings.cc:155: clamp(8, 512)).
+#define SFALL_CONFIG_ART_CACHE_SIZE_MIN 8
+#define SFALL_CONFIG_ART_CACHE_SIZE_MAX 512
 
 extern bool gSfallConfigInitialized;
 extern Config gSfallConfig;
@@ -45,11 +64,21 @@ extern bool gFallout1Behavior;
 extern bool gAllowUnsafeScripting; // INTENTIONALLY UNWIRED: opcodes registered unconditionally; flag parsed but never gates registration
 extern bool gEnableHeroAppearanceMod; // DEAD: feature always active; flag parsed in sfall_ini.cc but unwired in CE — no code gate exists
 extern bool gUseFileSystemOverride; // INTENTIONALLY UNWIRED: VFS priority handles this
-extern bool gOverrideArtCacheSize; // INTENTIONALLY UNWIRED: art.cc uses settings.system.art_cache_size instead
+extern bool gOverrideArtCacheSize; // WIRED: when set, art.cc uses the sfall [Misc] ArtCacheSize value (gSfallArtCacheSize) instead of settings.system.art_cache_size
 extern bool gExtraSaveSlots; // WIRED: consumed at loadsave.cc for save slot page count
+extern bool gProcessorIdle; // PARSED, NO ENGINE CHANGE NEEDED: CE's FPS limiter already yields the CPU every frame via SDL_Delay (src/fps_limiter.cc); parsed for ddraw.ini acceptance and documented
+extern int gBoxBarColours; // PARSED, INERT: accepted for ddraw.ini compatibility; CE has no sfall box-bar colour rendering equivalent (cosmetic)
+extern int gSfallArtCacheSize; // WIRED: consumed by art.cc via sfallArtCacheSizeMb() when gOverrideArtCacheSize is set
+extern int gFemaleDialogMsgs; // WIRED: 0=normal, 1=dialog_female for female PC, 2=+cuts_female; consumed by messageListGetLocalizedDir (message.cc) for dialog/cutscene message dir selection
 
 bool sfallConfigInit(int argc, char** argv);
 void sfallConfigExit();
+
+// Art cache size selection (MB): returns gSfallArtCacheSize when
+// gOverrideArtCacheSize is set, otherwise fallbackMb (the CE setting).
+// The result is clamped to [SFALL_CONFIG_ART_CACHE_SIZE_MIN,
+// SFALL_CONFIG_ART_CACHE_SIZE_MAX] to mirror the CE setting clamp.
+int sfallArtCacheSizeMb(int fallbackMb);
 
 } // namespace fallout
 

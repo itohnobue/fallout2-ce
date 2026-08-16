@@ -23,6 +23,7 @@
 #include "input.h"
 #include "map.h"
 #include "memory.h"
+#include "message.h"
 #include "mouse.h"
 #include "object.h"
 #include "palette.h"
@@ -141,6 +142,11 @@ static bool gEndgameEndingVoiceOverSpeechLoaded;
 
 // 0x570ABC endgame_subtitle_path
 static char gEndgameEndingSubtitlesLocalizedPath[COMPAT_MAX_PATH];
+
+// SFALL: FemaleDialogMsgs — true when gEndgameEndingSubtitlesLocalizedPath
+// points at the cuts_female dir, so a failed subtitle load can fall back to
+// the normal cuts dir.
+static bool gEndgameEndingSubtitlesFemaleDir = false;
 
 // The flag used to denote voice over speech for current slide has ended.
 //
@@ -757,7 +763,14 @@ static int endgameEndingSlideshowWindowInit()
         return 0;
     }
 
-    snprintf(gEndgameEndingSubtitlesLocalizedPath, sizeof(gEndgameEndingSubtitlesLocalizedPath), "text\\%s\\cuts\\", settings.system.language.c_str());
+    // SFALL: FemaleDialogMsgs — a female player loads endgame ending
+    // subtitles from cuts_female when the option is >=2; loading falls back
+    // to the normal cuts dir per-voiceover if the file is absent. Guard
+    // gDude (may be null in edge paths) — treat as non-female.
+    bool isFemale = gDude != nullptr && critterGetStat(gDude, STAT_GENDER) == GENDER_FEMALE;
+    const char* cutsDir = messageListGetLocalizedDir("cuts", true, isFemale);
+    gEndgameEndingSubtitlesFemaleDir = compat_stricmp(cutsDir, "cuts") != 0;
+    snprintf(gEndgameEndingSubtitlesLocalizedPath, sizeof(gEndgameEndingSubtitlesLocalizedPath), "text\\%s\\%s\\", settings.system.language.c_str(), cutsDir);
 
     gEndgameEndingSubtitles = (char**)internal_malloc(sizeof(*gEndgameEndingSubtitles) * ENDGAME_ENDING_MAX_SUBTITLES);
     if (gEndgameEndingSubtitles == nullptr) {
@@ -850,7 +863,17 @@ static void endgameEndingVoiceOverInit(const char* fileBaseName)
         snprintf(path, sizeof(path), "%s%s.txt", gEndgameEndingSubtitlesLocalizedPath, fileBaseName);
 
         if (endgameEndingSubtitlesLoad(path) != 0) {
-            return;
+            if (gEndgameEndingSubtitlesFemaleDir) {
+                // SFALL: FemaleDialogMsgs fallback — the cuts_female dir may
+                // be absent (English installs ship no cuts_female); retry from
+                // the normal cuts dir before giving up.
+                snprintf(path, sizeof(path), "text\\%s\\cuts\\%s.txt", settings.system.language.c_str(), fileBaseName);
+                if (endgameEndingSubtitlesLoad(path) != 0) {
+                    return;
+                }
+            } else {
+                return;
+            }
         }
 
         double durationPerCharacter;

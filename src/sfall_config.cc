@@ -1,6 +1,9 @@
 #include "sfall_config.h"
 
+#include "debug.h"
 #include "platform_compat.h"
+
+#include <algorithm>
 #include <stdio.h>
 #include <string.h>
 
@@ -26,16 +29,39 @@ bool gFallout1Behavior = false;
 //   gUseFileSystemOverride   — INTENTIONALLY UNWIRED: VFS priority ordering
 //                               provides equivalent override behavior without
 //                               this flag (master_patches/ dir > .dat files).
-//   gOverrideArtCacheSize     — UNWIRED: art cache size is controlled by
-//                               settings.system.art_cache_size (art.cc),
-//                               not this flag. Needs wiring or removal.
+//   gOverrideArtCacheSize     — WIRED: consumed by sfallArtCacheSizeMb()
+//                               (art.cc artInit) — when set, the art cache
+//                               uses the sfall [Misc] ArtCacheSize value
+//                               (gSfallArtCacheSize) instead of
+//                               settings.system.art_cache_size.
 //   gExtraSaveSlots           — WIRED: consumed at loadsave.cc for save slot
 //                               page count (true → 10 pages / false → 1 page).
+//   gProcessorIdle            — PARSED, NO ENGINE CHANGE NEEDED: sfall's
+//                               "reduce CPU usage by allowing the system to
+//                               go idle" is already satisfied by CE's FPS
+//                               limiter, which yields the CPU every frame
+//                               (SDL_Delay in fps_limiter.cc throttle()).
+//   gBoxBarColours            — PARSED, INERT: accepted for ddraw.ini
+//                               compatibility; CE has no sfall box-bar colour
+//                               rendering equivalent (cosmetic).
+//   gSfallArtCacheSize        — WIRED: the [Misc] ArtCacheSize override value
+//                               (MB) used when gOverrideArtCacheSize is set.
+//   gFemaleDialogMsgs         — WIRED: 0/1/2 mirror of sfall's FemaleDialogMsgs.
+//                               Consumed by messageListGetLocalizedDir
+//                               (message.cc): a female player loads dialog
+//                               messages from dialog_female (>=1) and cutscene
+//                               subtitles from cuts_female (>=2), with fallback
+//                               to the normal dirs when the female dirs are
+//                               absent (English installs ship none — inert).
 bool gAllowUnsafeScripting = false;
 bool gEnableHeroAppearanceMod = false;
 bool gUseFileSystemOverride = false;
 bool gOverrideArtCacheSize = false;
 bool gExtraSaveSlots = false;
+bool gProcessorIdle = false;
+int gBoxBarColours = 0;
+int gSfallArtCacheSize = SFALL_CONFIG_ART_CACHE_SIZE_DEFAULT;
+int gFemaleDialogMsgs = 0;
 
 bool sfallConfigInit(int argc, char** argv)
 {
@@ -61,6 +87,13 @@ bool sfallConfigInit(int argc, char** argv)
     configSetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, SFALL_CONFIG_USE_FILESYSTEM_OVERRIDE_KEY, 0);
     configSetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, SFALL_CONFIG_OVERRIDE_ART_CACHE_SIZE_KEY, 0);
     configSetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, SFALL_CONFIG_EXTRA_SAVE_SLOTS_KEY, 0);
+    configSetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, SFALL_CONFIG_PROCESSOR_IDLE_KEY, 0);
+    configSetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, SFALL_CONFIG_BOX_BAR_COLOURS_KEY, 0);
+    configSetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, SFALL_CONFIG_ART_CACHE_SIZE_KEY, SFALL_CONFIG_ART_CACHE_SIZE_DEFAULT);
+    // P3 RPU parity: FemaleDialogMsgs — sfall default is 0 (normal dirs).
+    // The value only matters for non-English RPU translations that ship
+    // dialog_female/cuts_female dirs; English installs are unaffected.
+    configSetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, SFALL_CONFIG_FEMALE_DIALOG_MSGS_KEY, 0);
     // H-06: WorldMapSlots defaults to 21. RPU's gl_k_modini.ssl checks
     // `get_ini_setting("ddraw.ini|Misc|WorldMapSlots") != 21` and calls
     // signal_end_game (ending the session) on any other value. sfall's own
@@ -92,6 +125,26 @@ bool sfallConfigInit(int argc, char** argv)
     gOverrideArtCacheSize = tempVal != 0;
     configGetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, SFALL_CONFIG_EXTRA_SAVE_SLOTS_KEY, &tempVal, 0);
     gExtraSaveSlots = tempVal != 0;
+    configGetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, SFALL_CONFIG_PROCESSOR_IDLE_KEY, &tempVal, 0);
+    gProcessorIdle = tempVal != 0;
+    configGetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, SFALL_CONFIG_BOX_BAR_COLOURS_KEY, &tempVal, 0);
+    gBoxBarColours = tempVal;
+    configGetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, SFALL_CONFIG_ART_CACHE_SIZE_KEY, &tempVal, SFALL_CONFIG_ART_CACHE_SIZE_DEFAULT);
+    gSfallArtCacheSize = tempVal;
+    configGetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, SFALL_CONFIG_FEMALE_DIALOG_MSGS_KEY, &tempVal, 0);
+    gFemaleDialogMsgs = tempVal;
+
+    // P3 RPU parity: ProcessorIdle and BoxBarColours need no engine behavior —
+    // CE already yields the CPU every frame via the FPS limiter (SDL_Delay in
+    // fps_limiter.cc throttle()) and has no sfall box-bar colour rendering
+    // equivalent. Log one-line notes so the accepted-but-inert state is
+    // observable at config load time.
+    if (gProcessorIdle) {
+        debugPrint("ProcessorIdle=1: accepted; CE's FPS limiter already yields the CPU every frame (src/fps_limiter.cc). No additional idle handling needed.\n");
+    }
+    if (gBoxBarColours != 0) {
+        debugPrint("BoxBarColours=%d: accepted but inert — CE has no sfall box-bar colour rendering equivalent (cosmetic setting).\n", gBoxBarColours);
+    }
 
     // gEnableHeroAppearanceMod is unconditionally false since F-17
     // removed its config key and parsing. The feature is always active
@@ -102,6 +155,15 @@ bool sfallConfigInit(int argc, char** argv)
     gSfallConfigInitialized = true;
 
     return true;
+}
+
+int sfallArtCacheSizeMb(int fallbackMb)
+{
+    int size = gOverrideArtCacheSize ? gSfallArtCacheSize : fallbackMb;
+    // Mirror the CE settings.system.art_cache_size clamp (src/settings.cc:155:
+    // clamp(8, 512)) so the cacheInit input is always in range regardless of
+    // which source supplied it.
+    return std::clamp(size, SFALL_CONFIG_ART_CACHE_SIZE_MIN, SFALL_CONFIG_ART_CACHE_SIZE_MAX);
 }
 
 void sfallConfigExit()

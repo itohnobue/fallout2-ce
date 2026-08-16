@@ -1443,7 +1443,10 @@ void scriptHooks_ComputeDamage(Attack* attack, int numRounds, int baseDmgMult)
             numRounds,
             attack->defenderKnockback,
             attack->hitMode,
-            attack // this is how sfall did it — get_object_data has bounds protection (sizeof(Object)), set_object_data is not implemented
+            attack // sfall passes the Attack* as the last arg (arg12); scripts
+                   // reach it via get_object_data/set_object_data on
+                   // combat_data, which CE routes through the typed
+                   // AttackDataField accessors (sfall_metarules.cc)
         });
 
     hook.call();

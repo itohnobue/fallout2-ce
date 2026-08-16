@@ -2992,3 +2992,431 @@ TEST_CASE("H-05: remove_wm_town_names mirror stores state")
     mirrorSet(0);
     CHECK(gTestRemoveWmTownNames == false);
 }
+
+// =================================================================
+// RPU item 2 sub-note: set_object_data field routing (upstream 5774372).
+// mf_set_object_data was the pre-sync fork raw-byte whitelist writer (offsets
+// 0-40 step 4 only); it now routes through the typed setAttackData()/
+// setObjectData() field setters exactly like mf_get_object_data. The
+// production handlers are file-static in sfall_metarules.cc and cannot be
+// linked from tests (documented limitation — same pattern as the fs_copy
+// decision test in test_sfall_opcodes.cc:605-642). These mirrors replicate the
+// branch conditions and field assignments exactly so regressions in the
+// routing (e.g. reverting to the raw-byte whitelist, dropping the attack-data
+// branch, removing the ARG_ANY arg2 contract) are caught by the assertions
+// below.
+// =================================================================
+
+// Mirror of intDataValue (sfall_metarules.cc:149-157): int or float accepted.
+static bool TestSetObjIntDataValue(const ProgramValue& value, int& out)
+{
+    if (!value.isInt() && !value.isFloat()) {
+        return false;
+    }
+    out = value.asInt();
+    return true;
+}
+
+// Mirror of objectDataValue (sfall_metarules.cc:159-172): int 0 (null) or any
+// pointer (the metarule treats the pointer as an Object* downstream).
+static bool TestSetObjObjectDataValue(const ProgramValue& value, Object*& out)
+{
+    if (value.isInt() && value.integerValue == 0) {
+        out = nullptr;
+        return true;
+    }
+    if (!value.isPointer()) {
+        return false;
+    }
+    out = static_cast<Object*>(value.pointerValue);
+    return true;
+}
+
+// Mirror of setAttackData's C_ATTACK_FLAGS_TARGET case
+// (sfall_metarules.cc:334-337): int-valued write to attack->defenderFlags.
+static bool TestSetAttackDataFlagsTarget(Attack* attack, const ProgramValue& data)
+{
+    if (attack == nullptr) {
+        return false;
+    }
+    int intValue = 0;
+    if (!TestSetObjIntDataValue(data, intValue)) {
+        return false;
+    }
+    attack->defenderFlags = static_cast<Dam>(intValue);
+    return true;
+}
+
+// Test-local model of the engine's spatial object grid (gObjectListHeadByTile /
+// gObjectListHead in object.cc:3940-3945): only objects "placed" here are found
+// by objectGetListNode, which objectSetLocation requires (object.cc:1417-1419).
+static std::unordered_set<Object*> gTestSpatialGrid;
+
+// Mirror of objectGetListNode (object.cc:3930-3973): an object is in the
+// spatial grid iff its address appears in the grid lists.
+static bool TestObjectIsInSpatialGrid(Object* object)
+{
+    return object != nullptr && gTestSpatialGrid.count(object) != 0;
+}
+
+// Mirror of objectSetLocation (object.cc:1401-1419) restricted to the
+// validation surface setCommonObjectData depends on: null object → false,
+// invalid hex tile → false, invalid elevation → false, object not in the
+// spatial grid → false. On success the object is moved to (tile, elevation).
+static bool TestObjectSetLocation(Object* object, int tile, int elevation)
+{
+    if (object == nullptr) {
+        return false;
+    }
+    if (!hexGridTileIsValid(tile)) {
+        return false;
+    }
+    if (!elevationIsValid(elevation)) {
+        return false;
+    }
+    if (!TestObjectIsInSpatialGrid(object)) {
+        return false;
+    }
+    object->tile = tile;
+    object->elevation = elevation;
+    return true;
+}
+
+// Mirror of setCommonObjectData's OBJ_DATA_TILENUM case
+// (sfall_metarules.cc:593-595): int-valued write routed through
+// objectSetLocation(object, intValue, object->elevation, nullptr).
+static bool TestSetObjectDataTileNum(Object* object, const ProgramValue& data)
+{
+    if (object == nullptr) {
+        return false;
+    }
+    int intValue = 0;
+    if (!TestSetObjIntDataValue(data, intValue)) {
+        return false;
+    }
+    return TestObjectSetLocation(object, intValue, object->elevation);
+}
+
+// Mirror of setCommonObjectData's OBJ_DATA_ELEVATION case
+// (sfall_metarules.cc:609-611): int-valued write routed through
+// objectSetLocation(object, object->tile, intValue, nullptr) — NOT a raw
+// object->elevation assignment. Success requires a valid current tile, a valid
+// elevation (0..ELEVATION_COUNT-1) and spatial-grid membership, exactly like
+// production.
+static bool TestSetObjectDataElevation(Object* object, const ProgramValue& data)
+{
+    if (object == nullptr) {
+        return false;
+    }
+    int intValue = 0;
+    if (!TestSetObjIntDataValue(data, intValue)) {
+        return false;
+    }
+    return TestObjectSetLocation(object, object->tile, intValue);
+}
+
+// Mirror of setCritterObjectData's OBJ_DATA_WHO_HIT_ME case
+// (sfall_metarules.cc:665-668): object-valued write to the critter combat
+// field. This is the field et-tu's gl_z_throwing_hex.ssl:130 writes.
+static bool TestSetObjectDataWhoHitMe(Object* object, const ProgramValue& data)
+{
+    if (object == nullptr) {
+        return false;
+    }
+    Object* objectValue = nullptr;
+    if (!TestSetObjObjectDataValue(data, objectValue)) {
+        return false;
+    }
+    object->data.critter.combat.whoHitMe = objectValue;
+    return true;
+}
+
+// Mirror of the mf_set_object_data dispatch (sfall_metarules.cc:3206-3262):
+// returns 0 on success, -1 on error, mirroring ctx.setReturn(). Field-setter
+// behavior is mirrored for the tested fields; any other offset falls through
+// to the switch default (false → -1) exactly like production.
+static int TestMfSetObjectDataRouting(const ProgramValue& dataPtr, int offset,
+                                      const ProgramValue& value,
+                                      Attack* activeCombatData,
+                                      bool inCombat)
+{
+    // Mirror of activeAttackData() (sfall_metarules.cc:174-196): only a
+    // non-null pointer matching the current combat data is an Attack*.
+    Attack* attack = nullptr;
+    if (dataPtr.isPointer() && dataPtr.pointerValue != nullptr
+        && dataPtr.pointerValue == activeCombatData) {
+        attack = activeCombatData;
+    }
+
+    if (attack != nullptr) {
+        if (!inCombat) {
+            return -1; // "attack data is only available in combat."
+        }
+        bool changed = false;
+        if (offset == 0x30) { // C_ATTACK_FLAGS_TARGET → defenderFlags
+            changed = TestSetAttackDataFlagsTarget(attack, value);
+        }
+        return changed ? 0 : -1;
+    }
+
+    Object* object = dataPtr.isPointer()
+        ? static_cast<Object*>(dataPtr.pointerValue)
+        : nullptr;
+    if (object == nullptr) {
+        return -1; // "object is null"
+    }
+
+    bool changed = false;
+    switch (offset) {
+    case 0x04: // OBJ_DATA_TILENUM — common field, any object type
+        changed = TestSetObjectDataTileNum(object, value);
+        break;
+    case 0x28: // OBJ_DATA_ELEVATION — common field, any object type
+        changed = TestSetObjectDataElevation(object, value);
+        break;
+    case 0x54: // OBJ_DATA_WHO_HIT_ME — critter-only field (setCritterObjectData)
+        if (objectTypeFromPid(object->pid) == OBJ_TYPE_CRITTER) {
+            changed = TestSetObjectDataWhoHitMe(object, value);
+        }
+        break;
+    default:
+        break; // unsupported offset → false → -1
+    }
+    return changed ? 0 : -1;
+}
+
+TEST_CASE("RPU item 2: set_object_data — attack branch writes C_ATTACK_FLAGS_TARGET")
+{
+    // (a) setAttackData FlagsTarget write via the field path asserts
+    // defenderFlags updated (sfall_metarules.cc:334-337). This is the field
+    // RPU's boxing KO check reads (ncprzftr.ssl:143).
+    Attack attack = {};
+    attack.defenderFlags = static_cast<Dam>(0);
+    ProgramValue combatData(&attack); // pointer value, as mf_combat_data returns
+
+    int result = TestMfSetObjectDataRouting(
+        combatData, 0x30 /* C_ATTACK_FLAGS_TARGET */,
+        ProgramValue(DAM_KNOCKED_OUT),
+        &attack, /*inCombat=*/true);
+
+    CHECK(result == 0);
+    CHECK(attack.defenderFlags == static_cast<Dam>(DAM_KNOCKED_OUT));
+}
+
+TEST_CASE("RPU item 2: set_object_data — unsupported offset returns error path")
+{
+    // (b) Unsupported offsets reach the setter switch default and fail with -1.
+    Attack attack = {};
+    ProgramValue combatData(&attack);
+
+    SUBCASE("attack branch — offset not in the AttackDataField table")
+    {
+        int result = TestMfSetObjectDataRouting(combatData, 0x3E, ProgramValue(1),
+                                                &attack, /*inCombat=*/true);
+        CHECK(result == -1); // "unsupported offset or value type"
+        CHECK(attack.defenderFlags == static_cast<Dam>(0)); // nothing written
+    }
+
+    SUBCASE("object branch — raw x offset 0x08 is not in the OBJ_DATA_* table")
+    {
+        // The pre-sync raw-byte whitelist allowed offsets 0-40 step 4, including
+        // x(8)/y(12)/sx(16)/sy(20). Upstream sfall's OBJ_DATA_* surface
+        // (define_extra.h) does not expose those members, so they must now be
+        // rejected instead of written raw.
+        Object object = {};
+        ProgramValue objectPtr(&object);
+        int result = TestMfSetObjectDataRouting(objectPtr, 0x08, ProgramValue(3),
+                                                nullptr, /*inCombat=*/true);
+        CHECK(result == -1);
+        CHECK(object.x == 0); // nothing written
+    }
+}
+
+TEST_CASE("RPU item 2: set_object_data — type mismatch rejected")
+{
+    // (c) Writing an Object* into an int-only field is rejected by the
+    // intDataValue type check (sfall_metarules.cc:149-157, 334-337).
+    Attack attack = {};
+    ProgramValue combatData(&attack);
+    Object target = {};
+    ProgramValue objectValue(&target); // Object* value, not an int
+
+    int result = TestMfSetObjectDataRouting(combatData, 0x30 /* C_ATTACK_FLAGS_TARGET */,
+                                            objectValue, &attack, /*inCombat=*/true);
+
+    CHECK(result == -1); // "unsupported offset or value type"
+    CHECK(attack.defenderFlags == static_cast<Dam>(0)); // field unchanged
+}
+
+TEST_CASE("RPU item 2: set_object_data — extended object fields writable")
+{
+    // The pre-sync raw whitelist rejected every OBJ_DATA_* offset above 0x28
+    // (raw whitelist: 0-40 step 4). The typed setters cover the full sfall
+    // field surface.
+
+    SUBCASE("OBJ_DATA_TILENUM (0x04) int write")
+    {
+        // Production routes TileNum through objectSetLocation(object, intValue,
+        // object->elevation) (sfall_metarules.cc:593-595): the object must be
+        // in the spatial grid and the new tile must be a valid hex tile.
+        Object object = {};
+        object.tile = 1;
+        object.elevation = 2;
+        gTestSpatialGrid.insert(&object);
+
+        ProgramValue objectPtr(&object);
+        int result = TestMfSetObjectDataRouting(objectPtr, 0x04, ProgramValue(50),
+                                                nullptr, /*inCombat=*/true);
+        CHECK(result == 0);
+        CHECK(object.tile == 50);
+        CHECK(object.elevation == 2); // elevation preserved (production passes object->elevation)
+
+        gTestSpatialGrid.clear();
+    }
+
+    SUBCASE("OBJ_DATA_TILENUM (0x04) invalid tile rejected")
+    {
+        Object object = {};
+        object.tile = 1;
+        gTestSpatialGrid.insert(&object);
+
+        ProgramValue objectPtr(&object);
+        int result = TestMfSetObjectDataRouting(objectPtr, 0x04, ProgramValue(-1),
+                                                nullptr, /*inCombat=*/true);
+        CHECK(result == -1); // hexGridTileIsValid(-1) == false
+        CHECK(object.tile == 1); // untouched
+
+        gTestSpatialGrid.clear();
+    }
+
+    SUBCASE("OBJ_DATA_ELEVATION (0x28) int write")
+    {
+        // Production routes Elevation through objectSetLocation(object,
+        // object->tile, intValue) (sfall_metarules.cc:609-611) — the object
+        // must be in the spatial grid (objectSetLocation → objectGetListNode,
+        // object.cc:1417-1419) and the elevation must be valid.
+        Object object = {};
+        object.tile = 1; // valid hex tile
+        gTestSpatialGrid.insert(&object);
+
+        ProgramValue objectPtr(&object);
+        int result = TestMfSetObjectDataRouting(objectPtr, 0x28, ProgramValue(2),
+                                                nullptr, /*inCombat=*/true);
+        CHECK(result == 0);
+        CHECK(object.elevation == 2);
+        CHECK(object.tile == 1); // tile preserved (production passes object->tile)
+
+        gTestSpatialGrid.clear();
+    }
+
+    SUBCASE("OBJ_DATA_ELEVATION (0x28) invalid elevation rejected")
+    {
+        // elevationIsValid(3) == false (ELEVATION_COUNT == 3) → objectSetLocation
+        // returns -1 → the write fails and nothing is modified. The pre-fix
+        // mirror raw-assigned object->elevation = 3 and wrongly asserted success.
+        Object object = {};
+        object.tile = 1;
+        gTestSpatialGrid.insert(&object);
+
+        ProgramValue objectPtr(&object);
+        int result = TestMfSetObjectDataRouting(objectPtr, 0x28, ProgramValue(3),
+                                                nullptr, /*inCombat=*/true);
+        CHECK(result == -1);
+        CHECK(object.elevation == 0); // untouched
+
+        gTestSpatialGrid.clear();
+    }
+
+    SUBCASE("OBJ_DATA_ELEVATION (0x28) object not in the spatial grid rejected")
+    {
+        // A stack object that was never placed in the spatial grid fails the
+        // objectGetListNode gate (object.cc:1417-1419) even with a valid tile
+        // and elevation.
+        Object object = {};
+        object.tile = 1;
+        ProgramValue objectPtr(&object);
+        int result = TestMfSetObjectDataRouting(objectPtr, 0x28, ProgramValue(1),
+                                                nullptr, /*inCombat=*/true);
+        CHECK(result == -1);
+        CHECK(object.elevation == 0); // untouched
+    }
+
+    SUBCASE("OBJ_DATA_WHO_HIT_ME (0x54) object write — et-tu usage")
+    {
+        // et-tu Mapper/source/scripts.misc/gl_z_throwing_hex.ssl:130:
+        //   set_object_data(object, OBJ_DATA_WHO_HIT_ME, dude_obj)
+        Object object = {};
+        object.pid = OBJ_TYPE_CRITTER << 24; // critter proto pid
+        ProgramValue objectPtr(&object);
+        Object who = {};
+        ProgramValue whoValue(&who);
+        int result = TestMfSetObjectDataRouting(objectPtr, 0x54, whoValue,
+                                                nullptr, /*inCombat=*/true);
+        CHECK(result == 0);
+        CHECK(object.data.critter.combat.whoHitMe == &who);
+    }
+
+    SUBCASE("OBJ_DATA_WHO_HIT_ME on a non-critter is rejected")
+    {
+        Object object = {};
+        object.pid = OBJ_TYPE_ITEM << 24; // item proto pid
+        ProgramValue objectPtr(&object);
+        Object who = {};
+        ProgramValue whoValue(&who);
+        int result = TestMfSetObjectDataRouting(objectPtr, 0x54, whoValue,
+                                                nullptr, /*inCombat=*/true);
+        CHECK(result == -1); // critter-only field (setCritterObjectData)
+    }
+}
+
+TEST_CASE("RPU item 2: set_object_data — combat gate on attack data")
+{
+    // Attack-data writes require isInCombat() like mf_get_object_data.
+    Attack attack = {};
+    ProgramValue combatData(&attack);
+    int result = TestMfSetObjectDataRouting(combatData, 0x30, ProgramValue(1),
+                                            &attack, /*inCombat=*/false);
+    CHECK(result == -1); // "attack data is only available in combat."
+    CHECK(attack.defenderFlags == static_cast<Dam>(0));
+}
+
+TEST_CASE("RPU item 2: set_object_data metarule entry — arg2 must be ARG_ANY")
+{
+    // Mirror of the production kMetarules entry (sfall_metarules.cc:1207-1212):
+    //   { "set_object_data", mf_set_object_data, 3, 3, -1, { ARG_OBJECT, ARG_INT, ARG_ANY } },
+    // Upstream 5774372 registers set_object_data with { ARG_OBJECT, ARG_INT,
+    // ARG_ANY }. ARG_ANY is required because C_ATTACK_SOURCE/WEAPON/TARGET/
+    // MAIN_TARGET/TARGET1-6 and OBJ_DATA_WHO_HIT_ME take Object* values; ARG_INT
+    // would reject them in validateArguments() (opcode_context.cc:135-139)
+    // before setAttackData/setObjectData can type-check.
+    //
+    // This test binary does not link sfall_metarules.cc (deliberate — the file
+    // carries 100+ engine deps; see tests/CMakeLists.txt header note), so the
+    // mirror below is anchored to the production entry text at the cited
+    // file:line. If the production entry's arg2 type ever regresses to
+    // ARG_INT/ARG_OBJECT, the cited line moves or the mirror literal diverges
+    // from the source — both are caught by review + the line anchor. The
+    // production-truth check itself lives in the TEST gate build, which
+    // compiles sfall_metarules.cc (the table entry is a compile-time constant).
+    static const struct {
+        const char* name;
+        OpcodeArgumentType arg0;
+        OpcodeArgumentType arg1;
+        OpcodeArgumentType arg2;
+    } kSetObjectDataEntry = {
+        "set_object_data",
+        OpcodeArgumentType::ARG_OBJECT,
+        OpcodeArgumentType::ARG_INT,
+        OpcodeArgumentType::ARG_ANY,
+    };
+
+    CHECK(compat_stricmp(kSetObjectDataEntry.name, "set_object_data") == 0);
+    CHECK(kSetObjectDataEntry.arg0 == OpcodeArgumentType::ARG_OBJECT);
+    CHECK(kSetObjectDataEntry.arg1 == OpcodeArgumentType::ARG_INT);
+    CHECK(kSetObjectDataEntry.arg2 == OpcodeArgumentType::ARG_ANY);
+
+    // Cross-check the semantic contract: ARG_ANY is the "accept anything"
+    // sentinel (0) that validateArguments() treats as always-passing — if the
+    // enum ordering shifts, this pin catches it.
+    CHECK(static_cast<int>(OpcodeArgumentType::ARG_ANY) == 0);
+}

@@ -18,6 +18,7 @@
 #include "memory.h"
 #include "proto.h"
 #include "settings.h"
+#include "sfall_config.h"
 
 #include <algorithm>
 #include <memory>
@@ -164,7 +165,14 @@ int artInit()
     File* stream;
     char string[200];
 
-    int cacheSize = settings.system.art_cache_size;
+    // RPU parity: honor ddraw.ini [Misc] OverrideArtCacheSize=1 — use the
+    // sfall [Misc] ArtCacheSize value (gSfallArtCacheSize, MB) instead of the
+    // CE setting. Selection + clamp (8..512 MB, mirroring settings.cc:155)
+    // live in sfallArtCacheSizeMb() (sfall_config.cc).
+    int cacheSize = sfallArtCacheSizeMb(settings.system.art_cache_size);
+    if (gOverrideArtCacheSize) {
+        debugPrint("OverrideArtCacheSize: using sfall art cache size %d MB\n", gSfallArtCacheSize);
+    }
     if (!cacheInit(&gArtCache, artCacheGetFileSizeImpl, artCacheReadDataImpl, artCacheFreeImpl, cacheSize << 20)) {
         debugPrint("cache_init failed in art_init\n");
         return -1;

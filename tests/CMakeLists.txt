@@ -978,3 +978,38 @@ add_executable(test_art_io_fixes
 )
 target_link_libraries(test_art_io_fixes PRIVATE doctest)
 add_test(NAME test_art_io_fixes COMMAND test_art_io_fixes)
+
+# ============================================================
+# RPU Automap Capacity Fix — Regression Tests (1 entry)
+# AUTOMAP_MAP_COUNT raised 160 -> 173 (remaining-work item 4, P2)
+# ============================================================
+
+# ---- Test: automap (RPU automap capacity: count, header dataSize, guards) ----
+# Self-contained mirror test — does not link automap.cc (35+ engine deps).
+# Includes automap.h/map_defs.h for the REAL constants (compile-time
+# static_assert pins AUTOMAP_MAP_COUNT == 173, derived dataSize == 2081,
+# last valid index 172) and mirrors automapMapIndexIsValid/_automapDisplayMap/
+# automapSetDisplayMap and the pipboy mapCount clamp logic.
+# automap.h -> db.h -> xfile.h -> zlib.h only; no SDL2 or test_stubs needed.
+add_executable(test_automap
+    test_automap.cc
+)
+target_include_directories(test_automap PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_include_directories(test_automap PRIVATE ${ZLIB_INCLUDE_DIRS})
+target_link_libraries(test_automap PRIVATE doctest)
+add_test(NAME test_automap COMMAND test_automap)
+
+# ---- Test: FemaleDialogMsgs directory selection (RPU P3, 2026-08-17) ----
+# Links test_sources (sfall_config.cc for gFemaleDialogMsgs) + test_stubs and
+# compiles message.cc directly into this target (messageListGetLocalizedDir is
+# the function under test; message.cc is NOT part of test_sources because its
+# proto_types/settings/random dependency chain would ripple into every test
+# target that links test_sources). The test file provides local stubs for the
+# message.cc symbols test_common_stubs does not define (fileReadChar, fileSeek,
+# fileTell, compat_strupr, randomBetween).
+add_executable(test_message_female_dialog
+    test_message_female_dialog.cc
+    "${CMAKE_SOURCE_DIR}/src/message.cc"
+)
+target_link_libraries(test_message_female_dialog PRIVATE test_sources test_stubs doctest)
+add_test(NAME test_message_female_dialog COMMAND test_message_female_dialog)

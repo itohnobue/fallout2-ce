@@ -32,6 +32,13 @@ namespace fallout {
 
 #define AUTOMAP_OFFSET_COUNT (AUTOMAP_MAP_COUNT * ELEVATION_COUNT)
 
+// On-disk header size for the current format: version (1 byte) + dataSize
+// (int, 4 bytes) + offsets[AUTOMAP_MAP_COUNT][ELEVATION_COUNT] ints. A valid
+// AUTOMAP.DB always has dataSize >= this (a fresh DB is exactly this size;
+// saved entries only add bytes), so automapLoadHeader rejects anything below
+// it as stale/corrupt.
+#define AUTOMAP_HEADER_SIZE (5 + AUTOMAP_OFFSET_COUNT * sizeof(int))
+
 #define AUTOMAP_WINDOW_WIDTH (519)
 #define AUTOMAP_WINDOW_HEIGHT (480)
 
@@ -45,6 +52,7 @@ static int automapSaveHeader(File* stream);
 static int automapLoadHeader(File* stream);
 static void _decode_map_data(int elevation);
 static int automapCreate();
+static int automapEnsureCurrent();
 static int _copy_file_data(File* stream1, File* stream2, int length);
 
 static int gAutomapWindow = -1;
@@ -71,10 +79,11 @@ typedef struct AutomapEntry {
 } AutomapEntry;
 
 // M-145: Shared bounds check for automap map indices. The AUTOMAP.DB header
-// (offsets[160][3]) and _displayMapList[160] only cover AUTOMAP_MAP_COUNT
-// entries, but modded maps.txt files (e.g. RPU's 173 maps) make
-// mapGetCurrentMap()/wmMapMaxCount() exceed 160. All automap sites that index
-// by map number must go through this helper.
+// (offsets[AUTOMAP_MAP_COUNT][ELEVATION_COUNT]) and _displayMapList[] only
+// cover AUTOMAP_MAP_COUNT entries, but modded maps.txt files (e.g. mods with
+// more than RPU's 173 maps) make mapGetCurrentMap()/wmMapMaxCount() exceed
+// AUTOMAP_MAP_COUNT. All automap sites that index by map number must go
+// through this helper.
 bool automapMapIndexIsValid(int map)
 {
     return map >= 0 && map < AUTOMAP_MAP_COUNT;
@@ -744,10 +753,11 @@ int automapSaveCurrent()
         return 0;
     }
 
-    // M-145: mapGetCurrentMap() returns the map index, which exceeds
-    // AUTOMAP_MAP_COUNT (160) with modded maps.txt (RPU ships 173 maps).
-    // The offsets[map][elevation] read below (and the write at line 906)
-    // would go out of bounds; skip saving for out-of-range maps.
+    // M-145: mapGetCurrentMap() returns the map index, which can exceed
+    // AUTOMAP_MAP_COUNT with modded maps.txt (the count is 173, matching RPU,
+    // but other mods can go higher). The offsets[map][elevation] read below
+    // (and the write at line 906) would go out of bounds; skip saving for
+    // out-of-range maps.
     if (!automapMapIndexIsValid(map)) {
         return 0;
     }
@@ -778,6 +788,20 @@ int automapSaveCurrent()
     // NOTE: Not sure about the size.
     char path[512];
     snprintf(path, sizeof(path), "%s\\%s\\%s", settings.system.master_patches_path.c_str(), "MAPS", AUTOMAP_DB);
+
+    // A pre-change save can restore a stale version-1 AUTOMAP.DB.SAV over
+    // the fresh v2 DB (loadsave.cc _SlotMap2Game). Ensure the on-disk DB is
+    // current-format before opening it for the header load below — otherwise
+    // automapLoadHeader fails, the visit is not recorded, and the stale file
+    // is re-copied into the next save. Regenerating here records the visit
+    // and heals the save on its next write.
+    if (automapEnsureCurrent() == -1) {
+        debugPrint("\nAUTOMAP: Error opening automap database file!\n");
+        debugPrint("Error continued: automap_pip_save: path: %s", path);
+        internal_free(gAutomapEntry.data);
+        internal_free(gAutomapEntry.compressedData);
+        return -1;
+    }
 
     File* stream1 = fileOpen(path, "r+b");
     if (stream1 == nullptr) {
@@ -1014,6 +1038,15 @@ static int automapLoadEntry(int map, int elevation)
     char path[COMPAT_MAX_PATH];
     snprintf(path, sizeof(path), "%s\\%s", "MAPS", AUTOMAP_DB);
 
+    // A pre-change save can restore a stale version-1 AUTOMAP.DB.SAV over
+    // the fresh v2 DB (loadsave.cc _SlotMap2Game); regenerate it first so the
+    // header and offsets below are valid for the current 173-entry layout.
+    if (automapEnsureCurrent() == -1) {
+        debugPrint("\nAUTOMAP: Error opening automap database file!\n");
+        debugPrint("Error continued: AM_ReadEntry: path: %s", path);
+        return -1;
+    }
+
     bool success = true;
 
     File* stream = fileOpen(path, "r+b");
@@ -1147,15 +1180,29 @@ static int automapLoadHeader(File* stream)
         return -1;
     }
 
+    // Version gate first: a pre-change save can restore a version-1
+    // AUTOMAP.DB.SAV (160-entry layout) over the freshly generated v2 DB, so
+    // its header (1925 bytes) does not match the current 2081-byte layout.
+    // Rejecting the version before reading dataSize/offsets avoids absorbing
+    // entry bytes as garbage offsets; the load paths then regenerate the DB.
+    if (gAutomapHeader.version != AUTOMAP_DB_VERSION) {
+        return -1;
+    }
+
     if (_db_freadInt(stream, &(gAutomapHeader.dataSize)) == -1) {
         return -1;
     }
 
-    if (_db_freadIntCount(stream, (int*)gAutomapHeader.offsets, AUTOMAP_OFFSET_COUNT) == -1) {
+    // A current-format DB always has dataSize >= the header size (a fresh DB
+    // is exactly the header; saved entries only add bytes). Anything smaller
+    // — including a negative garbage value, which would otherwise pass the
+    // size_t-promoted comparison — means a stale or truncated file: refuse
+    // to trust the offsets below.
+    if (gAutomapHeader.dataSize < static_cast<int>(AUTOMAP_HEADER_SIZE)) {
         return -1;
     }
 
-    if (gAutomapHeader.version != 1) {
+    if (_db_freadIntCount(stream, (int*)gAutomapHeader.offsets, AUTOMAP_OFFSET_COUNT) == -1) {
         return -1;
     }
 
@@ -1207,8 +1254,13 @@ static void _decode_map_data(int elevation)
 // 0x41CC98 am_pip_init
 static int automapCreate()
 {
-    gAutomapHeader.version = 1;
-    gAutomapHeader.dataSize = 1925;
+    gAutomapHeader.version = AUTOMAP_DB_VERSION;
+    // On-disk header size: version (1 byte) + dataSize (int, 4 bytes) +
+    // offsets[AUTOMAP_MAP_COUNT][ELEVATION_COUNT] ints. Previously hardcoded
+    // 1925 for AUTOMAP_MAP_COUNT == 160 (5 + 160*3*4); must track the count
+    // so raised counts (e.g. 173 for RPU) produce a valid header. This must
+    // match what automapSaveHeader writes and automapLoadHeader reads.
+    gAutomapHeader.dataSize = AUTOMAP_HEADER_SIZE;
     memcpy(gAutomapHeader.offsets, _defam, sizeof(_defam));
 
     char path[COMPAT_MAX_PATH];
@@ -1228,6 +1280,38 @@ static int automapCreate()
     fileClose(stream);
 
     return 0;
+}
+
+// Ensures the on-disk AUTOMAP.DB is a current-format database, regenerating
+// it via automapCreate() when it is stale or unreadable. A pre-change save
+// restores a version-1 AUTOMAP.DB.SAV over the freshly generated v2 DB
+// (loadsave.cc _SlotMap2Game), which otherwise breaks the automap for the
+// whole session (the stale file fails automapLoadHeader and gets re-copied
+// into the next save). Regenerating on the first access heals it immediately:
+// the pipboy list rebuilds from a valid 173-entry header, visits record
+// normally, and the next save copies the fresh v2 DB into the slot.
+//
+// Returns 0 when the DB is current-format (or was regenerated), -1 when no
+// DB exists or it could not be made readable.
+static int automapEnsureCurrent()
+{
+    char path[COMPAT_MAX_PATH];
+    snprintf(path, sizeof(path), "%s\\%s", "MAPS", AUTOMAP_DB);
+
+    File* stream = fileOpen(path, "rb");
+    if (stream == nullptr) {
+        return -1;
+    }
+
+    if (automapLoadHeader(stream) == 0) {
+        fileClose(stream);
+        return 0;
+    }
+    fileClose(stream);
+
+    // Stale format (e.g. a version-1 DB restored from a pre-change save) or
+    // corrupt header: regenerate a fresh current-format DB.
+    return automapCreate();
 }
 
 // Copy data from stream1 to stream2.
@@ -1269,6 +1353,17 @@ int automapGetHeader(AutomapHeader** automapHeaderPtr)
 {
     char path[COMPAT_MAX_PATH];
     snprintf(path, sizeof(path), "%s\\%s", "MAPS", AUTOMAP_DB);
+
+    // A pre-change save can restore a stale version-1 AUTOMAP.DB.SAV over
+    // the fresh v2 DB (loadsave.cc _SlotMap2Game). Ensure the on-disk DB is
+    // current-format before reading — a stale DB fails the version check in
+    // automapLoadHeader and would leave the pipboy automap list empty (and
+    // the stale file would be re-copied into the next save).
+    if (automapEnsureCurrent() == -1) {
+        debugPrint("\nAUTOMAP: Error opening database file for reading!\n");
+        debugPrint("Error continued: ReadAMList: path: %s", path);
+        return -1;
+    }
 
     File* stream = fileOpen(path, "rb");
     if (stream == nullptr) {

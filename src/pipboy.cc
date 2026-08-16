@@ -1809,8 +1809,9 @@ static int _PrintAMelevList(int selectedMap)
     int elevationsListSize = 0;
     const int maxEntriesPerPage = PIPBOY_AUTOMAP_SUB_LINES;
     // ceecc3e: guard _amcty_indx (the selected automap index) before
-    // indexing automapHeader->offsets with it — with more than 160 maps
-    // (RPU) the index can exceed AUTOMAP_MAP_COUNT and read out of bounds.
+    // indexing automapHeader->offsets with it — AUTOMAP_MAP_COUNT matches
+    // RPU's 173 maps, but mods with more maps than that can push the index
+    // past AUTOMAP_MAP_COUNT and read out of bounds.
     int mapCount = std::min(wmMapMaxCount(), AUTOMAP_MAP_COUNT);
     if (_amcty_indx < 0 || _amcty_indx >= mapCount) {
         return 0;
@@ -1937,8 +1938,9 @@ static int _PrintAMList(int selectedLocation)
     int count = 0;
 
     // ceecc3e: clamp to AUTOMAP_MAP_COUNT — automapHeader->offsets is
-    // sized [AUTOMAP_MAP_COUNT][ELEVATION_COUNT]; with > 160 maps (RPU)
-    // wmMapMaxCount() can exceed it and read out of bounds.
+    // sized [AUTOMAP_MAP_COUNT][ELEVATION_COUNT]; with more maps than that
+    // (mods beyond RPU's 173) wmMapMaxCount() can exceed it and read out
+    // of bounds.
     int mapCount = std::min(wmMapMaxCount(), AUTOMAP_MAP_COUNT);
     for (int map = 0; map < mapCount; map++) {
         int elevation;

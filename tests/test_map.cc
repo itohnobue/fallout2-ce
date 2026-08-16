@@ -545,23 +545,28 @@ TEST_CASE("M-142: tileRenderFloorsInRect clamp — all loop bounds stay in [0, g
 // TESTS — M-145: automap map-index bounds (automap.cc / automap.h)
 // ============================================================
 //
-// AUTOMAP.DB stores only AUTOMAP_MAP_COUNT (160) entries, but modded
-// maps.txt files make mapGetCurrentMap()/wmMapMaxCount() exceed 160 (RPU
-// ships 173 maps). Every automap site now validates via automapMapIndexIsValid
-// before indexing offsets[]/_displayMapList[].
+// AUTOMAP_MAP_COUNT was raised from 160 to 173 (automap.h:26) so RPU's 173
+// maps (maps.txt [Map 000]..[Map 172]) all get AUTOMAP.DB entries; maps
+// 160-172 are now VALID automap indices. Every automap site validates via
+// automapMapIndexIsValid before indexing offsets[]/_displayMapList[]; mods
+// with more than 173 maps still exceed the range and are rejected. The real
+// count is pinned at compile time by test_automap.cc:41-42 (static_assert
+// AUTOMAP_MAP_COUNT == 173) — keep this mirror in sync with that pin.
+// (This target does not include automap.h; the literal mirrors automap.h:26.)
 
-// Mirror of automapMapIndexIsValid (automap.cc).
+// Mirror of automapMapIndexIsValid (automap.cc:78-81).
 static bool testAutomapMapIndexIsValid(int map)
 {
-    return map >= 0 && map < 160; // AUTOMAP_MAP_COUNT
+    return map >= 0 && map < 173; // AUTOMAP_MAP_COUNT (automap.h:26)
 }
 
 TEST_CASE("M-145: automap map index bounds helper")
 {
     CHECK(testAutomapMapIndexIsValid(0));
     CHECK(testAutomapMapIndexIsValid(159));
-    CHECK_FALSE(testAutomapMapIndexIsValid(160)); // RPU map 160..172 exceed the DB
-    CHECK_FALSE(testAutomapMapIndexIsValid(172));
+    CHECK(testAutomapMapIndexIsValid(160)); // RPU maps 160..172 now have entries
+    CHECK(testAutomapMapIndexIsValid(172)); // last valid map
+    CHECK_FALSE(testAutomapMapIndexIsValid(173)); // one past the end
     CHECK_FALSE(testAutomapMapIndexIsValid(-1));
 }
 
