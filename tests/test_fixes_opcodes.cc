@@ -61,7 +61,7 @@ using namespace fallout;
 //
 //   F2-08: Mirror the positive-check pattern with the actual FID_TYPE
 //     macro from obj_types.h. The guard:
-//     `if (invenObj != nullptr && itemObj != nullptr && FID_TYPE(invenObj->fid) == OBJ_TYPE_CRITTER)`
+//     `if (invenObj != nullptr && itemObj != nullptr && objectTypeFromFid(invenObj->fid) == OBJ_TYPE_CRITTER)`
 //     Verify: critter FID → guard passes, non-critter FID → guard rejects.
 //
 //   F2-16: Mirror the type-dispatch with isInt() check. The guard:
@@ -448,7 +448,7 @@ TEST_CASE("F2-06: gCritterSkillModMap — insert-side capacity check")
 // Section 4: F2-08 — op_obj_is_carrying_obj FID_TYPE guard
 // Production: sfall_opcodes.cc:99
 // Pattern:   if (invenObj != nullptr && itemObj != nullptr
-//                && FID_TYPE(invenObj->fid) == OBJ_TYPE_CRITTER)
+//                && objectTypeFromFid(invenObj->fid) == OBJ_TYPE_CRITTER)
 // FID_TYPE and OBJ_TYPE_CRITTER are real macros/enums from obj_types.h.
 // ============================================================
 
@@ -460,9 +460,9 @@ static int testObjIsCarryingObj(int invenObjFid, int itemObjFid, bool itemNonNul
 {
     // --- Start of production guard (sfall_opcodes.cc:99) ---
     // The original guard: if (invenObj != nullptr && itemObj != nullptr)
-    // The fix adds:          && FID_TYPE(invenObj->fid) == OBJ_TYPE_CRITTER
+    // The fix adds:          && objectTypeFromFid(invenObj->fid) == OBJ_TYPE_CRITTER
     int count = 0;
-    if (invenNonNull && itemNonNull && FID_TYPE(invenObjFid) == OBJ_TYPE_CRITTER) {
+    if (invenNonNull && itemNonNull && objectTypeFromFid(invenObjFid) == OBJ_TYPE_CRITTER) {
         // Guard passed — critter FID verified before union access.
         // Production at sfall_opcodes.cc:100 would access invenObj->data.inventory here.
         // For the mirror, we just track that the guard passed.
@@ -530,14 +530,14 @@ TEST_CASE("F2-08: op_obj_is_carrying_obj — FID_TYPE guard before inventory acc
 
     SUBCASE("zero FID — type=OBJ_TYPE_ITEM, guard rejects")
     {
-        // FID_TYPE(0) extracts lower 4 bits of (0 & 0xF000000) >> 24 = 0 = OBJ_TYPE_ITEM
+        // objectTypeFromFid(0) extracts lower 4 bits of (0 & 0xF000000) >> 24 = 0 = OBJ_TYPE_ITEM
         int result = testObjIsCarryingObj(0, 0, true, true);
         CHECK(result == 0); // not a critter, guard rejects
     }
 
     SUBCASE("all bits set FID — type=15, guard rejects")
     {
-        // FID_TYPE(0xFFFFFFFF) = (0xF000000) >> 24 = 15, not OBJ_TYPE_CRITTER=1
+        // objectTypeFromFid(0xFFFFFFFF) = (0xF000000) >> 24 = 15, not OBJ_TYPE_CRITTER=1
         int result = testObjIsCarryingObj(0xFFFFFFFF, 0, true, true);
         CHECK(result == 0);
     }
@@ -547,13 +547,13 @@ TEST_CASE("F2-08: op_obj_is_carrying_obj — FID_TYPE guard before inventory acc
         // Verify the macro and enum the guard depends on have expected values
         CHECK(OBJ_TYPE_CRITTER == 1);
         int critterFid = (OBJ_TYPE_CRITTER << 24) | 0x00ABCD;
-        int critterFidType = FID_TYPE(critterFid);
+        int critterFidType = objectTypeFromFid(critterFid);
         CHECK(critterFidType == 1);
         CHECK(critterFidType == OBJ_TYPE_CRITTER);
 
         // Verify a non-critter FID doesn't match
         int itemFid = (OBJ_TYPE_ITEM << 24) | 0x00ABCD;
-        int itemFidType = FID_TYPE(itemFid);
+        int itemFidType = objectTypeFromFid(itemFid);
         CHECK(itemFidType == OBJ_TYPE_ITEM);
         CHECK(itemFidType != OBJ_TYPE_CRITTER);
     }

@@ -12,12 +12,13 @@ struct SystemSettings {
     std::string executable = "game";
     std::string master_dat_path = "master.dat";
     std::string master_patches_path = "data";
+    std::string f2_res_dat_path = "f2_res.dat";
     std::string critter_dat_path = "critter.dat";
     std::string critter_patches_path = "data";
     std::string language = ENGLISH;
     int scroll_lock = 0;
     bool interrupt_walk = true;
-    int art_cache_size = 8;
+    int art_cache_size = 32;
     bool color_cycling = true;
     int cycle_speed_factor = 1;
     bool hashing = true;
@@ -70,7 +71,8 @@ struct UISettings {
     // Expands barter/trade window vertically, adding a 4th item slot per side.
     bool expand_barter_window = false;
 
-    int splash_screen_size = 0;
+    // Scales the splash screen to fit the screen
+    int splash_screen_size = 1;
 
     // Whether to scale movies to fit the screen while preserving aspect ratio.
     bool movie_aspect_fit = true;

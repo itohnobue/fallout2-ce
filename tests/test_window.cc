@@ -48,6 +48,14 @@ static constexpr int TEXT_ALIGNMENT_LEFT = 0;
 static constexpr int TEXT_ALIGNMENT_RIGHT = 1;
 static constexpr int TEXT_ALIGNMENT_CENTER = 2;
 
+// From src/window_manager.h:60-64 — upstream renamed the old text_font.h
+// FONT_SHADOW/FONT_UNDERLINE/FONT_MONO macros to DRAW_TEXT_FLAG_* (same
+// values). Defined locally because window_manager.h pulls in SDL headers
+// (the test intentionally avoids the SDL include chain — see header note).
+static constexpr int DRAW_TEXT_FLAG_SHADOWED = 0x0010000;
+static constexpr int DRAW_TEXT_FLAG_UNDERLINED = 0x0020000;
+static constexpr int DRAW_TEXT_FLAG_MONOSPACED = 0x0040000;
+
 // ============================================================
 // Definitions for extern font function pointers
 // ============================================================
@@ -805,10 +813,13 @@ TEST_CASE("scriptWindowResetTextAttributes — expected flag values")
 
 TEST_CASE("FONT_SHADOW and FONT_UNDERLINE constants")
 {
-    // From src/text_font.h:34-35
-    CHECK(FONT_SHADOW == 0x10000);
-    CHECK(FONT_UNDERLINE == 0x20000);
-    CHECK(FONT_MONO == 0x40000);
+    // From src/window_manager.h:60-62 — upstream renamed the old
+    // text_font.h FONT_SHADOW/FONT_UNDERLINE/FONT_MONO macros to
+    // DRAW_TEXT_FLAG_SHADOWED/UNDERLINED/MONOSPACED (same values).
+    // Defined locally here because window_manager.h pulls in SDL headers.
+    CHECK(DRAW_TEXT_FLAG_SHADOWED == 0x10000);
+    CHECK(DRAW_TEXT_FLAG_UNDERLINED == 0x20000);
+    CHECK(DRAW_TEXT_FLAG_MONOSPACED == 0x40000);
 }
 
 

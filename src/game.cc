@@ -181,6 +181,21 @@ int gameInitWithOptions(const char* windowTitle, bool isMapper, int font, int fl
     messageListRepositoryInit();
 
     programWindowSetTitle(windowTitle);
+
+    const char* visibleWindowTitle = windowTitle;
+    char versionWindowTitle[256];
+    if (settings.screen.windowed == WindowMode::Windowed) {
+        char* configuredWindowTitle = nullptr;
+        configGetString(&gContentConfig, CONTENT_CONFIG_MISC_SECTION, "window_title", &configuredWindowTitle, "");
+        if (configuredWindowTitle != nullptr && configuredWindowTitle[0] != '\0') {
+            visibleWindowTitle = configuredWindowTitle;
+        } else {
+            versionGetVersion(versionWindowTitle, sizeof(versionWindowTitle));
+            visibleWindowTitle = versionWindowTitle;
+        }
+    }
+
+    programWindowSetTitle(visibleWindowTitle);
     windowInit(1, flags);
     paletteInit();
 
@@ -464,6 +479,13 @@ void gameReset()
     aiReset();
     inventoryResetDude();
     gameSoundReset();
+
+    // Flush the art cache during game loads if the target map differs from the current one.
+    // This prevents memory fragmentation and avoids heavy eviction loops on the art heap.
+    if (_isLoadingGame() && gMapHeader.index != mapIdBeingLoaded()) {
+        artCacheFlush();
+    }
+
     _movieStop();
     movieEffectsReset();
     gameMoviesReset();
@@ -471,6 +493,7 @@ void gameReset()
     gameMouseReset();
     protoReset();
     _scr_reset();
+    gameFreeGlobalVars();
     gameLoadGlobalVars();
     scriptsReset();
     wmWorldMap_reset();
@@ -734,7 +757,7 @@ int gameHandleKey(int eventCode, bool isInCombatMode)
                 MessageListItem messageListItem;
                 char title[128];
                 strcpy(title, getmsg(&gMiscMessageList, &messageListItem, 7));
-                showDialogBox(title, nullptr, 0, 192, 116, _colorTable[32328], nullptr, _colorTable[32328], 0);
+                showDialogBox(title, nullptr, 0, 192, 116, COLOR_AMBER, nullptr, COLOR_AMBER, 0);
             } else {
                 soundPlayFile("ib1p1xx1");
                 pipboyOpen(PIPBOY_OPEN_INTENT_UNSPECIFIED);
@@ -749,7 +772,7 @@ int gameHandleKey(int eventCode, bool isInCombatMode)
 
             // NOTE: There is an `inc` for this value to build jump table which
             // is not needed.
-            int rc = skilldexOpen();
+            SkilldexRC rc = skilldexOpen();
 
             gameHandleSkilldexResult(rc);
         }
@@ -764,7 +787,7 @@ int gameHandleKey(int eventCode, bool isInCombatMode)
                 MessageListItem messageListItem;
                 char title[128];
                 strcpy(title, getmsg(&gMiscMessageList, &messageListItem, 7));
-                showDialogBox(title, nullptr, 0, 192, 116, _colorTable[32328], nullptr, _colorTable[32328], 0);
+                showDialogBox(title, nullptr, 0, 192, 116, COLOR_AMBER, nullptr, COLOR_AMBER, 0);
             } else {
                 soundPlayFile("ib1p1xx1");
                 pipboyOpen(PIPBOY_OPEN_INTENT_REST);
@@ -1019,9 +1042,9 @@ bool gameUiIsDisabled()
 }
 
 // 0x443C68
-int gameGetGlobalVar(int var)
+int gameGetGlobalVar(GameGlobalVar var)
 {
-    if (var < 0 || var >= gGameGlobalVarsLength) {
+    if (!globalVariableIsValid(var)) {
         debugPrint("ERROR: attempt to reference global var out of range: %d", var);
         return 0;
     }
@@ -1030,9 +1053,9 @@ int gameGetGlobalVar(int var)
 }
 
 // 0x443C98
-int gameSetGlobalVar(int var, int value)
+int gameSetGlobalVar(GameGlobalVar var, int value)
 {
-    if (var < 0 || var >= gGameGlobalVarsLength) {
+    if (!globalVariableIsValid(var)) {
         debugPrint("ERROR: attempt to reference global var out of range: %d", var);
         return -1;
     }
@@ -1276,7 +1299,7 @@ void showHelp()
         unsigned char* windowBuffer = windowGetBuffer(win);
         if (windowBuffer != nullptr) {
             FrmImage backgroundFrmImage;
-            int backgroundFid = buildFid(OBJ_TYPE_INTERFACE, 297, 0, 0, 0);
+            int backgroundFid = buildFid(OBJ_TYPE_INTERFACE, 297);
             if (backgroundFrmImage.lock(backgroundFid)) {
                 paletteSetEntries(gPaletteBlack);
                 blitBufferToBuffer(backgroundFrmImage.getData(), HELP_SCREEN_WIDTH, HELP_SCREEN_HEIGHT, HELP_SCREEN_WIDTH, windowBuffer, HELP_SCREEN_WIDTH);
@@ -1290,7 +1313,7 @@ void showHelp()
                     screenGetWidth(),
                     screenGetHeight(),
                     screenGetWidth(),
-                    intensityColorTable[_colorTable[0]][0]);
+                    intensityColorTable[COLOR_BLACK][0]);
 
                 windowShow(overlay);
                 windowShow(win);
@@ -1363,7 +1386,7 @@ int showQuitConfirmationDialog()
     MessageListItem messageListItem;
     messageListItem.num = 0;
     if (messageListGetItem(&gMiscMessageList, &messageListItem)) {
-        rc = showDialogBox(messageListItem.text, nullptr, 0, 169, 117, _colorTable[32328], nullptr, _colorTable[32328], DIALOG_BOX_YES_NO);
+        rc = showDialogBox(messageListItem.text, nullptr, 0, 169, 117, COLOR_AMBER, nullptr, COLOR_AMBER, DIALOG_BOX_YES_NO);
         if (rc != 0) {
             _game_user_wants_to_quit = GAME_QUIT_REQUEST_MAIN_MENU;
         }
@@ -1465,7 +1488,7 @@ static int gameDbInit()
 
     // Load archives in reverse priority order (dbOpen prepends to chain).
     // Resulting chain (head = highest priority):
-    //   master_patches > critter_patches > mods > patchXXX.dat > ce.dat > f2_res.dat > critter.dat > master.dat
+    //   master_patches > critter_patches > mods > patchXXX.dat > ce.dat > f2_res_dat > critter.dat > master.dat
 
     if (dbOpen(master_dat_path) == -1) {
         showMessageBox("Could not find the master datafile. Please make sure the FALLOUT CD is in the drive and that you are running FALLOUT from the directory you installed it to.");
@@ -1477,9 +1500,8 @@ static int gameDbInit()
         return -1;
     }
 
-    constexpr char highResPatchDatPath[] = "f2_res.dat";
-
-    if (compat_access(highResPatchDatPath, 0) == 0) {
+    const char* highResPatchDatPath = settings.system.f2_res_dat_path.c_str();
+    if (*highResPatchDatPath != '\0' && compat_access(highResPatchDatPath, 0) == 0) {
         debugPrint("Loading HRP data mod: %s\n", highResPatchDatPath);
         dbOpen(highResPatchDatPath);
     }
@@ -1666,7 +1688,7 @@ int gameShowDeathDialog(const char* message)
     GameQuitRequest oldUserWantsToQuit = _game_user_wants_to_quit;
     _game_user_wants_to_quit = GAME_QUIT_REQUEST_NONE;
 
-    int rc = showDialogBox(message, nullptr, 0, 169, 117, _colorTable[32328], nullptr, _colorTable[32328], DIALOG_BOX_LARGE);
+    int rc = showDialogBox(message, nullptr, 0, 169, 117, COLOR_AMBER, nullptr, COLOR_AMBER, DIALOG_BOX_LARGE);
 
     _game_user_wants_to_quit = oldUserWantsToQuit;
 
@@ -1687,9 +1709,9 @@ int gameShowDeathDialog(const char* message)
     return rc;
 }
 
-void* gameGetGlobalPointer(int var)
+void* gameGetGlobalPointer(GameGlobalVar var)
 {
-    if (var < 0 || var >= gGameGlobalVarsLength) {
+    if (!globalVariableIsValid(var)) {
         debugPrint("ERROR: attempt to reference global pointer out of range: %d", var);
         return nullptr;
     }
@@ -1697,9 +1719,9 @@ void* gameGetGlobalPointer(int var)
     return gGameGlobalPointers[var];
 }
 
-int gameSetGlobalPointer(int var, void* value)
+int gameSetGlobalPointer(GameGlobalVar var, void* value)
 {
-    if (var < 0 || var >= gGameGlobalVarsLength) {
+    if (!globalVariableIsValid(var)) {
         debugPrint("ERROR: attempt to reference global var out of range: %d", var);
         return -1;
     }
@@ -1729,6 +1751,12 @@ void GameMode::exitGameMode(int gameMode)
     }
 }
 
+// remove game mode without triggering hooks
+void GameMode::exitGameModeQuietly(int gameMode)
+{
+    currentGameMode &= ~gameMode;
+}
+
 bool GameMode::isInGameMode(int gameMode)
 {
     return (currentGameMode & gameMode) != 0;
@@ -1745,7 +1773,7 @@ ScopedGameMode::~ScopedGameMode()
     GameMode::exitGameMode(gameMode);
 }
 
-void gameHandleSkilldexResult(int rc)
+void gameHandleSkilldexResult(SkilldexRC rc)
 {
     int mode = -1;
 

@@ -19,6 +19,7 @@
 #include "game_mouse.h"
 #include "game_movie.h"
 #include "game_sound.h"
+#include "game_vars.h"
 #include "input.h"
 #include "map.h"
 #include "memory.h"
@@ -49,7 +50,7 @@ extern bool gFallout1Behavior;
 #define ENDGAME_ENDING_WINDOW_HEIGHT 480
 
 typedef struct EndgameDeathEnding {
-    int gvar;
+    GameGlobalVar gvar;
     int value;
     int worldAreaKnown;
     int worldAreaNotKnown;
@@ -63,7 +64,7 @@ typedef struct EndgameDeathEnding {
 } EndgameDeathEnding;
 
 typedef struct EndgameEnding {
-    int gvar;
+    GameGlobalVar gvar;
     int value;
     int art_num;
     char voiceOverBaseName[12];
@@ -78,7 +79,7 @@ static void endgameEndingSlideshowWindowFree();
 static void endgameEndingVoiceOverInit(const char* fname);
 static void endgameEndingVoiceOverReset();
 static void endgameEndingVoiceOverFree();
-static void endgameEndingLoadPalette(int type, int id);
+static void endgameEndingLoadPalette(ObjectType type, int id);
 static void _endgame_voiceover_callback();
 static int endgameEndingSubtitlesLoad(const char* filePath);
 static void endgameEndingRefreshSubtitles();
@@ -284,7 +285,7 @@ void endgamePlaySlideshow()
             if (ending->art_num == 327) {
                 endgameEndingRenderPanningScene(ending->direction, ending->voiceOverBaseName);
             } else {
-                int fid = buildFid(OBJ_TYPE_INTERFACE, ending->art_num, 0, 0, 0);
+                int fid = buildFid(OBJ_TYPE_INTERFACE, ending->art_num);
                 endgameEndingRenderStaticScene(fid, ending->voiceOverBaseName);
             }
         }
@@ -327,7 +328,6 @@ void endgamePlayMovie()
     _endgame_maybe_done = 0;
     tickersAdd(_endgame_movie_bk_process);
     backgroundSoundSetEndCallback(_endgame_movie_callback);
-
     if (gFallout1Behavior) {
         // FO1: gender-based endgame movie selection (was "not implemented").
         // FO1 used different endgame movies for male vs. female protagonist.
@@ -430,7 +430,7 @@ static int endgameEndingHandleContinuePlaying()
     MessageListItem messageListItem;
     messageListItem.num = 30;
     if (messageListGetItem(&gMiscMessageList, &messageListItem)) {
-        rc = showDialogBox(messageListItem.text, nullptr, 0, 169, 117, _colorTable[32328], nullptr, _colorTable[32328], DIALOG_BOX_YES_NO);
+        rc = showDialogBox(messageListItem.text, nullptr, 0, 169, 117, COLOR_AMBER, nullptr, COLOR_AMBER, DIALOG_BOX_YES_NO);
         if (rc == 0) {
             _game_user_wants_to_quit = GAME_QUIT_REQUEST_MAIN_MENU;
         }
@@ -457,16 +457,16 @@ static int endgameEndingHandleContinuePlaying()
 // 0x43FBDC endgame_pan_desert
 static void endgameEndingRenderPanningScene(int direction, const char* narratorFileName)
 {
-    int fid = buildFid(OBJ_TYPE_INTERFACE, 327, 0, 0, 0);
+    int fid = buildFid(OBJ_TYPE_INTERFACE, 327);
 
     CacheEntry* backgroundHandle;
     Art* background = artLock(fid, &backgroundHandle);
     if (background != nullptr) {
-        int width = artGetWidth(background, 0, 0);
-        int height = artGetHeight(background, 0, 0);
-        unsigned char* backgroundData = artGetFrameData(background, 0, 0);
-        bufferFill(gEndgameEndingSlideshowWindowBuffer, ENDGAME_ENDING_WINDOW_WIDTH, ENDGAME_ENDING_WINDOW_HEIGHT, ENDGAME_ENDING_WINDOW_WIDTH, _colorTable[0]);
-        endgameEndingLoadPalette(6, 327);
+        int width = artGetWidth(background);
+        int height = artGetHeight(background);
+        unsigned char* backgroundData = artGetFrameData(background);
+        bufferFill(gEndgameEndingSlideshowWindowBuffer, ENDGAME_ENDING_WINDOW_WIDTH, ENDGAME_ENDING_WINDOW_HEIGHT, ENDGAME_ENDING_WINDOW_WIDTH, COLOR_BLACK);
+        endgameEndingLoadPalette(OBJ_TYPE_INTERFACE, 327);
 
         // CE: Update overlay.
         endgameEndingUpdateOverlay();
@@ -587,7 +587,7 @@ static void endgameEndingRenderPanningScene(int direction, const char* narratorF
         artUnlock(backgroundHandle);
 
         paletteFadeTo(gPaletteBlack);
-        bufferFill(gEndgameEndingSlideshowWindowBuffer, ENDGAME_ENDING_WINDOW_WIDTH, ENDGAME_ENDING_WINDOW_HEIGHT, ENDGAME_ENDING_WINDOW_WIDTH, _colorTable[0]);
+        bufferFill(gEndgameEndingSlideshowWindowBuffer, ENDGAME_ENDING_WINDOW_WIDTH, ENDGAME_ENDING_WINDOW_HEIGHT, ENDGAME_ENDING_WINDOW_WIDTH, COLOR_BLACK);
         windowRefresh(gEndgameEndingSlideshowWindow);
     }
 
@@ -610,12 +610,12 @@ static void endgameEndingRenderStaticScene(int fid, const char* narratorFileName
         return;
     }
 
-    unsigned char* backgroundData = artGetFrameData(background, 0, 0);
+    unsigned char* backgroundData = artGetFrameData(background);
     if (backgroundData != nullptr) {
         blitBufferToBuffer(backgroundData, ENDGAME_ENDING_WINDOW_WIDTH, ENDGAME_ENDING_WINDOW_HEIGHT, ENDGAME_ENDING_WINDOW_WIDTH, gEndgameEndingSlideshowWindowBuffer, ENDGAME_ENDING_WINDOW_WIDTH);
         windowRefresh(gEndgameEndingSlideshowWindow);
 
-        endgameEndingLoadPalette(FID_TYPE(fid), fid & 0xFFF);
+        endgameEndingLoadPalette(objectTypeFromFid(fid), fid & 0xFFF);
 
         // CE: Update overlay.
         endgameEndingUpdateOverlay();
@@ -656,7 +656,7 @@ static void endgameEndingRenderStaticScene(int fid, const char* narratorFileName
                 break;
             }
 
-            if (getTicksSince(referenceTime) > delay) {
+            if (getTicksSince(referenceTime) >= delay) {
                 break;
             }
 
@@ -723,7 +723,7 @@ static int endgameEndingSlideshowWindowInit()
 
     // CE: Every slide has a separate color palette which is incompatible with
     // main color palette. Setup overlay to hide everything.
-    gEndgameEndingOverlay = windowCreate(0, 0, screenGetWidth(), screenGetHeight(), _colorTable[0], WINDOW_MOVE_ON_TOP);
+    gEndgameEndingOverlay = windowCreate(0, 0, screenGetWidth(), screenGetHeight(), COLOR_BLACK, WINDOW_MOVE_ON_TOP);
     if (gEndgameEndingOverlay == -1) {
         return -1;
     }
@@ -734,7 +734,7 @@ static int endgameEndingSlideshowWindowInit()
         windowEndgameEndingY,
         ENDGAME_ENDING_WINDOW_WIDTH,
         ENDGAME_ENDING_WINDOW_HEIGHT,
-        _colorTable[0],
+        COLOR_BLACK,
         WINDOW_MOVE_ON_TOP);
     if (gEndgameEndingSlideshowWindow == -1) {
         windowDestroy(gEndgameEndingOverlay);
@@ -902,7 +902,7 @@ static void endgameEndingVoiceOverFree()
 }
 
 // 0x440378 endgame_load_palette
-static void endgameEndingLoadPalette(int type, int id)
+static void endgameEndingLoadPalette(ObjectType type, int id)
 {
     char fileName[13];
     if (artCopyFileName(type, id, fileName) != 0) {
@@ -1013,8 +1013,8 @@ static void endgameEndingRefreshSubtitles()
 
         int width = fontGetStringWidth(beginning);
         int x = (640 - width) / 2;
-        bufferFill(gEndgameEndingSlideshowWindowBuffer + 640 * y + x, width, height, 640, _colorTable[0]);
-        fontDrawText(gEndgameEndingSlideshowWindowBuffer + 640 * y + x, beginning, width, 640, _colorTable[32767]);
+        bufferFill(gEndgameEndingSlideshowWindowBuffer + 640 * y + x, width, height, 640, COLOR_BLACK);
+        fontDrawText(gEndgameEndingSlideshowWindowBuffer + 640 * y + x, beginning, width, 640, COLOR_WHITE);
 
         *ending = c;
 
@@ -1091,7 +1091,7 @@ static int endgameEndingInit()
             continue;
         }
 
-        entry.gvar = atoi(tok);
+        entry.gvar = static_cast<GameGlobalVar>(atoi(tok));
 
         tok = strtok(nullptr, delim);
         if (tok == nullptr) {
@@ -1197,7 +1197,7 @@ int endgameDeathEndingInit()
             continue;
         }
 
-        entry.gvar = atoi(tok);
+        entry.gvar = static_cast<GameGlobalVar>(atoi(tok));
 
         tok = strtok(nullptr, delim);
         if (tok == nullptr) {
@@ -1439,7 +1439,7 @@ void endgameEndingUpdateOverlay()
         windowGetWidth(gEndgameEndingOverlay),
         windowGetHeight(gEndgameEndingOverlay),
         windowGetWidth(gEndgameEndingOverlay),
-        intensityColorTable[_colorTable[0]][0]);
+        intensityColorTable[COLOR_BLACK][0]);
     windowRefresh(gEndgameEndingOverlay);
 }
 

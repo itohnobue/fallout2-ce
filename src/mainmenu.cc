@@ -201,19 +201,19 @@ static bool mainMenuLoadArt()
     }
 
     if (!mainMenuBackgroundFrmImage.isLocked()) {
-        int backgroundFid = buildFid(OBJ_TYPE_INTERFACE, 140, 0, 0, 0);
+        int backgroundFid = buildFid(OBJ_TYPE_INTERFACE, 140);
         if (!mainMenuBackgroundFrmImage.lock(backgroundFid)) {
             debugPrint("MAINMENU: failed to load vanilla mainmenu.frm\n");
             return false;
         }
     }
 
-    int fid = buildFid(OBJ_TYPE_INTERFACE, 299, 0, 0, 0);
+    int fid = buildFid(OBJ_TYPE_INTERFACE, 299);
     if (!mainMenuButtonNormalFrmImage.lock(fid)) {
         return false;
     }
 
-    fid = buildFid(OBJ_TYPE_INTERFACE, 300, 0, 0, 0);
+    fid = buildFid(OBJ_TYPE_INTERFACE, 300);
     if (!mainMenuButtonPressedFrmImage.lock(fid)) {
         return false;
     }
@@ -245,7 +245,10 @@ static MainMenuLayout mainMenuBuildLayout()
 
     layout.scaleX = layout.backgroundWidth / static_cast<float>(MAIN_MENU_LOGICAL_WIDTH);
     layout.scaleY = layout.backgroundHeight / static_cast<float>(MAIN_MENU_LOGICAL_HEIGHT);
-    layout.scaleControls = layout.art == MenuArt::Vanilla || settings.ui.main_menu_scale_mode >= 2;
+
+    bool scaleButtonsAndText = false;
+    configGetBool(&gContentConfig, CONTENT_CONFIG_MAIN_MENU_SECTION, "scale_buttons_and_text", &scaleButtonsAndText, false);
+    layout.scaleControls = layout.art == MenuArt::Vanilla || settings.ui.main_menu_scale_mode >= 2 || scaleButtonsAndText;
     layout.scale = layout.scaleControls ? layout.scaleY : 1.0f;
     return layout;
 }
@@ -305,8 +308,13 @@ static void mainMenuDrawPanel(const MainMenuLayout& layout, const MainMenuOffset
         return;
     }
 
+    int panelOffsetX = MAIN_MENU_PANEL_OFFSET_X;
+    int panelOffsetY = MAIN_MENU_PANEL_OFFSET_Y;
+    configGetInt(&gContentConfig, CONTENT_CONFIG_MAIN_MENU_SECTION, "main_menu_panel_offset_x", &panelOffsetX, MAIN_MENU_PANEL_OFFSET_X);
+    configGetInt(&gContentConfig, CONTENT_CONFIG_MAIN_MENU_SECTION, "main_menu_panel_offset_y", &panelOffsetY, MAIN_MENU_PANEL_OFFSET_Y);
+
     Size panelSize = mainMenuTransformSize(layout, mainMenuButtonPanelFrmImage.getWidth(), mainMenuButtonPanelFrmImage.getHeight());
-    Point panelOrigin = mainMenuTransformPoint(layout, MAIN_MENU_PANEL_OFFSET_X, MAIN_MENU_PANEL_OFFSET_Y);
+    Point panelOrigin = mainMenuTransformPoint(layout, panelOffsetX, panelOffsetY);
 
     blitBuffer2DScaledTrans(mainMenuButtonPanelFrmImage.getBuffer(),
         Buffer2D(gMainMenuWindowBuffer, layout.screenWidth, layout.screenHeight),
@@ -319,8 +327,8 @@ static void mainMenuDrawPanel(const MainMenuLayout& layout, const MainMenuOffset
 static Point mainMenuTransformPoint(const MainMenuLayout& layout, int x, int y)
 {
     return {
-        layout.backgroundX + (layout.scaleControls ? mainMenuScaleX(layout, x) : x),
-        layout.backgroundY + (layout.scaleControls ? mainMenuScaleY(layout, y) : y),
+        layout.backgroundX + (layout.scaleControls ? static_cast<int>(lround(x * layout.scale)) : x),
+        layout.backgroundY + (layout.scaleControls ? static_cast<int>(lround(y * layout.scale)) : y),
     };
 }
 
@@ -361,7 +369,7 @@ static void mainMenuDrawBuildInfo(const MainMenuLayout& layout, const MainMenuOf
     //        0x010000 - change the color for version string only
     //        0x020000 - underline text (only for the version string)
     //        0x040000 - monospace font (only for the version string)
-    int fontSettings = _colorTable[21091];
+    int fontSettings = COLOR_YELLOW_2;
     int fontSettingsSFall = 0;
     configGetInt(&gContentConfig, CONTENT_CONFIG_MAIN_MENU_SECTION, "font_color", &fontSettingsSFall, 0);
     if (fontSettingsSFall && !(fontSettingsSFall & 0x010000)) {
@@ -446,7 +454,7 @@ static bool mainMenuCreateButtons(const MainMenuLayout& layout, const MainMenuOf
 static void mainMenuDrawButtonLabels(const MainMenuLayout& layout, const MainMenuOffsets& offsets)
 {
     MessageListItem msg;
-    int fontSettings = _colorTable[21091];
+    int fontSettings = COLOR_YELLOW_2;
     int fontSettingsSFall = 0;
     configGetInt(&gContentConfig, CONTENT_CONFIG_MAIN_MENU_SECTION, "big_font_color", &fontSettingsSFall, 0);
     if (fontSettingsSFall) {

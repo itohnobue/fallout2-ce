@@ -21,6 +21,10 @@ namespace fallout {
 namespace {
 
 #define F2_RES_CONFIG_FILE_NAME "f2_res.ini"
+#define F2_RES_MAIN_MENU_BUTTON_X 30
+#define F2_RES_MAIN_MENU_BUTTON_Y 19
+#define F2_RES_DEFAULT_MAIN_MENU_PANEL_OFFSET_X 16
+#define F2_RES_DEFAULT_MAIN_MENU_PANEL_OFFSET_Y 15
 
     struct F2ResMigrationEntry {
         const char* legacySection;
@@ -34,11 +38,14 @@ namespace {
     static bool gameConfigMigrateMainMenuScaleModeKey(Config* legacyConfig, Config* gameConfig);
     static bool gameConfigMigrateStringKey(Config* legacyConfig, Config* gameConfig, const F2ResMigrationEntry& entry);
     static bool gameConfigMigrateScaleKey(Config* legacyConfig, Config* gameConfig);
+    static bool contentConfigMigrateF2ResMainMenuPanelOffsetKey(Config* legacyConfig, Config* contentConfig, const char* legacyKey, const char* targetKey, int baseValue, int defaultValue);
+    static bool contentConfigMigrateF2ResBoolKey(Config* legacyConfig, Config* contentConfig, const char* legacyKey, const char* targetKey);
 
     static constexpr F2ResMigrationEntry kF2ResMigrationEntries[] = {
         { "MAIN", "SCR_WIDTH", GAME_CONFIG_SCREEN_KEY, GAME_CONFIG_RESOLUTION_X_KEY },
         { "MAIN", "SCR_HEIGHT", GAME_CONFIG_SCREEN_KEY, GAME_CONFIG_RESOLUTION_Y_KEY },
         { "MAIN", "WINDOWED", GAME_CONFIG_SCREEN_KEY, GAME_CONFIG_WINDOWED_KEY },
+        { "MAIN", "f2_res_dat", GAME_CONFIG_SYSTEM_KEY, GAME_CONFIG_F2_RES_DAT_KEY },
         { "IFACE", "IFACE_BAR_MODE", GAME_CONFIG_UI_KEY, GAME_CONFIG_IFACE_BAR_MODE_KEY },
         { "IFACE", "IFACE_BAR_WIDTH", GAME_CONFIG_UI_KEY, GAME_CONFIG_IFACE_BAR_WIDTH_KEY },
         { "IFACE", "IFACE_BAR_SIDE_ART", GAME_CONFIG_UI_KEY, GAME_CONFIG_IFACE_BAR_SIDE_ART_KEY },
@@ -122,6 +129,43 @@ namespace {
 
         return configSetInt(gameConfig, GAME_CONFIG_SCREEN_KEY, GAME_CONFIG_SCALE_KEY, value + 1);
     }
+
+    static bool contentConfigMigrateF2ResMainMenuPanelOffsetKey(Config* legacyConfig, Config* contentConfig, const char* legacyKey, const char* targetKey, int baseValue, int defaultValue)
+    {
+        assert(legacyConfig != nullptr && contentConfig != nullptr);
+
+        if (gameConfigHasKey(contentConfig, CONTENT_CONFIG_MAIN_MENU_SECTION, targetKey)) {
+            return false;
+        }
+
+        int value;
+        if (!configGetInt(legacyConfig, "MAINMENU", legacyKey, &value)) {
+            return false;
+        }
+
+        value += baseValue;
+        if (value == defaultValue) {
+            return false;
+        }
+
+        return configSetInt(contentConfig, CONTENT_CONFIG_MAIN_MENU_SECTION, targetKey, value);
+    }
+
+    static bool contentConfigMigrateF2ResBoolKey(Config* legacyConfig, Config* contentConfig, const char* legacyKey, const char* targetKey)
+    {
+        assert(legacyConfig != nullptr && contentConfig != nullptr);
+
+        if (gameConfigHasKey(contentConfig, CONTENT_CONFIG_MAIN_MENU_SECTION, targetKey)) {
+            return false;
+        }
+
+        bool value;
+        if (!configGetBool(legacyConfig, "MAINMENU", legacyKey, &value)) {
+            return false;
+        }
+
+        return configSetBool(contentConfig, CONTENT_CONFIG_MAIN_MENU_SECTION, targetKey, value);
+    }
 } // namespace
 
 // Migrate settings F2_RES.INI to fallout2.cfg
@@ -188,6 +232,8 @@ namespace {
     constexpr SfallMigrationEntry kSfallMigrationEntries[] = {
         // [start]
         { kSfallMisc, "StartingMap", CONTENT_CONFIG_START_SECTION, "map", "" },
+        { kSfallMisc, "ViewXPos", CONTENT_CONFIG_START_SECTION, "worldmap_view_x", "-1" },
+        { kSfallMisc, "ViewYPos", CONTENT_CONFIG_START_SECTION, "worldmap_view_y", "-1" },
         { kSfallMisc, "MaleStartModel", CONTENT_CONFIG_START_SECTION, "model_male", "hmwarr" },
         { kSfallMisc, "MaleDefaultModel", CONTENT_CONFIG_START_SECTION, "model_male_default", "hmjmps" },
         { kSfallMisc, "FemaleStartModel", CONTENT_CONFIG_START_SECTION, "model_female", "hfprim" },
@@ -199,6 +245,8 @@ namespace {
         // but the migration entry prevents RPU scripts from incorrectly detecting
         // a missing config (they check != 1, and absence returns 0/false).
         { kSfallMisc, "UseFileSystemOverride", CONTENT_CONFIG_START_SECTION, "use_filesystem_override", "0" },
+        // [maps]
+        { kSfallMisc, "DisableSpecialMapIDs", CONTENT_CONFIG_MAPS_SECTION, "disable_special_map_ids", "0" },
         // [karma]
         { kSfallMisc, "KarmaFRMs", CONTENT_CONFIG_KARMA_SECTION, "frms" },
         { kSfallMisc, "KarmaPoints", CONTENT_CONFIG_KARMA_SECTION, "points" },
@@ -232,6 +280,8 @@ namespace {
         { kSfallMisc, "RemoveCriticalTimelimits", CONTENT_CONFIG_COMBAT_SECTION, "remove_critical_time_limits", "0" },
         { kSfallMisc, "ScienceOnCritters", CONTENT_CONFIG_COMBAT_SECTION, "science_on_critters", "0" },
         { kSfallMisc, "CheckWeaponAmmoCost", CONTENT_CONFIG_COMBAT_SECTION, "check_weapon_ammo_cost", nullptr },
+        { kSfallMisc, "InventoryApCost", CONTENT_CONFIG_COMBAT_SECTION, "inventory_ap_cost", "4" },
+        { kSfallMisc, "QuickPocketsApCostReduction", CONTENT_CONFIG_COMBAT_SECTION, "quick_pockets_ap_cost_reduction", "2" },
         { kSfallMisc, "ComputeSprayMod", CONTENT_CONFIG_COMBAT_SECTION, "burst_enabled", "0" },
         { kSfallMisc, "ComputeSpray_CenterMult", CONTENT_CONFIG_COMBAT_SECTION, "burst_center_mult", "1" },
         { kSfallMisc, "ComputeSpray_CenterDiv", CONTENT_CONFIG_COMBAT_SECTION, "burst_center_div", "3" },
@@ -256,8 +306,6 @@ namespace {
         { kSfallMisc, "DisableHorrigan", CONTENT_CONFIG_WORLDMAP_SECTION, "disable_horrigan", "0" },
         { kSfallMisc, "CityRepsList", CONTENT_CONFIG_WORLDMAP_SECTION, "city_reputation_list" },
         { kSfallInterface, "WorldMapTravelMarkers", CONTENT_CONFIG_WORLDMAP_SECTION, "trail_markers", "0" },
-        // FO1 worldmap position keys — migrated from ddraw.ini [Misc] to
-        // content_config worldmap section for et tu compatibility.
         { kSfallMisc, "StartXPos", CONTENT_CONFIG_WORLDMAP_SECTION, "start_x_pos" },
         { kSfallMisc, "StartYPos", CONTENT_CONFIG_WORLDMAP_SECTION, "start_y_pos" },
         // P-19: ViewXPos/ViewYPos/WorldMapSlots migration rows removed —
@@ -277,12 +325,15 @@ namespace {
         // There is no engine-level consumer for BoxBarCount in CE.
 
         { kSfallMisc, "BoostScriptDialogLimit", CONTENT_CONFIG_DIALOG_SECTION, "boost_dialog_limit", "0" },
+        { kSfallInterface, "WorldMapTerrainInfo", CONTENT_CONFIG_WORLDMAP_SECTION, "terrain_info", "0" },
         // [characters]
         { kSfallMisc, "PremadePaths", CONTENT_CONFIG_CHARACTERS_SECTION, "premade_paths" },
         { kSfallMisc, "PremadeFIDs", CONTENT_CONFIG_CHARACTERS_SECTION, "premade_fids" },
         // [text]
-    { kSfallMisc, "ExtraGameMsgFileList", CONTENT_CONFIG_TEXT_SECTION, "extra_msg_file_list" },
-};
+        { kSfallMisc, "ExtraGameMsgFileList", CONTENT_CONFIG_TEXT_SECTION, "extra_msg_file_list" },
+        // [stats]
+        { kSfallMisc, "XPTable", CONTENT_CONFIG_STATS_SECTION, "xp_table" },
+    };
 
 // SYNC WARNING: kSfallMigrationEntries MUST be kept synchronized with
 // kSfallContentMappings in content_config.cc (same ddraw.ini keys
@@ -516,6 +567,14 @@ static bool contentConfigMigrateFromSfall(Config* sfallConfig, const char* conte
         }
     }
 
+    if (contentConfigMigrateSfallMovieOverrides(sfallConfig, &migratedConfig)) {
+        migrated = true;
+    }
+
+    if (contentConfigMigrateSfallFallout1MovieBehavior(sfallConfig, &migratedConfig)) {
+        migrated = true;
+    }
+
     if (migrated) {
         // Ensure all directory components exist before writing.
         char drive[COMPAT_MAX_DRIVE];
@@ -533,6 +592,87 @@ static bool contentConfigMigrateFromSfall(Config* sfallConfig, const char* conte
 
     configFree(&migratedConfig);
     return migrated;
+}
+
+static bool contentConfigEnsureDirectory(const char* contentConfigFilePath)
+{
+    char drive[COMPAT_MAX_DRIVE];
+    char dirPart[COMPAT_MAX_DIR];
+    char pathWithoutFile[COMPAT_MAX_PATH];
+    compat_splitpath(contentConfigFilePath, drive, dirPart, nullptr, nullptr);
+    compat_makepath(pathWithoutFile, drive, dirPart, nullptr, nullptr);
+    return compat_is_dir(pathWithoutFile)
+        || compat_mkdir_recursive(pathWithoutFile) == 0
+        || compat_is_dir(pathWithoutFile);
+}
+
+static bool contentConfigMigrateFromF2Res(Config* legacyConfig, const char* contentConfigFilePath)
+{
+    assert(legacyConfig != nullptr && contentConfigFilePath != nullptr);
+
+    Config migratedConfig;
+    if (!configInit(&migratedConfig)) {
+        return false;
+    }
+
+    configRead(&migratedConfig, contentConfigFilePath, false);
+
+    bool migrated = false;
+    if (contentConfigMigrateF2ResMainMenuPanelOffsetKey(legacyConfig, &migratedConfig, "MENU_BG_OFFSET_X", "main_menu_panel_offset_x", F2_RES_MAIN_MENU_BUTTON_X, F2_RES_DEFAULT_MAIN_MENU_PANEL_OFFSET_X)) {
+        migrated = true;
+    }
+    if (contentConfigMigrateF2ResMainMenuPanelOffsetKey(legacyConfig, &migratedConfig, "MENU_BG_OFFSET_Y", "main_menu_panel_offset_y", F2_RES_MAIN_MENU_BUTTON_Y, F2_RES_DEFAULT_MAIN_MENU_PANEL_OFFSET_Y)) {
+        migrated = true;
+    }
+    if (contentConfigMigrateF2ResBoolKey(legacyConfig, &migratedConfig, "SCALE_BUTTONS_AND_TEXT_MENU", "scale_buttons_and_text")) {
+        migrated = true;
+    }
+
+    if (migrated) {
+        if (contentConfigEnsureDirectory(contentConfigFilePath)) {
+            if (!configWriteEx(&migratedConfig, contentConfigFilePath, CONFIG_RETAIN_ALL)) {
+                debugPrint("Failed to write migrated settings to %s!\n", contentConfigFilePath);
+            }
+        } else {
+            debugPrint("Failed to create directory for migrated settings at %s!\n", contentConfigFilePath);
+        }
+    }
+
+    configFree(&migratedConfig);
+    return migrated;
+}
+
+void contentConfigTryMigrateFromF2Res(const char* contentConfigPath)
+{
+    const auto& masterPatches = settings.system.master_patches_path;
+    if (masterPatches.empty()) {
+        debugPrint("Failed to migrate from f2_res.ini: no master_patches is set.\n");
+        return;
+    }
+    if (!compat_is_dir(masterPatches.c_str())) {
+        return;
+    }
+
+    char f2ResFilePath[COMPAT_MAX_PATH];
+    char drive[COMPAT_MAX_DRIVE];
+    char dir[COMPAT_MAX_DIR];
+    compat_splitpath(gGameConfigFilePath, drive, dir, nullptr, nullptr);
+    compat_makepath(f2ResFilePath, drive, dir, F2_RES_CONFIG_FILE_NAME, nullptr);
+
+    Config legacyConfig;
+    if (!configInit(&legacyConfig)) {
+        return;
+    }
+
+    if (configRead(&legacyConfig, f2ResFilePath, false)) {
+        char contentCfgPath[COMPAT_MAX_PATH];
+        snprintf(contentCfgPath, sizeof(contentCfgPath), "%s\\%s", masterPatches.c_str(), contentConfigPath);
+        if (contentConfigMigrateFromF2Res(&legacyConfig, contentCfgPath)) {
+            debugPrint("Migrated settings from f2_res.ini to %s.\n", contentCfgPath);
+        }
+    }
+
+    configFree(&legacyConfig);
 }
 
 void contentConfigTryMigrateFromSfall(const char* contentConfigPath)

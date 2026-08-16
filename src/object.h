@@ -10,7 +10,7 @@
 namespace fallout {
 
 typedef struct ObjectWithFlags {
-    int flags;
+    ObjectFlags flags;
     Object* object;
 } ObjectWithFlags;
 
@@ -25,6 +25,7 @@ int objectsInit(unsigned char* buf, int width, int height, int pitch);
 void objectsReset();
 void objectsExit();
 int objectRead(Object* obj, File* stream);
+bool objectIsSavable(Object* obj);
 int objectLoadAll(File* stream);
 int objectSaveAll(File* stream);
 void _obj_render_pre_roof(Rect* rect, int elevation);
@@ -42,7 +43,7 @@ int objectSetFid(Object* obj, int fid, Rect* rect);
 int objectSetFrame(Object* obj, int frame, Rect* rect);
 int objectSetNextFrame(Object* obj, Rect* rect);
 int objectSetPrevFrame(Object* obj, Rect* rect);
-int objectSetRotation(Object* obj, int direction, Rect* rect);
+int objectSetRotation(Object* obj, Rotation rotation, Rect* rect);
 int objectRotateClockwise(Object* obj, Rect* rect);
 int objectRotateCounterClockwise(Object* obj, Rect* rect);
 void _obj_rebuild_all_light();
@@ -79,39 +80,39 @@ Object* _obj_sight_blocking_at(Object* excludeObj, int tile_num, int elev);
 int objectGetDistanceBetween(Object* object1, Object* object2);
 int objectGetDistanceBetweenTiles(Object* object1, int tile1, Object* object2, int tile2);
 bool objectWithinWalkDistance(Object* critter, Object* target);
-int objectListCreate(int tile, int elevation, int objectType, Object*** objectsPtr);
+int objectListCreate(int tile, int elevation, ObjectType objectType, Object*** objectsPtr);
 void objectListFree(Object** objects);
 void _translucent_trans_buf_to_buf(unsigned char* src, int srcWidth, int srcHeight, int srcPitch, unsigned char* dest, int destX, int destY, int destPitch, unsigned char* a9, unsigned char* a10);
 void _dark_trans_buf_to_buf(unsigned char* src, int srcWidth, int srcHeight, int srcPitch, unsigned char* dest, int destX, int destY, int destPitch, int light);
 void _dark_translucent_trans_buf_to_buf(unsigned char* src, int srcWidth, int srcHeight, int srcPitch, unsigned char* dest, int destX, int destY, int destPitch, int light, unsigned char* a10, unsigned char* a11);
 void _intensity_mask_buf_to_buf(unsigned char* src, int srcWidth, int srcHeight, int srcPitch, unsigned char* dest, int destPitch, unsigned char* mask, int maskPitch, int light);
-int objectSetOutline(Object* obj, int a2, Rect* rect);
+int objectSetOutline(Object* obj, OutlineType outlineType, Rect* rect);
 int objectClearOutline(Object* obj, Rect* rect);
-int _obj_intersects_with(Object* object, int x, int y);
-int _obj_create_intersect_list(int x, int y, int elevation, int objectType, ObjectWithFlags** entriesPtr);
+ObjectFlags _obj_intersects_with(Object* object, int x, int y);
+int _obj_create_intersect_list(int x, int y, int elevation, ObjectType objectType, ObjectWithFlags** entriesPtr);
 void _obj_delete_intersect_list(ObjectWithFlags** a1);
 void obj_set_seen(int tile);
 void _obj_clear_seen();
 void _obj_process_seen();
 char* objectGetName(Object* obj);
 char* objectGetDescription(Object* obj);
-void _obj_preload_art_cache(int flags);
+void _obj_preload_art_cache(MapHeaderFlags flags);
 int _obj_save_dude(File* stream);
 int _obj_load_dude(File* stream);
 void _obj_fix_violence_settings(int* fid);
 
-Object* objectTypedFindById(int id, int type);
+Object* objectTypedFindById(int id, ObjectType type);
 bool isExitGridAt(int tile, int elevation);
 
 // 81225db: outline helpers.
 inline bool objectHasOutline(Object* obj)
 {
-    return obj != nullptr && (obj->outline & OUTLINE_TYPE_MASK) != 0;
+    return obj != nullptr && (obj->outline & OUTLINE_TYPE_MAX) != OUTLINE_TYPE_NONE;
 }
 
 inline bool objectHasVisibleOutline(Object* obj)
 {
-    return objectHasOutline(obj) && (obj->outline & OUTLINE_DISABLED) == 0;
+    return objectHasOutline(obj) && (obj->outline & OUTLINE_DISABLED) == OUTLINE_TYPE_NONE;
 }
 
 // RAII wrapper for Object*.

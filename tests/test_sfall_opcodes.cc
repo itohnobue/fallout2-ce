@@ -933,7 +933,7 @@ TEST_CASE("M-072: op_read_byte — extern globals used by opcode")
 // ============================================================
 // M-073: 4 critter stat ops — null/type guard untested.
 // sfall_opcodes.cc:170-207 (set), 219-251 (get).
-// All four opcodes check: obj == nullptr || FID_TYPE(obj->fid) != OBJ_TYPE_CRITTER
+// All four opcodes check: obj == nullptr || objectTypeFromFid(obj->fid) != OBJ_TYPE_CRITTER
 // FID_TYPE and OBJ_TYPE_CRITTER are public. We verify the macro
 // and enum values the guards depend on, plus cleanup via reset.
 // ============================================================
@@ -941,10 +941,10 @@ TEST_CASE("M-072: op_read_byte — extern globals used by opcode")
 TEST_CASE("M-073: FID_TYPE macro behavior — guards depend on correct extraction")
 {
     // The guards at lines 178, 203, 226, 245 all check:
-    //   if (obj == nullptr || FID_TYPE(obj->fid) != OBJ_TYPE_CRITTER)
+    //   if (obj == nullptr || objectTypeFromFid(obj->fid) != OBJ_TYPE_CRITTER)
     //
     // FID_TYPE is defined at obj_types.h:32:
-    //   #define FID_TYPE(value) ((value) & 0xF000000) >> 24
+    //   #define objectTypeFromFid(value) ((value) & 0xF000000) >> 24
     //
     // OBJ_TYPE_CRITTER = 1 (obj_types.h:19)
 
@@ -952,7 +952,7 @@ TEST_CASE("M-073: FID_TYPE macro behavior — guards depend on correct extractio
     {
         // Construct a critter FID: type=OBJ_TYPE_CRITTER(1) at bits 24-27
         int critterFid = (OBJ_TYPE_CRITTER << 24) | 0x001234;
-        int fidType1 = FID_TYPE(critterFid);
+        int fidType1 = objectTypeFromFid(critterFid);
         CHECK(fidType1 == OBJ_TYPE_CRITTER);
     }
 
@@ -960,19 +960,19 @@ TEST_CASE("M-073: FID_TYPE macro behavior — guards depend on correct extractio
     {
         // Item FID — should NOT be OBJ_TYPE_CRITTER
         int itemFid = (OBJ_TYPE_ITEM << 24) | 0x001234;
-        int itemFidType = FID_TYPE(itemFid);
+        int itemFidType = objectTypeFromFid(itemFid);
         CHECK(itemFidType == OBJ_TYPE_ITEM);
         CHECK(itemFidType != OBJ_TYPE_CRITTER);
 
         // Scenery FID
         int sceneryFid = (OBJ_TYPE_SCENERY << 24) | 0x001234;
-        int sceneryFidType = FID_TYPE(sceneryFid);
+        int sceneryFidType = objectTypeFromFid(sceneryFid);
         CHECK(sceneryFidType == OBJ_TYPE_SCENERY);
         CHECK(sceneryFidType != OBJ_TYPE_CRITTER);
 
         // Wall FID
         int wallFid = (OBJ_TYPE_WALL << 24) | 0x001234;
-        int wallFidType = FID_TYPE(wallFid);
+        int wallFidType = objectTypeFromFid(wallFid);
         CHECK(wallFidType == OBJ_TYPE_WALL);
         CHECK(wallFidType != OBJ_TYPE_CRITTER);
     }
@@ -980,7 +980,7 @@ TEST_CASE("M-073: FID_TYPE macro behavior — guards depend on correct extractio
     SUBCASE("FID_TYPE correctly handles zero FID (type=0 = OBJ_TYPE_ITEM)")
     {
         // A zero FID would have type bits all zero → OBJ_TYPE_ITEM, not CRITTER
-        int zeroFidType = FID_TYPE(0);
+        int zeroFidType = objectTypeFromFid(0);
         CHECK(zeroFidType == OBJ_TYPE_ITEM);
         CHECK(zeroFidType != OBJ_TYPE_CRITTER);
     }
@@ -994,7 +994,7 @@ TEST_CASE("M-073: FID_TYPE macro behavior — guards depend on correct extractio
 
     // I2-M61: Behavioral simulation of the actual opcode guard pattern.
     // The four critter stat opcodes (sfall_opcodes.cc:178,203,226,245)
-    // all use the pattern: if (obj == nullptr || FID_TYPE(obj->fid) != OBJ_TYPE_CRITTER) return;
+    // all use the pattern: if (obj == nullptr || objectTypeFromFid(obj->fid) != OBJ_TYPE_CRITTER) return;
     // This inline simulation tests the guard logic end-to-end with the
     // actual FID_TYPE macro and OBJ_TYPE_CRITTER constant.
     //
@@ -1005,8 +1005,8 @@ TEST_CASE("M-073: FID_TYPE macro behavior — guards depend on correct extractio
     {
         // Simulate the guard: reject non-critter, accept critter
         auto isGuardPassed = [](int fid) -> bool {
-            // Matches: FID_TYPE(obj->fid) == OBJ_TYPE_CRITTER
-            return FID_TYPE(fid) == OBJ_TYPE_CRITTER;
+            // Matches: objectTypeFromFid(obj->fid) == OBJ_TYPE_CRITTER
+            return objectTypeFromFid(fid) == OBJ_TYPE_CRITTER;
         };
 
         // Critter FID — guard PASSES
@@ -2141,7 +2141,7 @@ TEST_CASE("M-093: op_refresh_pc_art — FID_TYPE and OBJ_TYPE_CRITTER for buildF
         // buildFid(OBJ_TYPE_CRITTER, modelNum, 0, 0, 0)
         // The first argument becomes bits 24-31 of the FID.
         int critterFid = (OBJ_TYPE_CRITTER << 24) | 0x002000; // modelNum=2, weapon=0
-        int fidTypeC = FID_TYPE(critterFid);
+        int fidTypeC = objectTypeFromFid(critterFid);
         CHECK(fidTypeC == OBJ_TYPE_CRITTER);
     }
 
@@ -2174,11 +2174,11 @@ TEST_CASE("M-093: op_refresh_pc_art — FID_TYPE and OBJ_TYPE_CRITTER for buildF
 
 TEST_CASE("M-094: op_get_proto_data — PID_TYPE macro for proto_size guard")
 {
-    // The bounds check at line 811 uses PID_TYPE(pid):
-    //   if (offset + sizeof(int) > proto_size(PID_TYPE(pid)) || ...)
+    // The bounds check at line 811 uses objectTypeFromPid(pid):
+    //   if (offset + sizeof(int) > proto_size(objectTypeFromPid(pid)) || ...)
     //
     // PID_TYPE extracts the upper 8 bits (same format as FID_TYPE):
-    //   #define PID_TYPE(value) (value) >> 24  — obj_types.h:33
+    //   #define objectTypeFromPid(value) (value) >> 24  — obj_types.h:33
     //
     // The negative offset guard at line 795-799 catches negative values
     // BEFORE the PID_TYPE check, preventing signed/unsigned conversion UB.
@@ -2188,14 +2188,14 @@ TEST_CASE("M-094: op_get_proto_data — PID_TYPE macro for proto_size guard")
         // Proto IDs share the same type encoding as FIDs.
         // A critter PID: type=OBJ_TYPE_CRITTER(1) at bits 24-31
         int critterPid = (OBJ_TYPE_CRITTER << 24) | 0x000167; // example: radscorpion
-        int critterPidType = PID_TYPE(critterPid);
+        int critterPidType = objectTypeFromPid(critterPid);
         CHECK(critterPidType == OBJ_TYPE_CRITTER);
     }
 
     SUBCASE("PID_TYPE extracts item type from PID")
     {
         int itemPid = (OBJ_TYPE_ITEM << 24) | 0x000029; // example: stimpak
-        int itemPidType = PID_TYPE(itemPid);
+        int itemPidType = objectTypeFromPid(itemPid);
         CHECK(itemPidType == OBJ_TYPE_ITEM);
     }
 }
@@ -2526,7 +2526,7 @@ TEST_CASE("M-093+M-094: buildFid preconditions — type constants")
     // Both M-093 (refresh_pc_art) and M-094 (get_proto_data) depend on
     // the ObjectType enum in obj_types.h. The buildFid call at
     // sfall_opcodes.cc:1093 uses OBJ_TYPE_CRITTER(1).
-    // The proto_size(PID_TYPE(pid)) call at line 811 uses
+    // The proto_size(objectTypeFromPid(pid)) call at line 811 uses
     // PID_TYPE which extracts ObjectType from PID.
 
     SUBCASE("ObjectType enum values match expected layout")
@@ -2546,8 +2546,8 @@ TEST_CASE("M-093+M-094: buildFid preconditions — type constants")
         // Both extract the upper 8 bits as ObjectType.
         // FID_TYPE masks with 0xF000000 first; PID_TYPE does not.
         int value = (OBJ_TYPE_CRITTER << 24) | 0x00ABCDEF;
-        int pidTypeV = PID_TYPE(value);
-        int fidTypeV = FID_TYPE(value);
+        int pidTypeV = objectTypeFromPid(value);
+        int fidTypeV = objectTypeFromFid(value);
         CHECK(pidTypeV == OBJ_TYPE_CRITTER);
         CHECK(fidTypeV == OBJ_TYPE_CRITTER);
     }

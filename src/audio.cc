@@ -16,15 +16,28 @@
 
 namespace fallout {
 
-typedef enum AudioFlags {
+enum AudioFlags : int {
+    AUDIO_NONE = 0x00,
     AUDIO_IN_USE = 0x01,
     AUDIO_COMPRESSED = 0x02,
     // CE: Decoded formats like WAV/OGG are fully loaded into memory up front.
     AUDIO_MEMORY = 0x04,
-} AudioFileFlags;
+};
+
+inline AudioFlags& operator|=(AudioFlags& lhs, AudioFlags rhs)
+{
+    lhs = static_cast<AudioFlags>(static_cast<int>(lhs) | static_cast<int>(rhs));
+    return lhs;
+}
+
+inline AudioFlags& operator&=(AudioFlags& lhs, AudioFlags rhs)
+{
+    lhs = static_cast<AudioFlags>(static_cast<int>(lhs) & static_cast<int>(rhs));
+    return lhs;
+}
 
 typedef struct Audio {
-    int flags;
+    AudioFlags flags;
     File* stream;
     SoundDecoder* soundDecoder;
     unsigned char* data;
@@ -35,12 +48,12 @@ typedef struct Audio {
     int position;
 } Audio;
 
-typedef enum AudioOpenMode {
+enum AudioOpenMode : int {
     AUDIO_OPEN_MODE_RAW = 0,
     AUDIO_OPEN_MODE_COMPRESSED = 1, // ACM
     AUDIO_OPEN_MODE_WAV = 2,
     AUDIO_OPEN_MODE_OGG = 3,
-} AudioOpenMode;
+};
 
 static bool defaultCompressionFunc(char* filePath);
 static int audioSoundDecoderReadHandler(void* data, void* buf, unsigned int size);
@@ -205,7 +218,7 @@ int audioOpen(const char* fname, AudioFileInfo* info, bool* isMemoryBackedPtr)
 
     int index;
     for (index = 0; index < gAudioListLength; index++) {
-        if ((gAudioList[index].flags & AUDIO_IN_USE) == 0) {
+        if ((gAudioList[index].flags & AUDIO_IN_USE) == AUDIO_NONE) {
             break;
         }
     }
@@ -298,7 +311,7 @@ int audioOpen(const char* fname, AudioFileInfo* info, bool* isMemoryBackedPtr)
 int audioClose(int handle)
 {
     Audio* audioFile = &(gAudioList[handle - 1]);
-    if ((audioFile->flags & AUDIO_MEMORY) != 0) {
+    if ((audioFile->flags & AUDIO_MEMORY) != AUDIO_NONE) {
         if (audioFile->data != nullptr) {
             internal_free_safe(audioFile->data, __FILE__, __LINE__);
         }
@@ -306,7 +319,7 @@ int audioClose(int handle)
         fileClose(audioFile->stream);
     }
 
-    if ((audioFile->flags & AUDIO_COMPRESSED) != 0 && audioFile->soundDecoder != nullptr) {
+    if ((audioFile->flags & AUDIO_COMPRESSED) != AUDIO_NONE && audioFile->soundDecoder != nullptr) {
         soundDecoderFree(audioFile->soundDecoder);
     }
 
@@ -321,7 +334,7 @@ int audioRead(int handle, void* buffer, unsigned int size)
     Audio* audioFile = &(gAudioList[handle - 1]);
 
     int bytesRead;
-    if ((audioFile->flags & AUDIO_MEMORY) != 0) {
+    if ((audioFile->flags & AUDIO_MEMORY) != AUDIO_NONE) {
         bytesRead = audioFile->fileSize - audioFile->position;
         if (bytesRead > static_cast<int>(size)) {
             bytesRead = size;
@@ -330,7 +343,7 @@ int audioRead(int handle, void* buffer, unsigned int size)
         if (bytesRead > 0) {
             memcpy(buffer, audioFile->data + audioFile->position, bytesRead);
         }
-    } else if ((audioFile->flags & AUDIO_COMPRESSED) != 0) {
+    } else if ((audioFile->flags & AUDIO_COMPRESSED) != AUDIO_NONE) {
         bytesRead = soundDecoderDecode(audioFile->soundDecoder, buffer, size);
     } else {
         bytesRead = fileRead(buffer, 1, size, audioFile->stream);
@@ -364,7 +377,7 @@ long audioSeek(int handle, long offset, int origin)
         assert(false && "Should be unreachable");
     }
 
-    if ((audioFile->flags & AUDIO_MEMORY) != 0) {
+    if ((audioFile->flags & AUDIO_MEMORY) != AUDIO_NONE) {
         if (pos < 0) {
             pos = 0;
         }
@@ -375,7 +388,7 @@ long audioSeek(int handle, long offset, int origin)
 
         audioFile->position = pos;
         return audioFile->position;
-    } else if ((audioFile->flags & AUDIO_COMPRESSED) != 0) {
+    } else if ((audioFile->flags & AUDIO_COMPRESSED) != AUDIO_NONE) {
         if (pos < audioFile->position) {
             soundDecoderFree(audioFile->soundDecoder);
             fileSeek(audioFile->stream, 0, SEEK_SET);
@@ -384,7 +397,7 @@ long audioSeek(int handle, long offset, int origin)
             if (audioFile->soundDecoder == nullptr) {
                 fileClose(audioFile->stream);
                 audioFile->stream = nullptr;
-                audioFile->flags &= ~AUDIO_COMPRESSED;
+                audioFile->flags &= static_cast<AudioFlags>(~AUDIO_COMPRESSED);
                 audioFile->fileSize = savedFileSize;
                 audioFile->position = 0;
                 return -1;

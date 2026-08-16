@@ -22,6 +22,11 @@ static constexpr int kGlobalScriptBusyFlags = PROGRAM_FLAG_FATAL_ERROR
     | PROGRAM_FLAG_CHILD_CALL
     | PROGRAM_FLAG_CHILD_SPAWN;
 
+// sfall runs global script procs directly. CE keeps globals outside the normal
+// program list, so pending callbacks are resumed here; use a large bounded burst
+// to avoid stretching UI callbacks over multiple frames.
+static constexpr int kGlobalScriptContinuationBurstSize = 100;
+
 struct GlobalScript {
     Program* program = nullptr;
     int procs[SCRIPT_PROC_COUNT] = { 0 };
@@ -349,6 +354,8 @@ void sfall_gl_scr_exec_start_proc()
 
         Program* program = programCreateByPath(path.c_str());
         if (program != nullptr) {
+            scriptDetachedContextRegister(program, DetachedScriptOwnerKind::GlobalScript);
+
             GlobalScript scr;
             scr.program = program;
 
@@ -379,6 +386,7 @@ void sfall_gl_scr_remove_all()
         // Without this, hook dispatch iterating the hook vector after
         // programFree() would dereference freed memory.
         scriptHooksUnregisterProgram(scr.program);
+        scriptDetachedContextUnregister(scr.program);
         programFree(scr.program);
     }
 
@@ -517,8 +525,10 @@ int sfall_gl_scr_is_loaded(Program* program)
 
 void sfall_gl_scr_update(int burstSize)
 {
+    int globalScriptBurstSize = std::max(burstSize, kGlobalScriptContinuationBurstSize);
     for (auto& scr : state->globalScripts) {
-        programInterpret(scr.program, burstSize);
+        programInterpret(scr.program, globalScriptBurstSize);
+        programProcessProcedureEvents(scr.program);
     }
 }
 

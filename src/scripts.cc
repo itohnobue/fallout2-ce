@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unordered_map>
 #include <vector>
 
 #include "actions.h"
@@ -26,6 +27,7 @@
 #include "game_movie.h"
 #include "input.h"
 #include "map.h"
+#include "map_defs.h"
 #include "memory.h"
 #include "message.h"
 #include "object.h"
@@ -127,6 +129,14 @@ static bool gSpatialsEnabled = true;
 
 // 0x51C6C0 scriptlists
 static ScriptList gScriptLists[SCRIPT_TYPE_COUNT];
+
+struct ScriptSelfOverride {
+    Object* object = nullptr;
+    int consumeCount = 1;
+};
+
+static std::unordered_map<Program*, DetachedScriptContext> detachedScriptContexts;
+static std::unordered_map<Program*, ScriptSelfOverride> scriptSelfOverrides;
 
 // 0x51C710 script_path_base
 static const char* gScriptsBasePath = "scripts\\";
@@ -320,7 +330,7 @@ static int gMovieTimerArtimer4;
 
 // Returns game time in ticks (1/10 second).
 //
-// 0x4A3330
+// 0x4A3330 game_time
 unsigned int gameTimeGetTime()
 {
     return gGameTime;
@@ -368,8 +378,7 @@ void gameTimeGetDate(int* monthPtr, int* dayPtr, int* yearPtr)
 // - 3:00 P.M. -> 1500
 // - 11:59 P.M. -> 2359
 //
-// game_time_hour
-// 0x4A33C8
+// 0x4A33C8 game_time_hour
 int gameTimeGetHour()
 {
     return 100 * ((gGameTime / 600) / 60 % 24) + (gGameTime / 600) % 60;
@@ -399,7 +408,7 @@ void gameTimeSetTime(unsigned int time)
     gGameTime = time;
 }
 
-// 0x4A34CC
+// 0x4A34CC inc_game_time
 void gameTimeAddTicks(int ticks)
 {
     gGameTime += ticks;
@@ -418,14 +427,14 @@ void gameTimeAddTicks(int ticks)
     }
 }
 
-// 0x4A3518
+// 0x4A3518 inc_game_time_in_seconds
 void gameTimeAddSeconds(int seconds)
 {
     // NOTE: Uninline.
     gameTimeAddTicks(seconds * 10);
 }
 
-// 0x4A3570
+// 0x4A3570 gtime_q_add
 int gameTimeScheduleUpdateEvent()
 {
     // ticks until midnight
@@ -443,7 +452,7 @@ int gameTimeScheduleUpdateEvent()
     return 0;
 }
 
-// 0x4A3620
+// 0x4A3620 gtime_q_process
 int gameTimeEventProcess(Object* obj, void* data)
 {
     int movie_index;
@@ -471,7 +480,7 @@ int gameTimeEventProcess(Object* obj, void* data)
 
     stopProcess = critterCheckRadiationEvent(gDude);
 
-    queueClearByEventType(4, nullptr);
+    queueClearByEventType(EVENT_TYPE_GAME_TIME, nullptr);
 
     gameTimeScheduleUpdateEvent();
 
@@ -501,9 +510,9 @@ int _scriptsCheckGameEvents(int* moviePtr, int window)
             movie = MOVIE_ARTIMER4;
             if (!gameMovieIsSeen(MOVIE_ARTIMER4)) {
                 adjustRep = true;
-                wmAreaSetVisibleState(CITY_ARROYO, 0, 1);
-                wmAreaSetVisibleState(CITY_DESTROYED_ARROYO, 1, 1);
-                wmAreaMarkVisitedState(CITY_DESTROYED_ARROYO, 2);
+                wmAreaSetVisibleState(CITY_ARROYO, CITY_STATE_UNKNOWN, true);
+                wmAreaSetVisibleState(CITY_DESTROYED_ARROYO, CITY_STATE_KNOWN, true);
+                wmAreaMarkVisitedState(CITY_DESTROYED_ARROYO, CITY_STATE_VISITED);
             }
         } else if (day >= gMovieTimerArtimer3 && gameGetGlobalVar(GVAR_FALLOUT_2) != 3) {
             adjustRep = true;
@@ -551,7 +560,7 @@ int _scriptsCheckGameEvents(int* moviePtr, int window)
     return 0;
 }
 
-// 0x4A382C
+// 0x4A382C src_map_q_process
 int mapUpdateEventProcess(Object* obj, void* data)
 {
     scriptsExecMapUpdateScripts(SCRIPT_PROC_MAP_UPDATE);
@@ -574,8 +583,7 @@ int mapUpdateEventProcess(Object* obj, void* data)
     return -1;
 }
 
-// new_obj_id
-// 0x4A386C
+// 0x4A386C new_obj_id
 int scriptsNewObjectId()
 {
     Object* ptr;
@@ -666,7 +674,7 @@ void scriptsSyncObjectId(Object* object)
     }
 }
 
-// 0x4A390C
+// 0x4A390C src_find_sid_from_program
 int scriptGetSid(Program* program)
 {
     for (int type = 0; type < SCRIPT_TYPE_COUNT; type++) {
@@ -704,7 +712,7 @@ Object* scriptGetSelf(Program* program)
     }
 
     Object* object;
-    int fid = buildFid(OBJ_TYPE_INTERFACE, 3, 0, 0, 0);
+    int fid = buildFid(OBJ_TYPE_INTERFACE, 3);
     objectCreateWithFidPid(&object, fid, -1);
     objectHide(object, nullptr);
     _obj_toggle_flat(object, nullptr);
@@ -737,7 +745,203 @@ Object* scriptGetSelf(Program* program)
     return object;
 }
 
-// 0x4A3B0C
+bool scriptDetachedContextRegister(Program* program, DetachedScriptOwnerKind ownerKind)
+{
+    if (program == nullptr) {
+        return false;
+    }
+
+    DetachedScriptContext context;
+    context.program = program;
+    context.ownerKind = ownerKind;
+    auto result = detachedScriptContexts.emplace(program, std::move(context));
+    assert(result.second);
+    return result.second;
+}
+
+void scriptDetachedContextUnregister(Program* program)
+{
+    detachedScriptContexts.erase(program);
+    scriptSelfOverrides.erase(program);
+}
+
+bool scriptContextResolve(Program* program, ScriptContextRef* out)
+{
+    if (program == nullptr || out == nullptr) {
+        return false;
+    }
+
+    int sid = scriptGetSid(program);
+
+    Script* script;
+    if (scriptGetScript(sid, &script) != -1) {
+        out->kind = ScriptContextKind::NormalScript;
+        out->script = script;
+        out->detached = nullptr;
+        return true;
+    }
+
+    auto it = detachedScriptContexts.find(program);
+    if (it != detachedScriptContexts.end()) {
+        out->kind = ScriptContextKind::DetachedProgram;
+        out->script = nullptr;
+        out->detached = &(it->second);
+        return true;
+    }
+
+    return false;
+}
+
+bool scriptContextSetOverrideSelf(Program* program, Object* object)
+{
+    if (program == nullptr) {
+        return false;
+    }
+
+    if (object == nullptr) {
+        scriptSelfOverrides.erase(program);
+        return true;
+    }
+
+    auto it = scriptSelfOverrides.find(program);
+    if (it != scriptSelfOverrides.end()) {
+        if (it->second.object == object) {
+            it->second.consumeCount = 2;
+        } else {
+            it->second.object = object;
+            it->second.consumeCount = 1;
+        }
+    } else {
+        scriptSelfOverrides.emplace(program, ScriptSelfOverride { object, 1 });
+    }
+
+    return true;
+}
+
+bool scriptContextConsumeOverrideSelf(Program* program, Object** objectPtr)
+{
+    if (program == nullptr) {
+        return false;
+    }
+
+    auto it = scriptSelfOverrides.find(program);
+    if (it == scriptSelfOverrides.end() || it->second.object == nullptr) {
+        return false;
+    }
+
+    if (objectPtr != nullptr) {
+        *objectPtr = it->second.object;
+    }
+
+    it->second.consumeCount--;
+    if (it->second.consumeCount <= 0) {
+        scriptSelfOverrides.erase(it);
+    } else {
+        assert(it->second.consumeCount == 1);
+    }
+
+    return true;
+}
+
+bool scriptContextSetReturnValue(Program* program, int value)
+{
+    ScriptContextRef context;
+    if (!scriptContextResolve(program, &context)) {
+        return false;
+    }
+
+    if (context.kind == ScriptContextKind::NormalScript) {
+        context.script->returnValue = value;
+    } else {
+        context.detached->returnValue = value;
+    }
+
+    return true;
+}
+
+bool scriptContextTakeReturnValue(Program* program, int* valuePtr)
+{
+    ScriptContextRef context;
+    if (!scriptContextResolve(program, &context)) {
+        return false;
+    }
+
+    if (context.kind == ScriptContextKind::NormalScript) {
+        if (valuePtr != nullptr) {
+            *valuePtr = context.script->returnValue;
+        }
+        return true;
+    }
+
+    int value = context.detached->returnValue;
+    context.detached->returnValue = 0;
+    if (valuePtr != nullptr) {
+        *valuePtr = value;
+    }
+    return true;
+}
+
+bool scriptContextGetLocalVar(Program* program, int variable, ProgramValue& value)
+{
+    if (variable < 0) {
+        value.opcode = VALUE_TYPE_INT;
+        value.integerValue = -1;
+        return false;
+    }
+
+    Object* overrideSelf = nullptr;
+    if (scriptContextConsumeOverrideSelf(program, &overrideSelf)) {
+        if (overrideSelf != nullptr && overrideSelf->sid != -1) {
+            return scriptGetLocalVar(overrideSelf->sid, variable, value) != -1;
+        }
+    }
+
+    ScriptContextRef context;
+    if (!scriptContextResolve(program, &context)) {
+        value.opcode = VALUE_TYPE_INT;
+        value.integerValue = -1;
+        return false;
+    }
+
+    if (context.kind == ScriptContextKind::NormalScript) {
+        int sid = context.script->sid;
+        return scriptGetLocalVar(sid, variable, value) != -1;
+    }
+
+    value.opcode = VALUE_TYPE_INT;
+    value.integerValue = -1;
+    return false;
+}
+
+bool scriptContextSetLocalVar(Program* program, int variable, const ProgramValue& value)
+{
+    if (variable < 0) {
+        return false;
+    }
+
+    Object* overrideSelf = nullptr;
+    if (scriptContextConsumeOverrideSelf(program, &overrideSelf)) {
+        if (overrideSelf != nullptr && overrideSelf->sid != -1) {
+            ProgramValue mutableValue = value;
+            return scriptSetLocalVar(overrideSelf->sid, variable, mutableValue) != -1;
+        }
+    }
+
+    ScriptContextRef context;
+    if (!scriptContextResolve(program, &context)) {
+        return false;
+    }
+
+    if (context.kind == ScriptContextKind::NormalScript) {
+        int sid = context.script->sid;
+        ProgramValue mutableValue = value;
+        return scriptSetLocalVar(sid, variable, mutableValue) != -1;
+    }
+
+    return false;
+}
+
+// 0x4A3B0C scr_set_objs
 int scriptSetObjects(int sid, Object* source, Object* target)
 {
     Script* script;
@@ -751,7 +955,7 @@ int scriptSetObjects(int sid, Object* source, Object* target)
     return 0;
 }
 
-// 0x4A3B34
+// 0x4A3B34 src_set_ext_param
 void scriptSetFixedParam(int sid, int value)
 {
     Script* script;
@@ -760,7 +964,7 @@ void scriptSetFixedParam(int sid, int value)
     }
 }
 
-// 0x4A3B54
+// 0x4A3B54 scr_set_action_param
 int scriptSetActionBeingUsed(int sid, int value)
 {
     Script* scr;
@@ -774,7 +978,7 @@ int scriptSetActionBeingUsed(int sid, int value)
     return 0;
 }
 
-// 0x4A3B74
+// 0x4A3B74 loadProgram
 static Program* scriptsCreateProgramByName(const char* name)
 {
     char path[COMPAT_MAX_PATH];
@@ -1046,7 +1250,7 @@ static void scriptsCloseNearbyElevatorDoors()
     Object* elevatorDoors = objectFindFirstAtElevation(gDude->elevation);
     while (elevatorDoors != nullptr) {
         int pid = elevatorDoors->pid;
-        if (PID_TYPE(pid) == OBJ_TYPE_SCENERY
+        if (objectTypeFromPid(pid) == OBJ_TYPE_SCENERY
             && (pid == PROTO_ID_BROTHERHOOD_DOOR || pid == PROTO_ID_ELEVATOR_DOOR || pid == PROTO_ID_ELEVATOR_DOOR_ALT)
             && tileDistanceBetween(elevatorDoors->tile, gDude->tile) <= 4) {
             break;
@@ -1478,6 +1682,7 @@ int scriptExecProc(int sid, int proc)
     }
 
     // CE: Fix for the start procedure not being called correctly if the required standard script procedure is missing.
+    // TODO: vanilla cached this before interpreting the program
     int procedureIndex = script->procs[proc];
     if (procedureIndex == SCRIPT_PROC_NO_PROC) {
         // Fixme: hook receives `proc` which is wrong in this context
@@ -1816,14 +2021,11 @@ int scriptsInit()
 
     messageListRepositorySetStandardMessageList(STANDARD_MESSAGE_LIST_SCRIPT, &gScrMessageList);
 
-    configGetInt(&gContentConfig, CONTENT_CONFIG_START_SECTION, "year", &gStartYear, 2241);
-    configGetInt(&gContentConfig, CONTENT_CONFIG_START_SECTION, "month", &gStartMonth, 6);
-    configGetInt(&gContentConfig, CONTENT_CONFIG_START_SECTION, "day", &gStartDay, 24);
-
-    // 0c4c997: starting game time in 24-hour HHMM format (default 824 = 8:24
-    // AM). Invalid hour/minute values fall back to the default.
+    configGetIntBase(&gContentConfig, CONTENT_CONFIG_START_SECTION, "year", &gStartYear, 2241, 10);
+    configGetIntBase(&gContentConfig, CONTENT_CONFIG_START_SECTION, "month", &gStartMonth, 6, 10);
+    configGetIntBase(&gContentConfig, CONTENT_CONFIG_START_SECTION, "day", &gStartDay, 24, 10);
     int startTime;
-    configGetInt(&gContentConfig, CONTENT_CONFIG_START_SECTION, "time", &startTime, kDefaultStartTime, 10);
+    configGetIntBase(&gContentConfig, CONTENT_CONFIG_START_SECTION, "time", &startTime, kDefaultStartTime, 10);
     int startTimeHour = startTime / 100;
     int startTimeMinute = startTime % 100;
     if (startTimeHour < 0 || startTimeHour > 23 || startTimeMinute < 0 || startTimeMinute > 59) {
@@ -2304,7 +2506,7 @@ static int scriptRead(Script* scr, File* stream)
         scr->procs[index] = SCRIPT_PROC_NO_PROC;
     }
 
-    if (!(gMapHeader.flags & 1)) {
+    if (!(gMapHeader.flags & MAP_HEADER_SAVED)) {
         scr->localVarsCount = 0;
     }
 
@@ -2349,20 +2551,47 @@ static void scriptListExtentClearRuntimeState(ScriptListExtent* scriptExtent)
         script->owner = nullptr;
         script->source = nullptr;
         script->target = nullptr;
+        scriptSelfOverrides.erase(script->program);
         script->program = nullptr;
         script->flags &= ~SCRIPT_FLAG_LOADED;
     }
 }
 
+static void scriptListsFreeAll()
+{
+    for (int index = 0; index < SCRIPT_TYPE_COUNT; index++) {
+        ScriptList* scriptList = &(gScriptLists[index]);
+        ScriptListExtent* current = scriptList->head;
+
+        while (current != nullptr) {
+            ScriptListExtent* next = current->next;
+            internal_free(current);
+            current = next;
+        }
+
+        scriptList->head = nullptr;
+        scriptList->tail = nullptr;
+        scriptList->length = 0;
+        scriptList->nextScriptId = 0;
+    }
+
+    gScriptsEnumerationScriptIndex = 0;
+    gScriptsEnumerationScriptListExtent = nullptr;
+    gScriptsEnumerationElevation = 0;
+    scriptSelfOverrides.clear();
+}
+
 // 0x4A5C50
 int scriptLoadAll(File* stream)
 {
+    scriptListsFreeAll();
+
     for (int index = 0; index < SCRIPT_TYPE_COUNT; index++) {
         ScriptList* scriptList = &(gScriptLists[index]);
 
         int scriptsCount = 0;
         if (fileReadInt32(stream, &scriptsCount) == -1) {
-            return -1;
+            goto cleanup;
         }
 
         if (scriptsCount != 0) {
@@ -2373,11 +2602,15 @@ int scriptLoadAll(File* stream)
             }
 
             ScriptListExtent* extent = (ScriptListExtent*)internal_malloc(sizeof(*extent));
+
+            if (extent == nullptr) {
+                goto cleanup;
+            }
+
+            extent->next = nullptr;
+
             scriptList->head = extent;
             scriptList->tail = extent;
-            if (extent == nullptr) {
-                return -1;
-            }
 
             if (scriptListExtentRead(extent, stream) != 0) {
                 // I2-M029: Free the allocated extent on read failure.
@@ -2391,14 +2624,14 @@ int scriptLoadAll(File* stream)
 
             scriptListExtentClearRuntimeState(extent);
 
-            extent->next = nullptr;
-
             ScriptListExtent* prevExtent = extent;
             for (int extentIndex = 1; extentIndex < scriptList->length; extentIndex++) {
                 ScriptListExtent* extent = (ScriptListExtent*)internal_malloc(sizeof(*extent));
                 if (extent == nullptr) {
-                    return -1;
+                    goto cleanup;
                 }
+
+                extent->next = nullptr;
 
                 if (scriptListExtentRead(extent, stream) != 0) {
                     // I2-M029: Free the allocated extent on read failure
@@ -2410,7 +2643,6 @@ int scriptLoadAll(File* stream)
                 scriptListExtentClearRuntimeState(extent);
 
                 prevExtent->next = extent;
-                extent->next = nullptr;
                 prevExtent = extent;
             }
 
@@ -2423,6 +2655,10 @@ int scriptLoadAll(File* stream)
     }
 
     return 0;
+
+cleanup:
+    scriptListsFreeAll();
+    return -1;
 }
 
 // scr_ptr
@@ -2878,7 +3114,7 @@ bool scriptsExecSpatialProc(Object* object, int tile, int elevation)
         return false;
     }
 
-    if ((object->flags & OBJECT_HIDDEN) != 0 || (object->flags & OBJECT_FLAT) != 0) {
+    if ((object->flags & OBJECT_HIDDEN) != OBJECT_NONE || (object->flags & OBJECT_FLAT) != OBJECT_NONE) {
         return false;
     }
 
@@ -2997,7 +3233,7 @@ void scriptsExecMapUpdateScripts(int proc)
 
     int fixedParam = 0;
     if (proc == SCRIPT_PROC_MAP_ENTER) {
-        fixedParam = (gMapHeader.flags & 1) == 0;
+        fixedParam = (gMapHeader.flags & MAP_HEADER_SAVED) == MAP_HEADER_NONE;
     } else {
         scriptExecProc(gMapSid, proc);
     }
@@ -3103,7 +3339,7 @@ static int scriptsGetMessageList(int messageListId, MessageList** messageListPtr
         }
 
         // SFALL: Gender-specific words.
-        int gender = critterGetStat(gDude, STAT_GENDER);
+        Gender gender = static_cast<Gender>(critterGetStat(gDude, STAT_GENDER));
         messageListFilterGenderWords(messageList, gender);
     }
 
@@ -3141,7 +3377,7 @@ char* _scr_get_msg_str_speech(int messageListId, int messageId, int shouldStartS
         return nullptr;
     }
 
-    if (FID_TYPE(gGameDialogHeadFid) != OBJ_TYPE_HEAD) {
+    if (objectTypeFromFid(gGameDialogHeadFid) != OBJ_TYPE_HEAD) {
         shouldStartSpeech = 0;
     }
 

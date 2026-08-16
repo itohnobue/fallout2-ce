@@ -403,6 +403,8 @@ static bool _loadingGame = false;
 // write path is always fork-format.
 extern int gLoadedSaveVersionMajor;
 
+static int _loadingMapId = -1;
+
 // lsgame.msg
 //
 // 0x613D28 lsgame_msgfl
@@ -485,6 +487,14 @@ static void loadSaveRememberSelectedSlot()
 
     _slot_cursor = std::clamp(slot, 0, saveLoadTotalSlots - 1);
     _currentSlotPage = _slot_cursor / slotsPerPage;
+}
+
+static void loadSaveSetCurrentPage(int page)
+{
+    int slotIndex = _slot_cursor % slotsPerPage;
+
+    _currentSlotPage = std::clamp(page, 0, saveLoadPages - 1);
+    _slot_cursor = std::min(_currentSlotPage * slotsPerPage + slotIndex, saveLoadTotalSlots - 1);
 }
 
 static void loadSavePersistSelectedSlot()
@@ -618,7 +628,7 @@ int lsgSaveGame(int mode)
         const char* body[] = {
             _str1,
         };
-        showDialogBox(_str0, body, 1, 169, 116, _colorTable[32328], nullptr, _colorTable[32328], DIALOG_BOX_LARGE);
+        showDialogBox(_str0, body, 1, 169, 116, COLOR_AMBER, nullptr, COLOR_AMBER, DIALOG_BOX_LARGE);
 
         messageListFree(&gLoadSaveMessageList);
 
@@ -658,7 +668,7 @@ int lsgSaveGame(int mode)
             _str1,
             _str2,
         };
-        showDialogBox(_str0, body, 2, 169, 116, _colorTable[32328], nullptr, _colorTable[32328], DIALOG_BOX_LARGE);
+        showDialogBox(_str0, body, 2, 169, 116, COLOR_AMBER, nullptr, COLOR_AMBER, DIALOG_BOX_LARGE);
 
         lsgWindowFree(0);
 
@@ -781,8 +791,7 @@ int lsgSaveGame(int mode)
                 if ((mouseX >= 195 && mouseX <= 280 && mouseY >= 425 && mouseY <= 435) || keyCode == KEY_ARROW_RIGHT) { // Next Page coordinates
                     if (_currentSlotPage < (saveLoadTotalSlots / 10) - 1) { // Max 10 pages (0-9)
                         soundPlayFile("ib1p1xx1");
-                        _currentSlotPage++;
-                        _slot_cursor = _currentSlotPage * 10; // Move to first slot of new page
+                        loadSaveSetCurrentPage(_currentSlotPage + 1);
                         selectionChanged = true;
                         doubleClickSlot = -1;
                         _ShowSlotList(LOAD_SAVE_WINDOW_TYPE_SAVE_GAME);
@@ -795,8 +804,7 @@ int lsgSaveGame(int mode)
                 if ((mouseX >= 55 && mouseX <= 180 && mouseY >= 425 && mouseY <= 435) || keyCode == KEY_ARROW_LEFT) { // Previous Page coordinates
                     if (_currentSlotPage > 0) {
                         soundPlayFile("ib1p1xx1");
-                        _currentSlotPage--;
-                        _slot_cursor = (_currentSlotPage * 10) + 9; // Move to last slot of previous page
+                        loadSaveSetCurrentPage(_currentSlotPage - 1);
                         selectionChanged = true;
                         doubleClickSlot = -1;
                         _ShowSlotList(LOAD_SAVE_WINDOW_TYPE_SAVE_GAME);
@@ -859,7 +867,7 @@ int lsgSaveGame(int mode)
                 rc = 1;
                 // Save game already exists, overwrite?
                 const char* title = getmsg(&gLoadSaveMessageList, &gLoadSaveMessageListItem, 131);
-                if (showDialogBox(title, nullptr, 0, 169, 131, _colorTable[32328], nullptr, _colorTable[32328], DIALOG_BOX_YES_NO) == 0) {
+                if (showDialogBox(title, nullptr, 0, 169, 131, COLOR_AMBER, nullptr, COLOR_AMBER, DIALOG_BOX_YES_NO) == 0) {
                     rc = -1;
                 }
             } else {
@@ -1027,7 +1035,7 @@ int lsgSaveGame(int mode)
                 const char* body[1] = {
                     _str1,
                 };
-                showDialogBox(_str0, body, 1, 169, 116, _colorTable[32328], nullptr, _colorTable[32328], DIALOG_BOX_LARGE);
+                showDialogBox(_str0, body, 1, 169, 116, COLOR_AMBER, nullptr, COLOR_AMBER, DIALOG_BOX_LARGE);
                 rc = -1;
             } else if (v50 == 0) {
                 gameMouseSetCursor(MOUSE_CURSOR_ARROW);
@@ -1047,7 +1055,7 @@ int lsgSaveGame(int mode)
                     const char* body[1] = {
                         _str1,
                     };
-                    showDialogBox(_str0, body, 1, 169, 116, _colorTable[32328], nullptr, _colorTable[32328], DIALOG_BOX_LARGE);
+                    showDialogBox(_str0, body, 1, 169, 116, COLOR_AMBER, nullptr, COLOR_AMBER, DIALOG_BOX_LARGE);
 
                     if (_GetSlotList() == -1) {
                         windowRefresh(gLoadSaveWindow);
@@ -1068,7 +1076,7 @@ int lsgSaveGame(int mode)
                             _str1,
                             _str2,
                         };
-                        showDialogBox(_str0, body, 2, 169, 116, _colorTable[32328], nullptr, _colorTable[32328], DIALOG_BOX_LARGE);
+                        showDialogBox(_str0, body, 2, 169, 116, COLOR_AMBER, nullptr, COLOR_AMBER, DIALOG_BOX_LARGE);
 
                         lsgWindowFree(0);
 
@@ -1199,7 +1207,7 @@ int lsgLoadGame(int mode)
             WINDOW_MODAL | WINDOW_DONT_MOVE_TOP);
         if (window != -1) {
             unsigned char* windowBuffer = windowGetBuffer(window);
-            bufferFill(windowBuffer, LS_WINDOW_WIDTH, LS_WINDOW_HEIGHT, LS_WINDOW_WIDTH, _colorTable[0]);
+            bufferFill(windowBuffer, LS_WINDOW_WIDTH, LS_WINDOW_HEIGHT, LS_WINDOW_WIDTH, COLOR_BLACK);
             windowRefresh(window);
             renderPresent();
         }
@@ -1230,7 +1238,7 @@ int lsgLoadGame(int mode)
         soundPlayFile("iisxxxx1");
         strcpy(_str0, getmsg(&gLoadSaveMessageList, &messageListItem, 134));
         strcpy(_str1, getmsg(&gLoadSaveMessageList, &messageListItem, 135));
-        showDialogBox(_str0, body, 1, 169, 116, _colorTable[32328], nullptr, _colorTable[32328], DIALOG_BOX_LARGE);
+        showDialogBox(_str0, body, 1, 169, 116, COLOR_AMBER, nullptr, COLOR_AMBER, DIALOG_BOX_LARGE);
 
         messageListFree(&gLoadSaveMessageList);
         mapNewMap();
@@ -1283,7 +1291,7 @@ int lsgLoadGame(int mode)
         strcpy(_str0, getmsg(&gLoadSaveMessageList, &gLoadSaveMessageListItem, 106));
         strcpy(_str1, getmsg(&gLoadSaveMessageList, &gLoadSaveMessageListItem, 107));
         snprintf(_str2, sizeof(_str2), "\"%s\\\"", "SAVEGAME");
-        showDialogBox(_str0, body, 2, 169, 116, _colorTable[32328], nullptr, _colorTable[32328], DIALOG_BOX_LARGE);
+        showDialogBox(_str0, body, 2, 169, 116, COLOR_AMBER, nullptr, COLOR_AMBER, DIALOG_BOX_LARGE);
         lsgWindowFree(windowType);
         return -1;
     }
@@ -1424,8 +1432,7 @@ int lsgLoadGame(int mode)
                 if ((mouseX >= 195 && mouseX <= 280 && mouseY >= 425 && mouseY <= 435) || keyCode == KEY_ARROW_RIGHT) { // coordinates for Next Page button
                     if (_currentSlotPage < (saveLoadTotalSlots / 10) - 1) { // Max 10 pages (0-9)
                         soundPlayFile("ib1p1xx1");
-                        _currentSlotPage++;
-                        _slot_cursor = _currentSlotPage * 10; // Move to first slot of new page
+                        loadSaveSetCurrentPage(_currentSlotPage + 1);
                         selectionChanged = true;
                         doubleClickSlot = -1;
                         _ShowSlotList(LOAD_SAVE_WINDOW_TYPE_LOAD_GAME);
@@ -1438,8 +1445,7 @@ int lsgLoadGame(int mode)
                 if ((mouseX >= 55 && mouseX <= 180 && mouseY >= 425 && mouseY <= 435) || keyCode == KEY_ARROW_LEFT) { // Coordinates for Previous Page button
                     if (_currentSlotPage > 0) {
                         soundPlayFile("ib1p1xx1");
-                        _currentSlotPage--;
-                        _slot_cursor = (_currentSlotPage * 10) + 9; // Move to last slot of previous page
+                        loadSaveSetCurrentPage(_currentSlotPage - 1);
                         selectionChanged = true;
                         doubleClickSlot = -1;
 
@@ -1653,14 +1659,14 @@ int lsgLoadGame(int mode)
                 strcpy(_str0, getmsg(&gLoadSaveMessageList, &gLoadSaveMessageListItem, 134));
                 strcpy(_str1, getmsg(&gLoadSaveMessageList, &gLoadSaveMessageListItem, 136));
                 strcpy(_str2, getmsg(&gLoadSaveMessageList, &gLoadSaveMessageListItem, 135));
-                showDialogBox(_str0, body, 2, 169, 116, _colorTable[32328], nullptr, _colorTable[32328], DIALOG_BOX_LARGE);
+                showDialogBox(_str0, body, 2, 169, 116, COLOR_AMBER, nullptr, COLOR_AMBER, DIALOG_BOX_LARGE);
                 rc = -1;
                 break;
             case SLOT_STATE_ERROR:
                 soundPlayFile("iisxxxx1");
                 strcpy(_str0, getmsg(&gLoadSaveMessageList, &gLoadSaveMessageListItem, 134));
                 strcpy(_str1, getmsg(&gLoadSaveMessageList, &gLoadSaveMessageListItem, 136));
-                showDialogBox(_str0, body, 1, 169, 116, _colorTable[32328], nullptr, _colorTable[32328], DIALOG_BOX_LARGE);
+                showDialogBox(_str0, body, 1, 169, 116, COLOR_AMBER, nullptr, COLOR_AMBER, DIALOG_BOX_LARGE);
                 rc = -1;
                 break;
             default:
@@ -1669,7 +1675,7 @@ int lsgLoadGame(int mode)
                     soundPlayFile("iisxxxx1");
                     strcpy(_str0, getmsg(&gLoadSaveMessageList, &gLoadSaveMessageListItem, 134));
                     strcpy(_str1, getmsg(&gLoadSaveMessageList, &gLoadSaveMessageListItem, 135));
-                    showDialogBox(_str0, body, 1, 169, 116, _colorTable[32328], nullptr, _colorTable[32328], DIALOG_BOX_LARGE);
+                    showDialogBox(_str0, body, 1, 169, 116, COLOR_AMBER, nullptr, COLOR_AMBER, DIALOG_BOX_LARGE);
                     mapNewMap();
                     _game_user_wants_to_quit = GAME_QUIT_REQUEST_MAIN_MENU;
                     rc = -1;
@@ -1797,7 +1803,7 @@ static int lsgWindowInit(int windowType)
     }
 
     for (int index = 0; index < LOAD_SAVE_FRM_COUNT; index++) {
-        int fid = buildFid(OBJ_TYPE_INTERFACE, gLoadSaveFrmIds[index], 0, 0, 0);
+        int fid = buildFid(OBJ_TYPE_INTERFACE, gLoadSaveFrmIds[index]);
         if (!_loadsaveFrmImages[index].lock(fid)) {
             while (--index >= 0) {
                 _loadsaveFrmImages[index].unlock();
@@ -1874,15 +1880,15 @@ static int lsgWindowInit(int windowType)
     char* msg;
 
     msg = getmsg(&gLoadSaveMessageList, &gLoadSaveMessageListItem, messageId);
-    fontDrawText(gLoadSaveWindowBuffer + LS_WINDOW_WIDTH * 27 + 48, msg, LS_WINDOW_WIDTH, LS_WINDOW_WIDTH, _colorTable[18979]);
+    fontDrawText(gLoadSaveWindowBuffer + LS_WINDOW_WIDTH * 27 + 48, msg, LS_WINDOW_WIDTH, LS_WINDOW_WIDTH, COLOR_DARK_YELLOW);
 
     // DONE
     msg = getmsg(&gLoadSaveMessageList, &gLoadSaveMessageListItem, 104);
-    fontDrawText(gLoadSaveWindowBuffer + LS_WINDOW_WIDTH * 348 + 410, msg, LS_WINDOW_WIDTH, LS_WINDOW_WIDTH, _colorTable[18979]);
+    fontDrawText(gLoadSaveWindowBuffer + LS_WINDOW_WIDTH * 348 + 410, msg, LS_WINDOW_WIDTH, LS_WINDOW_WIDTH, COLOR_DARK_YELLOW);
 
     // CANCEL
     msg = getmsg(&gLoadSaveMessageList, &gLoadSaveMessageListItem, 105);
-    fontDrawText(gLoadSaveWindowBuffer + LS_WINDOW_WIDTH * 348 + 515, msg, LS_WINDOW_WIDTH, LS_WINDOW_WIDTH, _colorTable[18979]);
+    fontDrawText(gLoadSaveWindowBuffer + LS_WINDOW_WIDTH * 348 + 515, msg, LS_WINDOW_WIDTH, LS_WINDOW_WIDTH, COLOR_DARK_YELLOW);
 
     int btn;
 
@@ -2234,6 +2240,11 @@ bool _isLoadingGame()
     return _loadingGame;
 }
 
+int mapIdBeingLoaded()
+{
+    return _loadingMapId;
+}
+
 // 0x47DC68
 static int lsgLoadGameInSlot(int slot)
 {
@@ -2293,6 +2304,7 @@ static int lsgLoadGameInSlot(int slot)
     }
 
     LoadSaveSlotData* ptr = &(_LSData[slot]);
+    _loadingMapId = _LSData[slot].map;
     debugPrint("\nLOADSAVE: Load name: %s\n", ptr->description);
 
     debugPrint("LOADSAVE: Load file header size read: %d bytes.\n", fileTell(_flptr) - pos);
@@ -2344,6 +2356,7 @@ static int lsgLoadGameInSlot(int slot)
             fileClose(_flptr);
             gameReset();
             _loadingGame = false;
+            _loadingMapId = -1;
             return -1;
         }
 
@@ -2390,6 +2403,8 @@ static int lsgLoadGameInSlot(int slot)
 
         debugPrint("LOADSAVE: Load function #%d data size read: %d bytes.\n", index, fileTell(_flptr) - pos);
     }
+
+    _loadingMapId = -1;
 
     debugPrint("LOADSAVE: Total load data read: %ld bytes.\n", fileTell(_flptr));
     fileClose(_flptr);
@@ -2834,7 +2849,7 @@ static void _ShowSlotList(int windowType)
     if (endIndex > saveLoadTotalSlots) endIndex = saveLoadTotalSlots;
 
     for (int index = startIndex; index < endIndex; index++) {
-        int color = index == _slot_cursor ? _colorTable[32747] : _colorTable[992];
+        int color = index == _slot_cursor ? COLOR_LIGHT_YELLOW : COLOR_GREEN;
         const char* text = getmsg(&gLoadSaveMessageList, &gLoadSaveMessageListItem, windowType != 0 ? 110 : 109);
         snprintf(_str, sizeof(_str), "[   %s %.2d:   ]", text, index + 1);
         fontDrawText(gLoadSaveWindowBuffer + LS_WINDOW_WIDTH * y + 55, _str, LS_WINDOW_WIDTH, LS_WINDOW_WIDTH, color);
@@ -2853,13 +2868,13 @@ static void _ShowSlotList(int windowType)
             // - CORRUPT SAVE FILE -
             text = getmsg(&gLoadSaveMessageList, &gLoadSaveMessageListItem, 112);
             snprintf(_str, sizeof(_str), "%s", text);
-            color = _colorTable[32328];
+            color = COLOR_AMBER;
             break;
         case SLOT_STATE_UNSUPPORTED_VERSION:
             // - OLD VERSION -
             text = getmsg(&gLoadSaveMessageList, &gLoadSaveMessageListItem, 113);
             snprintf(_str, sizeof(_str), " %s", text);
-            color = _colorTable[32328];
+            color = COLOR_AMBER;
             break;
         }
 
@@ -2869,8 +2884,8 @@ static void _ShowSlotList(int windowType)
 
     // Pagination navigation
     if (saveLoadTotalSlots > 10) {
-        int activeColor = _colorTable[992];
-        int inactiveColor = _colorTable[8804];
+        int activeColor = COLOR_GREEN;
+        int inactiveColor = COLOR_LIGHT_GREEN_2;
 
         {
             MessageListItem messageListItemBack = { 201, 0, nullptr, nullptr };
@@ -2910,7 +2925,7 @@ static void _DrawInfoBox(int slot)
 
     unsigned char* dest;
     const char* text;
-    int color = _colorTable[992];
+    int color = COLOR_GREEN;
 
     switch (_LSstatus[slot]) {
     case SLOT_STATE_OCCUPIED:
@@ -2971,13 +2986,13 @@ static void _DrawInfoBox(int slot)
         // Error!
         text = getmsg(&gLoadSaveMessageList, &gLoadSaveMessageListItem, 115);
         dest = gLoadSaveWindowBuffer + LS_WINDOW_WIDTH * 262 + 404;
-        color = _colorTable[32328];
+        color = COLOR_AMBER;
         break;
     case SLOT_STATE_UNSUPPORTED_VERSION:
         // Old version.
         text = getmsg(&gLoadSaveMessageList, &gLoadSaveMessageListItem, 116);
         dest = gLoadSaveWindowBuffer + LS_WINDOW_WIDTH * 262 + 400;
-        color = _colorTable[32328];
+        color = COLOR_AMBER;
         break;
     default:
         assert(false && "Should be unreachable");
@@ -3054,7 +3069,7 @@ static int _GetComment(int slot)
         msg,
         _loadsaveFrmImages[LOAD_SAVE_FRM_BOX].getWidth(),
         _loadsaveFrmImages[LOAD_SAVE_FRM_BOX].getWidth(),
-        _colorTable[18979]);
+        COLOR_DARK_YELLOW);
 
     // CANCEL
     msg = getmsg(&gLoadSaveMessageList, &gLoadSaveMessageListItem, 105);
@@ -3062,7 +3077,7 @@ static int _GetComment(int slot)
         msg,
         _loadsaveFrmImages[LOAD_SAVE_FRM_BOX].getWidth(),
         _loadsaveFrmImages[LOAD_SAVE_FRM_BOX].getWidth(),
-        _colorTable[18979]);
+        COLOR_DARK_YELLOW);
 
     // DESCRIPTION
     msg = getmsg(&gLoadSaveMessageList, &gLoadSaveMessageListItem, 130);
@@ -3075,7 +3090,7 @@ static int _GetComment(int slot)
         title,
         _loadsaveFrmImages[LOAD_SAVE_FRM_BOX].getWidth(),
         _loadsaveFrmImages[LOAD_SAVE_FRM_BOX].getWidth(),
-        _colorTable[18979]);
+        COLOR_DARK_YELLOW);
 
     fontSetCurrent(101);
 
@@ -3131,7 +3146,7 @@ static int _GetComment(int slot)
     int rc;
 
     int backgroundColor = *(_loadsaveFrmImages[LOAD_SAVE_FRM_BOX].getData() + _loadsaveFrmImages[LOAD_SAVE_FRM_BOX].getWidth() * 35 + 24);
-    if (_get_input_str2(window, 507, 508, description, LOAD_SAVE_DESCRIPTION_LENGTH - 1, 24, 35, _colorTable[992], backgroundColor, 0) == 0) {
+    if (_get_input_str2(window, 507, 508, description, LOAD_SAVE_DESCRIPTION_LENGTH - 1, 24, 35, COLOR_GREEN, backgroundColor, 0) == 0) {
         strncpy(_LSData[slot].description, description, LOAD_SAVE_DESCRIPTION_LENGTH);
         _LSData[slot].description[LOAD_SAVE_DESCRIPTION_LENGTH - 1] = '\0';
         rc = 1;
@@ -3436,7 +3451,7 @@ static int _SlotMap2Game(File* stream)
         if (pid != -2) {
             char protoPath[COMPAT_MAX_PATH];
             if (_proto_list_str(pid, protoPath) == 0) {
-                const char* basePath = PID_TYPE(pid) == OBJ_TYPE_CRITTER
+                const char* basePath = objectTypeFromPid(pid) == OBJ_TYPE_CRITTER
                     ? PROTO_DIR_NAME "\\" CRITTERS_DIR_NAME
                     : PROTO_DIR_NAME "\\" ITEMS_DIR_NAME;
                 snprintf(_str0, sizeof(_str0), "%s\\%s\\%s", _patches, basePath, protoPath);

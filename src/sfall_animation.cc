@@ -6,6 +6,7 @@
 #include "animation.h"
 #include "interpreter.h"
 #include "opcode_context.h"
+#include "scripts.h"
 
 namespace fallout {
 
@@ -27,7 +28,7 @@ void op_reg_anim_destroy(Program* program)
 void op_reg_anim_animate_and_hide(Program* program)
 {
     int delay = programStackPopInteger(program);
-    int anim = programStackPopInteger(program);
+    AnimationType anim = programStackPopEnum<AnimationType>(program);
     Object* object = static_cast<Object*>(programStackPopPointer(program));
 
     if (object != nullptr && !animationCheckCombatMode()) {
@@ -74,7 +75,7 @@ void op_reg_anim_change_fid(Program* program)
 void op_reg_anim_take_out(Program* program)
 {
     int delay = programStackPopInteger(program);
-    int holdFrame = programStackPopInteger(program);
+    WeaponAnimation holdFrame = programStackPopEnum<WeaponAnimation>(program);
     Object* object = static_cast<Object*>(programStackPopPointer(program));
 
     if (object != nullptr && !animationCheckCombatMode()) {
@@ -103,11 +104,27 @@ void op_reg_anim_turn_towards(Program* program)
     }
 }
 
+static int regAnimCallbackExecute(void* programPtr, void* procedureIndexPtr)
+{
+    Program* program = static_cast<Program*>(programPtr);
+    int procedureIndex = static_cast<int>(reinterpret_cast<intptr_t>(procedureIndexPtr));
+    if (program == nullptr || procedureIndex < 0 || procedureIndex >= program->procedureCount()) {
+        return -1;
+    }
+
+    scriptContextSetReturnValue(program, 0);
+    programExecuteProcedure(program, procedureIndex);
+
+    int returnValue = 0;
+    scriptContextTakeReturnValue(program, &returnValue);
+    return returnValue;
+}
+
 void mf_reg_anim_animate_and_move(OpcodeContext& ctx)
 {
     Object* object = ctx.arg(0).asObject();
     int tile = ctx.arg(1).asInt();
-    int anim = ctx.arg(2).asInt();
+    AnimationType anim = static_cast<AnimationType>(ctx.arg(2).asInt());
     int delay = ctx.arg(3).asInt();
 
     if (object == nullptr) {

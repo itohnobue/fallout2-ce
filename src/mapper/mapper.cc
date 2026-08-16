@@ -72,22 +72,22 @@ static int categoryToggleState();
 static int categoryUnhide();
 static bool proto_user_is_librarian();
 static void edit_mapper();
-static void mapper_load_toolbar(int type, int* out_offset);
+static void mapper_load_toolbar(ObjectType type, int* out_offset);
 static void mapper_save_toolbar();
 static void redraw_toolname();
 static void clear_toolname();
-static void update_toolname(int* pid, int type, int id);
+static void update_toolname(int* pid, ObjectType type, int id);
 static void update_high_obj_name(Object* obj);
 static void mapper_destroy_highlight_obj(Object** a1, Object** a2);
 static void mapper_refresh_rotation();
-static void update_art(int type, int offset);
+static void update_art(ObjectType type, int offset);
 static int mapperPickObject(Object* obj, int* outOffset);
 static int mapperPickTile(int* outOffset);
-static void handle_new_map(int* a1, int* a2);
+static void handle_new_map(ObjectType* type, int* offset);
 static int mapper_mark_exit_grid();
 static void mapper_mark_all_exit_grids();
 static void mapper_enter_play_mode(Object** pHlObj1);
-static void mapper_exit_play_mode(int* pCurrentType, int* pScrollOffset, Object* dudeToRestore);
+static void mapper_exit_play_mode(ObjectType* pCurrentType, int* pScrollOffset, Object* dudeToRestore);
 static void mapper_remove_tmp_map_files();
 
 // TODO: Underlying menu/pulldown interface wants menu items to be non-const,
@@ -148,7 +148,7 @@ static char kTmpMapName[] = "TMP$MAP#.MAP";
 static char gSavedMapName[16];
 
 // 0x559618
-int rotate_arrows_x_offs[] = {
+int rotate_arrows_x_offs[ROTATION_COUNT] = {
     31,
     38,
     31,
@@ -158,7 +158,7 @@ int rotate_arrows_x_offs[] = {
 };
 
 // 0x559630
-int rotate_arrows_y_offs[] = {
+int rotate_arrows_y_offs[ROTATION_COUNT] = {
     7,
     23,
     37,
@@ -243,7 +243,7 @@ char** menu_names[] = {
 };
 
 // 0x559748
-MapTransition mapInfo = { -1, -1, 0, 0 };
+MapTransition mapInfo = { -1, -1, 0, ROTATION_NE };
 
 // 0x559880
 int max_art_buttons = 7;
@@ -305,7 +305,7 @@ int menu_val_4[3];
 unsigned char e_num[4][19 * 26];
 
 // 0x6EBD28
-unsigned char rotate_arrows[2][6][10 * 10];
+unsigned char rotate_arrows[2][ROTATION_COUNT][10 * 10];
 
 // 0x6EC408
 int menu_val_1[21];
@@ -778,10 +778,10 @@ static void mapperValidateDevPath()
 
 static void initMenuBar(const int screenWidth)
 {
-    int foregroundColor = _colorTable[20052];
-    int backgroundColor = _colorTable[8456];
+    int foregroundColor = COLOR_LIGHT_GREY_2;
+    int backgroundColor = COLOR_DARK_GREY;
 
-    menu_bar = windowCreate(0, 0, screenWidth, 16, _colorTable[0], WINDOW_HIDDEN);
+    menu_bar = windowCreate(0, 0, screenWidth, 16, COLOR_BLACK, WINDOW_HIDDEN);
     _win_register_menu_bar(menu_bar, 0, 0, screenWidth, 16, foregroundColor, backgroundColor);
     _win_register_menu_pulldown(menu_bar, 8, "FILE", kBtnMenuHeaderFile, 8, menu_names[0], foregroundColor, backgroundColor);
     _win_register_menu_pulldown(menu_bar, 40, "TOOLS", kBtnMenuHeaderTools, 21, menu_names[1], foregroundColor, backgroundColor);
@@ -814,7 +814,7 @@ int mapper_edit_init(int argc, char** argv)
     }
 
     setup_map_dirs();
-    mapper_load_toolbar(4, nullptr);
+    mapper_load_toolbar(OBJ_TYPE_TILE, nullptr);
     art_shape = (unsigned char*)internal_malloc(art_scale_height * art_scale_width);
     if (art_shape == nullptr) {
         printf("Can't malloc memory!!\n");
@@ -1158,7 +1158,7 @@ bool proto_user_is_librarian()
     return true;
 }
 
-static void toolbarSetObjectType(int newType, int& currentType, int& scrollOffset, Object** hl)
+static void toolbarSetObjectType(ObjectType newType, ObjectType& currentType, int& scrollOffset, Object** hl)
 {
     if (newType == currentType) return;
 
@@ -1198,7 +1198,7 @@ static int pickHexWithToolLabel(const char* label)
 // 0x4877D0
 void edit_mapper()
 {
-    int currentType = OBJ_TYPE_TILE;
+    ObjectType currentType = OBJ_TYPE_TILE;
     int scrollOffset = 0;
     int selectedPid = -1;
     int markExitGridMode = 0;
@@ -1302,7 +1302,7 @@ void edit_mapper()
                         windowGetHeight(gIsoWindow) - 1 - kToolbarReservedHeight)) {
                     if (tool_active != -1) {
                         if (selectedPid != -1) {
-                            if (PID_TYPE(selectedPid) == OBJ_TYPE_TILE) {
+                            if (objectTypeFromPid(selectedPid) == OBJ_TYPE_TILE) {
                                 placeTile(selectedPid, gGameMouseBouncingCursor->fid);
                             } else {
                                 placeObject(selectedPid, gGameMouseBouncingCursor->fid);
@@ -1344,7 +1344,7 @@ void edit_mapper()
                         mapper_mark_exit_grid();
                     } else if (tool_active != -1) {
                         if (selectedPid != -1) {
-                            if (PID_TYPE(selectedPid) == OBJ_TYPE_TILE) {
+                            if (objectTypeFromPid(selectedPid) == OBJ_TYPE_TILE) {
                                 placeTile(selectedPid, gGameMouseBouncingCursor->fid);
                             } else {
                                 placeObject(selectedPid, gGameMouseBouncingCursor->fid);
@@ -1352,7 +1352,7 @@ void edit_mapper()
                         }
                     } else {
                         // object_under_mouse_(currentType, 0, gElevation)
-                        int objTypeFilter = (currentType == OBJ_TYPE_MISC) ? -1 : currentType;
+                        ObjectType objTypeFilter = (currentType == OBJ_TYPE_MISC) ? OBJ_TYPE_INVALID : currentType;
                         Object* foundObj = gameMouseGetObjectUnderCursor(objTypeFilter, false, gElevation);
                         _screen_obj = foundObj;
 
@@ -1365,7 +1365,7 @@ void edit_mapper()
                             // create new highlight
                             update_high_obj_name(_screen_obj);
 
-                            int hfid = buildFid(OBJ_TYPE_INTERFACE, 1, 0, 0, 0);
+                            int hfid = buildFid(OBJ_TYPE_INTERFACE, 1);
                             Object* hlObj;
                             if (objectCreateWithFidPid(&hlObj, hfid, -1) != -1) {
                                 hlObj->flags |= OBJECT_SHOOT_THRU | OBJECT_LIGHT_THRU | OBJECT_NO_SAVE;
@@ -1658,7 +1658,7 @@ void edit_mapper()
             if (win_get_num_i(&val, -2, 255, false, "Exit Grid Dest Map", 100, 100) != -1) mapInfo.map = val;
             if (win_get_num_i(&val, -1, 40000, false, "Exit Grid Dest Tile #", 100, 100) != -1) mapInfo.tile = val;
             if (win_get_num_i(&val, 0, 3, false, "Exit Grid Dest Elevation", 100, 100) != -1) mapInfo.elevation = val;
-            if (win_get_num_i(&val, 0, 6, false, "Exit Grid Dest Rotation", 100, 100) != -1) mapInfo.rotation = val;
+            if (win_get_num_i(&val, ROTATION_FIRST, ROTATION_COUNT, false, "Exit Grid Dest Rotation", 100, 100) != -1) mapInfo.rotation = static_cast<Rotation>(val);
             break;
         }
         case kBtnMarkExitGrids:
@@ -1796,7 +1796,7 @@ void edit_mapper()
         case kBtnTypeWall:
         case kBtnTypeTile:
         case kBtnTypeMisc: {
-            int newType = keyCode - kBtnTypeItem;
+            ObjectType newType = static_cast<ObjectType>(keyCode - kBtnTypeItem);
             toolbarSetObjectType(newType, currentType, scrollOffset, &hl_obj1);
             break;
         }
@@ -1824,7 +1824,7 @@ void edit_mapper()
             Object* obj = _screen_obj ? _screen_obj : gGameMouseBouncingCursor;
             if (obj != nullptr) {
                 Rect rect;
-                int newRot = (keyCode == kBtnRotateRight) ? (obj->rotation + 1) % 6 : (obj->rotation + 5) % 6;
+                Rotation newRot = (keyCode == kBtnRotateRight) ? (obj->rotation + 1) % ROTATION_COUNT : (obj->rotation + ROTATION_LAST) % ROTATION_COUNT;
                 objectSetRotation(obj, newRot, &rect);
                 tileWindowRefreshRect(&rect, gElevation);
                 rotation = obj->rotation;
@@ -1841,7 +1841,7 @@ void edit_mapper()
         case kBtnHideTile:
         case kBtnHideMisc:
             if (!map_entered) {
-                artToggleObjectTypeHidden(keyCode - kBtnHideItem);
+                artToggleObjectTypeHidden(static_cast<ObjectType>(keyCode - kBtnHideItem));
                 tileWindowRefresh();
             }
             break;
@@ -1913,7 +1913,7 @@ void edit_mapper()
                 } else if (_screen_obj != nullptr) {
                     int protoOffset;
                     if (mapperPickObject(_screen_obj, &protoOffset) != -1) {
-                        int objType = PID_TYPE(_screen_obj->pid);
+                        ObjectType objType = objectTypeFromPid(_screen_obj->pid);
                         currentType = objType;
                         scrollOffset = protoOffset;
                         toolbarSetObjectType(currentType, currentType, scrollOffset, &hl_obj1);
@@ -1997,8 +1997,8 @@ void edit_mapper()
 
         // --- 'k' — Kill critter ---
         case kBtnKill:
-            if (!map_entered && _screen_obj != nullptr && PID_TYPE(_screen_obj->pid) == OBJ_TYPE_CRITTER) {
-                critterKill(_screen_obj, 0x3F, true);
+            if (!map_entered && _screen_obj != nullptr && objectTypeFromPid(_screen_obj->pid) == OBJ_TYPE_CRITTER) {
+                critterKill(_screen_obj, ANIM_FALL_FRONT_BLOOD_SF, true);
             }
             break;
 
@@ -2030,8 +2030,8 @@ void edit_mapper()
         // --- 't' — Pick toolbar type ---
         case kBtnPickToolbarType:
             if (!map_entered) {
-                int newType = pickToolbar(0);
-                if (newType != -1 && newType != currentType) {
+                ObjectType newType = pickToolbar(0);
+                if (newType != OBJ_TYPE_INVALID && newType != currentType) {
                     toolbarSetObjectType(newType, currentType, scrollOffset, &hl_obj1);
                 }
             }
@@ -2098,9 +2098,9 @@ void edit_mapper()
             if (!map_entered) {
                 Object* targetObj = _screen_obj ? _screen_obj : gGameMouseBouncingCursor;
                 if (targetObj != nullptr) {
-                    rotation = 0;
+                    rotation = ROTATION_NE;
                     Rect rect;
-                    objectSetRotation(targetObj, 0, &rect);
+                    objectSetRotation(targetObj, rotation, &rect);
                     tileWindowRefreshRect(&rect, targetObj->elevation);
                     mapper_refresh_rotation();
                 }
@@ -2112,9 +2112,9 @@ void edit_mapper()
             if (!map_entered) {
                 Object* targetObj = _screen_obj ? _screen_obj : gGameMouseBouncingCursor;
                 if (targetObj != nullptr) {
-                    rotation = 3;
+                    rotation = ROTATION_SW;
                     Rect rect;
-                    objectSetRotation(targetObj, 3, &rect);
+                    objectSetRotation(targetObj, rotation, &rect);
                     tileWindowRefreshRect(&rect, targetObj->elevation);
                     mapper_refresh_rotation();
                 }
@@ -2252,7 +2252,7 @@ exitLoop:
 }
 
 // 0x48AFFC
-void mapper_load_toolbar(int type, int* out_offset)
+void mapper_load_toolbar(ObjectType type, int* out_offset)
 {
     char name[16];
     name[0] = '\0';
@@ -2296,7 +2296,7 @@ void mapper_save_toolbar()
 }
 
 // 0x48B16C
-void print_toolbar_name(int object_type)
+void print_toolbar_name(ObjectType object_type)
 {
     Rect rect;
     char name[80];
@@ -2309,11 +2309,11 @@ void print_toolbar_name(int object_type)
         96,
         19,
         _scr_size.right - _scr_size.left + 1,
-        _colorTable[21140]);
+        COLOR_LIGHT_GREY);
 
     sprintf(name, "%s", artGetObjectTypeName(object_type));
     name[0] = static_cast<char>(toupper(name[0]));
-    windowDrawText(tool_win, name, 0, 7, 7, _colorTable[32747] | DRAW_TEXT_FLAG_NO_BG);
+    windowDrawText(tool_win, name, 0, 7, 7, COLOR_LIGHT_YELLOW | DRAW_TEXT_FLAG_NO_BG);
     windowRefreshRect(tool_win, &rect);
 }
 
@@ -2339,7 +2339,7 @@ void clear_toolname()
 }
 
 // 0x48B328
-void update_toolname(int* pid, int type, int id)
+void update_toolname(int* pid, ObjectType type, int id)
 {
     Proto* proto;
 
@@ -2356,7 +2356,7 @@ void update_toolname(int* pid, int type, int id)
         kToolNameY1,
         260);
 
-    switch (PID_TYPE(proto->pid)) {
+    switch (objectTypeFromPid(proto->pid)) {
     case OBJ_TYPE_ITEM:
         windowDrawText(tool_win,
             gItemTypeNames[proto->item.type],
@@ -2503,7 +2503,7 @@ void mapper_refresh_rotation()
 }
 
 // 0x48B850
-void update_art(int type, int offset)
+void update_art(ObjectType type, int offset)
 {
     int limit = settings.mapper.use_art_not_protos ? kArtMaxDirect : proto_max_id(type);
 
@@ -2525,7 +2525,7 @@ void update_art(int type, int offset)
     for (int i = offset; i < offset + max_art_buttons && i < limit; i++, p += slot_stride) {
         int fid;
         if (settings.mapper.use_art_not_protos) {
-            fid = buildFid(type, i, 0, 0, 0);
+            fid = buildFid(type, i);
         } else {
             Proto* proto;
             int pid = toolbar_proto(type, i);
@@ -2565,7 +2565,7 @@ static int mapperPickObject(Object* obj, int* outOffset)
         return -1;
     }
 
-    int type = PID_TYPE(obj->pid);
+    ObjectType type = objectTypeFromPid(obj->pid);
     int maxId = proto_max_id(type);
     constexpr int kScrollOffset = 10;
 
@@ -2605,7 +2605,7 @@ static int mapperPickTile(int* outOffset)
     } else {
         tileFid = packedTile & 0xFFF;
     }
-    int artFid = buildFid(OBJ_TYPE_TILE, tileFid, 0, 0, 0);
+    int artFid = buildFid(OBJ_TYPE_TILE, tileFid);
 
     for (int idx = 0; idx < maxId; idx++) {
         int pid = (OBJ_TYPE_TILE << 24) | idx;
@@ -2622,7 +2622,7 @@ static int mapperPickTile(int* outOffset)
 }
 
 // 0x48C524
-void handle_new_map(int* a1, int* a2)
+void handle_new_map(ObjectType* type, int* offset)
 {
     Rect rect;
 
@@ -2638,12 +2638,12 @@ void handle_new_map(int* a1, int* a2)
         rectGetWidth(&_scr_size));
     windowRefreshRect(tool_win, &rect);
 
-    if (*a1 < 0 || *a1 > 6) {
-        *a1 = 4;
+    if (*type < OBJ_TYPE_FIRST || *type >= OBJ_TYPE_PROTO_COUNT) {
+        *type = OBJ_TYPE_TILE;
     }
 
-    *a2 = 0;
-    update_art(*a1, *a2);
+    *offset = 0;
+    update_art(*type, *offset);
 
     print_toolbar_name(OBJ_TYPE_TILE);
 
@@ -2674,7 +2674,7 @@ int mapper_inven_unwield(Object* obj, int right_hand)
 
     animationRegisterAnimate(obj, ANIM_PUT_AWAY, 0);
 
-    fid = buildFid(OBJ_TYPE_CRITTER, obj->fid & 0xFFF, 0, 0, FID_ROTATION(obj->fid));
+    fid = buildFid(OBJ_TYPE_CRITTER, obj->fid & 0xFFF, ANIM_STAND, WEAPON_ANIMATION_NONE, rotationFromFid(obj->fid));
     animationRegisterSetFid(obj, fid, 0);
 
     return reg_anim_end();
@@ -2758,13 +2758,13 @@ static void mapper_enter_play_mode(Object** pHlObj1)
 
     objectSetLocation(gDude, savedCenterTile, gElevation, nullptr);
 
-    objectSetRotation(gDude, 0, nullptr);
+    objectSetRotation(gDude, ROTATION_NE, nullptr);
 
     objectShow(gDude, nullptr);
 
     _proto_dude_init("premade\\blank.gcd");
 
-    gDude->fid = buildFid(OBJ_TYPE_CRITTER, _art_vault_guy_num, 0, 0, 0);
+    gDude->fid = buildFid(OBJ_TYPE_CRITTER, _art_vault_guy_num, ANIM_STAND, WEAPON_ANIMATION_NONE, ROTATION_NE);
 
     _scr_game_init();
 
@@ -2806,7 +2806,7 @@ static void mapper_enter_play_mode(Object** pHlObj1)
     tileWindowRefresh();
 }
 
-static void mapper_exit_play_mode(int* pCurrentType, int* pScrollOffset, Object* dudeToRestore)
+static void mapper_exit_play_mode(ObjectType* pCurrentType, int* pScrollOffset, Object* dudeToRestore)
 {
     gmouse_set_mapper_mode(1);
 

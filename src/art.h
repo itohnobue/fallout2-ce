@@ -3,6 +3,8 @@
 
 #include <memory>
 
+#include "animation.h"
+#include "art_defs.h"
 #include "cache.h"
 #include "draw.h"
 #include "memory.h"
@@ -11,72 +13,15 @@
 
 namespace fallout {
 
-typedef enum Head {
-    HEAD_INVALID,
-    HEAD_MARCUS,
-    HEAD_MYRON,
-    HEAD_ELDER,
-    HEAD_LYNETTE,
-    HEAD_HAROLD,
-    HEAD_TANDI,
-    HEAD_COM_OFFICER,
-    HEAD_SULIK,
-    HEAD_PRESIDENT,
-    HEAD_HAKUNIN,
-    HEAD_BOSS,
-    HEAD_DYING_HAKUNIN,
-    HEAD_COUNT,
-} Head;
-
-typedef enum HeadAnimation {
-    HEAD_ANIMATION_VERY_GOOD_REACTION = 0,
-    FIDGET_GOOD = 1,
-    HEAD_ANIMATION_GOOD_TO_NEUTRAL = 2,
-    HEAD_ANIMATION_NEUTRAL_TO_GOOD = 3,
-    FIDGET_NEUTRAL = 4,
-    HEAD_ANIMATION_NEUTRAL_TO_BAD = 5,
-    HEAD_ANIMATION_BAD_TO_NEUTRAL = 6,
-    FIDGET_BAD = 7,
-    HEAD_ANIMATION_VERY_BAD_REACTION = 8,
-    HEAD_ANIMATION_GOOD_PHONEMES = 9,
-    HEAD_ANIMATION_NEUTRAL_PHONEMES = 10,
-    HEAD_ANIMATION_BAD_PHONEMES = 11,
-} HeadAnimation;
-
-typedef enum Background {
-    BACKGROUND_0,
-    BACKGROUND_1,
-    BACKGROUND_2,
-    BACKGROUND_HUB,
-    BACKGROUND_NECROPOLIS,
-    BACKGROUND_BROTHERHOOD,
-    BACKGROUND_MILITARY_BASE,
-    BACKGROUND_JUNK_TOWN,
-    BACKGROUND_CATHEDRAL,
-    BACKGROUND_SHADY_SANDS,
-    BACKGROUND_VAULT,
-    BACKGROUND_MASTER,
-    BACKGROUND_FOLLOWER,
-    BACKGROUND_RAIDERS,
-    BACKGROUND_CAVE,
-    BACKGROUND_ENCLAVE,
-    BACKGROUND_WASTELAND,
-    BACKGROUND_BOSS,
-    BACKGROUND_PRESIDENT,
-    BACKGROUND_TENT,
-    BACKGROUND_ADOBE,
-    BACKGROUND_COUNT,
-} Background;
-
 typedef struct Art {
     int version;
     short framesPerSecond;
     short actionFrame;
     short frameCount;
-    short xOffsets[6];
-    short yOffsets[6];
-    int dataOffsets[6];
-    int padding[6];
+    short xOffsets[ROTATION_COUNT];
+    short yOffsets[ROTATION_COUNT];
+    int dataOffsets[ROTATION_COUNT];
+    int padding[ROTATION_COUNT];
     int dataSize;
 } Art;
 
@@ -88,36 +33,6 @@ typedef struct ArtFrame {
     short y;
 } ArtFrame;
 
-typedef enum WeaponAnimation {
-    WEAPON_ANIMATION_NONE,
-    WEAPON_ANIMATION_KNIFE, // d
-    WEAPON_ANIMATION_CLUB, // e
-    WEAPON_ANIMATION_HAMMER, // f
-    WEAPON_ANIMATION_SPEAR, // g
-    WEAPON_ANIMATION_PISTOL, // h
-    WEAPON_ANIMATION_SMG, // i
-    WEAPON_ANIMATION_SHOTGUN, // j
-    WEAPON_ANIMATION_LASER_RIFLE, // k
-    WEAPON_ANIMATION_MINIGUN, // l
-    WEAPON_ANIMATION_LAUNCHER, // m
-    // ef0085d: sfall extra animation codes.
-    WEAPON_ANIMATION_SFALL_S, // s
-    WEAPON_ANIMATION_SFALL_O, // o
-    WEAPON_ANIMATION_SFALL_P, // p
-    WEAPON_ANIMATION_SFALL_Q, // q
-    WEAPON_ANIMATION_SFALL_T, // t
-    WEAPON_ANIMATION_COUNT,
-} WeaponAnimation;
-
-typedef enum DudeNativeLook {
-    // Hero looks as one the tribals (before finishing Temple of Trails).
-    DUDE_NATIVE_LOOK_TRIBAL,
-
-    // Hero have finished Temple of Trails and received Vault Jumpsuit.
-    DUDE_NATIVE_LOOK_JUMPSUIT,
-    DUDE_NATIVE_LOOK_COUNT,
-} DudeNativeLook;
-
 extern int _art_vault_guy_num;
 extern int _art_vault_person_nums[DUDE_NATIVE_LOOK_COUNT][GENDER_COUNT];
 
@@ -126,38 +41,38 @@ extern Cache gArtCache;
 int artInit();
 void artReset();
 void artExit();
-char* artGetObjectTypeName(int objectType);
-int artIsObjectTypeHidden(int objectType);
-void artToggleObjectTypeHidden(int objectType);
+char* artGetObjectTypeName(ObjectType objectType);
+int artIsObjectTypeHidden(ObjectType objectType);
+void artToggleObjectTypeHidden(ObjectType objectType);
 int artGetFidgetCount(int headFid);
 void artRender(int fid, unsigned char* dest, int width, int height, int pitch);
 int art_list_str(int fid, char* name);
 Art* artLock(int fid, CacheEntry** cache_entry);
-unsigned char* artLockFrameData(int fid, int frame, int direction, CacheEntry** out_cache_entry);
+unsigned char* artLockFrameData(int fid, int frame, Rotation rotation, CacheEntry** out_cache_entry);
 int artUnlock(CacheEntry* cache_entry);
 int artCacheFlush();
-int artCopyFileName(int objectType, int id, char* dest);
-int _art_get_code(int animation, int weaponType, char* weaponCodePtr, char* animationCodePtr);
+int artCopyFileName(ObjectType objectType, int id, char* dest);
+int _art_get_code(AnimationType animation, WeaponAnimation weaponType, char* weaponCodePtr, char* animationCodePtr);
 char* artBuildFilePath(int fid);
 int artGetFramesPerSecond(Art* art);
 int artGetActionFrame(Art* art);
 int artGetFrameCount(Art* art);
-int artGetWidth(Art* art, int frame, int direction);
-int artGetHeight(Art* art, int frame, int direction);
-int artGetSize(Art* art, int frame, int direction, int* out_width, int* out_height);
-int artGetFrameOffsets(const Art* art, int frame, int direction, int* xPtr, int* yPtr);
-int artGetRotationOffsets(Art* art, int rotation, int* out_offset_x, int* out_offset_y);
-unsigned char* artGetFrameData(Art* art, int frame, int direction);
-unsigned char* artGetFrameData(const Art* art, int frame, int direction, int* widthPtr, int* heightPtr, int* xOffsetPtr, int* yOffsetPtr);
-ArtFrame* artGetFrame(const Art* art, int frame, int direction);
-ConstBuffer2D artGetFrameBuffer(const Art* art, int frame, int direction);
+int artGetWidth(Art* art, int frame = 0, Rotation rotation = ROTATION_NE);
+int artGetHeight(Art* art, int frame = 0, Rotation rotation = ROTATION_NE);
+int artGetSize(Art* art, int frame, Rotation rotation, int* out_width, int* out_height);
+int artGetFrameOffsets(const Art* art, int frame, Rotation rotation, int* xPtr, int* yPtr);
+int artGetRotationOffsets(Art* art, Rotation rotation, int* out_offset_x, int* out_offset_y);
+unsigned char* artGetFrameData(Art* art, int frame = 0, Rotation rotation = ROTATION_NE);
+unsigned char* artGetFrameData(const Art* art, int frame, Rotation rotation, int* widthPtr, int* heightPtr, int* xOffsetPtr, int* yOffsetPtr);
+ArtFrame* artGetFrame(const Art* art, int frame, Rotation rotation);
+ConstBuffer2D artGetFrameBuffer(const Art* art, int frame, Rotation rotation);
 bool artExists(int fid);
 bool _art_fid_valid(int fid);
 int _art_alias_num(int index);
 int artCritterFidShouldRun(int fid);
 int artAliasFid(int fid);
-int buildFid(int objectType, int frmId, int animType, int weaponCode, int rotation);
-int artListIndex(int objectType, const char* name);
+int buildFid(ObjectType objectType, int frmId, int animType = 0, int weaponCode = 0, Rotation rotation = ROTATION_NE);
+int artListIndex(ObjectType objectType, const char* name);
 Art* artLoad(const char* path);
 int artRead(const char* path, unsigned char* data);
 int artWrite(const char* path, unsigned char* data);
@@ -179,7 +94,7 @@ public:
     explicit FrmId(const char* path);
 
     int fid() const { return _fid; }
-    bool hasObjectType() const { return _objectType >= 0 && _objectType < OBJ_TYPE_COUNT; }
+    bool hasObjectType() const { return objectTypeIsValid(_objectType); }
     ObjectType objectType() const;
     const char* filePath() const { return _path; }
 
@@ -207,13 +122,13 @@ public:
 
     bool isLocked() const { return _key != nullptr || _namedKey; }
     bool lock(const FrmId& frmId);
-    bool lock(const FrmId& frmId, int frame, int direction);
+    bool lock(const FrmId& frmId, int frame, Rotation rotation);
     bool lock(unsigned int fid);
-    bool lock(unsigned int fid, int frame, int direction);
+    bool lock(unsigned int fid, int frame, Rotation rotation);
     bool lock(const char* frmPath);
-    bool lock(const char* frmPath, int frame, int direction);
+    bool lock(const char* frmPath, int frame, Rotation rotation);
     bool lock(ObjectType objType, const char* frmRelativePath);
-    bool lock(ObjectType objType, const char* frmRelativePath, int frame, int direction);
+    bool lock(ObjectType objType, const char* frmRelativePath, int frame, Rotation rotation);
     void unlock();
 
     int getWidth() const { return _width; }
@@ -227,7 +142,7 @@ public:
 
 private:
     void resetInternal();
-    bool setFrame(const Art* art, int frame, int direction);
+    bool setFrame(const Art* art, int frame, Rotation rotation);
 
     std::shared_ptr<NamedCacheEntry> _namedKey;
     CacheEntry* _key = nullptr;

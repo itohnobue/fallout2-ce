@@ -59,8 +59,8 @@ static int protoInstSceneryEdit(Object* obj);
 static int protoInstWallEdit(Object* obj);
 static int protoInstTileEdit(Object* obj);
 static void protoInstMiscEdit(Object* obj);
-static int protoInstSetupEdit(int* pWinId, Object* obj, int* pObjType, int* pObjProtoOff, int* pBufOff, const char* title);
-static bool regModFlagsDialog(int* flags, int objectType);
+static int protoInstSetupEdit(int* pWinId, Object* obj, ObjectType* pObjType, int* pObjProtoOff, int* pBufOff, const char* title);
+static bool regModFlagsDialog(ObjectFlags* flags, ObjectType objectType);
 static int regModInstFlags(Object* obj);
 
 // proto_inst_edit_
@@ -68,7 +68,7 @@ void protoInstEdit(Object* obj)
 {
     if (obj == nullptr) return;
 
-    switch (PID_TYPE(obj->pid)) {
+    switch (objectTypeFromPid(obj->pid)) {
     case OBJ_TYPE_ITEM:
         protoInstItemEdit(obj);
         break;
@@ -87,11 +87,13 @@ void protoInstEdit(Object* obj)
     case OBJ_TYPE_MISC:
         protoInstMiscEdit(obj);
         break;
+    default:
+        break;
     }
 }
 
 // proto_inst_setup_edit_
-static int protoInstSetupEdit(int* pWinId, Object* obj, int* pObjType, int* pObjProtoOff, int* pBufOff, const char* title)
+static int protoInstSetupEdit(int* pWinId, Object* obj, ObjectType* pObjType, int* pObjProtoOff, int* pBufOff, const char* title)
 {
     Proto* proto;
     if (protoGetProto(obj->pid, &proto) == -1) {
@@ -109,24 +111,24 @@ static int protoInstSetupEdit(int* pWinId, Object* obj, int* pObjType, int* pObj
     if (win == -1) return -1;
 
     *pWinId = win;
-    *pObjType = PID_TYPE(obj->pid);
+    *pObjType = objectTypeFromPid(obj->pid);
     *pObjProtoOff = 0;
 
     windowDrawBorder(win);
 
     // Title
     int titleWidth = fontGetStringWidth(title);
-    windowDrawText(win, title, titleWidth, (kWinWidth - titleWidth) / 2, 18, _colorTable[32767] | FONT_SHADOW);
+    windowDrawText(win, title, titleWidth, (kWinWidth - titleWidth) / 2, 18, COLOR_WHITE | DRAW_TEXT_FLAG_SHADOWED);
 
     // Object type name
     const char* typeName = artGetObjectTypeName(*pObjType);
     int typeNameWidth = fontGetStringWidth(typeName);
-    windowDrawText(win, typeName, typeNameWidth, (kWinWidth - typeNameWidth) / 2, 28, _colorTable[21140] | FONT_SHADOW);
+    windowDrawText(win, typeName, typeNameWidth, (kWinWidth - typeNameWidth) / 2, 28, COLOR_LIGHT_GREY | DRAW_TEXT_FLAG_SHADOWED);
 
     // Name button + value
     _win_register_text_button(win, 10, 44, -1, -1, -1, kInstKeyName, "Name", 0);
     const char* objName = objectGetName(obj);
-    windowDrawText(win, objName, 130, 90, 48, _colorTable[32747] | FONT_SHADOW);
+    windowDrawText(win, objName, 130, 90, 48, COLOR_LIGHT_YELLOW | DRAW_TEXT_FLAG_SHADOWED);
 
     // Flags button
     _win_register_text_button(win, 10, 65, -1, -1, -1, kInstKeyFlags, "Flags", 0);
@@ -145,8 +147,8 @@ static int protoInstSetupEdit(int* pWinId, Object* obj, int* pObjType, int* pObj
     // Art rendering area bounds
     *pBufOff = 13420;
     unsigned char* buf = windowGetBuffer(win);
-    bufferDrawRect(buf + 12899, kWinWidth, 0, 0, 65, 49, _colorTable[0]);
-    bufferFill(buf + *pBufOff, kArtWidth, kArtHeight, kWinWidth, _colorTable[21]);
+    bufferDrawRect(buf + 12899, kWinWidth, 0, 0, 65, 49, COLOR_BLACK);
+    bufferFill(buf + *pBufOff, kArtWidth, kArtHeight, kWinWidth, COLOR_BLUE_2);
     artRender(obj->fid, buf + *pBufOff, kArtWidth, kArtHeight, kWinWidth);
 
     // Script section
@@ -155,18 +157,18 @@ static int protoInstSetupEdit(int* pWinId, Object* obj, int* pObjType, int* pObj
 
     char scriptName[64];
     scriptName[0] = '\0';
-    int scriptColor = _colorTable[32747];
+    int scriptColor = COLOR_LIGHT_YELLOW;
 
     Script* script;
     if (scriptGetScript(obj->sid, &script) != -1) {
         if (scriptsGetFileName(script->index, scriptName, sizeof(scriptName)) == -1) {
             strcpy(scriptName, "Error: Bad script index!");
-            scriptColor = _colorTable[31744];
+            scriptColor = COLOR_RED;
         }
     } else {
         strcpy(scriptName, "None");
     }
-    windowDrawText(win, scriptName, 130, 100, scriptY + 4, scriptColor | FONT_SHADOW);
+    windowDrawText(win, scriptName, 130, 100, scriptY + 4, scriptColor | DRAW_TEXT_FLAG_SHADOWED);
 
     // Done button
     y += 26;
@@ -179,7 +181,7 @@ static int protoInstSetupEdit(int* pWinId, Object* obj, int* pObjType, int* pObj
 // reg_mod_flags_
 // Original single-column vertical flag editor matching vanilla reg_mod_flags_ layout.
 // Flags are stored in *flags as a 32-bit ObjectFlags bitfield (obj->flags).
-static bool regModFlagsDialog(int* flags, int objectType)
+static bool regModFlagsDialog(ObjectFlags* flags, ObjectType objectType)
 {
     constexpr int kDlgWidth = 220;
     constexpr int kDlgHeight = 380;
@@ -257,7 +259,7 @@ static bool regModFlagsDialog(int* flags, int objectType)
             50,
             kValX,
             yPos + 4,
-            flagValues[i] ? (_colorTable[32747] | FONT_SHADOW) : (_colorTable[992] | FONT_SHADOW));
+            flagValues[i] ? (COLOR_LIGHT_YELLOW | DRAW_TEXT_FLAG_SHADOWED) : (COLOR_GREEN | DRAW_TEXT_FLAG_SHADOWED));
 
         yPos += kItemH;
     }
@@ -275,10 +277,10 @@ static bool regModFlagsDialog(int* flags, int objectType)
 
         if (key == KEY_ESCAPE || key == KEY_RETURN) {
             // Write back only the flags that were visible (prevents stomping unrelated bits)
-            int preserved = *flags;
+            ObjectFlags preserved = *flags;
             for (int vi = 0; vi < visibleCount; vi++) {
                 int i = visibleIndex[vi];
-                int bit = btnDefs[i].bit;
+                ObjectFlags bit = static_cast<ObjectFlags>(btnDefs[i].bit);
                 if (bit != -1) {
                     if (flagValues[i])
                         preserved |= bit;
@@ -297,7 +299,7 @@ static bool regModFlagsDialog(int* flags, int objectType)
 
             flagValues[i] = !flagValues[i];
             int rowY = 21 + vi * kItemH;
-            int valColor = flagValues[i] ? (_colorTable[32747] | FONT_SHADOW) : (_colorTable[992] | FONT_SHADOW);
+            int valColor = flagValues[i] ? (COLOR_LIGHT_YELLOW | DRAW_TEXT_FLAG_SHADOWED) : (COLOR_GREEN | DRAW_TEXT_FLAG_SHADOWED);
 
             unsigned char* buf = windowGetBuffer(win);
             int pitch = windowGetWidth(win);
@@ -319,12 +321,12 @@ static bool regModFlagsDialog(int* flags, int objectType)
 // Flat uses _obj_toggle_flat for proper side effects; all others are applied via bit ops.
 static int regModInstFlags(Object* obj)
 {
-    int flags = obj->flags;
-    int oldFlat = flags & OBJECT_FLAT;
-    int objectType = PID_TYPE(obj->pid);
+    ObjectFlags flags = obj->flags;
+    ObjectFlags oldFlat = flags & OBJECT_FLAT;
+    ObjectType objectType = objectTypeFromPid(obj->pid);
 
     if (regModFlagsDialog(&flags, objectType)) {
-        bool flatChanged = ((oldFlat != 0) != ((flags & OBJECT_FLAT) != 0));
+        bool flatChanged = ((oldFlat != OBJECT_NONE) != ((flags & OBJECT_FLAT) != OBJECT_NONE));
         obj->flags = flags;
 
         if (flatChanged) {
@@ -376,7 +378,7 @@ static void selectNewScript(Object* obj, int scriptType, int winId, int scriptNa
     } else {
         strcpy(scriptName, "None");
     }
-    windowDrawText(winId, scriptName, 130, 90, scriptNameY, _colorTable[32747] | FONT_SHADOW);
+    windowDrawText(winId, scriptName, 130, 90, scriptNameY, COLOR_LIGHT_YELLOW | DRAW_TEXT_FLAG_SHADOWED);
     windowRefresh(winId);
 }
 
@@ -384,7 +386,7 @@ static void selectNewScript(Object* obj, int scriptType, int winId, int scriptNa
 static int protoInstItemEdit(Object* obj)
 {
     int winId;
-    int objType;
+    ObjectType objType;
     int objProtoOff;
     int bufOff;
 
@@ -436,7 +438,7 @@ static int protoInstAddToInven(int pid, int count)
     objectSetLocation(newObj, 0, 0, nullptr);
 
     if (itemAdd(proto_inst_who_obj, newObj, count) != 0) {
-        win_timed_msg("Error adding obj to critter!", _colorTable[32747] | FONT_SHADOW);
+        win_timed_msg("Error adding obj to critter!", COLOR_LIGHT_YELLOW | DRAW_TEXT_FLAG_SHADOWED);
         return 0;
     }
 
@@ -447,7 +449,7 @@ static int protoInstAddToInven(int pid, int count)
 // proto_choose_pid_inven_fid
 static int protoInstChoosePidInvenFid(Proto* proto)
 {
-    if (PID_TYPE(proto->pid) != 0) return -1;
+    if (objectTypeFromPid(proto->pid) != OBJ_TYPE_ITEM) return -1;
     if (proto->item.inventoryFid == -1) return proto->fid;
     return proto->item.inventoryFid;
 }
@@ -473,7 +475,7 @@ static void protoInstChooseItemsForInvenList(Object* obj)
     for (int pid = 0x00000001; count < kMaxItems; pid++) {
         Proto* proto;
         if (protoGetProto(pid, &proto) == -1) break;
-        if (PID_TYPE(pid) != OBJ_TYPE_ITEM) continue;
+        if (objectTypeFromPid(pid) != OBJ_TYPE_ITEM) continue;
 
         names[count] = static_cast<char*>(internal_malloc(64));
         snprintf(names[count], 64, "%s", protoGetName(pid));
@@ -481,7 +483,7 @@ static void protoInstChooseItemsForInvenList(Object* obj)
         count++;
     }
 
-    int selection = _win_list_select("Pick item to add", names, count, nullptr, 80, 200, _colorTable[32747] | FONT_SHADOW);
+    int selection = _win_list_select("Pick item to add", names, count, nullptr, 80, 200, COLOR_LIGHT_YELLOW | DRAW_TEXT_FLAG_SHADOWED);
     if (selection != -1) {
         int quantity = 1;
         win_get_num_i(&quantity, 1, 32000, false, "How many?", 100, 100);
@@ -500,7 +502,7 @@ static void protoInstChooseItemsForInvenList(Object* obj)
 static int protoInstCritterEdit(Object* obj)
 {
     int winId;
-    int objType;
+    ObjectType objType;
     int objProtoOff;
     int bufOff;
 
@@ -520,14 +522,14 @@ static int protoInstCritterEdit(Object* obj)
         _win_register_text_button(winId, 10, kAiY, -1, -1, -1, kInstKeyAiPacket, "AI Packet", 0);
         const char* aiName = combat_ai_name(obj->data.critter.combat.aiPacket);
         if (aiName == nullptr) aiName = "<Error>";
-        windowDrawText(winId, aiName, 80, 100, kAiY + 4, _colorTable[32747] | FONT_SHADOW);
+        windowDrawText(winId, aiName, 80, 100, kAiY + 4, COLOR_LIGHT_YELLOW | DRAW_TEXT_FLAG_SHADOWED);
 
         // Team Num
         constexpr int kTeamY = kAiY;
         _win_register_text_button(winId, 240, kTeamY, -1, -1, -1, kInstKeyTeamNum, "Team Num", 0);
         char teamStr[16];
         snprintf(teamStr, sizeof(teamStr), "%d", obj->data.critter.combat.team);
-        windowDrawText(winId, teamStr, 80, 320, kTeamY + 4, _colorTable[32747] | FONT_SHADOW);
+        windowDrawText(winId, teamStr, 80, 320, kTeamY + 4, COLOR_LIGHT_YELLOW | DRAW_TEXT_FLAG_SHADOWED);
 
         windowRefresh(winId);
 
@@ -561,14 +563,14 @@ static int protoInstCritterEdit(Object* obj)
                 proto_pick_ai_packet(&obj->data.critter.combat.aiPacket);
                 const char* newAiName = combat_ai_name(obj->data.critter.combat.aiPacket);
                 if (newAiName == nullptr) newAiName = "<Error>";
-                windowDrawText(winId, newAiName, 80, 100, kAiY + 4, _colorTable[32747] | FONT_SHADOW);
+                windowDrawText(winId, newAiName, 80, 100, kAiY + 4, COLOR_LIGHT_YELLOW | DRAW_TEXT_FLAG_SHADOWED);
                 needRedraw = true;
             } else if (key == kInstKeyTeamNum) {
                 int team = obj->data.critter.combat.team;
                 if (win_get_num_i(&team, 0, 32000, false, "Team Num", 100, 100) != -1) {
                     obj->data.critter.combat.team = static_cast<char>(team);
                     snprintf(teamStr, sizeof(teamStr), "%d", obj->data.critter.combat.team);
-                    windowDrawText(winId, teamStr, 80, 240, kTeamY + 4, _colorTable[32747] | FONT_SHADOW);
+                    windowDrawText(winId, teamStr, 80, 240, kTeamY + 4, COLOR_LIGHT_YELLOW | DRAW_TEXT_FLAG_SHADOWED);
                     needRedraw = true;
                 }
             } else if (key == kInstKeyClearInven) {
@@ -589,11 +591,11 @@ static int protoInstCritterEdit(Object* obj)
                 inventoryResetDude();
 
                 Object* rightHandItem = critterGetItem2(obj);
-                int animCode = 0;
+                WeaponAnimation animCode = WEAPON_ANIMATION_NONE;
                 if (rightHandItem != nullptr && itemGetType(rightHandItem) == ITEM_TYPE_WEAPON) {
                     animCode = weaponGetAnimationCode(rightHandItem);
                 }
-                obj->fid = buildFid(FID_TYPE(obj->fid), obj->fid & 0xFFF, obj->frame + 1, animCode, 0);
+                obj->fid = buildFid(objectTypeFromFid(obj->fid), obj->fid & 0xFFF, obj->frame + 1, animCode, ROTATION_NE);
                 tileWindowRefresh();
 
                 break;
@@ -609,7 +611,7 @@ static int protoInstCritterEdit(Object* obj)
 static int protoInstWallEdit(Object* obj)
 {
     int winId;
-    int objType;
+    ObjectType objType;
     int objProtoOff;
     int bufOff;
 
@@ -644,7 +646,7 @@ static int protoInstWallEdit(Object* obj)
 static int protoInstTileEdit(Object* obj)
 {
     int winId;
-    int objType;
+    ObjectType objType;
     int objProtoOff;
     int bufOff;
 
@@ -677,7 +679,7 @@ static int protoInstTileEdit(Object* obj)
 static void protoInstMiscEdit(Object* obj)
 {
     int winId;
-    int objType;
+    ObjectType objType;
     int objProtoOff;
     int bufOff;
 
@@ -710,7 +712,7 @@ static void protoInstMiscEdit(Object* obj)
 static int protoInstSceneryEdit(Object* obj)
 {
     int winId;
-    int objType;
+    ObjectType objType;
     int objProtoOff;
     int bufOff;
 

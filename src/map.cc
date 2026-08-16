@@ -12,6 +12,7 @@
 #include "character_editor.h"
 #include "color.h"
 #include "combat.h"
+#include "content_config.h"
 #include "critter.h"
 #include "cycle.h"
 #include "debug.h"
@@ -26,6 +27,7 @@
 #include "item.h"
 #include "light.h"
 #include "loadsave.h"
+#include "map_defs.h"
 #include "map_edge.h"
 #include "memory.h"
 #include "object.h"
@@ -64,6 +66,7 @@ static int _map_age_dead_critters();
 static void _map_fix_critter_combat_data();
 static int _map_save_file(File* stream);
 int _map_save(bool isInGame);
+static int replaceDeadCritter(Object* critter);
 static void mapMakeMapsDirectory();
 static void isoWindowRefreshRect(Rect* rect);
 static void isoWindowRefreshRectGame(Rect* rect);
@@ -77,9 +80,11 @@ static int mapLocalVariablesLoad(File* stream);
 static void _map_place_dude_and_mouse();
 static void square_init();
 static void _square_reset();
-static int _square_load(File* stream, int flags);
+static int _square_load(File* stream, MapHeaderFlags flags);
 static int mapHeaderWrite(MapHeader* ptr, File* stream);
 static int mapHeaderRead(MapHeader* ptr, File* stream);
+static void mapLoadTimerStart();
+static void mapLoadTimerFinish(const char* fileName, int rc);
 
 // 0x50B058
 static char byte_50B058[] = "";
@@ -91,10 +96,10 @@ static char _aErrorF2[] = "ERROR! F2";
 static IsoWindowRefreshProc* _map_scroll_refresh = isoWindowRefreshRectGame;
 
 // 0x519544 map_data_elev_flags
-static const int _map_data_elev_flags[ELEVATION_COUNT] = {
-    2,
-    4,
-    8,
+static const MapHeaderFlags _map_data_elev_flags[ELEVATION_COUNT] = {
+    MAP_HEADER_ELEVATION_0,
+    MAP_HEADER_ELEVATION_1,
+    MAP_HEADER_ELEVATION_2,
 };
 
 // 0x519550 map_last_scroll_time
@@ -112,7 +117,7 @@ static int gEnteringElevation = -1;
 static int gEnteringTile = -1;
 
 // 0x519560 mapEntranceRotation
-static int gEnteringRotation = ROTATION_NE;
+static Rotation gEnteringRotation = ROTATION_NE;
 
 // 0x519564 map_script_id
 int gMapSid = -1;
@@ -149,6 +154,7 @@ static TileData _square_data[ELEVATION_COUNT];
 
 // 0x631D28 map_state
 static MapTransition gMapTransition;
+static bool disableSpecialMapIds;
 
 // 0x631D38 map_display_rect
 static Rect gIsoWindowRect;
@@ -173,6 +179,9 @@ int gIsoWindow;
 
 // 0x631E50 scratchStr
 static char _scratchStr[40];
+
+static int mapLoadTimerDepth = 0;
+static unsigned int mapLoadStartTime = 0;
 
 // CE: Basically the same problem described in |gMapLocalPointers|, but this
 // time Olympus folks use global map variables to store objects (looks like
@@ -254,7 +263,7 @@ int isoInit()
     mapMakeMapsDirectory();
 
     // NOTE: Uninline.
-    mapSetEnteringLocation(-1, -1, -1);
+    mapSetEnteringLocation(-1, -1, ROTATION_INVALID);
 
     return 0;
 }
@@ -275,7 +284,7 @@ void isoReset()
     interfaceReset();
 
     // NOTE: Uninline.
-    mapSetEnteringLocation(-1, -1, -1);
+    mapSetEnteringLocation(-1, -1, ROTATION_INVALID);
 }
 
 // 0x481F48
@@ -299,6 +308,8 @@ void isoExit()
 // 0x481FB4
 void mapInit()
 {
+    configGetBool(&gContentConfig, CONTENT_CONFIG_MAPS_SECTION, "disable_special_map_ids", &disableSpecialMapIds, false);
+
     if (settings.system.executableIsMapper()) {
         _map_scroll_refresh = isoWindowRefreshRectMapper;
     }
@@ -510,7 +521,7 @@ int mapAllocLocalVars(const int numNewVars)
 }
 
 // 0x48234C
-void mapSetStart(int tile, int elevation, int rotation)
+void mapSetStart(int tile, int elevation, Rotation rotation)
 {
     gMapHeader.enteringTile = tile;
     gMapHeader.enteringElevation = elevation;
@@ -787,11 +798,11 @@ const char* mapBuildSavePath(const char* name)
 }
 
 // 0x482924
-int mapSetEnteringLocation(int elevation, int tile_num, int orientation)
+int mapSetEnteringLocation(int elevation, int tile_num, Rotation rotation)
 {
     gEnteringElevation = elevation;
     gEnteringTile = tile_num;
-    gEnteringRotation = orientation;
+    gEnteringRotation = rotation;
     return 0;
 }
 
@@ -803,7 +814,7 @@ void mapNewMap()
     tileSetCenter(20100, TILE_SET_CENTER_FLAG_IGNORE_SCROLL_RESTRICTIONS);
     memset(&gMapTransition, 0, sizeof(gMapTransition));
     gMapHeader.enteringElevation = 0;
-    gMapHeader.enteringRotation = 0;
+    gMapHeader.enteringRotation = ROTATION_NE;
     gMapHeader.localVariablesCount = 0;
     gMapHeader.version = 20;
     gMapHeader.name[0] = '\0';
@@ -825,6 +836,8 @@ void mapNewMap()
 // 0x482A68 map_load
 int mapLoadByName(char* fileName)
 {
+    mapLoadTimerStart();
+
     int rc;
 
     compat_strupr(fileName);
@@ -864,7 +877,34 @@ int mapLoadByName(char* fileName)
         }
     }
 
+    mapLoadTimerFinish(fileName, rc);
+
     return rc;
+}
+
+static void mapLoadTimerStart()
+{
+    if (mapLoadTimerDepth == 0) {
+        mapLoadStartTime = compat_timeGetTime();
+    }
+
+    mapLoadTimerDepth++;
+}
+
+static void mapLoadTimerFinish(const char* fileName, int rc)
+{
+    assert(mapLoadTimerDepth > 0);
+
+    mapLoadTimerDepth--;
+    if (mapLoadTimerDepth != 0) {
+        return;
+    }
+
+    unsigned int elapsed = getTicksBetween(compat_timeGetTime(), mapLoadStartTime);
+    debugPrint("\nMAP LOAD: %s rc=%d total=%ums",
+        fileName != nullptr ? fileName : "<null>",
+        rc,
+        elapsed);
 }
 
 // 0x482B34
@@ -923,7 +963,7 @@ static int mapLoad(File* stream)
         0,
         windowGetWidth(gIsoWindow),
         windowGetHeight(gIsoWindow),
-        _colorTable[0]);
+        COLOR_BLACK);
     windowRefresh(gIsoWindow);
     animationStop();
     scriptsDisable();
@@ -958,11 +998,11 @@ static int mapLoad(File* stream)
         int sy = sfallGetMapEnterY();
         int sel = sfallGetMapEnterElevation();
         if (sx >= 0 && sy >= 0) {
-            mapSetEnteringLocation(sel >= 0 ? sel : 0, sx, sy);
+            mapSetEnteringLocation(sel >= 0 ? sel : 0, sx, ROTATION_NE);
         } else if (wmHasMapEnterPosition()) {
             int overrideX, overrideY, overrideElevation;
             wmGetMapEnterPosition(&overrideX, &overrideY, &overrideElevation);
-            mapSetEnteringLocation(overrideElevation, overrideX, overrideY);
+            mapSetEnteringLocation(overrideElevation, overrideX, ROTATION_NE);
         } else {
             // NOTE: Uninline.
             mapSetEnteringLocation(gMapHeader.enteringElevation, gMapHeader.enteringTile, gMapHeader.enteringRotation);
@@ -1044,7 +1084,7 @@ static int mapLoad(File* stream)
     objectSetRotation(gDude, gEnteringRotation, nullptr);
     gMapHeader.index = wmMapMatchNameToIdx(gMapHeader.name);
 
-    if ((gMapHeader.flags & 1) == 0) {
+    if ((gMapHeader.flags & MAP_HEADER_SAVED) == MAP_HEADER_NONE) {
         char path[COMPAT_MAX_PATH];
         snprintf(path, sizeof(path), "maps\\%s", gMapHeader.name);
 
@@ -1075,7 +1115,7 @@ static int mapLoad(File* stream)
         }
 
         Object* object;
-        int fid = buildFid(OBJ_TYPE_MISC, 12, 0, 0, 0);
+        int fid = buildFid(OBJ_TYPE_MISC, 12, 0, 0, ROTATION_NE);
         if (objectCreateWithFidPid(&object, fid, -1) == -1) {
             error = "Error creating map object";
             goto err;
@@ -1083,7 +1123,7 @@ static int mapLoad(File* stream)
         object->flags |= (OBJECT_LIGHT_THRU | OBJECT_NO_SAVE | OBJECT_HIDDEN);
         objectSetLocation(object, 1, 0, nullptr);
         object->sid = gMapSid;
-        scriptSetFixedParam(gMapSid, (gMapHeader.flags & 1) == 0);
+        scriptSetFixedParam(gMapSid, (gMapHeader.flags & MAP_HEADER_SAVED) == MAP_HEADER_NONE);
 
         Script* script;
         scriptGetScript(gMapSid, &script);
@@ -1170,7 +1210,7 @@ err:
     gameMouseSetCursor(savedMouseCursorId);
 
     // NOTE: Uninline.
-    mapSetEnteringLocation(-1, -1, -1);
+    mapSetEnteringLocation(-1, -1, ROTATION_INVALID);
 
     tile_hires_stencil_on_map_load();
 
@@ -1243,7 +1283,7 @@ static int _map_age_dead_critters()
 
     Object* obj = objectFindFirst();
     while (obj != nullptr) {
-        if (PID_TYPE(obj->pid) == OBJ_TYPE_CRITTER
+        if (objectTypeFromPid(obj->pid) == OBJ_TYPE_CRITTER
             && obj != gDude
             && !objectIsPartyMember(obj)
             && !critterIsDead(obj)) {
@@ -1270,10 +1310,10 @@ static int _map_age_dead_critters()
 
     obj = objectFindFirst();
     while (obj != nullptr) {
-        int type = PID_TYPE(obj->pid);
+        ObjectType type = objectTypeFromPid(obj->pid);
         if (type == OBJ_TYPE_CRITTER) {
             if (obj != gDude && critterIsDead(obj)) {
-                if (critterGetKillType(obj) != KILL_TYPE_ROBOT && !critterFlagCheck(obj->pid, CRITTER_NO_HEAL)) {
+                if (critterGetKillType(obj) != KILL_TYPE_ROBOT && !critterFlagCheck(obj->pid, CRITTER_NO_AGE)) {
                     objects[count++] = obj;
 
                     if (count >= capacity) {
@@ -1288,7 +1328,7 @@ static int _map_age_dead_critters()
                     }
                 }
             }
-        } else if (agingType == 2 && type == OBJ_TYPE_MISC && obj->pid == 0x500000B) {
+        } else if (agingType == 2 && type == OBJ_TYPE_MISC && obj->fid == 0x500000B) {
             objects[count++] = obj;
             if (count >= capacity) {
                 capacity *= 2;
@@ -1307,33 +1347,18 @@ static int _map_age_dead_critters()
     int rc = 0;
     for (int index = 0; index < count; index++) {
         Object* obj = objects[index];
-        if (PID_TYPE(obj->pid) == OBJ_TYPE_CRITTER) {
-            if (!critterFlagCheck(obj->pid, CRITTER_NO_DROP)) {
-                itemDropAll(obj, obj->tile);
-            }
-
-            Object* blood;
-            if (objectCreateWithPid(&blood, 0x5000004) == -1) {
+        if (objectTypeFromPid(obj->pid) == OBJ_TYPE_CRITTER) {
+            // replace the dead critter bodies by the blood pool stain
+            if (replaceDeadCritter(obj) == -1) {
+                debugPrint("\n%s: Could not replace dead body by the blood stain for the critter %d with pid %d.", __func__, obj->id, obj->pid);
                 rc = -1;
                 break;
             }
 
-            objectSetLocation(blood, obj->tile, obj->elevation, nullptr);
-
-            Proto* proto;
-            protoGetProto(obj->pid, &proto);
-
-            int frame = randomBetween(0, 3);
-            if ((proto->critter.flags & CRITTER_FLAT)) {
-                frame += 6;
-            } else {
-                if (critterGetKillType(obj) != KILL_TYPE_RAT
-                    && critterGetKillType(obj) != KILL_TYPE_MANTIS) {
-                    frame += 3;
-                }
+            // drop the critter owned items on top of the blood stain only when successfully replaced
+            if (!critterFlagCheck(obj->pid, CRITTER_NO_DROP)) {
+                itemDropAll(obj, obj->tile);
             }
-
-            objectSetFrame(blood, frame, nullptr);
         }
 
         reg_anim_clear(obj);
@@ -1343,6 +1368,34 @@ static int _map_age_dead_critters()
     internal_free(objects);
 
     return rc;
+}
+
+static int replaceDeadCritter(Object* critter)
+{
+    if (objectTypeFromPid(critter->pid) != OBJ_TYPE_CRITTER) {
+        return -1;
+    }
+
+    Object* blood;
+    if (objectCreateWithPid(&blood, PROTO_ID_BLOOD) == -1) {
+        return -1;
+    }
+
+    if (objectSetLocation(blood, critter->tile, critter->elevation, nullptr) == -1) {
+        return -1;
+    }
+
+    int frame = randomBetween(0, 3);
+    if ((critter->flags & OBJECT_MULTIHEX) != OBJECT_NONE) {
+        frame += 6;
+    } else {
+        KillType killType = critterGetKillType(critter);
+        if (killType != KILL_TYPE_RAT && killType != KILL_TYPE_MANTIS) {
+            frame += 3;
+        }
+    }
+
+    return objectSetFrame(blood, frame, nullptr);
 }
 
 // 0x48358C
@@ -1412,7 +1465,8 @@ int mapHandleTransition()
             }
 
             if (gMapTransition.tile != -1 && gMapTransition.tile != 0
-                && gMapHeader.index != MAP_MODOC_BEDNBREAKFAST && gMapHeader.index != MAP_THE_SQUAT_A
+                && (disableSpecialMapIds
+                    || (gMapHeader.index != MAP_MODOC_BEDNBREAKFAST && gMapHeader.index != MAP_THE_SQUAT_A))
                 && elevationIsValid(gMapTransition.elevation)) {
                 objectSetLocation(gDude, gMapTransition.tile, gMapTransition.elevation, nullptr);
                 mapSetElevation(gMapTransition.elevation);
@@ -1425,7 +1479,7 @@ int mapHandleTransition()
 
             memset(&gMapTransition, 0, sizeof(gMapTransition));
 
-            int city;
+            int city = -1;
             wmMatchAreaContainingMapIdx(gMapHeader.index, &city);
             if (wmTeleportToArea(city) == -1) {
                 debugPrint("\nError: couldn't make jump on worldmap for map jump!");
@@ -1444,7 +1498,7 @@ static void _map_fix_critter_combat_data()
             continue;
         }
 
-        if (PID_TYPE(object->pid) != OBJ_TYPE_CRITTER) {
+        if (objectTypeFromPid(object->pid) != OBJ_TYPE_CRITTER) {
             continue;
         }
 
@@ -1498,13 +1552,13 @@ static int _map_save_file(File* stream)
         for (tile = 0; tile < SQUARE_GRID_SIZE; tile++) {
             int fid;
 
-            fid = buildFid(OBJ_TYPE_TILE, _square[elevation]->field_0[tile] & 0xFFF, 0, 0, 0);
-            if (fid != buildFid(OBJ_TYPE_TILE, 1, 0, 0, 0)) {
+            fid = buildFid(OBJ_TYPE_TILE, _square[elevation]->field_0[tile] & 0xFFF);
+            if (fid != buildFid(OBJ_TYPE_TILE, 1)) {
                 break;
             }
 
-            fid = buildFid(OBJ_TYPE_TILE, (_square[elevation]->field_0[tile] >> 16) & 0xFFF, 0, 0, 0);
-            if (fid != buildFid(OBJ_TYPE_TILE, 1, 0, 0, 0)) {
+            fid = buildFid(OBJ_TYPE_TILE, (_square[elevation]->field_0[tile] >> 16) & 0xFFF);
+            if (fid != buildFid(OBJ_TYPE_TILE, 1)) {
                 break;
             }
         }
@@ -1599,7 +1653,7 @@ int _map_save_in_game(bool isLeavingMap)
         _obj_reset_roof();
     }
 
-    gMapHeader.flags |= 0x01;
+    gMapHeader.flags |= MAP_HEADER_SAVED;
     gMapHeader.lastVisitTime = gameTimeGetTime();
 
     char name[16];
@@ -1821,9 +1875,9 @@ static void _map_place_dude_and_mouse()
     _obj_clear_seen();
 
     if (gDude != nullptr) {
-        if (FID_ANIM_TYPE(gDude->fid) != ANIM_STAND) {
+        if (animationTypeFromFid(gDude->fid) != ANIM_STAND) {
             objectSetFrame(gDude, 0, nullptr);
-            gDude->fid = buildFid(OBJ_TYPE_CRITTER, gDude->fid & 0xFFF, ANIM_STAND, (gDude->fid & 0xF000) >> 12, gDude->rotation + 1);
+            gDude->fid = buildFid(OBJ_TYPE_CRITTER, gDude->fid & 0xFFF, ANIM_STAND, weaponAnimationFromFid(gDude->fid), gDude->rotation + 1);
         }
 
         if (gDude->tile == -1) {
@@ -1863,11 +1917,11 @@ static void _square_reset()
                 // check subsequent calls.
                 int fid = *p;
                 fid &= ~0xFFFF;
-                *p = (((buildFid(OBJ_TYPE_TILE, 1, 0, 0, 0) & 0xFFF) | (((fid >> 16) & 0xF000) >> 12)) << 16) | (fid & 0xFFFF);
+                *p = (((buildFid(OBJ_TYPE_TILE, 1) & 0xFFF) | (((fid >> 16) & 0xF000) >> 12)) << 16) | (fid & 0xFFFF);
 
                 fid = *p;
                 int tileFlags = (fid & 0xF000) >> 12;
-                int updatedLowerTile = (buildFid(OBJ_TYPE_TILE, 1, 0, 0, 0) & 0xFFF) | tileFlags;
+                int updatedLowerTile = (buildFid(OBJ_TYPE_TILE, 1) & 0xFFF) | tileFlags;
 
                 fid &= ~0xFFFF;
 
@@ -1880,7 +1934,7 @@ static void _square_reset()
 }
 
 // 0x48431C
-static int _square_load(File* stream, int flags)
+static int _square_load(File* stream, MapHeaderFlags flags)
 {
     int upperTileWord;
     int upperTileFlags;
@@ -1890,7 +1944,7 @@ static int _square_load(File* stream, int flags)
     _square_reset();
 
     for (int elevation = 0; elevation < ELEVATION_COUNT; elevation++) {
-        if ((flags & _map_data_elev_flags[elevation]) == 0) {
+        if ((flags & _map_data_elev_flags[elevation]) == MAP_HEADER_NONE) {
             int* arr = _square[elevation]->field_0;
             if (_db_freadIntCount(stream, arr, SQUARE_GRID_SIZE) != 0) {
                 return -1;
@@ -1921,10 +1975,10 @@ static int mapHeaderWrite(MapHeader* ptr, File* stream)
     if (fileWriteFixedLengthString(stream, ptr->name, 16) == -1) return -1;
     if (fileWriteInt32(stream, ptr->enteringTile) == -1) return -1;
     if (fileWriteInt32(stream, ptr->enteringElevation) == -1) return -1;
-    if (fileWriteInt32(stream, ptr->enteringRotation) == -1) return -1;
+    if (fileWriteInt32Enum<Rotation>(stream, ptr->enteringRotation) == -1) return -1;
     if (fileWriteInt32(stream, ptr->localVariablesCount) == -1) return -1;
     if (fileWriteInt32(stream, ptr->scriptIndex) == -1) return -1;
-    if (fileWriteInt32(stream, ptr->flags) == -1) return -1;
+    if (fileWriteInt32Enum<MapHeaderFlags>(stream, ptr->flags) == -1) return -1;
     if (fileWriteInt32(stream, ptr->darkness) == -1) return -1;
     if (fileWriteInt32(stream, ptr->globalVariablesCount) == -1) return -1;
     if (fileWriteInt32(stream, ptr->index) == -1) return -1;
@@ -1941,10 +1995,10 @@ static int mapHeaderRead(MapHeader* ptr, File* stream)
     if (fileReadFixedLengthString(stream, ptr->name, 16) == -1) return -1;
     if (fileReadInt32(stream, &(ptr->enteringTile)) == -1) return -1;
     if (fileReadInt32(stream, &(ptr->enteringElevation)) == -1) return -1;
-    if (fileReadInt32(stream, &(ptr->enteringRotation)) == -1) return -1;
+    if (fileReadInt32Enum<Rotation>(stream, &(ptr->enteringRotation)) == -1) return -1;
     if (fileReadInt32(stream, &(ptr->localVariablesCount)) == -1) return -1;
     if (fileReadInt32(stream, &(ptr->scriptIndex)) == -1) return -1;
-    if (fileReadInt32(stream, &(ptr->flags)) == -1) return -1;
+    if (fileReadInt32Enum<MapHeaderFlags>(stream, &(ptr->flags)) == -1) return -1;
     if (fileReadInt32(stream, &(ptr->darkness)) == -1) return -1;
     if (fileReadInt32(stream, &(ptr->globalVariablesCount)) == -1) return -1;
     if (fileReadInt32(stream, &(ptr->index)) == -1) return -1;

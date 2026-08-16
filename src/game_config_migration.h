@@ -8,6 +8,7 @@
 namespace fallout {
 
 bool gameConfigMigrateFromF2Res(const char* gameConfigFilePath, Config* gameConfig);
+void contentConfigTryMigrateFromF2Res(const char* contentConfigPath);
 void contentConfigTryMigrateFromSfall(const char* contentConfigPath);
 
 // Number of entries in kSfallContentMappings (content_config.cc) and
@@ -20,7 +21,11 @@ void contentConfigTryMigrateFromSfall(const char* contentConfigPath);
 // gSfallConfig default of 21 per H-06).
 // 5dc9135/68ff38e/f7841ee: 56 → 63 — StartGDialogFix (dialog) + 6 [sound]
 // music override rows added.
-inline constexpr size_t kSfallMigrationEntryCount = 63;
+// sync2 (upstream 1cce144): 63 → 70 — upstream additions with live consumers
+// (DisableSpecialMapIDs, InventoryApCost, QuickPocketsApCostReduction,
+// WorldMapTerrainInfo, XPTable, ViewXPos/ViewYPos to [start] worldmap_view_*).
+// StartXPos/StartYPos keep the fork [worldmap] targets (F-072 Et Tu path).
+inline constexpr size_t kSfallMigrationEntryCount = 70;
 
 } // namespace fallout
 

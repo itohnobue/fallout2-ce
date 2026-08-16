@@ -303,7 +303,7 @@ TEST_CASE("F-21: Reset is idempotent — double-Reset does not access freed prog
 //
 // Production critterIsDead() at critter.cc:962-970 checks:
 //   if (critter == nullptr) return false;
-//   if (FID_TYPE(critter->fid) != OBJ_TYPE_CRITTER) return false;
+//   if (objectTypeFromFid(critter->fid) != OBJ_TYPE_CRITTER) return false;
 //   return (critter->data.critter.combat.results & DAM_DEAD) != 0;
 //
 // Mirror: We model a critter as having an `fid` (for PID_TYPE check)
@@ -322,7 +322,7 @@ struct MirrorCritter {
 static bool mirrorCritterIsDead(const MirrorCritter* critter)
 {
     if (critter == nullptr) return false;
-    if (PID_TYPE(critter->fid) != OBJ_TYPE_CRITTER) return false;
+    if (objectTypeFromPid(critter->fid) != OBJ_TYPE_CRITTER) return false;
     return (critter->combatResults & DAM_DEAD) != 0;
 }
 
@@ -340,7 +340,7 @@ static AfterHitRollValidationResult validateDefender_preF42(
 {
     AfterHitRollValidationResult result;
     if (overrideDefender != nullptr
-        && PID_TYPE(overrideDefender->fid) == OBJ_TYPE_CRITTER) {
+        && objectTypeFromPid(overrideDefender->fid) == OBJ_TYPE_CRITTER) {
         result.overrideAccepted = true;
         result.acceptedDefender = overrideDefender;
     }
@@ -353,7 +353,7 @@ static AfterHitRollValidationResult validateDefender_postF42(
 {
     AfterHitRollValidationResult result;
     if (overrideDefender != nullptr
-        && PID_TYPE(overrideDefender->fid) == OBJ_TYPE_CRITTER
+        && objectTypeFromPid(overrideDefender->fid) == OBJ_TYPE_CRITTER
         && !mirrorCritterIsDead(overrideDefender)) {
         result.overrideAccepted = true;
         result.acceptedDefender = overrideDefender;
@@ -628,7 +628,7 @@ TEST_CASE("F2-02: Return type is void — pattern matches peer functions")
 // Non-critter override causes UB on downstream data.critter.combat access.
 //
 // Fix at sfall_script_hooks.cc:1176:
-//   Added PID_TYPE(overrideUser->pid) == OBJ_TYPE_CRITTER check before
+//   Added objectTypeFromPid(overrideUser->pid) == OBJ_TYPE_CRITTER check before
 //   accepting the override, matching the AfterHitRoll pattern at line 1067.
 //
 // PID_TYPE extracts bits 31..24 of the FID:
@@ -673,14 +673,14 @@ static void mirrorUseSkillOn_postF204(int overrideUserFid,
     }
 
     // F2-04 fix: validate the object is a critter
-    if (PID_TYPE(overrideUserFid) == OBJ_TYPE_CRITTER) {
+    if (objectTypeFromPid(overrideUserFid) == OBJ_TYPE_CRITTER) {
         state.userFid = overrideUserFid;
         state.overridden = true;
     } else {
         // Rejected: non-critter override
-        // Production would call: debugPrint("HOOK_USESKILLON: ignoring non-critter user override (type=%d)", PID_TYPE(overrideUserFid));
+        // Production would call: debugPrint("HOOK_USESKILLON: ignoring non-critter user override (type=%d)", objectTypeFromPid(overrideUserFid));
         state.rejected = true;
-        state.rejectType = PID_TYPE(overrideUserFid);
+        state.rejectType = objectTypeFromPid(overrideUserFid);
     }
 }
 
@@ -717,12 +717,12 @@ static UseSkillOnFullResult mirrorUseSkillOn_full(
             return result; // null object → no override
         }
         // F2-04 fix: validate PID_TYPE
-        if (PID_TYPE(ret0Value) == OBJ_TYPE_CRITTER) {
+        if (objectTypeFromPid(ret0Value) == OBJ_TYPE_CRITTER) {
             result.userFid = ret0Value;
             result.userOverridden = true;
         } else {
             result.rejected = true;
-            result.rejectType = PID_TYPE(ret0Value);
+            result.rejectType = objectTypeFromPid(ret0Value);
         }
     }
 
@@ -881,23 +881,23 @@ TEST_CASE("F2-04: Full ret0 handling — Object* non-critter rejected")
 TEST_CASE("F2-04: Pattern matches AfterHitRoll fix — both use PID_TYPE + OBJ_TYPE_CRITTER")
 {
     // F2-04 uses the same validation pattern as the F-42 fix:
-    //   nullptr check → PID_TYPE(obj->pid) == OBJ_TYPE_CRITTER → accept/reject
+    //   nullptr check → objectTypeFromPid(obj->pid) == OBJ_TYPE_CRITTER → accept/reject
     //
     // F-42:  validateDefender_postF42 — nullptr + PID_TYPE + !critterIsDead
     // F2-04: mirrorUseSkillOn_postF204    — nullptr + PID_TYPE (no dead check
     //         because UseSkillOn targets any critter, not just combatants)
     //
-    // Both validate PID_TYPE(oid->pid) == OBJ_TYPE_CRITTER before accepting
+    // Both validate objectTypeFromPid(oid->pid) == OBJ_TYPE_CRITTER before accepting
     // an Object* returned from script hook execution.
 
-    // Verify the PID_TYPE(oid->pid) expression works correctly:
+    // Verify the objectTypeFromPid(oid->pid) expression works correctly:
     // For a critter with pid = 0x01000001:
     int critterPid = (OBJ_TYPE_CRITTER << 24) | 0x000001;
-    int critterPidType = PID_TYPE(critterPid);
+    int critterPidType = objectTypeFromPid(critterPid);
     CHECK(critterPidType == OBJ_TYPE_CRITTER);
 
     // For an item with pid = 0x00000042:
     int itemPid = (OBJ_TYPE_ITEM << 24) | 0x000042;
-    int itemPidType = PID_TYPE(itemPid);
+    int itemPidType = objectTypeFromPid(itemPid);
     CHECK(itemPidType == OBJ_TYPE_ITEM);
 }

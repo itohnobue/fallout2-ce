@@ -168,12 +168,12 @@ int gameMoviePlay(int movie, int flags)
     debugPrint("\nPlaying movie: %s\n", movieFileName);
 
     char movieFilePath[COMPAT_MAX_PATH];
-    int movieFileSize;
     bool movieFound = false;
 
     // F-017: Check for movie path override set via set_movie_path (0x8177).
     // If a script has overridden the path for this movie ID, use it directly
     // instead of resolving through the normal language-dependent file lookup.
+    int movieFileSize;
     const char* pathOverride = sfallGetMoviePathOverride(movie);
     if (pathOverride != nullptr && pathOverride[0] != '\0') {
         snprintf(movieFilePath, sizeof(movieFilePath), "%s", pathOverride);
@@ -338,17 +338,6 @@ int gameMoviePlay(int movie, int flags)
     return 0;
 }
 
-// 0x44EAE4 gmPaletteFinish
-void gameMovieFadeOut()
-{
-    if (gGameMovieFaded) {
-        paletteFadeTo(_cmap);
-        gGameMovieFaded = false;
-    }
-}
-
-// 68ff38e: default (unconfigured) file name for a built-in movie, used by
-// the config migration to detect non-default overrides.
 const char* gameMovieGetDefaultFileName(int movie)
 {
     if (movie < 0 || movie >= MOVIE_COUNT) {
@@ -358,7 +347,6 @@ const char* gameMovieGetDefaultFileName(int movie)
     return movieDefaultFileNames[movie];
 }
 
-// 68ff38e: set a movie file name at runtime (set_movie_path, 0x8177).
 bool gameMovieSetPath(int movie, const char* fileName)
 {
     if (movie < 0 || movie >= GAME_MOVIE_MAX_COUNT || !gameMovieIsValidFileName(fileName)) {
@@ -369,11 +357,19 @@ bool gameMovieSetPath(int movie, const char* fileName)
     return true;
 }
 
-// 68ff38e: mark a built-in movie as seen (mark_movie_played, 0x8240).
 void gameMovieMarkSeen(int movie)
 {
     if (movie >= 0 && movie < MOVIE_COUNT) {
         gGameMoviesSeen[movie] = 1;
+    }
+}
+
+// 0x44EAE4 gmPaletteFinish
+void gameMovieFadeOut()
+{
+    if (gGameMovieFaded) {
+        paletteFadeTo(_cmap);
+        gGameMovieFaded = false;
     }
 }
 

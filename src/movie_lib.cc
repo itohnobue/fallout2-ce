@@ -1170,7 +1170,7 @@ static int _MVE_sndAdd(unsigned char* dest, unsigned char** src_ptr, int a3, int
     }
 
     if (!_snd_buf) {
-        memcpy(dest, src, a3);
+        memcpy(dest, *src_ptr, a3);
         *src_ptr += a3;
         return a4;
     }

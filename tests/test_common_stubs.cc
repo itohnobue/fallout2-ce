@@ -721,4 +721,24 @@ int Program::procedureCount() const
     return 0;
 }
 
+// sync2 (upstream 1cce144): sfall_global_scripts.cc now calls
+// programProcessProcedureEvents (interpreter.cc) and
+// scriptDetachedContextRegister/Unregister (scripts.cc). Those
+// translation units are not part of test_sources, so provide
+// no-op stubs here (same pattern as programInterpret above).
+void programProcessProcedureEvents(Program* /*program*/)
+{
+    // no-op: event processing requires the full interpreter runtime.
+}
+
+bool scriptDetachedContextRegister(Program* /*program*/, DetachedScriptOwnerKind /*ownerKind*/)
+{
+    return true;
+}
+
+void scriptDetachedContextUnregister(Program* /*program*/)
+{
+    // no-op: detached-context tracking requires the full script runtime.
+}
+
 } // namespace fallout

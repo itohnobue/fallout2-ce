@@ -126,6 +126,7 @@ int ScriptHookCall::numArgs() const { return _numArgs; }
 int ScriptHookCall::maxReturnValues() const { return _maxRetVals; }
 int ScriptHookCall::numReturnValues() const { return _numRetVals; }
 int ScriptHookCall::numScriptReturnValues() const { return _scriptRetVals; }
+HookType ScriptHookCall::hookType() const { return _hookType; }
 
 void ScriptHookCall::drainStaleEntries(uintptr_t currentStackAddr)
 {
@@ -515,7 +516,7 @@ int     arg2 - The result of engine calculation: 1 - failure, 2 - success
 int     ret0 - The new delay in ticks (maximum 18000 == 30min). Negative values use engine behavior.
 int     ret1 - The new result: 0/1 - failure, 2/3 - success. Other values use engine behavior.
 */
-int scriptHooks_ExplosiveTimer(Object* explosive, int delay, int eventType)
+int scriptHooks_ExplosiveTimer(Object* explosive, int delay, EventType eventType)
 {
     if (explosive == nullptr) {
         debugPrint("HOOK_EXPLOSIVETIMER: explosive is null, returning -1\n");
@@ -574,7 +575,7 @@ int     arg5 - 1 if this is an attack using a melee weapon, 0 otherwise
 int     ret0 - Either the damage to be used, if ret1 isn't given, or the new minimum damage if it is
 int     ret1 - The new maximum damage
 */
-void scriptHooks_ItemDamage(Object* weapon, Object* critter, int hitMode, bool isMeleeWeaponAttack, int* minDamagePtr, int* maxDamagePtr)
+void scriptHooks_ItemDamage(Object* weapon, Object* critter, HitMode hitMode, bool isMeleeWeaponAttack, int* minDamagePtr, int* maxDamagePtr)
 {
     if (critter == nullptr || minDamagePtr == nullptr || maxDamagePtr == nullptr) return;
 
@@ -934,7 +935,7 @@ Item    arg4 - The weapon for which the cost is calculated. If it is 0, the
 
 int     ret0 - The new AP cost
 */
-int scriptHooks_CalcApCost(Object* critter, int hitMode, bool aiming, int actionPoints, Object* weapon)
+int scriptHooks_CalcApCost(Object* critter, HitMode hitMode, bool aiming, int actionPoints, Object* weapon)
 {
     if (scriptHooks[HOOK_CALCAPCOST].empty()) {
         return actionPoints;
@@ -1040,7 +1041,7 @@ int     arg7 - The raw hit chance before applying the cap
 
 int     ret0 - The new hit chance. The value is limited to the range of -99 to 999
 */
-int scriptHooks_ToHit(Object* attacker, Object* defender, int tile, int hitMode, int hitLocation, int hitChance, int hitChanceUncapped, bool useDistance)
+int scriptHooks_ToHit(Object* attacker, Object* defender, int tile, HitMode hitMode, HitLocation hitLocation, int hitChance, int hitChanceUncapped, bool useDistance)
 {
     if (scriptHooks[HOOK_TOHIT].empty()) {
         return hitChance;
@@ -1077,7 +1078,7 @@ int     ret0 - Override the hit/miss
 int     ret1 - Override the targeted bodypart
 Critter ret2 - Override the target of the attack
 */
-int scriptHooks_AfterHitRoll(Object* attacker, Object** defenderPtr, int* hitLocationPtr, int hitChance, int roll)
+int scriptHooks_AfterHitRoll(Object* attacker, Object** defenderPtr, HitLocation* hitLocationPtr, int hitChance, int roll)
 {
     if (defenderPtr == nullptr || hitLocationPtr == nullptr) return roll;
 
@@ -1100,8 +1101,8 @@ int scriptHooks_AfterHitRoll(Object* attacker, Object** defenderPtr, int* hitLoc
     }
 
     if (hook.numReturnValues() > 1) {
-        int hitLocationOverride = hook.getReturnValueAt(1).asInt();
-        if (hitLocationOverride >= 0 && hitLocationOverride < HIT_LOCATION_COUNT) {
+        HitLocation hitLocationOverride = static_cast<HitLocation>(hook.getReturnValueAt(1).asInt());
+        if (hitLocationIsValid(hitLocationOverride)) {
             *hitLocationPtr = hitLocationOverride;
         } else {
             debugPrint("HOOK_AFTERHITROLL: ignoring invalid hit location override %d", hitLocationOverride);
@@ -1130,10 +1131,10 @@ int scriptHooks_AfterHitRoll(Object* attacker, Object** defenderPtr, int* hitLoc
         // lines 4133 and 4170).  Reject the override and log a
         // diagnostic, consistent with how other invalid return values
         // are handled in this function.
-        if (overrideDefender != nullptr && PID_TYPE(overrideDefender->pid) == OBJ_TYPE_CRITTER && !critterIsDead(overrideDefender)) {
+        if (overrideDefender != nullptr && objectTypeFromPid(overrideDefender->pid) == OBJ_TYPE_CRITTER && !critterIsDead(overrideDefender)) {
             *defenderPtr = overrideDefender;
         } else if (overrideDefender != nullptr) {
-            debugPrint("HOOK_AFTERHITROLL: ignoring non-critter or dead defender override (type=%d, dead=%d)", PID_TYPE(overrideDefender->pid), critterIsDead(overrideDefender) ? 1 : 0);
+            debugPrint("HOOK_AFTERHITROLL: ignoring non-critter or dead defender override (type=%d, dead=%d)", objectTypeFromPid(overrideDefender->pid), critterIsDead(overrideDefender) ? 1 : 0);
         }
     }
 
@@ -1154,7 +1155,7 @@ int     arg4 - The death anim id calculated by Fallout
 
 int     ret0 - The death anim id to override with
 */
-void scriptHooks_DeathAnim(Object* attacker, Object* defender, Object* weapon, int damage, int* anim)
+void scriptHooks_DeathAnim(Object* attacker, Object* defender, Object* weapon, int damage, AnimationType* anim)
 {
     if (anim == nullptr) {
         debugPrint("HOOK_DEATHANIM2: anim pointer is null, cannot override\n");
@@ -1179,9 +1180,9 @@ void scriptHooks_DeathAnim(Object* attacker, Object* defender, Object* weapon, i
         // F-M03: Validate the animation FID is a known death animation.
         // Only death/knockdown animations (ANIM_FALL_BACK through ANIM_FALL_FRONT_BLOOD)
         // are valid for this hook; non-death-anim FIDs could crash the rendering pipeline.
-        int animType = FID_ANIM_TYPE(animFid);
+        AnimationType animType = animationTypeFromFid(animFid);
         if (animType >= FIRST_KNOCKDOWN_AND_DEATH_ANIM && animType <= LAST_KNOCKDOWN_AND_DEATH_ANIM) {
-            *anim = animFid;
+            *anim = static_cast<AnimationType>(animFid);
         } else {
             debugPrint("HOOK_DEATHANIM2: ignoring invalid anim FID 0x%x (type=%d outside death range [%d,%d])\n",
                        animFid, animType, FIRST_KNOCKDOWN_AND_DEATH_ANIM, LAST_KNOCKDOWN_AND_DEATH_ANIM);
@@ -1201,7 +1202,7 @@ int     arg2 - skill being used
 int     ret0 - a new critter to override the user critter. Pass -1 to cancel the skill use, pass 0 to skip this return value
 int     ret1 - pass 1 to allow the skill to be used in combat
 */
-UseSkillOnHookResult scriptHooks_UseSkillOn(Object** userPtr, Object* target, int skill)
+UseSkillOnHookResult scriptHooks_UseSkillOn(Object** userPtr, Object* target, Skill skill)
 {
     if (userPtr == nullptr || *userPtr == nullptr || target == nullptr) {
         return { true, false, false };
@@ -1239,11 +1240,11 @@ UseSkillOnHookResult scriptHooks_UseSkillOn(Object** userPtr, Object* target, in
         // have valid critter data, and downstream dereferences of
         // data.critter.combat are undefined behavior.  This matches the
         // HOOK_AFTERHITROLL pattern at line ~1064.
-        if (overrideUser != nullptr && PID_TYPE(overrideUser->pid) == OBJ_TYPE_CRITTER) {
+        if (overrideUser != nullptr && objectTypeFromPid(overrideUser->pid) == OBJ_TYPE_CRITTER) {
             *userPtr = overrideUser;
             result.userOverridden = true;
         } else if (overrideUser != nullptr) {
-            debugPrint("HOOK_USESKILLON: ignoring non-critter user override (type=%d)", PID_TYPE(overrideUser->pid));
+            debugPrint("HOOK_USESKILLON: ignoring non-critter user override (type=%d)", objectTypeFromPid(overrideUser->pid));
         }
     }
 
@@ -1266,7 +1267,7 @@ int     arg3 - skill bonus from items such as first aid kits
 
 int     ret0 - overrides hard-coded handler (-1 - use engine handler, any other value - override)
 */
-int scriptHooks_UseSkill(Object* user, Object* target, int skill, int skillBonus)
+int scriptHooks_UseSkill(Object* user, Object* target, Skill skill, int skillBonus)
 {
     if (scriptHooks[HOOK_USESKILL].empty()) {
         return -1;
@@ -1381,6 +1382,20 @@ int scriptHooks_UseItemOn(Object* user, Object* target, Object* objUsed)
 }
 
 /*
+Runs when an object is removed from a container or critter's inventory for any reason.
+
+Obj     arg0 - the owner that the object is being removed from
+Item    arg1 - the item that is being removed
+int     arg2 - the number of items to remove
+int     arg3 - The reason the object is being removed (RemoveInventoryObjectHookReason / RMOBJ_* constants)
+Obj     arg4 - The destination object when the item is moved to another object, 0 otherwise
+*/
+void scriptHooks_RemoveInventoryObject(Object* owner, Object* item, int quantity, RemoveInventoryObjectHookReason reason, Object* target)
+{
+    ScriptHookCall(HOOK_REMOVEINVENOBJ, 0, { owner, item, quantity, static_cast<int>(reason), target }).call();
+}
+
+/*
 Runs when:
 
 - Game calculates how much damage each target will get. This includes primary target as well as all extras (explosions and bursts). This happens BEFORE the actual attack animation.
@@ -1437,9 +1452,6 @@ void scriptHooks_ComputeDamage(Attack* attack, int numRounds, int baseDmgMult)
     // (HOOK_ITEMDAMAGE, HOOK_TOHIT, HOOK_AFTERHITROLL) all clamp/validate their
     // return values; HOOK_COMBATDAMAGE was the only hook writing raw script return
     // values without any bounds checking.
-    constexpr int DAMAGE_FIELDS[] = {0, 1};          // defenderDamage, attackerDamage
-    constexpr int FLAGS_FIELDS[] = {2, 3};           // defenderFlags, attackerFlags
-    constexpr int KNOCKBACK_FIELD = 4;               // defenderKnockback
     // UM-94: sfall allows negative damage values for healing effects
     // (e.g., stimpak scripts returning -15 to heal). CE previously
     // clamped to COMBAT_DAMAGE_MIN=0, breaking healing scripts.
@@ -1457,30 +1469,45 @@ void scriptHooks_ComputeDamage(Attack* attack, int numRounds, int baseDmgMult)
     // silently clamp higher values to 20, misleading mod authors.
     constexpr int COMBAT_KNOCKBACK_MAX = MAX_KNOCKDOWN_DISTANCE;
 
+    // Field indices for the generic loop below (see F-01 clamp logic).
+    // defenderFlags/attackerFlags are Dam-typed now (upstream enum
+    // hardening), so they are written separately after the loop.
+    constexpr int DAMAGE_FIELDS_0 = 0;
+    constexpr int DAMAGE_FIELDS_1 = 1;
+    constexpr int FLAGS_FIELDS_0 = 2;
+    constexpr int FLAGS_FIELDS_1 = 3;
+    constexpr int KNOCKBACK_FIELD_0 = 4;
+
     int* fields[] = {
         &attack->defenderDamage,
         &attack->attackerDamage,
-        &attack->defenderFlags,
-        &attack->attackerFlags,
         &attack->defenderKnockback
     };
 
     int numRets = hook.numReturnValues();
-    for (int i = 0; i < numRets; i++) {
+    for (int i = 0; i < numRets && i < 2; i++) {
         int value = hook.getReturnValueAt(i).asInt();
         // Clamp damage values.
-        if (i == DAMAGE_FIELDS[0] || i == DAMAGE_FIELDS[1]) {
+        if (i == DAMAGE_FIELDS_0 || i == DAMAGE_FIELDS_1) {
             value = std::clamp(value, COMBAT_DAMAGE_MIN, COMBAT_DAMAGE_MAX);
         }
-        // Mask flag values to valid DAM_* bits.
-        if (i == FLAGS_FIELDS[0] || i == FLAGS_FIELDS[1]) {
-            value &= COMBAT_FLAGS_MASK;
-        }
-        // Clamp knockback value.
-        if (i == KNOCKBACK_FIELD) {
-            value = std::clamp(value, COMBAT_KNOCKBACK_MIN, COMBAT_KNOCKBACK_MAX);
-        }
         *fields[i] = value;
+    }
+
+    // defenderFlags (index 2) and attackerFlags (index 3) are Dam-typed.
+    if (numRets > FLAGS_FIELDS_0) {
+        int value = hook.getReturnValueAt(FLAGS_FIELDS_0).asInt();
+        attack->defenderFlags = static_cast<Dam>(value & COMBAT_FLAGS_MASK);
+    }
+    if (numRets > FLAGS_FIELDS_1) {
+        int value = hook.getReturnValueAt(FLAGS_FIELDS_1).asInt();
+        attack->attackerFlags = static_cast<Dam>(value & COMBAT_FLAGS_MASK);
+    }
+
+    // defenderKnockback (index 4).
+    if (numRets > KNOCKBACK_FIELD_0) {
+        int value = std::clamp(hook.getReturnValueAt(KNOCKBACK_FIELD_0).asInt(), COMBAT_KNOCKBACK_MIN, COMBAT_KNOCKBACK_MAX);
+        attack->defenderKnockback = value;
     }
 }
 
@@ -1570,11 +1597,11 @@ int scriptHooks_AdjustFid(int vanillaFid, int modifiedFid)
         // F-07: Validate the return FID — must be a critter FID
         // (OBJ_TYPE_CRITTER type bits) since this hook is for character
         // FID display in UI (inventory, barter).
-        if (FID_TYPE(overrideFid) == OBJ_TYPE_CRITTER) {
+        if (objectTypeFromFid(overrideFid) == OBJ_TYPE_CRITTER) {
             return overrideFid;
         }
         debugPrint("HOOK_ADJUSTFID: ignoring invalid FID 0x%x (type=%d, expected OBJ_TYPE_CRITTER=%d)\n",
-                   overrideFid, FID_TYPE(overrideFid), OBJ_TYPE_CRITTER);
+                   overrideFid, objectTypeFromFid(overrideFid), OBJ_TYPE_CRITTER);
         return modifiedFid;
     }
 
@@ -1639,7 +1666,7 @@ bool scriptHooks_InvenWield(Object* critter, Object* item, InvenSlot slot, int i
 
     int     ret0 - overrides the result of engine function
 */
-bool scriptHooks_CanUseWeapon(bool result, Object* critter, Object* weapon, int hitMode)
+bool scriptHooks_CanUseWeapon(bool result, Object* critter, Object* weapon, HitMode hitMode)
 {
     if (scriptHooks[HOOK_CANUSEWEAPON].empty()) {
         return result;

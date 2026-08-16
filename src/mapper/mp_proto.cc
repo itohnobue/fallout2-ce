@@ -68,7 +68,7 @@ bool can_modify_protos = false;
 static int subwin = -1;
 
 // 0x559C6C
-static int critFlagList[CRITTER_FLAG_COUNT] = {
+static CritterFlags critFlagList[CRITTER_FLAG_COUNT] = {
     CRITTER_NO_STEAL,
     CRITTER_NO_DROP,
     CRITTER_NO_LIMBS,
@@ -98,7 +98,7 @@ static const char* critFlagStrs[CRITTER_FLAG_COUNT] = {
 // 0x4922F8
 void init_mapper_protos()
 {
-    edit_window_color = _colorTable[10570];
+    edit_window_color = COLOR_DARK_GREY_2;
     can_modify_protos = target_overriden();
 }
 
@@ -131,14 +131,14 @@ int proto_choose_container_flags(Proto* proto)
             50,
             125,
             15,
-            _colorTable[32747] | 0x10000);
+            COLOR_LIGHT_YELLOW | DRAW_TEXT_FLAG_SHADOWED);
     } else {
         windowDrawText(win,
             yesno[NO],
             50,
             125,
             15,
-            _colorTable[32747] | 0x10000);
+            COLOR_LIGHT_YELLOW | DRAW_TEXT_FLAG_SHADOWED);
     }
 
     _win_register_text_button(win,
@@ -157,14 +157,14 @@ int proto_choose_container_flags(Proto* proto)
             50,
             125,
             36,
-            _colorTable[32747] | 0x10000);
+            COLOR_LIGHT_YELLOW | DRAW_TEXT_FLAG_SHADOWED);
     } else {
         windowDrawText(win,
             yesno[NO],
             50,
             125,
             36,
-            _colorTable[32747] | 0x10000);
+            COLOR_LIGHT_YELLOW | DRAW_TEXT_FLAG_SHADOWED);
     }
 
     windowDrawBorder(win);
@@ -189,14 +189,14 @@ int proto_choose_container_flags(Proto* proto)
                     50,
                     125,
                     15,
-                    _colorTable[32747] | 0x10000);
+                    COLOR_LIGHT_YELLOW | DRAW_TEXT_FLAG_SHADOWED);
             } else {
                 windowDrawText(win,
                     yesno[NO],
                     50,
                     125,
                     15,
-                    _colorTable[32747] | 0x10000);
+                    COLOR_LIGHT_YELLOW | DRAW_TEXT_FLAG_SHADOWED);
             }
 
             windowRefresh(win);
@@ -209,14 +209,14 @@ int proto_choose_container_flags(Proto* proto)
                     50,
                     125,
                     36,
-                    _colorTable[32747] | 0x10000);
+                    COLOR_LIGHT_YELLOW | DRAW_TEXT_FLAG_SHADOWED);
             } else {
                 windowDrawText(win,
                     yesno[NO],
                     50,
                     125,
                     36,
-                    _colorTable[32747] | 0x10000);
+                    COLOR_LIGHT_YELLOW | DRAW_TEXT_FLAG_SHADOWED);
             }
 
             windowRefresh(win);
@@ -267,14 +267,14 @@ int proto_subdata_setup_int_button(const char* title, int key, int value, int mi
             38,
             button_x + value_offset_x,
             *y + 4,
-            _colorTable[32747] | 0x10000);
+            COLOR_LIGHT_YELLOW | DRAW_TEXT_FLAG_SHADOWED);
     } else {
         windowDrawText(subwin,
             "<ERROR>",
             38,
             button_x + value_offset_x,
             *y + 4,
-            _colorTable[31744] | 0x10000);
+            COLOR_RED | DRAW_TEXT_FLAG_SHADOWED);
     }
 
     *y += 21;
@@ -323,14 +323,14 @@ int proto_subdata_setup_fid_button(const char* title, int key, int fid, int* y, 
             80,
             button_x + value_offset_x,
             *y + 4,
-            _colorTable[32747] | 0x10000);
+            COLOR_LIGHT_YELLOW | DRAW_TEXT_FLAG_SHADOWED);
     } else {
         windowDrawText(subwin,
             "None",
             80,
             button_x + value_offset_x,
             *y + 4,
-            _colorTable[992] | 0x10000);
+            COLOR_GREEN | DRAW_TEXT_FLAG_SHADOWED);
     }
 
     *y += 21;
@@ -372,14 +372,14 @@ int proto_subdata_setup_pid_button(const char* title, int key, int pid, int* y, 
             49,
             button_x + value_offset_x,
             *y + 4,
-            _colorTable[32747] | 0x10000);
+            COLOR_LIGHT_YELLOW | DRAW_TEXT_FLAG_SHADOWED);
     } else {
         windowDrawText(subwin,
             "None",
             49,
             button_x + value_offset_x,
             *y + 4,
-            _colorTable[992] | 0x10000);
+            COLOR_GREEN | DRAW_TEXT_FLAG_SHADOWED);
     }
 
     *y += 21;
@@ -422,12 +422,12 @@ void proto_critter_flags_redraw(int win, int pid)
 
     for (index = 0; index < CRITTER_FLAG_COUNT; index++) {
         if (critterFlagCheck(pid, critFlagList[index])) {
-            color = _colorTable[992];
+            color = COLOR_GREEN;
         } else {
-            color = _colorTable[10570];
+            color = COLOR_DARK_GREY_2;
         }
 
-        windowDrawText(win, critFlagStrs[index], 44, x, 195, color | 0x10000);
+        windowDrawText(win, critFlagStrs[index], 44, x, 195, color | DRAW_TEXT_FLAG_SHADOWED);
         x += 48;
     }
 }
@@ -444,7 +444,7 @@ int proto_critter_flags_modify(int pid)
         return -1;
     }
 
-    rc = win_yes_no("Can't be stolen from?", 340, 200, _colorTable[32747] | 0x10000);
+    rc = win_yes_no("Can't be stolen from?", 340, 200, COLOR_LIGHT_YELLOW | DRAW_TEXT_FLAG_SHADOWED);
     if (rc == -1) {
         return -1;
     }
@@ -453,7 +453,7 @@ int proto_critter_flags_modify(int pid)
         flags |= CRITTER_NO_STEAL;
     }
 
-    rc = win_yes_no("Can't Drop items?", 340, 200, _colorTable[32747] | 0x10000);
+    rc = win_yes_no("Can't Drop items?", 340, 200, COLOR_LIGHT_YELLOW | DRAW_TEXT_FLAG_SHADOWED);
     if (rc == -1) {
         return -1;
     }
@@ -462,7 +462,7 @@ int proto_critter_flags_modify(int pid)
         flags |= CRITTER_NO_DROP;
     }
 
-    rc = win_yes_no("Can't lose limbs?", 340, 200, _colorTable[32747] | 0x10000);
+    rc = win_yes_no("Can't lose limbs?", 340, 200, COLOR_LIGHT_YELLOW | DRAW_TEXT_FLAG_SHADOWED);
     if (rc == -1) {
         return -1;
     }
@@ -471,7 +471,7 @@ int proto_critter_flags_modify(int pid)
         flags |= CRITTER_NO_LIMBS;
     }
 
-    rc = win_yes_no("Dead Bodies Can't Age?", 340, 200, _colorTable[32747] | 0x10000);
+    rc = win_yes_no("Dead Bodies Can't Age?", 340, 200, COLOR_LIGHT_YELLOW | DRAW_TEXT_FLAG_SHADOWED);
     if (rc == -1) {
         return -1;
     }
@@ -480,7 +480,7 @@ int proto_critter_flags_modify(int pid)
         flags |= CRITTER_NO_AGE;
     }
 
-    rc = win_yes_no("Can't Heal by Aging?", 340, 200, _colorTable[32747] | 0x10000);
+    rc = win_yes_no("Can't Heal by Aging?", 340, 200, COLOR_LIGHT_YELLOW | DRAW_TEXT_FLAG_SHADOWED);
     if (rc == -1) {
         return -1;
     }
@@ -489,7 +489,7 @@ int proto_critter_flags_modify(int pid)
         flags |= CRITTER_NO_HEAL;
     }
 
-    rc = win_yes_no("Is Invlunerable????", 340, 200, _colorTable[32747] | 0x10000);
+    rc = win_yes_no("Is Invulnerable????", 340, 200, COLOR_LIGHT_YELLOW | DRAW_TEXT_FLAG_SHADOWED);
     if (rc == -1) {
         return -1;
     }
@@ -498,7 +498,7 @@ int proto_critter_flags_modify(int pid)
         flags |= CRITTER_INVULNERABLE;
     }
 
-    rc = win_yes_no("Can't Flatten on Death?", 340, 200, _colorTable[32747] | 0x10000);
+    rc = win_yes_no("Can't Flatten on Death?", 340, 200, COLOR_LIGHT_YELLOW | DRAW_TEXT_FLAG_SHADOWED);
     if (rc == -1) {
         return -1;
     }
@@ -507,7 +507,7 @@ int proto_critter_flags_modify(int pid)
         flags |= CRITTER_FLAT;
     }
 
-    rc = win_yes_no("Has Special Death?", 340, 200, _colorTable[32747] | 0x10000);
+    rc = win_yes_no("Has Special Death?", 340, 200, COLOR_LIGHT_YELLOW | DRAW_TEXT_FLAG_SHADOWED);
     if (rc == -1) {
         return -1;
     }
@@ -516,7 +516,7 @@ int proto_critter_flags_modify(int pid)
         flags |= CRITTER_SPECIAL_DEATH;
     }
 
-    rc = win_yes_no("Has Extra Hand-To-Hand Range?", 340, 200, _colorTable[32747] | 0x10000);
+    rc = win_yes_no("Has Extra Hand-To-Hand Range?", 340, 200, COLOR_LIGHT_YELLOW | DRAW_TEXT_FLAG_SHADOWED);
     if (rc == -1) {
         return -1;
     }
@@ -525,7 +525,7 @@ int proto_critter_flags_modify(int pid)
         flags |= CRITTER_LONG_LIMBS;
     }
 
-    rc = win_yes_no("Can't be knocked back?", 340, 200, _colorTable[32747] | 0x10000);
+    rc = win_yes_no("Can't be knocked back?", 340, 200, COLOR_LIGHT_YELLOW | DRAW_TEXT_FLAG_SHADOWED);
     if (rc == -1) {
         return -1;
     }
@@ -535,7 +535,7 @@ int proto_critter_flags_modify(int pid)
     }
 
     if (!can_modify_protos) {
-        win_timed_msg("Can't modify protos!", _colorTable[31744] | 0x10000);
+        win_timed_msg("Can't modify protos!", COLOR_RED | DRAW_TEXT_FLAG_SHADOWED);
         return -1;
     }
 
@@ -553,20 +553,19 @@ int proto_critter_flags_modify(int pid)
 // 0x497520
 int mp_pick_kill_type()
 {
-    char* names[KILL_TYPE_COUNT];
-    int index;
+    char* names[KILL_TYPE_DEFAULT_COUNT];
 
-    for (index = 0; index < KILL_TYPE_COUNT; index++) {
-        names[index] = killTypeGetName(index);
+    for (KillType killType = KILL_TYPE_FIRST; killType < KILL_TYPE_DEFAULT_COUNT; killType++) {
+        names[killType] = killTypeGetName(killType);
     }
 
     return _win_list_select("Kill Type",
         names,
-        KILL_TYPE_COUNT,
+        KILL_TYPE_DEFAULT_COUNT,
         nullptr,
         50,
         100,
-        _colorTable[32747] | 0x10000);
+        COLOR_LIGHT_YELLOW | DRAW_TEXT_FLAG_SHADOWED);
 }
 
 // 0x497568
@@ -594,7 +593,7 @@ int proto_pick_ai_packet(int* value)
         nullptr,
         50,
         100,
-        _colorTable[32747] | 0x10000);
+        COLOR_LIGHT_YELLOW | DRAW_TEXT_FLAG_SHADOWED);
     if (rc != -1) {
         *value = rc;
     }
@@ -608,14 +607,14 @@ int proto_pick_ai_packet(int* value)
 }
 
 // 0x49B778
-int proto_build_all_type(int type)
+int proto_build_all_type(ObjectType type)
 {
     // TODO: Incomplete.
     (void)type;
     return 0;
 }
 
-int proto_build_all_type_binary(int type)
+int proto_build_all_type_binary(ObjectType type)
 {
     // TODO: rebuild binary proto list for given object type.
     (void)type;
@@ -651,7 +650,7 @@ void swap_protos()
 
 static unsigned char itemIconsBgColor()
 {
-    return _colorTable[21];
+    return COLOR_BLUE_2;
 };
 
 // proto_choose_multi_pids_update
@@ -684,7 +683,7 @@ static void protoChooseMultiPidsUpdate(int win, int pidType, int scrollOffset, p
                 const char* name = protoGetName(pid);
                 int textY = cellY + kArtH + 5;
                 bufferFill(buf + textY * pitch + cellX, kCellPitchX, fontGetLineHeight(), pitch, edit_window_color);
-                windowDrawText(win, name, 80, cellX, textY, _colorTable[32747] | FONT_SHADOW);
+                windowDrawText(win, name, 80, cellX, textY, COLOR_LIGHT_YELLOW | DRAW_TEXT_FLAG_SHADOWED);
             }
         }
     }
@@ -693,7 +692,7 @@ static void protoChooseMultiPidsUpdate(int win, int pidType, int scrollOffset, p
 }
 
 // proto_choose_multi_pids_func
-int protoChooseMultiPids(int pidType, protoChooseFidCallback fidFunc, protoChooseAddCallback addFunc)
+int protoChooseMultiPids(ObjectType pidType, protoChooseFidCallback fidFunc, protoChooseAddCallback addFunc)
 {
     constexpr int kGridCols = 4;
     constexpr int kGridRows = 4;
@@ -727,7 +726,7 @@ int protoChooseMultiPids(int pidType, protoChooseFidCallback fidFunc, protoChoos
             int cellY = kGridY + row * kCellPitchY;
             int keyCode = kBaseKey + row * kGridCols + col;
 
-            bufferDrawRect(buf, pitch, cellX, cellY, cellX + kCellBorderW - 1, cellY + kCellBorderH - 1, _colorTable[2]);
+            bufferDrawRect(buf, pitch, cellX, cellY, cellX + kCellBorderW - 1, cellY + kCellBorderH - 1, COLOR_BLACK_2);
 
             int btn = buttonCreate(win, cellX, cellY, kCellBorderW, kCellBorderH, -1, -1, -1, keyCode, nullptr, nullptr, nullptr, 0);
             if (btn != -1) {

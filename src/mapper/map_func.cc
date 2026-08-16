@@ -40,7 +40,7 @@ static bool block_obj_view_on = false;
 static int fidShowList[9] = { 0 };
 static int blockedFidCache[9] = { 0 };
 
-constexpr int kBlockViewArtType[9] = { 2, 2, 2, 2, 3, 3, 5, 5, 2 };
+constexpr ObjectType kBlockViewArtType[9] = { OBJ_TYPE_SCENERY, OBJ_TYPE_SCENERY, OBJ_TYPE_SCENERY, OBJ_TYPE_SCENERY, OBJ_TYPE_WALL, OBJ_TYPE_WALL, OBJ_TYPE_MISC, OBJ_TYPE_MISC, OBJ_TYPE_SCENERY };
 constexpr const char* kBlockViewListName[9] = {
     "block2", "block3", "block4", "block5",
     "block2", "block3", "scrblk", "trnblk", "blkexit"
@@ -82,7 +82,7 @@ void place_entrance_hex()
                 if (tileSetCenter(tile, TILE_SET_CENTER_FLAG_IGNORE_SCROLL_RESTRICTIONS) == 0) {
                     mapSetEnteringLocation(gElevation, tile, rotation);
                 } else {
-                    win_timed_msg("ERROR: Entrance out of range!", _colorTable[32747] | FONT_SHADOW);
+                    win_timed_msg("ERROR: Entrance out of range!", COLOR_LIGHT_YELLOW | DRAW_TEXT_FLAG_SHADOWED);
                 }
             }
         }
@@ -113,6 +113,7 @@ void pick_region(Rect* rect)
     temp.top = y;
     temp.right = x;
     temp.bottom = y;
+    *rect = temp;
 
     while ((mouseGetEvent() & MOUSE_EVENT_LEFT_BUTTON_UP) == 0) {
         sharedFpsLimiter.mark();
@@ -122,8 +123,10 @@ void pick_region(Rect* rect)
 
         if (x != temp.right || y != temp.bottom) {
             erase_rect(rect);
+            temp.right = x;
+            temp.bottom = y;
             sort_rect(rect, &temp);
-            draw_rect(rect, _colorTable[32747]);
+            draw_rect(rect, COLOR_LIGHT_YELLOW);
         }
         renderPresent();
         sharedFpsLimiter.throttle();
@@ -181,7 +184,11 @@ void draw_rect(Rect* rect, unsigned char color)
 // 0x4843A0
 void erase_rect(Rect* rect)
 {
-    Rect r = *rect;
+    Rect r;
+    r.left = rect->left;
+    r.top = rect->top;
+    r.right = rect->right;
+    r.bottom = rect->bottom;
 
     r.bottom = rect->top;
     windowRefreshAll(&r);
@@ -192,6 +199,7 @@ void erase_rect(Rect* rect)
 
     r.left = rect->left;
     r.top = rect->bottom;
+    r.right = rect->right;
     windowRefreshAll(&r);
 
     r.top = rect->top;
@@ -200,7 +208,7 @@ void erase_rect(Rect* rect)
 }
 
 // 0x484400
-int toolbar_proto(int type, int id)
+int toolbar_proto(ObjectType type, int id)
 {
     if (id < proto_max_id(type)) {
         return (type << 24) | id;
@@ -226,7 +234,7 @@ void map_toggle_block_obj_viewing(int mode)
             if (fid == -1) {
                 debugPrint("\nError: art_list_index failed in toggle_obj_view");
             } else {
-                fidShowList[i] = buildFid(kBlockViewArtType[i], fid, 0, 0, 0);
+                fidShowList[i] = buildFid(kBlockViewArtType[i], fid);
             }
         }
     }
@@ -264,7 +272,7 @@ void map_load_dialog()
     char** fileList;
     int count = fileNameListInit("maps\\*.map", &fileList);
     if (count == -1) {
-        win_timed_msg("No maps found!", _colorTable[32747] | FONT_SHADOW);
+        win_timed_msg("No maps found!", COLOR_LIGHT_YELLOW | DRAW_TEXT_FLAG_SHADOWED);
         return;
     }
 
@@ -405,20 +413,19 @@ int pickHex()
 
 //
 // pick_toolbar
-int pickToolbar(int topY)
+ObjectType pickToolbar(int topY)
 {
-    constexpr int kTypeCount = 6;
-    char names[kTypeCount][20];
-    char* items[kTypeCount];
+    char names[OBJ_TYPE_PROTO_COUNT][20];
+    char* items[OBJ_TYPE_PROTO_COUNT];
 
-    for (int i = 0; i < kTypeCount; i++) {
+    for (ObjectType i = OBJ_TYPE_FIRST; i < OBJ_TYPE_PROTO_COUNT; i++) {
         snprintf(names[i], sizeof(names[i]), " %s", artGetObjectTypeName(i));
         // Original mapper highlights the type's first letter as a hotkey by uppercasing it.
         names[i][1] = toupper(names[i][1]);
         items[i] = names[i];
     }
 
-    return _win_pull_down(items, kTypeCount, 0, topY, _colorTable[32747] | FONT_SHADOW);
+    return static_cast<ObjectType>(_win_pull_down(items, OBJ_TYPE_PROTO_COUNT, 0, topY, COLOR_LIGHT_YELLOW | DRAW_TEXT_FLAG_SHADOWED));
 }
 
 // place_object_
@@ -456,7 +463,7 @@ void placeTile(int pid, int fid)
     int oldValue = *squarePtr;
 
     if (tileRoofIsVisible()) {
-        int oldRoofFid = buildFid(OBJ_TYPE_TILE, (oldValue >> 16) & 0xFFF, 0, 0, 0);
+        int oldRoofFid = buildFid(OBJ_TYPE_TILE, (oldValue >> 16) & 0xFFF);
         if (oldRoofFid == fid) {
             return;
         }
@@ -471,7 +478,7 @@ void placeTile(int pid, int fid)
         Rect rect = { sx, sy, sx + 80, sy + 36 };
         tileWindowRefreshRect(&rect, gElevation);
     } else {
-        int oldFloorFid = buildFid(OBJ_TYPE_TILE, oldValue & 0xFFF, 0, 0, 0);
+        int oldFloorFid = buildFid(OBJ_TYPE_TILE, oldValue & 0xFFF);
         if (oldFloorFid == fid) {
             return;
         }
@@ -650,7 +657,7 @@ static void copy_object_to_tile_pobj(int srcFid, int dstTile, Object* srcObj, bo
     bool gatePassed = useArtNotProtos
         || existing == nullptr
         || srcObj == nullptr
-        || PID_TYPE(srcObj->pid) == OBJ_TYPE_TILE
+        || objectTypeFromPid(srcObj->pid) == OBJ_TYPE_TILE
         || protoGetProto(srcObj->pid, &proto) == -1
         || (proto != nullptr && (proto->flags & 0x10) != 0);
 
@@ -718,7 +725,7 @@ static void copy_object_to_tile_pobj(int srcFid, int dstTile, Object* srcObj, bo
         }
     }
 
-    int newType = FID_TYPE(newFid);
+    ObjectType newType = objectTypeFromFid(newFid);
     if (newType == OBJ_TYPE_CRITTER || newType == OBJ_TYPE_MISC) {
         objectSetRotation(copy, rotation, nullptr);
     }
@@ -761,11 +768,11 @@ void copyObject(int filterType)
                     || obj == gDude
                     || obj == gGameMouseBouncingCursor
                     || obj == gGameMouseHexCursor
-                    || (obj->flags & OBJECT_HIDDEN) != 0
-                    || filterType != -1 && FID_TYPE(obj->fid) != filterType) continue;
+                    || (obj->flags & OBJECT_HIDDEN) != OBJECT_NONE
+                    || filterType != -1 && objectTypeFromFid(obj->fid) != filterType) continue;
 
                 if (mpCopyCount >= kMaxCopyEntries) {
-                    _win_msg("Too many objects in region!", 80, 80, _colorTable[31744]);
+                    _win_msg("Too many objects in region!", 80, 80, COLOR_RED);
                     return;
                 }
 
@@ -780,7 +787,7 @@ void copyObject(int filterType)
     }
 
     if (mpCopyCount == 0) {
-        _win_msg("Nothing selected.", 80, 80, _colorTable[31744]);
+        _win_msg("Nothing selected.", 80, 80, COLOR_RED);
         return;
     }
 
@@ -866,11 +873,11 @@ void copyTile()
     int srcTiles[kMaxTiles];
     int srcCount = squares_in_rect(&region, gElevation, srcTiles, kMaxTiles);
     if (srcCount == 0) {
-        win_timed_msg("No tiles in area.", _colorTable[31744] | FONT_SHADOW);
+        win_timed_msg("No tiles in area.", COLOR_RED | DRAW_TEXT_FLAG_SHADOWED);
         return;
     }
     if (srcCount == kMaxTiles) {
-        win_timed_msg("Too many tiles in region!", _colorTable[31744] | FONT_SHADOW);
+        win_timed_msg("Too many tiles in region!", COLOR_RED | DRAW_TEXT_FLAG_SHADOWED);
         return;
     }
 
@@ -879,7 +886,7 @@ void copyTile()
     int srcDy[kMaxTiles];
     for (int i = 0; i < srcCount; i++) {
         int floorArt = _square[gElevation]->field_0[srcTiles[i]] & 0xFFF;
-        srcFid[i] = buildFid(OBJ_TYPE_TILE, floorArt, 0, 0, 0);
+        srcFid[i] = buildFid(OBJ_TYPE_TILE, floorArt);
 
         int sx, sy;
         squareTileToScreenXY(srcTiles[i], &sx, &sy, gElevation);
@@ -887,7 +894,7 @@ void copyTile()
         srcDy[i] = sy - region.top;
     }
 
-    int blankFid = buildFid(OBJ_TYPE_TILE, 1, 0, 0, 0);
+    int blankFid = buildFid(OBJ_TYPE_TILE, 1);
 
     mp_run_placement_loop([&](int ix, int iy) {
         for (int i = 0; i < srcCount; i++) {
@@ -931,8 +938,8 @@ void eraseObject()
                          obj != nullptr;
                          obj = objectFindNextAtElevation()) {
                         if (obj == gDude) continue;
-                        if (PID_TYPE(obj->pid) == OBJ_TYPE_INTERFACE) continue;
-                        if ((obj->flags & OBJECT_HIDDEN) != 0) continue;
+                        if (objectTypeFromPid(obj->pid) == OBJ_TYPE_INTERFACE) continue;
+                        if ((obj->flags & OBJECT_HIDDEN) != OBJECT_NONE) continue;
                         if (obj == gGameMouseBouncingCursor) continue;
                         if (obj == gGameMouseHexCursor) continue;
                         // Original mapper also tested `obj->flags & 0x40` here; that flag is
@@ -947,7 +954,7 @@ void eraseObject()
 
                     if (hit != nullptr) {
                         // Don't destroy exit-grid markers (interface art, id=3).
-                        int exitGridFid = buildFid(OBJ_TYPE_INTERFACE, 3, 0, 0, 0);
+                        int exitGridFid = buildFid(OBJ_TYPE_INTERFACE, 3);
                         if (hit->fid != exitGridFid) {
                             Rect rect;
                             int elev = hit->elevation;
@@ -1171,7 +1178,7 @@ void mapper_shift_map_elev()
             && (obj == gGameMouseBouncingCursor
                 || obj == gGameMouseHexCursor
                 || obj == gDude
-                || (obj->flags & OBJECT_NO_REMOVE) != 0)) {
+                || (obj->flags & OBJECT_NO_REMOVE) != OBJECT_NONE)) {
             obj = objectFindNextAtElevation();
         }
         if (obj == nullptr) break;
@@ -1186,7 +1193,7 @@ void mapper_shift_map_elev()
             && (obj == gGameMouseBouncingCursor
                 || obj == gGameMouseHexCursor
                 || obj == gDude
-                || (obj->flags & OBJECT_NO_REMOVE) != 0)) {
+                || (obj->flags & OBJECT_NO_REMOVE) != OBJECT_NONE)) {
             obj = objectFindNextAtElevation();
         }
         if (obj == nullptr) break;
@@ -1199,7 +1206,7 @@ void mapper_shift_map_elev()
     // tiles in the source elevation back to "blank" art (id=1).
     memcpy(_square[destElev]->field_0, _square[gElevation]->field_0, 40000);
 
-    int blankFid = buildFid(OBJ_TYPE_TILE, 1, 0, 0, 0);
+    int blankFid = buildFid(OBJ_TYPE_TILE, 1);
 
     // Match the original mapper's tile word format (preserved here even though the rotation
     // bits end up overlapping the low nibble of the art id — same convention as placeTile).
@@ -1222,7 +1229,7 @@ void mapper_shift_map_elev()
         int elevBits = (builtTile >> 26) & 0x7;
         int newBuiltTile = tile | (destElev << 29) | ((elevBits << 26) & 0x1C000000);
 
-        int exitGridFid = buildFid(OBJ_TYPE_INTERFACE, 3, 0, 0, 0);
+        int exitGridFid = buildFid(OBJ_TYPE_INTERFACE, 3);
         Object* exitGrid = objectFindFirstAtLocation(gElevation, tile);
         while (exitGrid != nullptr) {
             if (exitGrid->fid == exitGridFid) {
@@ -1264,7 +1271,7 @@ void mapper_copy_map_elev()
             && (obj == gGameMouseBouncingCursor
                 || obj == gGameMouseHexCursor
                 || obj == gDude
-                || (obj->flags & OBJECT_NO_REMOVE) != 0)) {
+                || (obj->flags & OBJECT_NO_REMOVE) != OBJECT_NONE)) {
             obj = objectFindNextAtElevation();
         }
         if (obj == nullptr) break;
@@ -1294,7 +1301,7 @@ void mapper_copy_map_elev()
             && (obj == gGameMouseBouncingCursor
                 || obj == gGameMouseHexCursor
                 || obj == gDude
-                || (obj->flags & OBJECT_NO_REMOVE) != 0
+                || (obj->flags & OBJECT_NO_REMOVE) != OBJECT_NONE
                 || obj->pid == -1)) {
             obj = objectFindNextAtElevation();
         }

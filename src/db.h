@@ -39,8 +39,38 @@ int fileReadUInt16(File* stream, unsigned short* valuePtr);
 // Reads a 32-bit big-endian integer from stream and stores it in host byte order.
 int fileReadInt32(File* stream, int* valuePtr);
 
+template <typename T>
+inline int fileReadInt32Enum(File* stream, T* valuePtr)
+{
+    int temp = 0;
+
+    int result = fileReadInt32(stream, &temp);
+    if (result == -1) {
+        return -1;
+    }
+
+    *valuePtr = static_cast<T>(temp);
+
+    return result;
+}
+
 // Reads a 32-bit big-endian unsigned integer from stream and stores it in host byte order.
 int fileReadUInt32(File* stream, unsigned int* valuePtr);
+
+template <typename T>
+inline int fileReadUInt32Enum(File* stream, T* valuePtr)
+{
+    unsigned int temp = 0;
+
+    int result = fileReadUInt32(stream, &temp);
+    if (result == -1) {
+        return -1;
+    }
+
+    *valuePtr = static_cast<T>(temp);
+
+    return result;
+}
 
 // Reads a 32-bit big-endian integer from stream and stores it in host byte order (alias).
 int _db_freadInt(File* stream, int* valuePtr);
@@ -61,11 +91,23 @@ int fileWriteUInt16(File* stream, unsigned short value);
 // Writes a 32-bit integer to stream in big-endian byte order.
 int fileWriteInt32(File* stream, int value);
 
+template <typename T>
+inline int fileWriteInt32Enum(File* stream, T value)
+{
+    return fileWriteInt32(stream, static_cast<int>(value));
+}
+
 // Writes a 32-bit integer to stream in big-endian byte order (alias).
 int _db_fwriteLong(File* stream, int value);
 
 // Writes a 32-bit unsigned integer to stream in big-endian byte order.
 int fileWriteUInt32(File* stream, unsigned int value);
+
+template <typename T>
+inline int fileWriteUInt32Enum(File* stream, T value)
+{
+    return fileWriteUInt32(stream, static_cast<unsigned int>(value));
+}
 
 // Writes a 32-bit floating-point value to stream in big-endian byte order.
 int fileWriteFloat(File* stream, float value);
@@ -84,6 +126,30 @@ int fileReadUInt16List(File* stream, unsigned short* arr, int count);
 // Reads a list of 32-bit big-endian integers from stream into arr (in host byte order).
 int fileReadInt32List(File* stream, int* arr, int count);
 
+template <typename T>
+inline int fileReadInt32EnumList(File* stream, T* arr, int count)
+{
+    if (count <= 0) {
+        return 0;
+    }
+
+    if (arr == nullptr) {
+        return -1;
+    }
+
+    int result = 0;
+
+    for (int i = 0; i < count; i++) {
+        result = fileReadInt32Enum<T>(stream, &(arr[i]));
+
+        if (result == -1) {
+            break;
+        }
+    }
+
+    return result;
+}
+
 // Reads a list of 32-bit big-endian integers from stream into arr (in host byte order, alias).
 int _db_freadIntCount(File* stream, int* arr, int count);
 
@@ -100,6 +166,30 @@ int fileWriteUInt16List(File* stream, unsigned short* arr, int count);
 
 // Writes a list of 32-bit integers to stream in big-endian byte order.
 int fileWriteInt32List(File* stream, int* arr, int count);
+
+template <typename T>
+inline int fileWriteInt32EnumList(File* stream, T* arr, int count)
+{
+    if (count <= 0) {
+        return 0;
+    }
+
+    if (arr == nullptr) {
+        return -1;
+    }
+
+    int result = 0;
+
+    for (int i = 0; i < count; i++) {
+        result = fileWriteInt32Enum<T>(stream, arr[i]);
+
+        if (result == -1) {
+            break;
+        }
+    }
+
+    return result;
+}
 
 // Writes a list of 32-bit integers to stream in big-endian byte order (alias).
 int _db_fwriteLongCount(File* stream, int* arr, int count);

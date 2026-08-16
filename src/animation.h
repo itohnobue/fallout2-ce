@@ -1,25 +1,38 @@
 #ifndef ANIMATION_H
 #define ANIMATION_H
 
+#include "art_defs.h"
 #include "combat_defs.h"
 #include "obj_types.h"
 
 namespace fallout {
 
-typedef enum AnimationRequestOptions {
+enum AnimationRequestOptions : int {
+    ANIMATION_REQUEST_NONE = 0x00,
     ANIMATION_REQUEST_UNRESERVED = 0x01,
     ANIMATION_REQUEST_RESERVED = 0x02,
     ANIMATION_REQUEST_NO_STAND = 0x04,
     ANIMATION_REQUEST_PING = 0x100,
     ANIMATION_REQUEST_INSIGNIFICANT = 0x200,
-} AnimationRequestOptions;
+};
+
+constexpr inline AnimationRequestOptions operator|(AnimationRequestOptions lhs, AnimationRequestOptions rhs)
+{
+    return static_cast<AnimationRequestOptions>(static_cast<int>(lhs) | static_cast<int>(rhs));
+}
+
+inline AnimationRequestOptions& operator|=(AnimationRequestOptions& lhs, AnimationRequestOptions rhs)
+{
+    return lhs = lhs | rhs;
+}
 
 // Basic animations: 0-19
 // Knockdown and death: 20-35
 // Change positions: 36-37
 // Weapon: 38-47
 // Single-frame death animations (the last frame of knockdown and death animations): 48-63
-typedef enum AnimationType {
+enum AnimationType : int {
+    ANIM_INVALID = -1,
     ANIM_STAND = 0,
     ANIM_WALK = 1,
     ANIM_JUMP_BEGIN = 2,
@@ -86,13 +99,23 @@ typedef enum AnimationType {
     ANIM_FALL_FRONT_BLOOD_SF = 63,
     ANIM_CALLED_SHOT_PIC = 64,
     ANIM_COUNT = 65,
+    ANIM_FIRST = ANIM_STAND,
     FIRST_KNOCKDOWN_AND_DEATH_ANIM = ANIM_FALL_BACK,
     LAST_KNOCKDOWN_AND_DEATH_ANIM = ANIM_FALL_FRONT_BLOOD,
     FIRST_SF_DEATH_ANIM = ANIM_FALL_BACK_SF,
     LAST_SF_DEATH_ANIM = ANIM_FALL_FRONT_BLOOD_SF,
-} AnimationType;
+};
 
-#define FID_ANIM_TYPE(value) ((value) & 0xFF0000) >> 16
+inline bool animationTypeIsValid(int anim)
+{
+    return anim >= ANIM_FIRST && anim < ANIM_COUNT;
+}
+
+inline AnimationType animationTypeFromFid(int fid)
+{
+    int anim = (fid & 0xFF0000) >> 16;
+    return static_cast<AnimationType>(anim);
+}
 
 // Signature of animation callback accepting 2 parameters.
 typedef int(AnimationCallback)(void* a1, void* a2);
@@ -115,7 +138,7 @@ void animationExit();
 bool animationCheckCombatMode();
 void animationSetCombatCheck(bool enable);
 void animationResetCombatCheck();
-int reg_anim_begin(int a1);
+int reg_anim_begin(AnimationRequestOptions requestOptions);
 int _register_priority(int a1);
 int reg_anim_clear(Object* a1);
 int reg_anim_end();
@@ -124,11 +147,11 @@ int animationRegisterMoveToObject(Object* owner, Object* destination, int action
 int animationRegisterRunToObject(Object* owner, Object* destination, int actionPoints, int delay);
 int animationRegisterMoveToTile(Object* owner, int tile, int elevation, int actionPoints, int delay);
 int animationRegisterRunToTile(Object* owner, int tile, int elevation, int actionPoints, int delay);
-int animationRegisterMoveToTileStraight(Object* object, int tile, int elevation, int anim, int delay);
-int animationRegisterMoveToTileStraightAndWaitForComplete(Object* owner, int tile, int elev, int anim, int delay);
-int animationRegisterAnimate(Object* owner, int anim, int delay);
-int animationRegisterAnimateReversed(Object* owner, int anim, int delay);
-int animationRegisterAnimateAndHide(Object* owner, int anim, int delay);
+int animationRegisterMoveToTileStraight(Object* object, int tile, int elevation, AnimationType anim, int delay);
+int animationRegisterMoveToTileStraightAndWaitForComplete(Object* owner, int tile, int elev, AnimationType anim, int delay);
+int animationRegisterAnimate(Object* owner, AnimationType anim, int delay);
+int animationRegisterAnimateReversed(Object* owner, AnimationType anim, int delay);
+int animationRegisterAnimateAndHide(Object* owner, AnimationType anim, int delay);
 int animationRegisterRotateToTile(Object* owner, int tile);
 int animationRegisterRotateClockwise(Object* owner);
 int animationRegisterRotateCounterClockwise(Object* owner);
@@ -137,15 +160,15 @@ int animationRegisterHideObjectForced(Object* object);
 int animationRegisterCallback(void* a1, void* a2, AnimationCallback* proc, int delay);
 int animationRegisterCallback3(void* a1, void* a2, void* a3, AnimationCallback3* proc, int delay);
 int animationRegisterCallbackForced(void* a1, void* a2, AnimationCallback* proc, int delay);
-int animationRegisterSetFlag(Object* object, int flag, int delay);
-int animationRegisterUnsetFlag(Object* object, int flag, int delay);
+int animationRegisterSetFlag(Object* object, ObjectFlags flag, int delay);
+int animationRegisterUnsetFlag(Object* object, ObjectFlags flag, int delay);
 int animationRegisterSetFid(Object* owner, int fid, int delay);
-int animationRegisterTakeOutWeapon(Object* owner, int weaponAnimationCode, int delay);
+int animationRegisterTakeOutWeapon(Object* owner, WeaponAnimation weaponAnimationCode, int delay);
 int animationRegisterSetLightDistance(Object* owner, int lightDistance, int delay);
 int animationRegisterToggleOutline(Object* object, bool outline, int delay);
 int animationRegisterPlaySoundEffect(Object* owner, const char* soundEffectName, int delay);
-int animationRegisterAnimateForever(Object* owner, int anim, int delay);
-int animationRegisterPing(int flags, int delay);
+int animationRegisterAnimateForever(Object* owner, AnimationType anim, int delay);
+int animationRegisterPing(AnimationRequestOptions requestOptions, int delay);
 int _make_path(Object* object, int from, int to, unsigned char* rotations, int requireEmptyDest);
 int pathfinderFindPath(Object* object, int from, int to, unsigned char* rotations, int requireEmptyDest, PathBuilderCallback* callback);
 int _make_straight_path(Object* object, int from, int to, StraightPathNode* straightPathNodeList, Object** obstaclePtr, int a6);
@@ -155,7 +178,7 @@ int _check_move(int* actionPointsPtr);
 int _dude_move(int actionPoints);
 int _dude_run(int actionPoints);
 void _dude_fidget();
-void _dude_stand(Object* obj, int rotation, int fid);
+void _dude_stand(Object* obj, Rotation rotation, int fid);
 void _dude_standup(Object* a1);
 void animationStop();
 

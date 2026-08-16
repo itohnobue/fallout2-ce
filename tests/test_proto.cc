@@ -21,7 +21,7 @@
 #include <string>
 
 #include "proto_types.h"  // Proto, ProtoList, ProtoListExtent, ItemProto, etc.
-#include "obj_types.h"    // OBJ_TYPE_*, PID_TYPE macro, Object type
+#include "obj_types.h"    // OBJ_TYPE_*, objectTypeFromPid, Object type
 #include "stat_defs.h"    // STAT_DAMAGE_RESISTANCE_EMP, Stat enum
 #include "proto_instance.h" // UseItemResultCode enum
 
@@ -84,19 +84,19 @@ static CritterProto testDudeProto = {
     -1,                     // messageId
     0x1000001,              // fid
     0, 0,                   // lightDistance, lightIntensity
-    0x20000000,             // flags
-    0,                      // extendedFlags
+    static_cast<ProtoFlags>(0x20000000),  // flags
+    static_cast<ProtoExtendedFlags>(0),   // extendedFlags
     -1,                     // sid
     {                       // data (CritterProtoData)
-        0,                  //   data.flags
+        static_cast<CritterFlags>(0),     //   data.flags
         // data.baseStats[35] = all SPECIAL=5, HP/AP/etc.
         { 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 18, 0, 0, 0, 0, 0, 0, 0, 0, 100, 0, 0, 0, 23, 0 },
         { 0 },              //   data.bonusStats[35]
         { 0 },              //   data.skills[18]
-        0,                  //   data.bodyType
+        static_cast<BodyType>(0),         //   data.bodyType
         0,                  //   data.experience
-        0,                  //   data.killType
-        0,                  //   data.damageType
+        static_cast<KillType>(0),         //   data.killType
+        static_cast<DamageType>(0),       //   data.damageType
     },
     -1, 0, 0,               // headFid, aiPacket, team
 };
@@ -128,7 +128,7 @@ static int testProtoGetProto(int pid, Proto** protoPtr)
         return 0;
     }
 
-    ProtoList* protoList = &(testProtoLists[PID_TYPE(pid)]);
+    ProtoList* protoList = &(testProtoLists[objectTypeFromPid(pid)]);
     ProtoListExtent* extent = protoList->head;
     while (extent != nullptr) {
         for (int index = 0; index < extent->length; index++) {
@@ -151,7 +151,7 @@ static bool testProtoIsSubtype(Proto* proto, int subtype)
         return true;
     }
 
-    switch (PID_TYPE(proto->pid)) {
+    switch (objectTypeFromPid(proto->pid)) {
     case OBJ_TYPE_ITEM:
         return proto->item.type == subtype;
     case OBJ_TYPE_SCENERY:
@@ -170,7 +170,7 @@ static int testProtoGetDataMemberType(int pid, int member)
         return -1;
     }
 
-    switch (PID_TYPE(pid)) {
+    switch (objectTypeFromPid(pid)) {
     case OBJ_TYPE_ITEM:
         if (member == 1 || member == 2) { // NAME, DESCRIPTION
             return TEST_PROTO_DATA_MEMBER_TYPE_STRING;
@@ -281,35 +281,43 @@ TEST_CASE("ProtoListExtent structure layout")
 }
 
 // ============================================================================
-// SECTION 3: PID_TYPE macro validation
+// SECTION 3: objectTypeFromPid validation (upstream replaced PID_TYPE macro)
 // ============================================================================
 
-TEST_CASE("PID_TYPE macro extracts object type from PID")
+TEST_CASE("objectTypeFromPid extracts object type from PID")
 {
     // PID format: (type << 24) | (index & 0xFFFFFF)
     // OBJ_TYPE_ITEM = 0, OBJ_TYPE_CRITTER = 1, etc.
-    int t0 = PID_TYPE(0x00000001); CHECK(t0 == 0);    // OBJ_TYPE_ITEM
-    int t1 = PID_TYPE(0x01000001); CHECK(t1 == 1);    // OBJ_TYPE_CRITTER
-    int t2 = PID_TYPE(0x02000001); CHECK(t2 == 2);    // OBJ_TYPE_SCENERY
-    int t3 = PID_TYPE(0x03000001); CHECK(t3 == 3);    // OBJ_TYPE_WALL
-    int t4 = PID_TYPE(0x04000001); CHECK(t4 == 4);    // OBJ_TYPE_TILE
-    int t5 = PID_TYPE(0x05000001); CHECK(t5 == 5);    // OBJ_TYPE_MISC
+    int t0 = objectTypeFromPid(0x00000001); CHECK(t0 == 0);    // OBJ_TYPE_ITEM
+    int t1 = objectTypeFromPid(0x01000001); CHECK(t1 == 1);    // OBJ_TYPE_CRITTER
+    int t2 = objectTypeFromPid(0x02000001); CHECK(t2 == 2);    // OBJ_TYPE_SCENERY
+    int t3 = objectTypeFromPid(0x03000001); CHECK(t3 == 3);    // OBJ_TYPE_WALL
+    int t4 = objectTypeFromPid(0x04000001); CHECK(t4 == 4);    // OBJ_TYPE_TILE
+    int t5 = objectTypeFromPid(0x05000001); CHECK(t5 == 5);    // OBJ_TYPE_MISC
 
     // Special PIDs
-    int td1 = PID_TYPE(0x1000000); CHECK(td1 == 1);   // gDudeProto (OBJ_TYPE_CRITTER)
-    int td2 = PID_TYPE(0x1000098); CHECK(td2 == 1);   // Goris (OBJ_TYPE_CRITTER)
-    int tg = PID_TYPE(0x2000031); CHECK(tg == 2);     // Exit Grid Marker (OBJ_TYPE_SCENERY)
-    int te = PID_TYPE(0x5000010); CHECK(te == 5);     // First Exit Grid PID (OBJ_TYPE_MISC)
+    int td1 = objectTypeFromPid(0x1000000); CHECK(td1 == 1);   // gDudeProto (OBJ_TYPE_CRITTER)
+    int td2 = objectTypeFromPid(0x1000098); CHECK(td2 == 1);   // Goris (OBJ_TYPE_CRITTER)
+    int tg = objectTypeFromPid(0x2000031); CHECK(tg == 2);     // Exit Grid Marker (OBJ_TYPE_SCENERY)
+    int te = objectTypeFromPid(0x5000010); CHECK(te == 5);     // First Exit Grid PID (OBJ_TYPE_MISC)
 
-    // Edge: zero-extended
-    int tz = PID_TYPE(0xF0FFFFFF); CHECK(tz == 0xF0);
+    // Edge: high-bit set — the pid parameter is `int`, so the value is
+    // treated as a signed 32-bit integer and the shift is arithmetic
+    // (0xF0FFFFFF >> 24 == -16, not 240). Production guards treat negative
+    // results as invalid (proto.cc:2238: `type < 0 || type >= OBJ_TYPE_COUNT`),
+    // so this asserts the post-sync2 behavior (upstream objectTypeFromPid
+    // replaced the old unsigned-literal PID_TYPE macro).
+    int tz = objectTypeFromPid(0xF0FFFFFF);
+    CHECK(tz == -16);
+    // The production guard rejects it: type < OBJ_TYPE_FIRST (0).
+    CHECK(objectTypeFromPid(0xF0FFFFFF) < OBJ_TYPE_FIRST);
 }
 
 TEST_CASE("PID low 24 bits mask")
 {
     // Verify the (pid & 0xFFFFFF) pattern used in _proto_list_str
     int pid = 0x0100002A;  // critter #42
-    int ptype = PID_TYPE(pid);
+    int ptype = objectTypeFromPid(pid);
     CHECK(ptype == 1);                            // OBJ_TYPE_CRITTER
     int idx = pid & 0xFFFFFF;
     CHECK(idx == 0x2A);                           // index 42
@@ -378,9 +386,9 @@ TEST_CASE("Proto union — field offsets match expectations")
     proto.sid = -1;
 
     // SceneryProto has material at a different offset than ItemProto's type
-    CHECK(proto.scenery.material == 0); // not yet set
-    proto.scenery.material = 5;
-    CHECK(proto.scenery.material == 5);
+    CHECK(proto.scenery.material == static_cast<MaterialType>(0)); // not yet set
+    proto.scenery.material = static_cast<MaterialType>(5);
+    CHECK(proto.scenery.material == static_cast<MaterialType>(5));
 
     // material and item.type overlap in the union
     // This is expected — only one type is active at a time
@@ -463,9 +471,9 @@ static Proto* setupProtoInList(int type, int pid, int subTypeValue)
     tempProto.pid = pid;
 
     if (type == OBJ_TYPE_ITEM) {
-        tempProto.item.type = subTypeValue;
+        tempProto.item.type = static_cast<ItemType>(subTypeValue);
     } else if (type == OBJ_TYPE_SCENERY) {
-        tempProto.scenery.type = subTypeValue;
+        tempProto.scenery.type = static_cast<SceneryType>(subTypeValue);
     }
 
     static ProtoListExtent tempExtent;
@@ -993,10 +1001,10 @@ TEST_CASE("ItemProtoData — drug field access")
     memset(&data, 0, sizeof(data));
 
     data.drug.addictionChance = 50;
-    data.drug.withdrawalEffect = 3;
+    data.drug.withdrawalEffect = static_cast<Perk>(3);
 
     CHECK(data.drug.addictionChance == 50);
-    CHECK(data.drug.withdrawalEffect == 3);
+    CHECK(data.drug.withdrawalEffect == static_cast<Perk>(3));
 }
 
 // ============================================================================
@@ -1509,10 +1517,10 @@ TEST_CASE("M-047: protoWrite — SceneryProto and WallProto are distinct structs
     //  flags, extendedFlags, sid, material — no 'type' or 'soundId')
     WallProto wall;
     memset(&wall, 0, sizeof(wall));
-    wall.material = 7;
+    wall.material = static_cast<MaterialType>(7);
 
     // Verify wall-specific field holds its value
-    CHECK(wall.material == 7);
+    CHECK(wall.material == static_cast<MaterialType>(7));
 
     // Verify the material field offset differs between SceneryProto and WallProto
     // In SceneryProto, it's between extendedFlags and soundId.
@@ -1561,7 +1569,7 @@ TEST_CASE("M-047: protoWrite — scenery write block preserves scenery-only fiel
     // Fill all scenery-specific fields with known values
     scenery.pid = 0x02000001;
     scenery.type = SCENERY_TYPE_STAIRS;
-    scenery.material = 12;
+    scenery.material = static_cast<MaterialType>(12);
     scenery.soundId = 99;
 
     // Verify all fields are intact (no wall-block corruption)

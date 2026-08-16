@@ -516,16 +516,16 @@ TEST_CASE("Only guard 5 (all pass) enables migration")
 
 TEST_CASE("F-054: kSfallMigrationEntryCount matches production header")
 {
-    // The header declares 63 migration entries (P-19: ViewXPos/ViewYPos/
-    // WorldMapSlots rows removed — dead targets, zero consumers; WorldMapSlots
-    // served by the gSfallConfig default of 21 per H-06; then +7 new entries
-    // from the upstream incorporation: StartGDialogFix + 6 Sound section rows
-    // [MainMenuMusic, WorldMapMusic, WorldMapCarMusic, EndGameMovieMusic0,
-    // EndGameMovieMusic1, MapLoadingSound] — count verified by the production
-    // static_assert in game_config_migration.cc:292). Our mirror tests verify
-    // 8 entries (the most commonly used ones). The full table of 63 entries
-    // exists in game_config_migration.cc and content_config.cc.
-    CHECK(kSfallMigrationEntryCount == 63);
+    // The header declares 70 migration entries. sync2 (upstream 1cce144)
+    // grew the table 63 → 70 with upstream additions that have live
+    // consumers (DisableSpecialMapIDs, InventoryApCost,
+    // QuickPocketsApCostReduction, WorldMapTerrainInfo, XPTable,
+    // ViewXPos/ViewYPos to [start] worldmap_view_*) — documented in
+    // game_config_migration.h and enforced by the production static_assert
+    // in game_config_migration.cc:343 and content_config.cc:146. Our mirror
+    // tests verify 8 entries (the most commonly used ones). The full table
+    // of 70 entries exists in game_config_migration.cc and content_config.cc.
+    CHECK(kSfallMigrationEntryCount == 70);
     CHECK(kSfallMigrationEntryCount > 0);
 }
 

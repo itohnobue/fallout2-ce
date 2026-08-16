@@ -36,6 +36,7 @@
 #include "memory.h"
 #include "message.h"
 #include "mouse.h"
+#include "obj_types.h"
 #include "object.h"
 #include "party_member.h"
 #include "perk.h"
@@ -97,7 +98,7 @@ static void op_obj_is_carrying_obj(Program* program)
     Object* invenObj = static_cast<Object*>(programStackPopPointer(program));
 
     int count = 0;
-    if (invenObj != nullptr && itemObj != nullptr && FID_TYPE(invenObj->fid) == OBJ_TYPE_CRITTER) {
+    if (invenObj != nullptr && itemObj != nullptr && objectTypeFromFid(invenObj->fid) == OBJ_TYPE_CRITTER) {
         Inventory* inventory = &(invenObj->data.inventory);
         for (int index = 0; index < inventory->length; index++) {
             InventoryItem* inventoryItem = &(inventory->items[index]);
@@ -230,7 +231,7 @@ static void op_set_pc_base_stat(Program* program)
     // dude's proto, without calling |critterSetBaseStat|. This function has
     // important call to update derived stats, which is not present in Sfall.
     int value = programStackPopInteger(program);
-    int stat = programStackPopInteger(program);
+    Stat stat = programStackPopEnum<Stat>(program);
     if (gDude == nullptr) {
         return;
     }
@@ -243,9 +244,9 @@ static void op_set_critter_base_stat(Program* program)
     // dude's proto, without calling |critterSetBaseStat|. This function has
     // important call to update derived stats, which is not present in Sfall.
     int value = programStackPopInteger(program);
-    int stat = programStackPopInteger(program);
+    Stat stat = programStackPopEnum<Stat>(program);
     Object* obj = static_cast<Object*>(programStackPopPointer(program));
-    if (obj == nullptr || FID_TYPE(obj->fid) != OBJ_TYPE_CRITTER) {
+    if (obj == nullptr || objectTypeFromFid(obj->fid) != OBJ_TYPE_CRITTER) {
         return;
     }
     critterSetBaseStat(obj, stat, value);
@@ -258,7 +259,7 @@ static void op_set_pc_bonus_stat(Program* program)
     // dude's proto, without calling |critterSetBonusStat|. This function has
     // important call to update derived stats, which is not present in Sfall.
     int value = programStackPopInteger(program);
-    int stat = programStackPopInteger(program);
+    Stat stat = programStackPopEnum<Stat>(program);
     if (gDude == nullptr) {
         return;
     }
@@ -271,13 +272,20 @@ static void op_set_critter_extra_stat(Program* program)
     // dude's proto, without calling |critterSetBonusStat|. This function has
     // important call to update derived stats, which is not present in Sfall.
     int value = programStackPopInteger(program);
-    int stat = programStackPopInteger(program);
+    Stat stat = programStackPopEnum<Stat>(program);
     Object* obj = static_cast<Object*>(programStackPopPointer(program));
-    if (obj == nullptr || FID_TYPE(obj->fid) != OBJ_TYPE_CRITTER) {
+    if (obj == nullptr || objectTypeFromFid(obj->fid) != OBJ_TYPE_CRITTER) {
         return;
     }
     critterSetBonusStat(obj, stat, value);
 }
+
+
+
+
+
+
+
 
 // get_pc_base_stat
 static void op_get_pc_base_stat(Program* program)
@@ -285,7 +293,7 @@ static void op_get_pc_base_stat(Program* program)
     // CE: Implementation is different. Sfall obtains value directly from
     // dude's proto. This can have unforeseen consequences when dealing with
     // current stats.
-    int stat = programStackPopInteger(program);
+    Stat stat = programStackPopEnum<Stat>(program);
     if (gDude == nullptr) {
         programStackPushInteger(program, 0);
         return;
@@ -298,9 +306,9 @@ static void op_get_critter_base_stat(Program* program)
     // CE: Implementation is different. Sfall obtains value directly from
     // dude's proto. This can have unforeseen consequences when dealing with
     // current stats.
-    int stat = programStackPopInteger(program);
+    Stat stat = programStackPopEnum<Stat>(program);
     Object* obj = static_cast<Object*>(programStackPopPointer(program));
-    if (obj == nullptr || FID_TYPE(obj->fid) != OBJ_TYPE_CRITTER) {
+    if (obj == nullptr || objectTypeFromFid(obj->fid) != OBJ_TYPE_CRITTER) {
         programStackPushInteger(program, 0);
         return;
     }
@@ -310,7 +318,7 @@ static void op_get_critter_base_stat(Program* program)
 // get_pc_extra_stat
 static void op_get_pc_bonus_stat(Program* program)
 {
-    int stat = programStackPopInteger(program);
+    Stat stat = programStackPopEnum<Stat>(program);
     if (gDude == nullptr) {
         programStackPushInteger(program, 0);
         return;
@@ -321,9 +329,9 @@ static void op_get_pc_bonus_stat(Program* program)
 
 static void op_get_critter_extra_stat(Program* program)
 {
-    int stat = programStackPopInteger(program);
+    Stat stat = programStackPopEnum<Stat>(program);
     Object* obj = static_cast<Object*>(programStackPopPointer(program));
-    if (obj == nullptr || FID_TYPE(obj->fid) != OBJ_TYPE_CRITTER) {
+    if (obj == nullptr || objectTypeFromFid(obj->fid) != OBJ_TYPE_CRITTER) {
         programStackPushInteger(program, 0);
         return;
     }
@@ -345,6 +353,8 @@ static void op_get_year(Program* program)
     gameTimeGetDate(nullptr, nullptr, &year);
     programStackPushInteger(program, year);
 }
+
+
 
 // game_loaded
 // F-058: Returns tri-state per sfall 4.x spec:
@@ -382,7 +392,7 @@ static void op_in_world_map(Program* program)
 static void op_force_encounter(Program* program)
 {
     int map = programStackPopInteger(program);
-    wmForceEncounter(map, 0);
+    wmForceEncounter(map, ENCOUNTER_FLAG_NONE);
 }
 
 // set_world_map_pos
@@ -427,7 +437,7 @@ static void op_get_critter_current_ap(Program* program)
     Object* critter = static_cast<Object*>(programStackPopPointer(program));
 
     int actionPoints = 0;
-    if (critter != nullptr && FID_TYPE(critter->fid) == OBJ_TYPE_CRITTER) {
+    if (critter != nullptr && objectTypeFromFid(critter->fid) == OBJ_TYPE_CRITTER) {
         actionPoints = critter->data.critter.combat.ap;
     }
 
@@ -439,7 +449,7 @@ static void op_set_critter_current_ap(Program* program)
     int actionPoints = programStackPopInteger(program);
     Object* critter = static_cast<Object*>(programStackPopPointer(program));
 
-    if (critter == nullptr || FID_TYPE(critter->fid) != OBJ_TYPE_CRITTER) {
+    if (critter == nullptr || objectTypeFromFid(critter->fid) != OBJ_TYPE_CRITTER) {
         programPrintError("set_critter_current_ap: expected critter object");
         return;
     }
@@ -459,7 +469,7 @@ static void op_set_critter_burst_disable(Program* program)
     int disable = programStackPopInteger(program);
     Object* critter = static_cast<Object*>(programStackPopPointer(program));
 
-    if (critter == nullptr || FID_TYPE(critter->fid) != OBJ_TYPE_CRITTER) {
+    if (critter == nullptr || objectTypeFromFid(critter->fid) != OBJ_TYPE_CRITTER) {
         programPrintError("set_critter_burst_disable: expected critter object");
         return;
     }
@@ -754,24 +764,24 @@ static void op_set_car_current_town(Program* program)
 // get_bodypart_hit_modifier
 static void op_get_bodypart_hit_modifier(Program* program)
 {
-    int hit_location = programStackPopInteger(program);
-    programStackPushInteger(program, combat_get_hit_location_penalty(hit_location));
+    HitLocation hitLocation = programStackPopEnum<HitLocation>(program);
+    programStackPushInteger(program, combat_get_hit_location_penalty(hitLocation));
 }
 
 // set_bodypart_hit_modifier
 static void op_set_bodypart_hit_modifier(Program* program)
 {
     int penalty = programStackPopInteger(program);
-    int hit_location = programStackPopInteger(program);
-    combat_set_hit_location_penalty(hit_location, penalty);
+    HitLocation hitLocation = programStackPopEnum<HitLocation>(program);
+    combat_set_hit_location_penalty(hitLocation, penalty);
 }
 
-static bool criticalTableArgsAreValid(Program* program, const char* opcodeName, int killType, int hitLocation, int effect, int dataMember)
+static bool criticalTableArgsAreValid(Program* program, const char* opcodeName, KillType killType, HitLocation hitLocation, int effect, CriticalHitDataMember dataMember)
 {
-    if (killType < 0 || killType > SFALL_KILL_TYPE_COUNT
-        || hitLocation < 0 || hitLocation >= HIT_LOCATION_COUNT
-        || effect < 0 || effect >= CRTICIAL_EFFECT_COUNT
-        || dataMember < 0 || dataMember >= CRIT_DATA_MEMBER_COUNT) {
+    if (!killTypeOverrideIsValid(killType)
+        || !hitLocationIsValid(hitLocation)
+        || !criticalEffectIsValid(effect)
+        || !criticalHitDataMemberIsValid(dataMember)) {
         programPrintError("%s: argument values out of range", opcodeName);
         return false;
     }
@@ -782,10 +792,10 @@ static bool criticalTableArgsAreValid(Program* program, const char* opcodeName, 
 static void op_set_critical_table(Program* program)
 {
     int value = programStackPopInteger(program);
-    int dataMember = programStackPopInteger(program);
-    int effect = programStackPopInteger(program);
-    int hitLocation = programStackPopInteger(program);
-    int killType = programStackPopInteger(program);
+    CriticalHitDataMember dataMember = programStackPopEnum<CriticalHitDataMember>(program);
+    CriticalEffect effect = programStackPopEnum<CriticalEffect>(program);
+    HitLocation hitLocation = programStackPopEnum<HitLocation>(program);
+    KillType killType = programStackPopEnum<KillType>(program);
 
     if (!criticalTableArgsAreValid(program, "set_critical_table", killType, hitLocation, effect, dataMember)) {
         return;
@@ -796,10 +806,10 @@ static void op_set_critical_table(Program* program)
 
 static void op_get_critical_table(Program* program)
 {
-    int dataMember = programStackPopInteger(program);
-    int effect = programStackPopInteger(program);
-    int hitLocation = programStackPopInteger(program);
-    int killType = programStackPopInteger(program);
+    CriticalHitDataMember dataMember = programStackPopEnum<CriticalHitDataMember>(program);
+    CriticalEffect effect = programStackPopEnum<CriticalEffect>(program);
+    HitLocation hitLocation = programStackPopEnum<HitLocation>(program);
+    KillType killType = programStackPopEnum<KillType>(program);
 
     if (!criticalTableArgsAreValid(program, "get_critical_table", killType, hitLocation, effect, dataMember)) {
         programStackPushInteger(program, 0);
@@ -811,10 +821,10 @@ static void op_get_critical_table(Program* program)
 
 static void op_reset_critical_table(Program* program)
 {
-    int dataMember = programStackPopInteger(program);
-    int effect = programStackPopInteger(program);
-    int hitLocation = programStackPopInteger(program);
-    int killType = programStackPopInteger(program);
+    CriticalHitDataMember dataMember = programStackPopEnum<CriticalHitDataMember>(program);
+    CriticalEffect effect = programStackPopEnum<CriticalEffect>(program);
+    HitLocation hitLocation = programStackPopEnum<HitLocation>(program);
+    KillType killType = programStackPopEnum<KillType>(program);
 
     if (!criticalTableArgsAreValid(program, "reset_critical_table", killType, hitLocation, effect, dataMember)) {
         return;
@@ -1004,7 +1014,7 @@ static void op_set_script(Program* program)
         obj->scriptIndex = -1;
     }
 
-    int scriptType = (PID_TYPE(obj->pid) == OBJ_TYPE_CRITTER) ? SCRIPT_TYPE_CRITTER : SCRIPT_TYPE_ITEM;
+    int scriptType = (objectTypeFromPid(obj->pid) == OBJ_TYPE_CRITTER) ? SCRIPT_TYPE_CRITTER : SCRIPT_TYPE_ITEM;
     if (objectSetScript(obj, scriptType, scriptIndex) == -1) {
         obj->sid = -1;
         obj->scriptIndex = -1;
@@ -1052,7 +1062,7 @@ static void op_get_proto_data(Program* program)
 
     // CE: Make sure the requested offset is within memory bounds and is
     // properly aligned.
-    if (offset + sizeof(int) > proto_size(PID_TYPE(pid)) || offset % sizeof(int) != 0) {
+    if (offset + sizeof(int) > proto_size(objectTypeFromPid(pid)) || offset % sizeof(int) != 0) {
         programPrintError("get_proto_data: bad offset %d", offset);
         programStackPushInteger(program, -1);
         return;
@@ -1083,7 +1093,7 @@ static void op_set_proto_data(Program* program)
 
     // CE: Make sure the requested offset is within memory bounds and is
     // properly aligned.
-    if (offset + sizeof(int) > proto_size(PID_TYPE(pid)) || offset % sizeof(int) != 0) {
+    if (offset + sizeof(int) > proto_size(objectTypeFromPid(pid)) || offset % sizeof(int) != 0) {
         programPrintError("set_proto_data: bad offset %d", offset);
         return;
     }
@@ -1097,12 +1107,7 @@ static void op_set_self(Program* program)
 {
     Object* obj = static_cast<Object*>(programStackPopPointer(program));
 
-    int sid = scriptGetSid(program);
-
-    Script* scr;
-    if (scriptGetScript(sid, &scr) == 0) {
-        scr->overriddenSelf = obj;
-    }
+    scriptContextSetOverrideSelf(program, obj);
 }
 
 // list_begin
@@ -1153,13 +1158,15 @@ static void op_get_weapon_ammo_pid(Program* program)
 
     int pid = -1;
     if (obj != nullptr) {
-        if (PID_TYPE(obj->pid) == OBJ_TYPE_ITEM) {
+        if (objectTypeFromPid(obj->pid) == OBJ_TYPE_ITEM) {
             switch (itemGetType(obj)) {
             case ITEM_TYPE_WEAPON:
                 pid = weaponGetAmmoTypePid(obj);
                 break;
             case ITEM_TYPE_MISC:
                 pid = miscItemGetPowerTypePid(obj);
+                break;
+            default:
                 break;
             }
         }
@@ -1182,7 +1189,7 @@ static void op_set_weapon_ammo_pid(Program* program)
     Object* obj = static_cast<Object*>(programStackPopPointer(program));
 
     if (obj != nullptr) {
-        if (PID_TYPE(obj->pid) == OBJ_TYPE_ITEM) {
+        if (objectTypeFromPid(obj->pid) == OBJ_TYPE_ITEM) {
             switch (itemGetType(obj)) {
             case ITEM_TYPE_WEAPON: {
                 // Validate that the new ammo PID references a valid ammo proto.
@@ -1191,7 +1198,7 @@ static void op_set_weapon_ammo_pid(Program* program)
                     programPrintError("set_weapon_ammo_pid: invalid ammo PID %d (proto not found)", ammoTypePid);
                     return;
                 }
-                if (PID_TYPE(ammoTypePid) != OBJ_TYPE_ITEM || ammoProto->item.type != ITEM_TYPE_AMMO) {
+                if (objectTypeFromPid(ammoTypePid) != OBJ_TYPE_ITEM || ammoProto->item.type != ITEM_TYPE_AMMO) {
                     programPrintError("set_weapon_ammo_pid: PID %d is not ITEM_TYPE_AMMO", ammoTypePid);
                     return;
                 }
@@ -1203,6 +1210,8 @@ static void op_set_weapon_ammo_pid(Program* program)
                 obj->data.item.weapon.ammoTypePid = ammoTypePid;
                 break;
             }
+            default:
+                break;
             }
         }
     }
@@ -1216,7 +1225,7 @@ static void op_get_weapon_ammo_count(Program* program)
     // CE: Implementation is different.
     int ammoQuantityOrCharges = 0;
     if (obj != nullptr) {
-        if (PID_TYPE(obj->pid) == OBJ_TYPE_ITEM) {
+        if (objectTypeFromPid(obj->pid) == OBJ_TYPE_ITEM) {
             switch (itemGetType(obj)) {
             case ITEM_TYPE_AMMO:
             case ITEM_TYPE_WEAPON:
@@ -1224,6 +1233,8 @@ static void op_get_weapon_ammo_count(Program* program)
                 break;
             case ITEM_TYPE_MISC:
                 ammoQuantityOrCharges = miscItemGetCharges(obj);
+                break;
+            default:
                 break;
             }
         }
@@ -1240,7 +1251,7 @@ static void op_set_weapon_ammo_count(Program* program)
 
     // CE: Implementation is different.
     if (obj != nullptr) {
-        if (PID_TYPE(obj->pid) == OBJ_TYPE_ITEM) {
+        if (objectTypeFromPid(obj->pid) == OBJ_TYPE_ITEM) {
             // Guard: negative charges/ammo don't make sense. ammoSetQuantity()
             // handles it for ammo/weapons; miscItemSetCharges() only guards the
             // upper bound — clamp negative here for the MISC path.
@@ -1254,6 +1265,8 @@ static void op_set_weapon_ammo_count(Program* program)
                 break;
             case ITEM_TYPE_MISC:
                 miscItemSetCharges(obj, ammoQuantityOrCharges);
+                break;
+            default:
                 break;
             }
         }
@@ -1342,8 +1355,8 @@ static void op_refresh_pc_art(Program* program)
     Rect rect;
     objectGetRect(gDude, &rect);
 
-    int anim = FID_ANIM_TYPE(gDude->fid);
-    int rotation = FID_ROTATION(gDude->fid);
+    AnimationType anim = animationTypeFromFid(gDude->fid);
+    Rotation rotation = rotationFromFid(gDude->fid);
 
     _proto_dude_update_gender();
 
@@ -1368,7 +1381,7 @@ static void op_refresh_pc_art(Program* program)
     if (customModelNum > 0) {
         Proto* proto;
         if (protoGetProto(gDude->pid, &proto) != -1) {
-            proto->fid = buildFid(OBJ_TYPE_CRITTER, customModelNum, 0, 0, 0);
+            proto->fid = buildFid(OBJ_TYPE_CRITTER, customModelNum, 0, 0, ROTATION_NE);
         }
     } else if (heroRace > 0 || heroStyle > 0) {
         // Hero Appearance race/style overrides: read the current base model
@@ -1394,7 +1407,7 @@ static void op_refresh_pc_art(Program* program)
                     baseFid = ((baseFid / 10) + 1) * 10;
                 }
             }
-            proto->fid = buildFid(OBJ_TYPE_CRITTER, baseFid, 0, 0, 0);
+            proto->fid = buildFid(OBJ_TYPE_CRITTER, baseFid, 0, 0, ROTATION_NE);
         }
     }
 
@@ -1486,7 +1499,7 @@ static void op_create_message_window(Program* program)
 // get_attack_type
 static void op_get_attack_type(Program* program)
 {
-    int hit_mode;
+    HitMode hit_mode;
     if (interface_get_current_attack_mode(&hit_mode)) {
         programStackPushInteger(program, hit_mode);
     } else {
@@ -1548,7 +1561,7 @@ static void op_stop_sfall_sound(Program* program)
 // force_encounter_with_flags
 static void op_force_encounter_with_flags(Program* program)
 {
-    unsigned int flags = programStackPopInteger(program);
+    EncounterFlag flags = static_cast<EncounterFlag>(programStackPopInteger(program));
     int map = programStackPopInteger(program);
     wmForceEncounter(map, flags);
 }
@@ -1728,11 +1741,11 @@ static void op_explosions_metarule(Program* program)
         // F-13: Wire param1/param2 as actual explosion rotation parameters.
         // See sfall_metarules.cc EXPL_MF_FORCE_PATTERN for full explanation.
         if (param2 != 0) {
-            explosionSetPattern(param1, param2);
+            explosionSetPattern(static_cast<Rotation>(param1), static_cast<Rotation>(param2));
         } else if (param1 != 0) {
-            explosionSetPattern(2, 4);
+            explosionSetPattern(ROTATION_SE, ROTATION_W);
         } else {
-            explosionSetPattern(0, 6);
+            explosionSetPattern(ROTATION_FIRST, ROTATION_COUNT);
         }
         programStackPushInteger(program, 0);
         break;
@@ -1745,7 +1758,10 @@ static void op_explosions_metarule(Program* program)
         programStackPushInteger(program, 0);
         break;
     case EXPL_FORCE_EXPLOSION_DMGTYPE:
-        explosionSetDamageType(param1);
+        if (!damageTypeIsValid(param1)) {
+            debugPrint("\n%s: explosions_metarule: EXPL_FORCE_EXPLOSION_DMGTYPE invalid damage type %d", program->name, param1);
+        }
+        explosionSetDamageType(static_cast<DamageType>(param1));
         programStackPushInteger(program, 0);
         break;
     case EXPL_STATIC_EXPLOSION_RADIUS:
@@ -2088,7 +2104,7 @@ static void op_obj_blocking_at(Program* program)
     Object* obstacle = func(nullptr, tile, elevation);
     if (obstacle != nullptr) {
         if (type == BLOCKING_TYPE_SHOOT) {
-            if ((obstacle->flags & OBJECT_SHOOT_THRU) != 0) {
+            if ((obstacle->flags & OBJECT_SHOOT_THRU) != OBJECT_NONE) {
                 obstacle = nullptr;
             }
         }
@@ -2145,7 +2161,7 @@ static void op_make_path(Program* program)
     }
 
     // sfall only requires an empty destination tile when the source object is a critter.
-    int requireEmptyDest = PID_TYPE(object->pid) == OBJ_TYPE_CRITTER;
+    int requireEmptyDest = objectTypeFromPid(object->pid) == OBJ_TYPE_CRITTER;
 
     // XXX: pathfinderFindPath does not accept a destination buffer length. Use the
     // same capacity as the engine's AnimationSad::rotations storage so this
@@ -3559,15 +3575,15 @@ static void op_charcode(Program* program)
     }
 }
 
-static void op_show_iface_tag(fallout::Program* program)
+static void op_show_iface_tag(Program* program)
 {
-    int tag = fallout::programStackPopInteger(program);
+    int tag = programStackPopInteger(program);
 
     switch (tag) {
     case DudeState::DUDE_STATE_SNEAKING:
     case DudeState::DUDE_STATE_LEVEL_UP_AVAILABLE:
     case DudeState::DUDE_STATE_ADDICTED:
-        dudeEnableState(tag);
+        dudeEnableState(static_cast<DudeState>(tag));
         break;
     case 1: // POISONED — engine-driven indicator, cannot be force-shown via sfall API.
             // The indicator appears automatically when critterGetPoison(gDude) > POISON_INDICATOR_THRESHOLD.
@@ -3580,17 +3596,19 @@ static void op_show_iface_tag(fallout::Program* program)
     default:
         interfaceTagShow(tag);
     }
+
+    interfaceTagShow(tag);
 }
 
-static void op_hide_iface_tag(fallout::Program* program)
+static void op_hide_iface_tag(Program* program)
 {
-    int tag = fallout::programStackPopInteger(program);
+    int tag = programStackPopInteger(program);
 
     switch (tag) {
     case DudeState::DUDE_STATE_SNEAKING:
     case DudeState::DUDE_STATE_LEVEL_UP_AVAILABLE:
     case DudeState::DUDE_STATE_ADDICTED:
-        dudeDisableState(tag);
+        dudeDisableState(static_cast<DudeState>(tag));
         break;
     case 1: // POISONED — engine-driven indicator, cannot be force-hidden via sfall API.
             // The indicator disappears automatically when poison level falls below the threshold.
@@ -3603,30 +3621,22 @@ static void op_hide_iface_tag(fallout::Program* program)
     default:
         interfaceTagHide(tag);
     }
+
+    interfaceTagHide(tag);
 }
 
-static void op_is_iface_tag_active(fallout::Program* program)
+static void op_is_iface_tag_active(Program* program)
 {
-    int tag = fallout::programStackPopInteger(program);
+    int tag = programStackPopInteger(program);
     bool isActive = false;
 
-    switch (tag) {
-    case DudeState::DUDE_STATE_SNEAKING:
-    case DudeState::DUDE_STATE_LEVEL_UP_AVAILABLE:
-    case DudeState::DUDE_STATE_ADDICTED:
-        isActive = fallout::dudeHasState(tag);
-        break;
-    case 1: // POISONED
-        isActive = critterGetPoison(gDude) > POISON_INDICATOR_THRESHOLD;
-        break;
-    case 2: // RADIATED
-        isActive = critterGetRadiation(gDude) > RADATION_INDICATOR_THRESHOLD;
-        break;
-    default:
+    if (dudeStateIsValid(tag)) {
+        isActive = dudeHasState(static_cast<DudeState>(tag));
+    } else {
         isActive = interfaceTagIsActive(tag);
     }
 
-    fallout::programStackPushInteger(program, isActive ? 1 : 0);
+    programStackPushInteger(program, isActive ? 1 : 0);
 }
 
 // TODO: move opcodes into several files
@@ -3937,7 +3947,7 @@ static void op_set_critter_skill_points(Program* program)
     int skill = programStackPopInteger(program);
     Object* critter = static_cast<Object*>(programStackPopPointer(program));
 
-    if (critter == nullptr || FID_TYPE(critter->fid) != OBJ_TYPE_CRITTER) {
+    if (critter == nullptr || objectTypeFromFid(critter->fid) != OBJ_TYPE_CRITTER) {
         programPrintError("set_critter_skill_points: expected critter object");
         return;
     }
@@ -3969,7 +3979,7 @@ static void op_get_critter_skill_points(Program* program)
     int skill = programStackPopInteger(program);
     Object* critter = static_cast<Object*>(programStackPopPointer(program));
 
-    if (critter == nullptr || FID_TYPE(critter->fid) != OBJ_TYPE_CRITTER) {
+    if (critter == nullptr || objectTypeFromFid(critter->fid) != OBJ_TYPE_CRITTER) {
         programPrintError("get_critter_skill_points: expected critter object");
         programStackPushInteger(program, 0);
         return;
@@ -5265,17 +5275,17 @@ static void op_remove_trait(Program* program)
         return;
     }
 
-    int trait1, trait2, trait3;
+    Trait trait1, trait2, trait3;
     traitsGetSelected(&trait1, &trait2, &trait3);
 
     if (trait1 == traitID) {
-        traitsSetSelected(-1, trait2, trait3);
+        traitsSetSelected(TRAIT_INVALID, trait2, trait3);
         debugPrint("remove_trait(%d): removed from slot 1\n", traitID);
     } else if (trait2 == traitID) {
-        traitsSetSelected(trait1, -1, trait3);
+        traitsSetSelected(trait1, TRAIT_INVALID, trait3);
         debugPrint("remove_trait(%d): removed from slot 2\n", traitID);
     } else if (trait3 == traitID) {
-        traitsSetSelected(trait1, trait2, -1);
+        traitsSetSelected(trait1, trait2, TRAIT_INVALID);
         debugPrint("remove_trait(%d): removed from slot 3\n", traitID);
     } else {
         debugPrint("remove_trait(%d): trait not currently selected (selected: %d, %d, %d)\n",
@@ -5443,7 +5453,7 @@ static void op_set_critter_hit_chance_mod(Program* program)
     // op_set_critter_current_ap, op_set_critter_burst_disable,
     // op_set_critter_skill_mod, op_set_critter_pickpocket_mod) validate
     // that the object is actually a critter before operating on it.
-    if (FID_TYPE(critter->fid) != OBJ_TYPE_CRITTER) {
+    if (objectTypeFromFid(critter->fid) != OBJ_TYPE_CRITTER) {
         programPrintError("set_critter_hit_chance_mod: object is not a critter");
         return;
     }
@@ -5642,7 +5652,7 @@ static void op_set_critter_skill_mod(Program* program)
         programPrintError("set_critter_skill_mod: expected critter object");
         return;
     }
-    if (FID_TYPE(critter->fid) != OBJ_TYPE_CRITTER) {
+    if (objectTypeFromFid(critter->fid) != OBJ_TYPE_CRITTER) {
         programPrintError("set_critter_skill_mod: object is not a critter");
         return;
     }
@@ -5726,7 +5736,7 @@ static void op_set_critter_pickpocket_mod(Program* program)
         sfallCritterPickpocketMax = max;
         return;
     }
-    if (FID_TYPE(critter->fid) != OBJ_TYPE_CRITTER) {
+    if (objectTypeFromFid(critter->fid) != OBJ_TYPE_CRITTER) {
         programPrintError("set_critter_pickpocket_mod: object is not a critter");
         return;
     }
@@ -5904,7 +5914,7 @@ static void op_create_spatial(Program* program)
     // we returned the SID (integer), but that caused type mismatch failures
     // in metarule calls (F-002).
     Object* obj = nullptr;
-    int markerFid = buildFid(OBJ_TYPE_INTERFACE, 3, 0, 0, 0);
+    int markerFid = buildFid(OBJ_TYPE_INTERFACE, 3, 0, 0, ROTATION_NE);
     if (objectCreateWithFidPid(&obj, markerFid, -1) != -1) {
         obj->flags |= OBJECT_NO_SAVE;
         objectHide(obj, nullptr);
@@ -6123,7 +6133,7 @@ static void op_get_kill_counter(Program* program)
     int critterType = programStackPopInteger(program);
     // M-15: read the ENGINE tally. killsGetByType bounds-checks (returns 0
     // for invalid indices, critter.cc:748-753).
-    int count = killsGetByType(critterType);
+    int count = killsGetByType(static_cast<KillType>(critterType));
     // Negative mod deltas (mod_kill_counter with amount < 0) cannot be applied
     // to the engine array (no decrement API), so they live in
     // gSfallKillCounters and are layered on top here for consistency.
@@ -6154,8 +6164,8 @@ static void op_mod_kill_counter(Program* program)
         debugPrint("mod_kill_counter: negative critterType %d rejected\n", critterType);
         return;
     }
-    if (critterType >= KILL_TYPE_COUNT) {
-        debugPrint("mod_kill_counter: critterType %d out of range [0, %d)\n", critterType, KILL_TYPE_COUNT);
+    if (critterType >= KILL_TYPE_DEFAULT_COUNT) {
+        debugPrint("mod_kill_counter: critterType %d out of range [0, %d)\n", critterType, KILL_TYPE_DEFAULT_COUNT);
         return;
     }
 
@@ -6177,7 +6187,7 @@ static void op_mod_kill_counter(Program* program)
     // get_kill_counter remains consistent for negative mods.
     if (amount > 0) {
         for (int i = 0; i < amount; i++) {
-            killsIncByType(critterType);
+            killsIncByType(static_cast<KillType>(critterType));
         }
     } else if (amount < 0) {
         // Guard against unbounded map growth from script bugs. Allow existing
@@ -8309,22 +8319,22 @@ void sfallOpcodesInit()
         interpreterRegisterOpcode(0x81DB, op_call_offset_r4);
     }
 
-    // 0x815a - void set_pc_base_stat(int StatID, int value)
+    // 0x815a - void set_pc_base_stat(Stat stat, int value)
     interpreterRegisterOpcode(0x815A, op_set_pc_base_stat);
-    // 0x815b - void set_pc_extra_stat(int StatID, int value)
+    // 0x815b - void set_pc_extra_stat(Stat stat, int value)
     interpreterRegisterOpcode(0x815B, op_set_pc_bonus_stat);
-    // 0x815c - int  get_pc_base_stat(int StatID)
+    // 0x815c - int  get_pc_base_stat(Stat stat)
     interpreterRegisterOpcode(0x815C, op_get_pc_base_stat);
-    // 0x815d - int  get_pc_extra_stat(int StatID)
+    // 0x815d - int  get_pc_extra_stat(Stat stat)
     interpreterRegisterOpcode(0x815D, op_get_pc_bonus_stat);
 
-    // 0x815e - void set_critter_base_stat(object, int StatID, int value)
+    // 0x815e - void set_critter_base_stat(object, Stat stat, int value)
     interpreterRegisterOpcode(0x815E, op_set_critter_base_stat);
-    // 0x815f - void set_critter_extra_stat(object, int StatID, int value)
+    // 0x815f - void set_critter_extra_stat(object, Stat stat, int value)
     interpreterRegisterOpcode(0x815F, op_set_critter_extra_stat);
-    // 0x8160 - int  get_critter_base_stat(object, int StatID)
+    // 0x8160 - int  get_critter_base_stat(object, Stat stat)
     interpreterRegisterOpcode(0x8160, op_get_critter_base_stat);
-    // 0x8161 - int  get_critter_extra_stat(object, int StatID)
+    // 0x8161 - int  get_critter_extra_stat(object, Stat stat)
     interpreterRegisterOpcode(0x8161, op_get_critter_extra_stat);
     // 0x8242 - void set_critter_skill_points(object critter, int skill, int value)
     interpreterRegisterOpcode(0x8242, op_set_critter_skill_points);

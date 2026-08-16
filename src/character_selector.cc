@@ -67,12 +67,27 @@ namespace fallout {
 #define CS_WINDOW_SECONDARY_STAT_MID_X (379)
 #define CS_WINDOW_BIO_X (438)
 
-typedef enum PremadeCharacter {
+enum PremadeCharacter : int {
     PREMADE_CHARACTER_NARG,
     PREMADE_CHARACTER_CHITSA,
     PREMADE_CHARACTER_MINGUN,
     PREMADE_CHARACTER_COUNT,
-} PremadeCharacter;
+    PREMADE_CHARACTER_FIRST = PREMADE_CHARACTER_NARG
+};
+
+inline PremadeCharacter operator++(PremadeCharacter& e, int)
+{
+    PremadeCharacter result = e;
+    e = static_cast<PremadeCharacter>(static_cast<int>(e) + 1);
+    return result;
+}
+
+inline PremadeCharacter operator--(PremadeCharacter& e, int)
+{
+    PremadeCharacter result = e;
+    e = static_cast<PremadeCharacter>(static_cast<int>(e) - 1);
+    return result;
+}
 
 typedef struct PremadeCharacterDescription {
     char fileName[20];
@@ -91,7 +106,7 @@ static bool characterSelectorWindowFatalError(bool result);
 static void premadeCharactersLocalizePath(char* path);
 
 // 0x51C84C premade_index
-static int gCurrentPremadeCharacter = PREMADE_CHARACTER_NARG;
+static PremadeCharacter gCurrentPremadeCharacter = PREMADE_CHARACTER_NARG;
 
 // 0x51C850 premade_characters
 static PremadeCharacterDescription gPremadeCharacterDescriptions[PREMADE_CHARACTER_COUNT] = {
@@ -223,9 +238,9 @@ int characterSelectorOpen()
             soundPlayFile("ib2p1xx1");
             // FALLTHROUGH
         case 500:
-            gCurrentPremadeCharacter -= 1;
-            if (gCurrentPremadeCharacter < 0) {
-                gCurrentPremadeCharacter = gPremadeCharacterCount - 1;
+            gCurrentPremadeCharacter--;
+            if (gCurrentPremadeCharacter < PREMADE_CHARACTER_FIRST) {
+                gCurrentPremadeCharacter = static_cast<PremadeCharacter>(gPremadeCharacterCount - 1);
             }
 
             characterSelectorWindowRefresh();
@@ -234,9 +249,9 @@ int characterSelectorOpen()
             soundPlayFile("ib2p1xx1");
             // FALLTHROUGH
         case 501:
-            gCurrentPremadeCharacter += 1;
+            gCurrentPremadeCharacter++;
             if (gCurrentPremadeCharacter >= gPremadeCharacterCount) {
-                gCurrentPremadeCharacter = 0;
+                gCurrentPremadeCharacter = PREMADE_CHARACTER_FIRST;
             }
 
             characterSelectorWindowRefresh();
@@ -269,7 +284,7 @@ static bool characterSelectorWindowInit()
 
     int characterSelectorWindowX = (screenGetWidth() - CS_WINDOW_WIDTH) / 2;
     int characterSelectorWindowY = (screenGetHeight() - CS_WINDOW_HEIGHT) / 2;
-    gCharacterSelectorWindow = windowCreate(characterSelectorWindowX, characterSelectorWindowY, CS_WINDOW_WIDTH, CS_WINDOW_HEIGHT, _colorTable[0], 0);
+    gCharacterSelectorWindow = windowCreate(characterSelectorWindowX, characterSelectorWindowY, CS_WINDOW_WIDTH, CS_WINDOW_HEIGHT, COLOR_BLACK, 0);
     if (gCharacterSelectorWindow == -1) {
         return characterSelectorWindowFatalError(false);
     }
@@ -280,7 +295,7 @@ static bool characterSelectorWindowInit()
     }
 
     FrmImage backgroundFrmImage;
-    int backgroundFid = buildFid(OBJ_TYPE_INTERFACE, 174, 0, 0, 0);
+    int backgroundFid = buildFid(OBJ_TYPE_INTERFACE, 174);
     if (!backgroundFrmImage.lock(backgroundFid)) {
         return characterSelectorWindowFatalError(false);
     }
@@ -308,12 +323,12 @@ static bool characterSelectorWindowInit()
     int fid;
 
     // Setup "Previous" button.
-    fid = buildFid(OBJ_TYPE_INTERFACE, 122, 0, 0, 0);
+    fid = buildFid(OBJ_TYPE_INTERFACE, 122);
     if (!_previousButtonNormalFrmImage.lock(fid)) {
         return characterSelectorWindowFatalError(false);
     }
 
-    fid = buildFid(OBJ_TYPE_INTERFACE, 123, 0, 0, 0);
+    fid = buildFid(OBJ_TYPE_INTERFACE, 123);
     if (!_previousButtonPressedFrmImage.lock(fid)) {
         return characterSelectorWindowFatalError(false);
     }
@@ -338,12 +353,12 @@ static bool characterSelectorWindowInit()
     buttonSetCallbacks(gCharacterSelectorWindowPreviousButton, _gsound_med_butt_press, _gsound_med_butt_release);
 
     // Setup "Next" button.
-    fid = buildFid(OBJ_TYPE_INTERFACE, 124, 0, 0, 0);
+    fid = buildFid(OBJ_TYPE_INTERFACE, 124);
     if (!_nextButtonNormalFrmImage.lock(fid)) {
         return characterSelectorWindowFatalError(false);
     }
 
-    fid = buildFid(OBJ_TYPE_INTERFACE, 125, 0, 0, 0);
+    fid = buildFid(OBJ_TYPE_INTERFACE, 125);
     if (!_nextButtonPressedFrmImage.lock(fid)) {
         return characterSelectorWindowFatalError(false);
     }
@@ -368,12 +383,12 @@ static bool characterSelectorWindowInit()
     buttonSetCallbacks(gCharacterSelectorWindowNextButton, _gsound_med_butt_press, _gsound_med_butt_release);
 
     // Setup "Take" button.
-    fid = buildFid(OBJ_TYPE_INTERFACE, 8, 0, 0, 0);
+    fid = buildFid(OBJ_TYPE_INTERFACE, 8);
     if (!_takeButtonNormalFrmImage.lock(fid)) {
         return characterSelectorWindowFatalError(false);
     }
 
-    fid = buildFid(OBJ_TYPE_INTERFACE, 9, 0, 0, 0);
+    fid = buildFid(OBJ_TYPE_INTERFACE, 9);
     if (!_takeButtonPressedFrmImage.lock(fid)) {
         return characterSelectorWindowFatalError(false);
     }
@@ -398,11 +413,11 @@ static bool characterSelectorWindowInit()
     buttonSetCallbacks(gCharacterSelectorWindowTakeButton, _gsound_red_butt_press, _gsound_red_butt_release);
 
     // Setup "Modify" button.
-    fid = buildFid(OBJ_TYPE_INTERFACE, 8, 0, 0, 0);
+    fid = buildFid(OBJ_TYPE_INTERFACE, 8);
     if (!_modifyButtonNormalFrmImage.lock(fid))
         return characterSelectorWindowFatalError(false);
 
-    fid = buildFid(OBJ_TYPE_INTERFACE, 9, 0, 0, 0);
+    fid = buildFid(OBJ_TYPE_INTERFACE, 9);
     if (!_modifyButtonPressedFrmImage.lock(fid)) {
         return characterSelectorWindowFatalError(false);
     }
@@ -427,12 +442,12 @@ static bool characterSelectorWindowInit()
     buttonSetCallbacks(gCharacterSelectorWindowModifyButton, _gsound_red_butt_press, _gsound_red_butt_release);
 
     // Setup "Create" button.
-    fid = buildFid(OBJ_TYPE_INTERFACE, 8, 0, 0, 0);
+    fid = buildFid(OBJ_TYPE_INTERFACE, 8);
     if (!_createButtonNormalFrmImage.lock(fid)) {
         return characterSelectorWindowFatalError(false);
     }
 
-    fid = buildFid(OBJ_TYPE_INTERFACE, 9, 0, 0, 0);
+    fid = buildFid(OBJ_TYPE_INTERFACE, 9);
     if (!_createButtonPressedFrmImage.lock(fid)) {
         return characterSelectorWindowFatalError(false);
     }
@@ -457,12 +472,12 @@ static bool characterSelectorWindowInit()
     buttonSetCallbacks(gCharacterSelectorWindowCreateButton, _gsound_red_butt_press, _gsound_red_butt_release);
 
     // Setup "Back" button.
-    fid = buildFid(OBJ_TYPE_INTERFACE, 8, 0, 0, 0);
+    fid = buildFid(OBJ_TYPE_INTERFACE, 8);
     if (!_backButtonNormalFrmImage.lock(fid)) {
         return characterSelectorWindowFatalError(false);
     }
 
-    fid = buildFid(OBJ_TYPE_INTERFACE, 9, 0, 0, 0);
+    fid = buildFid(OBJ_TYPE_INTERFACE, 9);
     if (!_backButtonPressedFrmImage.lock(fid)) {
         return characterSelectorWindowFatalError(false);
     }
@@ -598,7 +613,7 @@ static bool characterSelectorWindowRenderFace()
     bool success = false;
 
     FrmImage faceFrmImage;
-    int faceFid = buildFid(OBJ_TYPE_INTERFACE, gCustomPremadeCharacterDescriptions[gCurrentPremadeCharacter].face, 0, 0, 0);
+    int faceFid = buildFid(OBJ_TYPE_INTERFACE, gCustomPremadeCharacterDescriptions[gCurrentPremadeCharacter].face);
     if (faceFrmImage.lock(faceFid)) {
         unsigned char* data = faceFrmImage.getData();
         if (data != nullptr) {
@@ -635,7 +650,7 @@ static bool characterSelectorWindowRenderStats()
     strcpy(text, str);
 
     length = fontGetStringWidth(text);
-    fontDrawText(gCharacterSelectorWindowBuffer + CS_WINDOW_WIDTH * y + CS_WINDOW_NAME_MID_X - (length / 2), text, 160, CS_WINDOW_WIDTH, _colorTable[992]);
+    fontDrawText(gCharacterSelectorWindowBuffer + CS_WINDOW_WIDTH * y + CS_WINDOW_NAME_MID_X - (length / 2), text, 160, CS_WINDOW_WIDTH, COLOR_GREEN);
 
     // STRENGTH
     y += vh + vh + vh;
@@ -646,13 +661,13 @@ static bool characterSelectorWindowRenderStats()
     snprintf(text, sizeof(text), "%s %02d", str, value);
 
     length = fontGetStringWidth(text);
-    fontDrawText(gCharacterSelectorWindowBuffer + CS_WINDOW_WIDTH * y + CS_WINDOW_PRIMARY_STAT_MID_X - length, text, length, CS_WINDOW_WIDTH, _colorTable[992]);
+    fontDrawText(gCharacterSelectorWindowBuffer + CS_WINDOW_WIDTH * y + CS_WINDOW_PRIMARY_STAT_MID_X - length, text, length, CS_WINDOW_WIDTH, COLOR_GREEN);
 
     str = statGetValueDescription(value);
     snprintf(text, sizeof(text), "  %s", str);
 
     length = fontGetStringWidth(text);
-    fontDrawText(gCharacterSelectorWindowBuffer + CS_WINDOW_WIDTH * y + CS_WINDOW_PRIMARY_STAT_MID_X, text, length, CS_WINDOW_WIDTH, _colorTable[992]);
+    fontDrawText(gCharacterSelectorWindowBuffer + CS_WINDOW_WIDTH * y + CS_WINDOW_PRIMARY_STAT_MID_X, text, length, CS_WINDOW_WIDTH, COLOR_GREEN);
 
     // PERCEPTION
     y += vh;
@@ -663,13 +678,13 @@ static bool characterSelectorWindowRenderStats()
     snprintf(text, sizeof(text), "%s %02d", str, value);
 
     length = fontGetStringWidth(text);
-    fontDrawText(gCharacterSelectorWindowBuffer + CS_WINDOW_WIDTH * y + CS_WINDOW_PRIMARY_STAT_MID_X - length, text, length, CS_WINDOW_WIDTH, _colorTable[992]);
+    fontDrawText(gCharacterSelectorWindowBuffer + CS_WINDOW_WIDTH * y + CS_WINDOW_PRIMARY_STAT_MID_X - length, text, length, CS_WINDOW_WIDTH, COLOR_GREEN);
 
     str = statGetValueDescription(value);
     snprintf(text, sizeof(text), "  %s", str);
 
     length = fontGetStringWidth(text);
-    fontDrawText(gCharacterSelectorWindowBuffer + CS_WINDOW_WIDTH * y + CS_WINDOW_PRIMARY_STAT_MID_X, text, length, CS_WINDOW_WIDTH, _colorTable[992]);
+    fontDrawText(gCharacterSelectorWindowBuffer + CS_WINDOW_WIDTH * y + CS_WINDOW_PRIMARY_STAT_MID_X, text, length, CS_WINDOW_WIDTH, COLOR_GREEN);
 
     // ENDURANCE
     y += vh;
@@ -680,13 +695,13 @@ static bool characterSelectorWindowRenderStats()
     snprintf(text, sizeof(text), "%s %02d", str, value);
 
     length = fontGetStringWidth(text);
-    fontDrawText(gCharacterSelectorWindowBuffer + CS_WINDOW_WIDTH * y + CS_WINDOW_PRIMARY_STAT_MID_X - length, text, length, CS_WINDOW_WIDTH, _colorTable[992]);
+    fontDrawText(gCharacterSelectorWindowBuffer + CS_WINDOW_WIDTH * y + CS_WINDOW_PRIMARY_STAT_MID_X - length, text, length, CS_WINDOW_WIDTH, COLOR_GREEN);
 
     str = statGetValueDescription(value);
     snprintf(text, sizeof(text), "  %s", str);
 
     length = fontGetStringWidth(text);
-    fontDrawText(gCharacterSelectorWindowBuffer + CS_WINDOW_WIDTH * y + CS_WINDOW_PRIMARY_STAT_MID_X, text, length, CS_WINDOW_WIDTH, _colorTable[992]);
+    fontDrawText(gCharacterSelectorWindowBuffer + CS_WINDOW_WIDTH * y + CS_WINDOW_PRIMARY_STAT_MID_X, text, length, CS_WINDOW_WIDTH, COLOR_GREEN);
 
     // CHARISMA
     y += vh;
@@ -697,13 +712,13 @@ static bool characterSelectorWindowRenderStats()
     snprintf(text, sizeof(text), "%s %02d", str, value);
 
     length = fontGetStringWidth(text);
-    fontDrawText(gCharacterSelectorWindowBuffer + CS_WINDOW_WIDTH * y + CS_WINDOW_PRIMARY_STAT_MID_X - length, text, length, CS_WINDOW_WIDTH, _colorTable[992]);
+    fontDrawText(gCharacterSelectorWindowBuffer + CS_WINDOW_WIDTH * y + CS_WINDOW_PRIMARY_STAT_MID_X - length, text, length, CS_WINDOW_WIDTH, COLOR_GREEN);
 
     str = statGetValueDescription(value);
     snprintf(text, sizeof(text), "  %s", str);
 
     length = fontGetStringWidth(text);
-    fontDrawText(gCharacterSelectorWindowBuffer + CS_WINDOW_WIDTH * y + CS_WINDOW_PRIMARY_STAT_MID_X, text, length, CS_WINDOW_WIDTH, _colorTable[992]);
+    fontDrawText(gCharacterSelectorWindowBuffer + CS_WINDOW_WIDTH * y + CS_WINDOW_PRIMARY_STAT_MID_X, text, length, CS_WINDOW_WIDTH, COLOR_GREEN);
 
     // INTELLIGENCE
     y += vh;
@@ -714,13 +729,13 @@ static bool characterSelectorWindowRenderStats()
     snprintf(text, sizeof(text), "%s %02d", str, value);
 
     length = fontGetStringWidth(text);
-    fontDrawText(gCharacterSelectorWindowBuffer + CS_WINDOW_WIDTH * y + CS_WINDOW_PRIMARY_STAT_MID_X - length, text, length, CS_WINDOW_WIDTH, _colorTable[992]);
+    fontDrawText(gCharacterSelectorWindowBuffer + CS_WINDOW_WIDTH * y + CS_WINDOW_PRIMARY_STAT_MID_X - length, text, length, CS_WINDOW_WIDTH, COLOR_GREEN);
 
     str = statGetValueDescription(value);
     snprintf(text, sizeof(text), "  %s", str);
 
     length = fontGetStringWidth(text);
-    fontDrawText(gCharacterSelectorWindowBuffer + CS_WINDOW_WIDTH * y + CS_WINDOW_PRIMARY_STAT_MID_X, text, length, CS_WINDOW_WIDTH, _colorTable[992]);
+    fontDrawText(gCharacterSelectorWindowBuffer + CS_WINDOW_WIDTH * y + CS_WINDOW_PRIMARY_STAT_MID_X, text, length, CS_WINDOW_WIDTH, COLOR_GREEN);
 
     // AGILITY
     y += vh;
@@ -731,13 +746,13 @@ static bool characterSelectorWindowRenderStats()
     snprintf(text, sizeof(text), "%s %02d", str, value);
 
     length = fontGetStringWidth(text);
-    fontDrawText(gCharacterSelectorWindowBuffer + CS_WINDOW_WIDTH * y + CS_WINDOW_PRIMARY_STAT_MID_X - length, text, length, CS_WINDOW_WIDTH, _colorTable[992]);
+    fontDrawText(gCharacterSelectorWindowBuffer + CS_WINDOW_WIDTH * y + CS_WINDOW_PRIMARY_STAT_MID_X - length, text, length, CS_WINDOW_WIDTH, COLOR_GREEN);
 
     str = statGetValueDescription(value);
     snprintf(text, sizeof(text), "  %s", str);
 
     length = fontGetStringWidth(text);
-    fontDrawText(gCharacterSelectorWindowBuffer + CS_WINDOW_WIDTH * y + CS_WINDOW_PRIMARY_STAT_MID_X, text, length, CS_WINDOW_WIDTH, _colorTable[992]);
+    fontDrawText(gCharacterSelectorWindowBuffer + CS_WINDOW_WIDTH * y + CS_WINDOW_PRIMARY_STAT_MID_X, text, length, CS_WINDOW_WIDTH, COLOR_GREEN);
 
     // LUCK
     y += vh;
@@ -748,13 +763,13 @@ static bool characterSelectorWindowRenderStats()
     snprintf(text, sizeof(text), "%s %02d", str, value);
 
     length = fontGetStringWidth(text);
-    fontDrawText(gCharacterSelectorWindowBuffer + CS_WINDOW_WIDTH * y + CS_WINDOW_PRIMARY_STAT_MID_X - length, text, length, CS_WINDOW_WIDTH, _colorTable[992]);
+    fontDrawText(gCharacterSelectorWindowBuffer + CS_WINDOW_WIDTH * y + CS_WINDOW_PRIMARY_STAT_MID_X - length, text, length, CS_WINDOW_WIDTH, COLOR_GREEN);
 
     str = statGetValueDescription(value);
     snprintf(text, sizeof(text), "  %s", str);
 
     length = fontGetStringWidth(text);
-    fontDrawText(gCharacterSelectorWindowBuffer + CS_WINDOW_WIDTH * y + CS_WINDOW_PRIMARY_STAT_MID_X, text, length, CS_WINDOW_WIDTH, _colorTable[992]);
+    fontDrawText(gCharacterSelectorWindowBuffer + CS_WINDOW_WIDTH * y + CS_WINDOW_PRIMARY_STAT_MID_X, text, length, CS_WINDOW_WIDTH, COLOR_GREEN);
 
     y += vh; // blank line
 
@@ -768,13 +783,13 @@ static bool characterSelectorWindowRenderStats()
     }
 
     length = fontGetStringWidth(text);
-    fontDrawText(gCharacterSelectorWindowBuffer + CS_WINDOW_WIDTH * y + CS_WINDOW_SECONDARY_STAT_MID_X - length, text, length, CS_WINDOW_WIDTH, _colorTable[992]);
+    fontDrawText(gCharacterSelectorWindowBuffer + CS_WINDOW_WIDTH * y + CS_WINDOW_SECONDARY_STAT_MID_X - length, text, length, CS_WINDOW_WIDTH, COLOR_GREEN);
 
     value = critterGetStat(gDude, STAT_MAXIMUM_HIT_POINTS);
     snprintf(text, sizeof(text), " %d/%d", critterGetHitPoints(gDude), value);
 
     length = fontGetStringWidth(text);
-    fontDrawText(gCharacterSelectorWindowBuffer + CS_WINDOW_WIDTH * y + CS_WINDOW_SECONDARY_STAT_MID_X, text, length, CS_WINDOW_WIDTH, _colorTable[992]);
+    fontDrawText(gCharacterSelectorWindowBuffer + CS_WINDOW_WIDTH * y + CS_WINDOW_SECONDARY_STAT_MID_X, text, length, CS_WINDOW_WIDTH, COLOR_GREEN);
 
     // ARMOR CLASS
     y += vh;
@@ -783,13 +798,13 @@ static bool characterSelectorWindowRenderStats()
     strcpy(text, str);
 
     length = fontGetStringWidth(text);
-    fontDrawText(gCharacterSelectorWindowBuffer + CS_WINDOW_WIDTH * y + CS_WINDOW_SECONDARY_STAT_MID_X - length, text, length, CS_WINDOW_WIDTH, _colorTable[992]);
+    fontDrawText(gCharacterSelectorWindowBuffer + CS_WINDOW_WIDTH * y + CS_WINDOW_SECONDARY_STAT_MID_X - length, text, length, CS_WINDOW_WIDTH, COLOR_GREEN);
 
     value = critterGetStat(gDude, STAT_ARMOR_CLASS);
     snprintf(text, sizeof(text), " %d", value);
 
     length = fontGetStringWidth(text);
-    fontDrawText(gCharacterSelectorWindowBuffer + CS_WINDOW_WIDTH * y + CS_WINDOW_SECONDARY_STAT_MID_X, text, length, CS_WINDOW_WIDTH, _colorTable[992]);
+    fontDrawText(gCharacterSelectorWindowBuffer + CS_WINDOW_WIDTH * y + CS_WINDOW_SECONDARY_STAT_MID_X, text, length, CS_WINDOW_WIDTH, COLOR_GREEN);
 
     // ACTION POINTS
     y += vh;
@@ -801,13 +816,13 @@ static bool characterSelectorWindowRenderStats()
     }
 
     length = fontGetStringWidth(text);
-    fontDrawText(gCharacterSelectorWindowBuffer + CS_WINDOW_WIDTH * y + CS_WINDOW_SECONDARY_STAT_MID_X - length, text, length, CS_WINDOW_WIDTH, _colorTable[992]);
+    fontDrawText(gCharacterSelectorWindowBuffer + CS_WINDOW_WIDTH * y + CS_WINDOW_SECONDARY_STAT_MID_X - length, text, length, CS_WINDOW_WIDTH, COLOR_GREEN);
 
     value = critterGetStat(gDude, STAT_MAXIMUM_ACTION_POINTS);
     snprintf(text, sizeof(text), " %d", value);
 
     length = fontGetStringWidth(text);
-    fontDrawText(gCharacterSelectorWindowBuffer + CS_WINDOW_WIDTH * y + CS_WINDOW_SECONDARY_STAT_MID_X, text, length, CS_WINDOW_WIDTH, _colorTable[992]);
+    fontDrawText(gCharacterSelectorWindowBuffer + CS_WINDOW_WIDTH * y + CS_WINDOW_SECONDARY_STAT_MID_X, text, length, CS_WINDOW_WIDTH, COLOR_GREEN);
 
     // MELEE DAMAGE
     y += vh;
@@ -816,18 +831,18 @@ static bool characterSelectorWindowRenderStats()
     strcpy(text, str);
 
     length = fontGetStringWidth(text);
-    fontDrawText(gCharacterSelectorWindowBuffer + CS_WINDOW_WIDTH * y + CS_WINDOW_SECONDARY_STAT_MID_X - length, text, length, CS_WINDOW_WIDTH, _colorTable[992]);
+    fontDrawText(gCharacterSelectorWindowBuffer + CS_WINDOW_WIDTH * y + CS_WINDOW_SECONDARY_STAT_MID_X - length, text, length, CS_WINDOW_WIDTH, COLOR_GREEN);
 
     value = critterGetStat(gDude, STAT_MELEE_DAMAGE);
     snprintf(text, sizeof(text), " %d", value);
 
     length = fontGetStringWidth(text);
-    fontDrawText(gCharacterSelectorWindowBuffer + CS_WINDOW_WIDTH * y + CS_WINDOW_SECONDARY_STAT_MID_X, text, length, CS_WINDOW_WIDTH, _colorTable[992]);
+    fontDrawText(gCharacterSelectorWindowBuffer + CS_WINDOW_WIDTH * y + CS_WINDOW_SECONDARY_STAT_MID_X, text, length, CS_WINDOW_WIDTH, COLOR_GREEN);
 
     y += vh; // blank line
 
     // SKILLS
-    int skills[DEFAULT_TAGGED_SKILLS];
+    Skill skills[DEFAULT_TAGGED_SKILLS];
     skillsGetTagged(skills, DEFAULT_TAGGED_SKILLS);
 
     for (int index = 0; index < DEFAULT_TAGGED_SKILLS; index++) {
@@ -844,20 +859,20 @@ static bool characterSelectorWindowRenderStats()
         strcpy(text, str);
 
         length = fontGetStringWidth(text);
-        fontDrawText(gCharacterSelectorWindowBuffer + CS_WINDOW_WIDTH * y + CS_WINDOW_SECONDARY_STAT_MID_X - length, text, length, CS_WINDOW_WIDTH, _colorTable[992]);
+        fontDrawText(gCharacterSelectorWindowBuffer + CS_WINDOW_WIDTH * y + CS_WINDOW_SECONDARY_STAT_MID_X - length, text, length, CS_WINDOW_WIDTH, COLOR_GREEN);
 
         value = skillGetValue(gDude, skills[index]);
         snprintf(text, sizeof(text), " %d%%", value);
 
         length = fontGetStringWidth(text);
-        fontDrawText(gCharacterSelectorWindowBuffer + CS_WINDOW_WIDTH * y + CS_WINDOW_SECONDARY_STAT_MID_X, text, length, CS_WINDOW_WIDTH, _colorTable[992]);
+        fontDrawText(gCharacterSelectorWindowBuffer + CS_WINDOW_WIDTH * y + CS_WINDOW_SECONDARY_STAT_MID_X, text, length, CS_WINDOW_WIDTH, COLOR_GREEN);
     }
 
     // TRAITS
     // F-021/I2-132: Initialize array with sentinel -1 (no trait) and read
     // all 3 slots. In FO1 mode, the 3rd slot holds the character's 3rd trait;
     // in FO2 mode, traits[2] will be -1 (sentinel, never displayed).
-    int traits[TRAITS_MAX_SELECTED_COUNT] = { -1, -1, -1 };
+    Trait traits[TRAITS_MAX_SELECTED_COUNT] = { TRAIT_INVALID, TRAIT_INVALID, TRAIT_INVALID };
     traitsGetSelected(&(traits[0]), &(traits[1]), &(traits[2]));
 
     for (int index = 0; index < traitGetMaxSelectedCount(); index++) {
@@ -875,7 +890,7 @@ static bool characterSelectorWindowRenderStats()
         strcpy(text, str);
 
         length = fontGetStringWidth(text);
-        fontDrawText(gCharacterSelectorWindowBuffer + CS_WINDOW_WIDTH * y + CS_WINDOW_SECONDARY_STAT_MID_X - length, text, length, CS_WINDOW_WIDTH, _colorTable[992]);
+        fontDrawText(gCharacterSelectorWindowBuffer + CS_WINDOW_WIDTH * y + CS_WINDOW_SECONDARY_STAT_MID_X - length, text, length, CS_WINDOW_WIDTH, COLOR_GREEN);
     }
 
     fontSetCurrent(oldFont);
@@ -900,7 +915,7 @@ static bool characterSelectorWindowRenderBio()
 
         char string[256];
         while (fileReadString(string, 256, stream) && y < 260) {
-            fontDrawText(gCharacterSelectorWindowBuffer + CS_WINDOW_WIDTH * y + CS_WINDOW_BIO_X, string, CS_WINDOW_WIDTH - CS_WINDOW_BIO_X, CS_WINDOW_WIDTH, _colorTable[992]);
+            fontDrawText(gCharacterSelectorWindowBuffer + CS_WINDOW_WIDTH * y + CS_WINDOW_BIO_X, string, CS_WINDOW_WIDTH - CS_WINDOW_BIO_X, CS_WINDOW_WIDTH, COLOR_GREEN);
             y += lineHeight;
         }
 

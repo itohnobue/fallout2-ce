@@ -1220,13 +1220,14 @@ TEST_CASE("F-07: AdjustFid — FID_TYPE macro extracts correct bits")
 {
     // FID layout: xxxxTTTT xxxxxxxx xxxxxxxx xxxxxxxx (bits 24-27 = type)
     // Build a test FID with OBJ_TYPE_CRITTER in the type field.
+    // Upstream replaced the FID_TYPE macro with objectTypeFromFid().
     constexpr int critterFid = (OBJ_TYPE_CRITTER << 24) | 0x00ABCD;
-    constexpr int critterFidType = FID_TYPE(critterFid);
+    const int critterFidType = static_cast<int>(objectTypeFromFid(critterFid));
     CHECK(critterFidType == OBJ_TYPE_CRITTER);
 
     // A non-critter FID should fail the validation.
     constexpr int sceneryFid = (OBJ_TYPE_SCENERY << 24) | 0x00ABCD;
-    constexpr int sceneryFidType = FID_TYPE(sceneryFid);
+    const int sceneryFidType = static_cast<int>(objectTypeFromFid(sceneryFid));
     CHECK_FALSE(sceneryFidType == OBJ_TYPE_CRITTER);
 }
 

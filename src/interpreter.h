@@ -1,8 +1,12 @@
 #ifndef INTERPRETER_H
 #define INTERPRETER_H
 
+#include "animation.h"
 #include "combat_defs.h"
+#include "game.h"
 #include "object.h"
+#include "proto_types.h"
+#include "stat_defs.h"
 #include <setjmp.h>
 
 #include <vector>
@@ -237,6 +241,7 @@ void programInterpret(Program* program, int numInstructions);
 void programExecuteProcedureAsync(Program* program, int procedureIndex);
 int programFindProcedure(Program* prg, const char* name);
 void programExecuteProcedure(Program* program, int procedureIndex);
+void programProcessProcedureEvents(Program* program);
 void programListNodeCreate(Program* program);
 void runProgram(Program* program);
 Program* runScript(char* name);
@@ -254,6 +259,141 @@ ProgramValue programStackPopValue(Program* program);
 int programStackPopInteger(Program* program);
 char* programStackPopString(Program* program);
 void* programStackPopPointer(Program* program);
+
+template <typename T>
+T programStackPopEnum(Program* program);
+
+template <>
+inline HitMode programStackPopEnum(Program* program)
+{
+    int hitMode = programStackPopInteger(program);
+    if (!hitModeIsValid(hitMode)) {
+        programPrintError("invalid hit mode %d", hitMode);
+    }
+
+    return static_cast<HitMode>(hitMode);
+}
+
+template <>
+inline HitLocation programStackPopEnum(Program* program)
+{
+    int hitLocation = programStackPopInteger(program);
+    if (!hitLocationIsValid(hitLocation)) {
+        programPrintError("invalid hit location %d", hitLocation);
+    }
+
+    return static_cast<HitLocation>(hitLocation);
+}
+
+template <>
+inline CriticalHitDataMember programStackPopEnum(Program* program)
+{
+    int criticalHitDataMember = programStackPopInteger(program);
+    if (!criticalHitDataMemberIsValid(criticalHitDataMember)) {
+        programPrintError("invalid critical hit data member %d", criticalHitDataMember);
+    }
+
+    return static_cast<CriticalHitDataMember>(criticalHitDataMember);
+}
+
+template <>
+inline CriticalEffect programStackPopEnum(Program* program)
+{
+    int effect = programStackPopInteger(program);
+    if (!criticalEffectIsValid(effect)) {
+        programPrintError("invalid critical effect %d", effect);
+    }
+
+    return static_cast<CriticalEffect>(effect);
+}
+
+template <>
+inline KillType programStackPopEnum(Program* program)
+{
+    int killType = programStackPopInteger(program);
+    if (!killTypeOverrideIsValid(killType)) {
+        programPrintError("invalid kill type %d", killType);
+    }
+
+    return static_cast<KillType>(killType);
+}
+
+template <>
+inline Skill programStackPopEnum(Program* program)
+{
+    int skill = programStackPopInteger(program);
+    if (!skillIsValid(skill)) {
+        programPrintError("invalid skill %d", skill);
+    }
+
+    return static_cast<Skill>(skill);
+}
+
+template <>
+inline Stat programStackPopEnum(Program* program)
+{
+    int stat = programStackPopInteger(program);
+    if (!statIsValid(stat)) {
+        programPrintError("invalid stat %d", stat);
+    }
+
+    return static_cast<Stat>(stat);
+}
+
+template <>
+inline PcStat programStackPopEnum(Program* program)
+{
+    int pcStat = programStackPopInteger(program);
+    if (!pcStatIsValid(pcStat)) {
+        programPrintError("invalid pc stat %d", pcStat);
+    }
+
+    return static_cast<PcStat>(pcStat);
+}
+
+template <>
+inline GameGlobalVar programStackPopEnum(Program* program)
+{
+    int var = programStackPopInteger(program);
+    if (!globalVariableIsValid(var)) {
+        programPrintError("invalid global variable %d", var);
+    }
+
+    return static_cast<GameGlobalVar>(var);
+}
+
+template <>
+inline AnimationType programStackPopEnum(Program* program)
+{
+    int anim = programStackPopInteger(program);
+    if (!animationTypeIsValid(anim)) {
+        programPrintError("invalid animation type %d", anim);
+    }
+
+    return static_cast<AnimationType>(anim);
+}
+
+template <>
+inline WeaponAnimation programStackPopEnum(Program* program)
+{
+    int anim = programStackPopInteger(program);
+    if (!weaponAnimationIsValid(anim)) {
+        programPrintError("invalid weapon animation %d", anim);
+    }
+
+    return static_cast<WeaponAnimation>(anim);
+}
+
+template <>
+inline Rotation programStackPopEnum(Program* program)
+{
+    int rotation = programStackPopInteger(program);
+    if (!rotationIsValid(rotation)) {
+        programPrintError("invalid rotation %d", rotation);
+    }
+
+    return static_cast<Rotation>(rotation);
+}
 
 void programReturnStackPushValue(Program* program, ProgramValue& programValue);
 void programReturnStackPushInteger(Program* program, int value);

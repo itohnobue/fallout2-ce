@@ -5,6 +5,7 @@
 
 #include "animation.h"
 #include "art.h"
+#include "art_defs.h"
 #include "audio.h"
 #include "combat.h"
 #include "content_config.h"
@@ -1150,7 +1151,7 @@ Sound* soundEffectLoad(const char* name, Object* object)
     }
 
     if (object != nullptr) {
-        if (FID_TYPE(object->fid) == OBJ_TYPE_CRITTER && (name[0] == 'H' || name[0] == 'N')) {
+        if (objectTypeFromFid(object->fid) == OBJ_TYPE_CRITTER && (name[0] == 'H' || name[0] == 'N')) {
             char v9 = name[1];
             if (v9 == 'A' || v9 == 'F' || v9 == 'M') {
                 if (v9 == 'A') {
@@ -1307,7 +1308,6 @@ int soundEffectPlay(Sound* sound)
 // 0x451534
 int _gsound_compute_relative_volume(Object* obj)
 {
-    int type;
     int v3;
     Object* v7;
     Rect v12;
@@ -1319,8 +1319,8 @@ int _gsound_compute_relative_volume(Object* obj)
     v3 = 0x7FFF;
 
     if (obj) {
-        type = FID_TYPE(obj->fid);
-        if (type == 0 || type == 1 || type == 2) {
+        ObjectType type = objectTypeFromFid(obj->fid);
+        if (type == OBJ_TYPE_ITEM || type == OBJ_TYPE_CRITTER || type == OBJ_TYPE_SCENERY) {
             v7 = objectGetOwner(obj);
             if (!v7) {
                 v7 = obj;
@@ -1351,38 +1351,38 @@ int _gsound_compute_relative_volume(Object* obj)
 
 // sfx_build_char_name
 // 0x451604
-char* sfxBuildCharName(Object* a1, int anim, int extra)
+char* sfxBuildCharName(Object* a1, AnimationType anim, WeaponAnimation weaponType)
 {
-    char v7[13];
-    char v8;
-    char v9;
+    char artName[13];
+    char weaponCode;
+    char animationCode;
 
-    if (artCopyFileName(FID_TYPE(a1->fid), a1->fid & 0xFFF, v7) == -1) {
+    if (artCopyFileName(objectTypeFromFid(a1->fid), a1->fid & 0xFFF, artName) == -1) {
         return nullptr;
     }
 
     if (anim == ANIM_TAKE_OUT) {
-        if (_art_get_code(anim, extra, &v8, &v9) == -1) {
+        if (_art_get_code(anim, weaponType, &weaponCode, &animationCode) == -1) {
             return nullptr;
         }
     } else {
-        if (_art_get_code(anim, (a1->fid & 0xF000) >> 12, &v8, &v9) == -1) {
+        if (_art_get_code(anim, weaponAnimationFromFid(a1->fid), &weaponCode, &animationCode) == -1) {
             return nullptr;
         }
     }
 
     // TODO: Check.
     if (anim == ANIM_FALL_FRONT || anim == ANIM_FALL_BACK) {
-        if (extra == CHARACTER_SOUND_EFFECT_PASS_OUT) {
-            v8 = 'Y';
-        } else if (extra == CHARACTER_SOUND_EFFECT_DIE) {
-            v8 = 'Z';
+        if (weaponType == CHARACTER_SOUND_EFFECT_PASS_OUT) {
+            weaponCode = 'Y';
+        } else if (weaponType == CHARACTER_SOUND_EFFECT_DIE) {
+            weaponCode = 'Z';
         }
-    } else if ((anim == ANIM_THROW_PUNCH || anim == ANIM_KICK_LEG) && extra == CHARACTER_SOUND_EFFECT_CONTACT) {
-        v8 = 'Z';
+    } else if ((anim == ANIM_THROW_PUNCH || anim == ANIM_KICK_LEG) && weaponType == CHARACTER_SOUND_EFFECT_CONTACT) {
+        weaponCode = 'Z';
     }
 
-    snprintf(_sfx_file_name, sizeof(_sfx_file_name), "%s%c%c", v7, v8, v9);
+    snprintf(_sfx_file_name, sizeof(_sfx_file_name), "%s%c%c", artName, weaponCode, animationCode);
     compat_strupr(_sfx_file_name);
     return _sfx_file_name;
 }
@@ -1407,7 +1407,7 @@ char* gameSoundBuildInterfaceName(const char* a1)
 
 // sfx_build_weapon_name
 // 0x451760
-char* sfxBuildWeaponName(int effectType, Object* weapon, int hitMode, Object* target)
+char* sfxBuildWeaponName(int effectType, Object* weapon, HitMode hitMode, Object* target)
 {
     int soundVariant;
     char weaponSoundCode;
@@ -1434,14 +1434,14 @@ char* sfxBuildWeaponName(int effectType, Object* weapon, int hitMode, Object* ta
         soundVariant = 1;
     }
 
-    int damageType = weaponGetDamageType(nullptr, weapon);
+    DamageType damageType = weaponGetDamageType(nullptr, weapon);
 
     // SFALL
     if (effectTypeCode != 'H' || target == nullptr || damageType == explosionGetDamageType() || damageType == DAMAGE_TYPE_PLASMA || damageType == DAMAGE_TYPE_EMP) {
         materialCode = 'X';
     } else {
-        const int type = FID_TYPE(target->fid);
-        int material;
+        const ObjectType type = objectTypeFromFid(target->fid);
+        MaterialType material;
         switch (type) {
         case OBJ_TYPE_ITEM:
             protoGetProto(target->pid, &proto);
@@ -1456,7 +1456,7 @@ char* sfxBuildWeaponName(int effectType, Object* weapon, int hitMode, Object* ta
             material = proto->wall.material;
             break;
         default:
-            material = -1;
+            material = MATERIAL_TYPE_INVALID;
             break;
         }
 
@@ -1505,7 +1505,7 @@ char* sfxBuildSceneryName(int actionType, int action, const char* name)
 // 0x4518D
 char* sfxBuildOpenName(Object* object, int action)
 {
-    if (FID_TYPE(object->fid) == OBJ_TYPE_SCENERY) {
+    if (objectTypeFromFid(object->fid) == OBJ_TYPE_SCENERY) {
         char scenerySoundId;
         Proto* proto;
         if (protoGetProto(object->pid, &proto) != -1) {

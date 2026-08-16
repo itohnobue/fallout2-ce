@@ -102,7 +102,7 @@ int objectSetScriptFromProto(Object* object, int* sidPtr)
     }
 
     int sid;
-    int objectType = PID_TYPE(object->pid);
+    int objectType = objectTypeFromPid(object->pid);
     if (objectType < OBJ_TYPE_TILE) {
         sid = proto->sid;
     } else if (objectType == OBJ_TYPE_TILE) {
@@ -182,7 +182,7 @@ int objectSetScript(Object* obj, int scriptType, int scriptIndex)
 
     _scr_find_str_run_info(scriptIndex & 0xFFFFFF, &(script->field_50), sid);
 
-    if (PID_TYPE(obj->pid) == OBJ_TYPE_CRITTER) {
+    if (objectTypeFromPid(obj->pid) == OBJ_TYPE_CRITTER) {
         obj->scriptIndex = script->index;
     }
 
@@ -202,7 +202,7 @@ int objectLookAtFunc(Object* critter, Object* target, void (*fn)(const char* str
         return -1;
     }
 
-    if (FID_TYPE(target->fid) == OBJ_TYPE_TILE) {
+    if (objectTypeFromFid(target->fid) == OBJ_TYPE_TILE) {
         return -1;
     }
 
@@ -225,7 +225,7 @@ int objectLookAtFunc(Object* critter, Object* target, void (*fn)(const char* str
     if (!scriptOverrides) {
         MessageListItem messageListItem;
 
-        if (PID_TYPE(target->pid) == OBJ_TYPE_CRITTER && critterIsDead(target)) {
+        if (objectTypeFromPid(target->pid) == OBJ_TYPE_CRITTER && critterIsDead(target)) {
             messageListItem.num = 491 + randomBetween(0, 1);
         } else {
             messageListItem.num = 490;
@@ -263,7 +263,7 @@ int objectExamineFunc(Object* critter, Object* target, void (*fn)(const char* st
         return -1;
     }
 
-    if (FID_TYPE(target->fid) == OBJ_TYPE_TILE) {
+    if (objectTypeFromFid(target->fid) == OBJ_TYPE_TILE) {
         return -1;
     }
 
@@ -310,7 +310,7 @@ int objectExamineFunc(Object* critter, Object* target, void (*fn)(const char* st
 
     char formattedText[260];
 
-    int type = PID_TYPE(target->pid);
+    ObjectType type = objectTypeFromPid(target->pid);
     if (type == OBJ_TYPE_CRITTER) {
         if (target != gDude && perkGetRank(gDude, PERK_AWARENESS) && !critterIsDead(target)) {
             MessageListItem hpMessageListItem;
@@ -337,7 +337,7 @@ int objectExamineFunc(Object* critter, Object* target, void (*fn)(const char* st
             if (item2 != nullptr) {
                 MessageListItem weaponMessageListItem;
 
-                if (ammoGetCaliber(item2) != 0) {
+                if (ammoGetCaliber(item2) != CALIBER_TYPE_NONE) {
                     weaponMessageListItem.num = 547; // and is wielding a %s with %d/%d shots of %s.
                 } else {
                     weaponMessageListItem.num = 546; // and is wielding a %s.
@@ -351,7 +351,7 @@ int objectExamineFunc(Object* critter, Object* target, void (*fn)(const char* st
                 char format[80];
                 snprintf(format, sizeof(format), "%s%s", hpMessageListItem.text, weaponMessageListItem.text);
 
-                if (ammoGetCaliber(item2) != 0) {
+                if (ammoGetCaliber(item2) != CALIBER_TYPE_NONE) {
                     const int ammoTypePid = weaponGetAmmoTypePid(item2);
                     const char* ammoName = protoGetName(ammoTypePid);
                     const int ammoCapacity = ammoGetCapacity(item2);
@@ -503,9 +503,9 @@ int objectExamineFunc(Object* critter, Object* target, void (*fn)(const char* st
             fn(formattedText);
         }
     } else if (type == OBJ_TYPE_ITEM) {
-        int itemType = itemGetType(target);
+        ItemType itemType = itemGetType(target);
         if (itemType == ITEM_TYPE_WEAPON) {
-            if (ammoGetCaliber(target) != 0) {
+            if (ammoGetCaliber(target) != CALIBER_TYPE_NONE) {
                 MessageListItem weaponMessageListItem;
                 weaponMessageListItem.num = 526;
 
@@ -660,7 +660,7 @@ static int _obj_remove_from_inven(Object* critter, Object* item)
         scriptHooks_InvenWield(critter, item, slot, 0, 1);
         if (slot == InvenSlot::RightHand) {
             if (critter != gDude || interfaceGetCurrentHand() == HAND_RIGHT) {
-                fid = buildFid(OBJ_TYPE_CRITTER, critter->fid & 0xFFF, FID_ANIM_TYPE(critter->fid), 0, critter->rotation);
+                fid = buildFid(OBJ_TYPE_CRITTER, critter->fid & 0xFFF, animationTypeFromFid(critter->fid), WEAPON_ANIMATION_NONE, critter->rotation);
                 objectSetFid(critter, fid, &updatedRect);
                 appearanceUpdateType = 2;
             } else {
@@ -668,7 +668,7 @@ static int _obj_remove_from_inven(Object* critter, Object* item)
             }
         } else if (slot == InvenSlot::LeftHand) {
             if (critter == gDude && interfaceGetCurrentHand() == HAND_LEFT) {
-                fid = buildFid(OBJ_TYPE_CRITTER, critter->fid & 0xFFF, FID_ANIM_TYPE(critter->fid), 0, critter->rotation);
+                fid = buildFid(OBJ_TYPE_CRITTER, critter->fid & 0xFFF, animationTypeFromFid(critter->fid), WEAPON_ANIMATION_NONE, critter->rotation);
                 objectSetFid(critter, fid, &updatedRect);
                 appearanceUpdateType = 2;
             } else {
@@ -683,7 +683,7 @@ static int _obj_remove_from_inven(Object* critter, Object* item)
                     defaultFid = proto->fid;
                 }
 
-                fid = buildFid(OBJ_TYPE_CRITTER, defaultFid, FID_ANIM_TYPE(critter->fid), (critter->fid & 0xF000) >> 12, critter->rotation);
+                fid = buildFid(OBJ_TYPE_CRITTER, defaultFid, animationTypeFromFid(critter->fid), weaponAnimationFromFid(critter->fid), critter->rotation);
                 objectSetFid(critter, fid, &updatedRect);
                 appearanceUpdateType = 3;
             }
@@ -786,7 +786,7 @@ static UseItemResultCode _obj_use_book(Object* book)
     MessageListItem messageListItem;
 
     int messageId = -1;
-    int skill;
+    Skill skill;
 
     // SFALL
     if (!booksGetInfo(book->pid, &messageId, &skill)) {
@@ -811,8 +811,17 @@ static UseItemResultCode _obj_use_book(Object* book)
             increase = 150 * increase / 100;
         }
 
+        bool increased = false;
         for (int i = 0; i < increase; i++) {
-            skillAddForce(gDude, skill);
+            if (skillAddForce(gDude, skill) != 0) {
+                break;
+            }
+
+            increased = true;
+        }
+
+        if (!increased) {
+            messageId = 801;
         }
     }
 
@@ -850,7 +859,7 @@ static UseItemResultCode _obj_use_flare(Object* critter, Object* flare)
         return USE_ITEM_RESULT_ERROR;
     }
 
-    if ((flare->flags & OBJECT_QUEUED) != 0) {
+    if ((flare->flags & OBJECT_QUEUED) != OBJECT_NONE) {
         if (critter == gDude) {
             // The flare is already lit.
             messageListItem.num = 588;
@@ -861,7 +870,7 @@ static UseItemResultCode _obj_use_flare(Object* critter, Object* flare)
     } else {
         if (critter == gDude) {
             // You light the flare.
-            messageListItem.num = 588;
+            messageListItem.num = 587;
             if (messageListGetItem(&gProtoMessageList, &messageListItem)) {
                 displayMonitorAddMessage(messageListItem.text);
             }
@@ -901,7 +910,7 @@ static UseItemResultCode _obj_use_explosive(Object* explosive)
         return USE_ITEM_RESULT_ERROR;
     }
 
-    if ((explosive->flags & OBJECT_QUEUED) != 0) {
+    if ((explosive->flags & OBJECT_QUEUED) != OBJECT_NONE) {
         // The timer is already ticking.
         messageListItem.num = 590;
         if (messageListGetItem(&gProtoMessageList, &messageListItem)) {
@@ -940,7 +949,7 @@ static UseItemResultCode _obj_use_explosive(Object* explosive)
                 roll = skillRoll(gDude, SKILL_TRAPS, 0, nullptr);
             }
 
-            int eventType;
+            EventType eventType;
             switch (roll) {
             case ROLL_CRITICAL_FAILURE:
                 delay = 0;
@@ -1168,17 +1177,17 @@ UseItemResultCode objectUseItem(Object* userObj, Object* item)
     if (rc == USE_ITEM_RESULT_REMOVE || rc == USE_ITEM_RESULT_DROP) {
         Object* root = objectGetOwner(item);
         if (root != nullptr) {
-            int flags = item->flags & OBJECT_IN_ANY_HAND;
-            itemRemove(root, item, 1);
+            ObjectFlags flags = item->flags & OBJECT_IN_ANY_HAND;
+            itemRemoveWithReason(root, item, 1, RemoveInventoryObjectHookReason::UseObj);
             Object* replacementItem = itemReplace(root, item, flags);
             if (root == gDude) {
-                int leftItemAction;
-                int rightItemAction;
+                InterfaceItemAction leftItemAction;
+                InterfaceItemAction rightItemAction;
                 interfaceGetItemActions(&leftItemAction, &rightItemAction);
                 if (replacementItem == nullptr) {
-                    if ((flags & OBJECT_IN_LEFT_HAND) != 0) {
+                    if ((flags & OBJECT_IN_LEFT_HAND) != OBJECT_NONE) {
                         leftItemAction = INTERFACE_ITEM_ACTION_DEFAULT;
-                    } else if ((flags & OBJECT_IN_RIGHT_HAND) != 0) {
+                    } else if ((flags & OBJECT_IN_RIGHT_HAND) != OBJECT_NONE) {
                         rightItemAction = INTERFACE_ITEM_ACTION_DEFAULT;
                     } else {
                         leftItemAction = INTERFACE_ITEM_ACTION_DEFAULT;
@@ -1215,7 +1224,7 @@ static UseItemResultCode _protinst_default_use_item(Object* user, Object* target
     UseItemResultCode rc;
     switch (itemGetType(item)) {
     case ITEM_TYPE_DRUG:
-        if (PID_TYPE(targetObj->pid) != OBJ_TYPE_CRITTER) {
+        if (objectTypeFromPid(targetObj->pid) != OBJ_TYPE_CRITTER) {
             if (user == gDude) {
                 // That does nothing
                 messageListItem.num = 582;
@@ -1280,6 +1289,8 @@ static UseItemResultCode _protinst_default_use_item(Object* user, Object* target
             return USE_ITEM_RESULT_OK;
         }
         break;
+    default:
+        break;
     }
 
     messageListItem.num = 582;
@@ -1301,7 +1312,7 @@ UseItemResultCode objectUseItemOnInternal(Object* critter, Object* targetObj, Ob
 
     int messageId = -1;
     int skillBonus = 0;
-    int skill = -1;
+    Skill skill = SKILL_INVALID;
 
     switch (item->pid) {
     case PROTO_ID_DOCTORS_BAG:
@@ -1419,8 +1430,8 @@ UseItemResultCode objectUseItemOn(Object* user, Object* targetObj, Object* item)
 
     if (rc == USE_ITEM_RESULT_REMOVE) {
         if (user != nullptr) {
-            int flags = item->flags & OBJECT_IN_ANY_HAND;
-            itemRemove(user, item, 1);
+            ObjectFlags flags = item->flags & OBJECT_IN_ANY_HAND;
+            itemRemoveWithReason(user, item, 1, RemoveInventoryObjectHookReason::UseDrugOn);
 
             Object* replacedItem = itemReplace(user, item, flags);
 
@@ -1428,14 +1439,14 @@ UseItemResultCode objectUseItemOn(Object* user, Object* targetObj, Object* item)
             // following code is on par with |_obj_use_item| which does not
             // crash.
             if (user == gDude) {
-                int leftItemAction;
-                int rightItemAction;
+                InterfaceItemAction leftItemAction;
+                InterfaceItemAction rightItemAction;
                 interfaceGetItemActions(&leftItemAction, &rightItemAction);
 
                 if (replacedItem == nullptr) {
-                    if ((flags & OBJECT_IN_LEFT_HAND) != 0) {
+                    if ((flags & OBJECT_IN_LEFT_HAND) != OBJECT_NONE) {
                         leftItemAction = INTERFACE_ITEM_ACTION_DEFAULT;
-                    } else if ((flags & OBJECT_IN_RIGHT_HAND) != 0) {
+                    } else if ((flags & OBJECT_IN_RIGHT_HAND) != OBJECT_NONE) {
                         rightItemAction = INTERFACE_ITEM_ACTION_DEFAULT;
                     } else {
                         leftItemAction = INTERFACE_ITEM_ACTION_DEFAULT;
@@ -1493,7 +1504,7 @@ int checkSceneryUseActionPointCost(Object* obj, Object* _)
 // 0x49C740
 int objectUse(Object* user, Object* targetObj)
 {
-    int type = FID_TYPE(targetObj->fid);
+    ObjectType type = objectTypeFromFid(targetObj->fid);
     if (user == gDude) {
         if (type != OBJ_TYPE_SCENERY) {
             return -1;
@@ -1509,7 +1520,7 @@ int objectUse(Object* user, Object* targetObj)
         return -1;
     }
 
-    if (PID_TYPE(targetObj->pid) == OBJ_TYPE_SCENERY && sceneryProto->scenery.type == SCENERY_TYPE_DOOR) {
+    if (objectTypeFromPid(targetObj->pid) == OBJ_TYPE_SCENERY && sceneryProto->scenery.type == SCENERY_TYPE_DOOR) {
         return objectUseDoor(user, targetObj);
     }
 
@@ -1525,7 +1536,7 @@ int objectUse(Object* user, Object* targetObj)
     }
 
     if (!scriptOverrides) {
-        if (PID_TYPE(targetObj->pid) == OBJ_TYPE_SCENERY) {
+        if (objectTypeFromPid(targetObj->pid) == OBJ_TYPE_SCENERY) {
             if (sceneryProto->scenery.type == SCENERY_TYPE_LADDER_DOWN) {
                 if (useLadderDown(user, targetObj) == 0) {
                     scriptOverrides = true;
@@ -1842,7 +1853,7 @@ int objectUseDoor(Object* user, Object* door, bool animateOnly)
 // 0x49CE7C
 int objectUseContainer(Object* critter, Object* item)
 {
-    if (FID_TYPE(item->fid) != OBJ_TYPE_ITEM) {
+    if (objectTypeFromFid(item->fid) != OBJ_TYPE_ITEM) {
         return -1;
     }
 
@@ -1920,7 +1931,7 @@ int objectUseContainer(Object* critter, Object* item)
 }
 
 // 0x49D078
-int objectUseSkillOn(Object* source, Object* target, int skill)
+int objectUseSkillOn(Object* source, Object* target, Skill skill)
 {
     if (objectIsJammed(target)) {
         if (source == gDude) {
@@ -1989,7 +2000,7 @@ static bool _obj_is_lockable(Object* obj)
         return false;
     }
 
-    switch (PID_TYPE(obj->pid)) {
+    switch (objectTypeFromPid(obj->pid)) {
     case OBJ_TYPE_ITEM:
         if (proto->item.type == ITEM_TYPE_CONTAINER) {
             return true;
@@ -1999,6 +2010,8 @@ static bool _obj_is_lockable(Object* obj)
         if (proto->scenery.type == SCENERY_TYPE_DOOR) {
             return true;
         }
+        break;
+    default:
         break;
     }
 
@@ -2013,14 +2026,14 @@ bool objectIsLocked(Object* obj)
     }
 
     ObjectData* data = &(obj->data);
-    switch (PID_TYPE(obj->pid)) {
+    switch (objectTypeFromPid(obj->pid)) {
     case OBJ_TYPE_ITEM:
         return data->flags & CONTAINER_FLAG_LOCKED;
     case OBJ_TYPE_SCENERY:
         return data->scenery.door.openFlags & DOOR_FLAG_LOCKED;
+    default:
+        return false;
     }
-
-    return false;
 }
 
 // 0x49D20C
@@ -2030,7 +2043,7 @@ int objectLock(Object* object)
         return -1;
     }
 
-    switch (PID_TYPE(object->pid)) {
+    switch (objectTypeFromPid(object->pid)) {
     case OBJ_TYPE_ITEM:
         object->data.flags |= OBJ_LOCKED;
         break;
@@ -2051,16 +2064,16 @@ int objectUnlock(Object* object)
         return -1;
     }
 
-    switch (PID_TYPE(object->pid)) {
+    switch (objectTypeFromPid(object->pid)) {
     case OBJ_TYPE_ITEM:
         object->data.flags &= ~OBJ_LOCKED;
         return 0;
     case OBJ_TYPE_SCENERY:
         object->data.scenery.door.openFlags &= ~OBJ_LOCKED;
         return 0;
+    default:
+        return -1;
     }
-
-    return -1;
 }
 
 // 0x49D294
@@ -2076,7 +2089,7 @@ bool objectIsOpenable(Object* obj)
     }
 
     bool couldBeOpenable = false;
-    switch (PID_TYPE(obj->pid)) {
+    switch (objectTypeFromPid(obj->pid)) {
     case OBJ_TYPE_ITEM:
         if (proto->item.type == ITEM_TYPE_CONTAINER) {
             couldBeOpenable = true;
@@ -2086,6 +2099,8 @@ bool objectIsOpenable(Object* obj)
         if (proto->scenery.type == SCENERY_TYPE_DOOR) {
             couldBeOpenable = true;
         }
+        break;
+    default:
         break;
     }
 
@@ -2180,7 +2195,7 @@ static bool objectIsJammed(Object* obj)
         return false;
     }
 
-    if (PID_TYPE(obj->pid) == OBJ_TYPE_SCENERY) {
+    if (objectTypeFromPid(obj->pid) == OBJ_TYPE_SCENERY) {
         if ((obj->data.scenery.door.openFlags & OBJ_JAMMED) != 0) {
             return true;
         }
@@ -2202,12 +2217,14 @@ int objectJamLock(Object* obj)
     }
 
     ObjectData* data = &(obj->data);
-    switch (PID_TYPE(obj->pid)) {
+    switch (objectTypeFromPid(obj->pid)) {
     case OBJ_TYPE_ITEM:
         data->flags |= CONTAINER_FLAG_JAMMED;
         break;
     case OBJ_TYPE_SCENERY:
         data->scenery.door.openFlags |= DOOR_FLAG_JAMMGED;
+        break;
+    default:
         break;
     }
 
@@ -2222,12 +2239,14 @@ int objectUnjamLock(Object* obj)
     }
 
     ObjectData* data = &(obj->data);
-    switch (PID_TYPE(obj->pid)) {
+    switch (objectTypeFromPid(obj->pid)) {
     case OBJ_TYPE_ITEM:
         data->flags &= ~CONTAINER_FLAG_JAMMED;
         break;
     case OBJ_TYPE_SCENERY:
         data->scenery.door.openFlags &= ~DOOR_FLAG_JAMMGED;
+        break;
+    default:
         break;
     }
 
@@ -2268,7 +2287,7 @@ int objectAttemptPlacement(Object* obj, int tile, int elevation, int radius)
                 break;
             }
 
-            for (int rotation = 0; rotation < ROTATION_COUNT; rotation++) {
+            for (Rotation rotation = ROTATION_FIRST; rotation < ROTATION_COUNT; rotation++) {
                 newTile = tileGetTileInDirection(tile, rotation, dist);
                 if (_obj_blocking_at(nullptr, newTile, elevation) == nullptr
                     && dist > 1
@@ -2282,7 +2301,7 @@ int objectAttemptPlacement(Object* obj, int tile, int elevation, int radius)
 
         // If location is too far (or not found at all), find any free adjacent tile, regardless if it's reachable or not.
         if (radius != 1 && dist > radius + 2) {
-            for (int rotation = 0; rotation < ROTATION_COUNT; rotation++) {
+            for (Rotation rotation = ROTATION_FIRST; rotation < ROTATION_COUNT; rotation++) {
                 int candidate = tileGetTileInDirection(tile, rotation, 1);
                 if (_obj_blocking_at(nullptr, candidate, elevation) == nullptr) {
                     newTile = candidate;
@@ -2319,7 +2338,7 @@ int objectAttemptPlacementPartyMember(Object* obj, int tile, int elevation)
     }
 
     int destinationTile = tile;
-    int rotation = 0;
+    Rotation rotation = ROTATION_NW;
     if (!wmEvalTileNumForPlacement(tile)) {
         destinationTile = gDude->tile;
         for (int i = 1; i <= 100; i++) {

@@ -14,6 +14,7 @@ void op_reg_anim_change_fid(Program* program);
 void op_reg_anim_take_out(Program* program);
 void op_reg_anim_turn_towards(Program* program);
 void mf_reg_anim_animate_and_move(OpcodeContext& ctx);
+void mf_reg_anim_animate_and_move(OpcodeContext& ctx);
 
 } // namespace fallout
 

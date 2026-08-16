@@ -112,8 +112,8 @@ static void TestListsFill(int type, const TestObjectStore& store,
         // mapping (mirrors sfall_lists.cc:131-138).
         for (const auto& obj : store.objects) {
             if (obj.pid >= 0
-                && PID_TYPE(obj.pid) < kObjectTypeToListTypeSize
-                && kObjectTypeToListType[PID_TYPE(obj.pid)] == type) {
+                && objectTypeFromPid(obj.pid) < kObjectTypeToListTypeSize
+                && kObjectTypeToListType[objectTypeFromPid(obj.pid)] == type) {
                 outObjects.push_back(obj);
             }
         }

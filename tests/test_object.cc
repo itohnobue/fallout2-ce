@@ -26,6 +26,10 @@
 
 #include "obj_types.h"
 
+// For weaponAnimationFromFid / WeaponAnimation (Section 19). art_defs.h is
+// a pure-type-definition header with no #includes — safe to include here.
+#include "art_defs.h"
+
 #include <algorithm>
 #include <cstring>
 #include <type_traits>
@@ -121,7 +125,7 @@ static Object* makeTestObject(int id, int tile, int elevation, int pid, unsigned
     obj->tile = tile;
     obj->elevation = elevation;
     obj->pid = pid;
-    obj->flags = flags;
+    obj->flags = static_cast<ObjectFlags>(flags);
     return obj;
 }
 
@@ -441,12 +445,12 @@ TEST_CASE("ObjectType — enum values and count")
 
 TEST_CASE("OutlineType — enum values")
 {
-    CHECK(OUTLINE_TYPE_HOSTILE  == 1);
-    CHECK(OUTLINE_TYPE_2        == 2);
-    CHECK(OUTLINE_TYPE_4        == 4);
-    CHECK(OUTLINE_TYPE_FRIENDLY == 8);
-    CHECK(OUTLINE_TYPE_ITEM     == 16);
-    CHECK(OUTLINE_TYPE_32       == 32);
+    CHECK(OUTLINE_TYPE_HOSTILE   == 0x01);
+    CHECK(OUTLINE_TYPE_SAME_TEAM == 0x02);
+    CHECK(OUTLINE_TYPE_BODY      == 0x04);
+    CHECK(OUTLINE_TYPE_FRIENDLY  == 0x08);
+    CHECK(OUTLINE_TYPE_ITEM      == 0x10);
+    CHECK(OUTLINE_TYPE_BLOCKED   == 0x20);
 }
 
 // ------------------------------------------------------------------
@@ -595,21 +599,21 @@ TEST_CASE("ObjectData — criticter data accessible through Object")
     Object obj;
     std::memset(&obj, 0, sizeof(obj));
 
-    // FID_TYPE macro: extracts bits 24-31
+    // objectTypeFromFid function: extracts bits 24-31
     obj.fid = (OBJ_TYPE_CRITTER << 24) | 0x123456;
-    int ftype = FID_TYPE(obj.fid);
+    int ftype = objectTypeFromFid(obj.fid);
     CHECK(ftype == OBJ_TYPE_CRITTER);
 }
 
-TEST_CASE("FID_TYPE / PID_TYPE / SID_TYPE macros")
+TEST_CASE("objectTypeFromFid / objectTypeFromPid / SID_TYPE")
 {
     // These extract the top 8 bits (type field).
     int fid = (OBJ_TYPE_ITEM << 24) | 0xABCDEF;
-    int ft1 = FID_TYPE(fid);
+    int ft1 = objectTypeFromFid(fid);
     CHECK(ft1 == OBJ_TYPE_ITEM);
 
     int pid = (OBJ_TYPE_CRITTER << 24) | 42;
-    int pt1 = PID_TYPE(pid);
+    int pt1 = objectTypeFromPid(pid);
     CHECK(pt1 == OBJ_TYPE_CRITTER);
     int st1 = SID_TYPE(pid);
     CHECK(st1 == OBJ_TYPE_CRITTER);
@@ -1231,9 +1235,9 @@ TEST_CASE("Lock / jam constants — flag values")
 
 TEST_CASE("Outline constants")
 {
-    CHECK(OUTLINE_TYPE_MASK  == 0xFFFFFF);
-    CHECK(OUTLINE_PALETTED   == 0x40000000);
-    CHECK(OUTLINE_DISABLED   == 0x80000000);
+    CHECK(OUTLINE_TYPE_MAX == 0xFFFFFF);
+    CHECK(OUTLINE_PALETTED  == 0x40000000);
+    CHECK(OUTLINE_DISABLED  == 0x80000000);
 }
 
 // ------------------------------------------------------------------
@@ -1276,29 +1280,30 @@ TEST_CASE("CritterManeuver enum values")
 }
 
 // ------------------------------------------------------------------
-// Section 19: FID_WEAPON_CODE / FID_ROTATION macros
+// Section 19: weaponAnimationFromFid / rotationFromFid functions
 // ------------------------------------------------------------------
 
-TEST_CASE("FID_WEAPON_CODE / FID_ROTATION")
+TEST_CASE("weaponAnimationFromFid / rotationFromFid")
 {
     // Weapon code: bits 12-15
     int fid = (0x5 << 12) | 0x42;
-    CHECK(FID_WEAPON_CODE(fid) == 0x5);
+    CHECK(weaponAnimationFromFid(fid) == static_cast<WeaponAnimation>(0x5));
 
     // Rotation: bits 28-30
     fid = (ROTATION_NW << 28) | (OBJ_TYPE_CRITTER << 24) | 0x123456;
-    CHECK(FID_ROTATION(fid) == ROTATION_NW);
+    CHECK(rotationFromFid(fid) == ROTATION_NW);
 }
 
 // ------------------------------------------------------------------
-// Section 20: CRITTER_RADIATED constant
+// Section 20: CRITTER_DUDE_RADIATED constant
 // ------------------------------------------------------------------
 
-TEST_CASE("CRITTER_RADIATED matches CRITTER_BARTER flag")
+TEST_CASE("CRITTER_DUDE_RADIATED matches CRITTER_BARTER flag")
 {
-    // Both are 0x02 — verified from obj_types.h:109 and :96.
-    CHECK(CRITTER_RADIATED == 0x02);
-    CHECK(CRITTER_BARTER   == 0x02);
+    // Both are 0x02 — verified from obj_types.h (CRITTER_DUDE_RADIATED)
+    // and obj_types.h (CRITTER_BARTER).
+    CHECK(CRITTER_DUDE_RADIATED == 0x02);
+    CHECK(CRITTER_BARTER        == 0x02);
     // This is not a bug — the same bit means different things in
     // different contexts (obj->data.critter.radiation vs obj->flags).
 }
@@ -1335,9 +1340,9 @@ TEST_CASE("Operations on zero-initialized Object are safe to read")
     CHECK(obj.owner == nullptr);
     CHECK(obj.scriptIndex == 0);
 
-    // FID_TYPE(0) = 0 = OBJ_TYPE_ITEM
-    int ft0 = FID_TYPE(obj.fid);
+    // objectTypeFromFid(0) = 0 = OBJ_TYPE_ITEM
+    int ft0 = objectTypeFromFid(obj.fid);
     CHECK(ft0 == OBJ_TYPE_ITEM);
-    int pt0 = PID_TYPE(obj.pid);
+    int pt0 = objectTypeFromPid(obj.pid);
     CHECK(pt0 == OBJ_TYPE_ITEM);
 }

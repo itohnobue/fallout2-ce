@@ -43,6 +43,21 @@ unsigned char* gMouseManagerCurrentStaticData;
 // 0x638E0C lastMouseIndex
 int gMouseManagerCurrentCacheEntryIndex;
 
+static bool mouseManagerSetFrameCleanupAndFail(File* stream, MouseManagerAnimatedData* animatedData = nullptr, int loadedFrameCount = 0)
+{
+    if (animatedData != nullptr) {
+        animatedData->frameCount = loadedFrameCount;
+
+        MouseManagerCacheEntry tempEntry = {};
+        tempEntry.animatedData = animatedData;
+        tempEntry.type = MOUSE_MANAGER_MOUSE_TYPE_ANIMATED;
+        mouseManagerFreeCacheEntry(&tempEntry);
+    }
+
+    fileClose(stream);
+    return false;
+}
+
 // 0x485250 defaultNameMangler
 char* mouseManagerNameManglerDefaultImpl(char* name)
 {
@@ -231,6 +246,8 @@ void mouseManagerUpdate()
 
     if (gMouseManagerCurrentAnimatedData == nullptr) {
         debugPrint("Animating == 1 but curAnim == 0\n");
+        gMouseManagerIsAnimating = false;
+        return;
     }
 
     if (gMouseManagerTimeProvider() >= gMouseManagerCurrentAnimatedData->field_1C) {
@@ -348,15 +365,13 @@ int mouseManagerSetFrame(char* fileName, int a2)
     // NOTE: Uninline.
     char* sep = strchr(string, ' ');
     if (sep == nullptr) {
-        fileClose(stream);
-        return false;
+        return mouseManagerSetFrameCleanupAndFail(stream);
     }
 
-    int v3 = 0;
-    float v4 = 0.0f;
-    if (sscanf(sep + 1, "%d %f", &v3, &v4) != 2) {
-        fileClose(stream);
-        return false;
+    int v3;
+    float v4;
+    if (sscanf(sep + 1, "%d %f", &v3, &v4) != 2 || v3 <= 0) {
+        return mouseManagerSetFrameCleanupAndFail(stream);
     }
 
     MouseManagerAnimatedData* animatedData = (MouseManagerAnimatedData*)internal_malloc_safe(sizeof(*animatedData), __FILE__, __LINE__); // "..\\int\\MOUSEMGR.C", 359
@@ -364,6 +379,8 @@ int mouseManagerSetFrame(char* fileName, int a2)
     animatedData->field_4 = (unsigned char**)internal_malloc_safe(sizeof(*animatedData->field_4) * v3, __FILE__, __LINE__); // "..\\int\\MOUSEMGR.C", 361
     animatedData->field_8 = (int*)internal_malloc_safe(sizeof(*animatedData->field_8) * v3, __FILE__, __LINE__); // "..\\int\\MOUSEMGR.C", 362
     animatedData->field_C = (int*)internal_malloc_safe(sizeof(*animatedData->field_8) * v3, __FILE__, __LINE__); // "..\\int\\MOUSEMGR.C", 363
+    memset(animatedData->field_0, 0, sizeof(*animatedData->field_0) * v3);
+    memset(animatedData->field_4, 0, sizeof(*animatedData->field_4) * v3);
     animatedData->field_18 = v4;
     animatedData->field_1C = gMouseManagerTimeProvider();
     animatedData->field_26 = 0;
@@ -375,36 +392,43 @@ int mouseManagerSetFrame(char* fileName, int a2)
         animatedData->field_20 = 1;
     }
 
-    int width;
-    int height;
+    int width = 0;
+    int height = 0;
+    int loadedFrameCount = 0;
     for (int index = 0; index < v3; index++) {
         string[0] = '\0';
         fileReadString(string, sizeof(string), stream);
         if (string[0] == '\0') {
             debugPrint("Not enough frames in %s, got %d, needed %d", mangledFileName, index, v3);
-            break;
+            return mouseManagerSetFrameCleanupAndFail(stream, animatedData, loadedFrameCount);
         }
 
         // NOTE: Uninline.
         char* sep = strchr(string, ' ');
         if (sep == nullptr) {
             debugPrint("Bad line %s in %s\n", string, fileName);
-            fileClose(stream);
-            return false;
+            return mouseManagerSetFrameCleanupAndFail(stream, animatedData, loadedFrameCount);
         }
 
         *sep = '\0';
 
         int v5;
         int v6;
-        sscanf(sep + 1, "%d %d", &v5, &v6);
+        if (sscanf(sep + 1, "%d %d", &v5, &v6) != 2) {
+            return mouseManagerSetFrameCleanupAndFail(stream, animatedData, loadedFrameCount);
+        }
 
         animatedData->field_4[index] = datafileReadRaw(gMouseManagerNameMangler(string), &width, &height);
+        if (animatedData->field_4[index] == nullptr) {
+            return mouseManagerSetFrameCleanupAndFail(stream, animatedData, loadedFrameCount);
+        }
+
         animatedData->field_0[index] = (unsigned char*)internal_malloc_safe(width * height, __FILE__, __LINE__); // "..\\int\\MOUSEMGR.C", 390
         memcpy(animatedData->field_0[index], animatedData->field_4[index], width * height);
         datafileRemapPixelsRgb8(animatedData->field_0[index], datafileGetPalette(), width, height);
         animatedData->field_8[index] = v5;
         animatedData->field_C[index] = v6;
+        loadedFrameCount++;
     }
 
     fileClose(stream);
@@ -414,6 +438,7 @@ int mouseManagerSetFrame(char* fileName, int a2)
 
     gMouseManagerCurrentCacheEntryIndex = mouseManagerInsertCacheEntry(reinterpret_cast<void**>(&animatedData), MOUSE_MANAGER_MOUSE_TYPE_ANIMATED, datafileGetPalette(), fileName);
     strncpy(gMouseManagerCache[gMouseManagerCurrentCacheEntryIndex].field_32C, fileName, 31);
+    gMouseManagerCache[gMouseManagerCurrentCacheEntryIndex].field_32C[31] = '\0';
 
     gMouseManagerCurrentAnimatedData = animatedData;
     gMouseManagerCurrentPalette = gMouseManagerCache[gMouseManagerCurrentCacheEntryIndex].palette;
@@ -552,6 +577,7 @@ bool mouseManagerSetMousePointer(char* fileName)
     string[0] = '\0';
     fileReadString(string, sizeof(string) - 1, stream);
     if (string[0] == '\0') {
+        fileClose(stream);
         return false;
     }
 
@@ -563,21 +589,28 @@ bool mouseManagerSetMousePointer(char* fileName)
         // NOTE: Uninline.
         char* sep = strchr(string, ' ');
         if (sep == nullptr) {
-            return 0;
+            fileClose(stream);
+            return false;
         }
 
         *sep = '\0';
 
         int v3;
         int v4;
-        sscanf(sep + 1, "%d %d", &v3, &v4);
+        if (sscanf(sep + 1, "%d %d", &v3, &v4) != 2) {
+            fileClose(stream);
+            return false;
+        }
 
         fileClose(stream);
 
         rc = mouseManagerSetMouseShape(string, v3, v4);
     }
 
-    strncpy(gMouseManagerCache[gMouseManagerCurrentCacheEntryIndex].field_32C, fileName, 31);
+    if (rc) {
+        strncpy(gMouseManagerCache[gMouseManagerCurrentCacheEntryIndex].field_32C, fileName, 31);
+        gMouseManagerCache[gMouseManagerCurrentCacheEntryIndex].field_32C[31] = '\0';
+    }
 
     return rc;
 }
@@ -587,8 +620,8 @@ void mouseManagerResetMouse()
 {
     MouseManagerCacheEntry* entry = &(gMouseManagerCache[gMouseManagerCurrentCacheEntryIndex]);
 
-    int imageWidth;
-    int imageHeight;
+    int imageWidth = 0;
+    int imageHeight = 0;
     switch (entry->type) {
     case MOUSE_MANAGER_MOUSE_TYPE_STATIC:
         imageWidth = entry->staticData->width;
@@ -598,6 +631,8 @@ void mouseManagerResetMouse()
         imageWidth = entry->animatedData->width;
         imageHeight = entry->animatedData->height;
         break;
+    default:
+        return;
     }
 
     switch (entry->type) {

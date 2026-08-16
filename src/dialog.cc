@@ -433,7 +433,7 @@ int _dialogStart(Program* a1)
     ptr->field_C = -1;
     ptr->field_10 = -1;
     ptr->field_14 = 1;
-    ptr->field_10 = 1;
+    ptr->field_18 = 1;
 
     return 0;
 }

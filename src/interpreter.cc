@@ -1394,6 +1394,10 @@ static void opConditionalOperatorGreaterThanEquals(Program* program)
         value[arg] = programStackPopValue(program);
     }
 
+    auto fatalInvalidComparison = [&value]() {
+        programFatalError("Invalid comparison: >= does not support %s and %s.", value[1].typeDebugString(), value[0].typeDebugString());
+    };
+
     switch (value[1].opcode) {
     case VALUE_TYPE_STRING:
     case VALUE_TYPE_DYNAMIC_STRING:
@@ -1494,6 +1498,10 @@ static void opConditionalOperatorLessThan(Program* program)
     for (int arg = 0; arg < 2; arg++) {
         value[arg] = programStackPopValue(program);
     }
+
+    auto fatalInvalidComparison = [&value]() {
+        programFatalError("Invalid comparison: < does not support %s and %s.", value[1].typeDebugString(), value[0].typeDebugString());
+    };
 
     switch (value[1].opcode) {
     case VALUE_TYPE_STRING:
@@ -1596,6 +1604,10 @@ static void opConditionalOperatorGreaterThan(Program* program)
         value[arg] = programStackPopValue(program);
     }
 
+    auto fatalInvalidComparison = [&value]() {
+        programFatalError("Invalid comparison: > does not support %s and %s.", value[1].typeDebugString(), value[0].typeDebugString());
+    };
+
     switch (value[1].opcode) {
     case VALUE_TYPE_STRING:
     case VALUE_TYPE_DYNAMIC_STRING:
@@ -1663,12 +1675,10 @@ static void opConditionalOperatorGreaterThan(Program* program)
     case VALUE_TYPE_PTR:
         switch (value[0].opcode) {
         case VALUE_TYPE_INT:
-            if (value[0].integerValue > 0) {
-                result = (uintptr_t)value[1].pointerValue > (uintptr_t)value[0].integerValue;
-            } else {
-                // (ptr > int{0 or negative}) means (ptr != nullptr)
-                result = nullptr != value[1].pointerValue;
+            if (value[0].integerValue != 0) {
+                programFatalError("Invalid pointer comparison: > only supports comparison to 0.");
             }
+            result = nullptr != value[1].pointerValue;
             break;
         default:
             programFatalError("Unexpected value[0].opcode=0x%x in %s", value[0].opcode, __func__);
@@ -1715,6 +1725,10 @@ static void opAdd(Program* program)
         case VALUE_TYPE_PTR:
             strings[0] = (char*)internal_malloc_safe(80, __FILE__, __LINE__);
             snprintf(strings[0], 80, "%p", value[0].pointerValue);
+            break;
+        default:
+            strings[0] = (char*)internal_malloc_safe(1, __FILE__, __LINE__);
+            strings[0][0] = '\0';
             break;
         }
 
@@ -3421,7 +3435,18 @@ void programExecuteProcedure(Program* program, int procedureIndex)
 static void doEvents()
 {
     ProgramListNode* programListNode;
-    unsigned int time;
+
+    programListNode = gInterpreterProgramListHead;
+
+    while (programListNode != nullptr) {
+        programProcessProcedureEvents(programListNode->program);
+
+        programListNode = programListNode->next;
+    }
+}
+
+void programProcessProcedureEvents(Program* program)
+{
     int procedureCount;
     int procedureIndex;
     unsigned char* procedurePtr;
@@ -3435,57 +3460,43 @@ static void doEvents()
         return;
     }
 
-    programListNode = gInterpreterProgramListHead;
-    time = getInterpreterTime();
+    unsigned int time = getInterpreterTime();
+    procedureCount = stackReadInt32(program->procedures, 0);
 
-    while (programListNode != nullptr) {
-        procedureCount = stackReadInt32(programListNode->program->procedures, 0);
+    procedurePtr = program->procedures + 4;
+    for (procedureIndex = 0; procedureIndex < procedureCount; procedureIndex++) {
+        procedureFlags = stackReadInt32(procedurePtr, offsetof(Procedure, flags));
+        if ((procedureFlags & PROCEDURE_FLAG_CONDITIONAL) != 0) {
+            memcpy(env, program->env, sizeof(env));
+            oldProgramFlags = program->flags;
+            oldInstructionPointer = program->instructionPointer;
 
-        // Guard against corrupted procedure count in .int file.
-        // Equivalent to: 4 + procedureCount * sizeof(Procedure) <= dataSize - 42
-        if (procedureCount < 0
-            || static_cast<size_t>(4) + static_cast<size_t>(procedureCount) * sizeof(Procedure) > static_cast<size_t>(programListNode->program->dataSize) - 42) {
-            programListNode = programListNode->next;
-            continue;
-        }
+            program->flags = 0;
+            program->instructionPointer = stackReadInt32(procedurePtr, offsetof(Procedure, conditionOffset));
+            programInterpret(program, -1);
 
-        procedurePtr = programListNode->program->procedures + 4;
-        for (procedureIndex = 0; procedureIndex < procedureCount; procedureIndex++) {
-            procedureFlags = stackReadInt32(procedurePtr, offsetof(Procedure, flags));
-            if ((procedureFlags & PROCEDURE_FLAG_CONDITIONAL) != 0) {
-                memcpy(env, programListNode->program->env, sizeof(env));
-                oldProgramFlags = programListNode->program->flags;
-                oldInstructionPointer = programListNode->program->instructionPointer;
+            if ((program->flags & PROGRAM_FLAG_FATAL_ERROR) == 0) {
+                data = programStackPopInteger(program);
 
-                programListNode->program->flags = 0;
-                programListNode->program->instructionPointer = stackReadInt32(procedurePtr, offsetof(Procedure, conditionOffset));
-                programInterpret(programListNode->program, -1);
+                program->flags = oldProgramFlags;
+                program->instructionPointer = oldInstructionPointer;
 
-                if ((programListNode->program->flags & PROGRAM_FLAG_FATAL_ERROR) == 0) {
-                    data = programStackPopInteger(programListNode->program);
-
-                    programListNode->program->flags = oldProgramFlags;
-                    programListNode->program->instructionPointer = oldInstructionPointer;
-
-                    if (data != 0) {
-                        // NOTE: Uninline.
-                        stackWriteInt32(0, procedurePtr, offsetof(Procedure, flags));
-                        programExecuteProcedureAsync(programListNode->program, procedureIndex);
-                    }
-                }
-
-                memcpy(programListNode->program->env, env, sizeof(env));
-            } else if ((procedureFlags & PROCEDURE_FLAG_TIMED) != 0) {
-                if ((unsigned int)stackReadInt32(procedurePtr, offsetof(Procedure, time)) < time) {
+                if (data != 0) {
                     // NOTE: Uninline.
                     stackWriteInt32(0, procedurePtr, offsetof(Procedure, flags));
-                    programExecuteProcedureAsync(programListNode->program, procedureIndex);
+                    programExecuteProcedureAsync(program, procedureIndex);
                 }
             }
-            procedurePtr += sizeof(Procedure);
-        }
 
-        programListNode = programListNode->next;
+            memcpy(program->env, env, sizeof(env));
+        } else if ((procedureFlags & PROCEDURE_FLAG_TIMED) != 0) {
+            if ((unsigned int)stackReadInt32(procedurePtr, offsetof(Procedure, time)) < time) {
+                // NOTE: Uninline.
+                stackWriteInt32(0, procedurePtr, offsetof(Procedure, flags));
+                programExecuteProcedureAsync(program, procedureIndex);
+            }
+        }
+        procedurePtr += sizeof(Procedure);
     }
 }
 
@@ -3571,10 +3582,8 @@ void _updatePrograms()
     // CE: Implementation is different. Sfall inserts global scripts into
     // program list upon creation, so engine does not diffirentiate between
     // global and normal scripts. Global scripts in CE are not part of program
-    // list, so we need a separate call to continue execution (usually
-    // non-critical calls scheduled from managed windows). One more thing to
-    // note is that global scripts in CE cannot handle conditional/timed procs
-    // (which are not used anyway).
+    // list, so we need a separate call to continue execution and process
+    // delayed/conditional proc calls.
     sfall_gl_scr_update(interpreterCpuBurstSize);
 
     ProgramListNode* curr = gInterpreterProgramListHead;

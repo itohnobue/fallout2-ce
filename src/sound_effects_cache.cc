@@ -75,7 +75,7 @@ int soundEffectsCacheInit(int cacheSize, const char* effectsPath)
 {
     gSoundEffectsCacheDebugLevel = settings.sound.debug_sfxc;
 
-    if (cacheSize <= SOUND_EFFECTS_CACHE_MIN_SIZE) {
+    if (cacheSize < SOUND_EFFECTS_CACHE_MIN_SIZE) {
         return -1;
     }
 

@@ -19,7 +19,7 @@
 
 namespace fallout {
 
-#define CONFIG_FILE_MAX_LINE_LENGTH (1024)
+#define CONFIG_FILE_MAX_LINE_LENGTH (2048)
 
 // The initial number of sections (or key-value) pairs in the config.
 #define CONFIG_INITIAL_CAPACITY (10)
@@ -34,9 +34,11 @@ struct CaseInsensitiveLess {
 typedef std::set<std::string, CaseInsensitiveLess> StringSet;
 
 static bool configParseLine(Config* config, char* string);
-static bool configParseKeyValue(char* string, char* key, size_t keySize, char* value, size_t valueSize);
+static bool configParseKeyValue(char* string, std::string& key, std::string& value);
 static bool configEnsureSectionExists(Config* config, const char* sectionKey);
 static bool configTrimString(char* string);
+static bool configGetIntImpl(Config* config, const char* sectionKey, const char* key, int* valuePtr, int base);
+static std::string configGetTrimmedString(const char* string);
 
 static bool configWriteDb(Config* config, const char* filePath);
 static bool configWriteStandard(Config* config, const char* filePath);
@@ -155,10 +157,10 @@ bool configParseCommandLineArguments(Config* config, int argc, char** argv)
 
         *pch = '\0';
 
-        char key[CONFIG_FILE_MAX_LINE_LENGTH];
-        char value[CONFIG_FILE_MAX_LINE_LENGTH];
-        if (configParseKeyValue(pch + 1, key, sizeof(key), value, sizeof(value))) {
-            if (!configSetString(config, sectionKey, key, value)) {
+        std::string key;
+        std::string value;
+        if (configParseKeyValue(pch + 1, key, value)) {
+            if (!configSetString(config, sectionKey, key.c_str(), value.c_str())) {
                 *pch = ']';
                 return false;
             }
@@ -265,6 +267,11 @@ bool configSetString(Config* config, const char* sectionKey, const char* key, co
 // failures on leading-zero-padded values like "08"/"09".
 bool configGetInt(Config* config, const char* sectionKey, const char* key, int* valuePtr, unsigned char base /* = 10 */)
 {
+    return configGetIntImpl(config, sectionKey, key, valuePtr, base);
+}
+
+static bool configGetIntImpl(Config* config, const char* sectionKey, const char* key, int* valuePtr, int base)
+{
     if (valuePtr == nullptr) {
         return false;
     }
@@ -298,7 +305,18 @@ bool configGetInt(Config* config, const char* sectionKey, const char* key, int* 
     if (config == nullptr || sectionKey == nullptr || key == nullptr || valuePtr == nullptr) {
         return false;
     }
-    if (!configGetInt(config, sectionKey, key, valuePtr, base)) {
+    if (!configGetIntImpl(config, sectionKey, key, valuePtr, base)) {
+        *valuePtr = defaultValue;
+    }
+    return true;
+}
+
+bool configGetIntBase(Config* config, const char* sectionKey, const char* key, int* valuePtr, const int defaultValue, int base)
+{
+    if (config == nullptr || sectionKey == nullptr || key == nullptr || valuePtr == nullptr) {
+        return false;
+    }
+    if (!configGetIntImpl(config, sectionKey, key, valuePtr, base)) {
         *valuePtr = defaultValue;
     }
     return true;
@@ -948,13 +966,13 @@ static bool configParseLine(Config* config, char* string)
         return false;
     }
 
-    char key[CONFIG_FILE_MAX_LINE_LENGTH];
-    char value[CONFIG_FILE_MAX_LINE_LENGTH];
-    if (!configParseKeyValue(string, key, sizeof(key), value, sizeof(value))) {
+    std::string key;
+    std::string value;
+    if (!configParseKeyValue(string, key, value)) {
         return false;
     }
 
-    return configSetString(config, gConfigLastSectionKey, key, value);
+    return configSetString(config, gConfigLastSectionKey, key.c_str(), value.c_str());
 }
 
 // Splits "key=value" pair from [string] and copy appropriate parts into [key]
@@ -963,9 +981,9 @@ static bool configParseLine(Config* config, char* string)
 // Both key and value are trimmed.
 //
 // 0x42C594
-static bool configParseKeyValue(char* string, char* key, size_t keySize, char* value, size_t valueSize)
+static bool configParseKeyValue(char* string, std::string& key, std::string& value)
 {
-    if (string == nullptr || key == nullptr || value == nullptr) {
+    if (string == nullptr) {
         return false;
     }
 
@@ -977,15 +995,10 @@ static bool configParseKeyValue(char* string, char* key, size_t keySize, char* v
 
     *pch = '\0';
 
-    strncpy(key, string, keySize - 1);
-    key[keySize - 1] = '\0';
-    strncpy(value, pch + 1, valueSize - 1);
-    value[valueSize - 1] = '\0';
+    key = configGetTrimmedString(string);
+    value = configGetTrimmedString(pch + 1);
 
     *pch = '=';
-
-    configTrimString(key);
-    configTrimString(value);
 
     return true;
 }
@@ -1056,6 +1069,25 @@ static bool configTrimString(char* string)
     memmove(string, pch, length + 1);
 
     return true;
+}
+
+static std::string configGetTrimmedString(const char* string)
+{
+    if (string == nullptr) {
+        return std::string();
+    }
+
+    const char* start = string;
+    while (isspace(static_cast<unsigned char>(*start))) {
+        start++;
+    }
+
+    const char* end = start + strlen(start);
+    while (end > start && isspace(static_cast<unsigned char>(*(end - 1)))) {
+        end--;
+    }
+
+    return std::string(start, end);
 }
 
 // 0x42C718

@@ -2,6 +2,7 @@
 #define PROTOTYPE_INSTANCES_H
 
 #include "obj_types.h"
+#include "skill_defs.h"
 
 namespace fallout {
 
@@ -34,7 +35,7 @@ int checkSceneryUseActionPointCost(Object* obj, Object* _);
 int objectUse(Object* user, Object* targetObj);
 int objectUseDoor(Object* user, Object* doorObj, bool animateOnly = false);
 int objectUseContainer(Object* critter, Object* item);
-int objectUseSkillOn(Object* source, Object* target, int skill);
+int objectUseSkillOn(Object* source, Object* target, Skill skill);
 bool objectIsLocked(Object* obj);
 int objectLock(Object* obj);
 int objectUnlock(Object* obj);

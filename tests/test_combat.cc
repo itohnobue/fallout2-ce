@@ -75,14 +75,14 @@ static void stub_combat_reset_hit_location_penalty()
 // Using REAL CriticalHitDescription type from combat_defs.h
 // =============================================================
 
-static CriticalHitDescription gCriticalHitTables[SFALL_KILL_TYPE_COUNT][HIT_LOCATION_COUNT][CRTICIAL_EFFECT_COUNT];
-static CriticalHitDescription gPlayerCriticalHitTable[HIT_LOCATION_COUNT][CRTICIAL_EFFECT_COUNT];
-static CriticalHitDescription gBaseCriticalHitTables[SFALL_KILL_TYPE_COUNT][HIT_LOCATION_COUNT][CRTICIAL_EFFECT_COUNT];
-static CriticalHitDescription gBasePlayerCriticalHitTable[HIT_LOCATION_COUNT][CRTICIAL_EFFECT_COUNT];
+static CriticalHitDescription gCriticalHitTables[KILL_TYPE_OVERRIDE_COUNT][HIT_LOCATION_COUNT][CRITICAL_EFFECT_COUNT];
+static CriticalHitDescription gPlayerCriticalHitTable[HIT_LOCATION_COUNT][CRITICAL_EFFECT_COUNT];
+static CriticalHitDescription gBaseCriticalHitTables[KILL_TYPE_OVERRIDE_COUNT][HIT_LOCATION_COUNT][CRITICAL_EFFECT_COUNT];
+static CriticalHitDescription gBasePlayerCriticalHitTable[HIT_LOCATION_COUNT][CRITICAL_EFFECT_COUNT];
 
 static int stub_criticalsGetValue(int killType, int hitLocation, int effect, int dataMember)
 {
-    if (killType == SFALL_KILL_TYPE_COUNT) {
+    if (killType == KILL_TYPE_OVERRIDE_COUNT) {
         return gPlayerCriticalHitTable[hitLocation][effect].values[dataMember];
     } else {
         return gCriticalHitTables[killType][hitLocation][effect].values[dataMember];
@@ -91,7 +91,7 @@ static int stub_criticalsGetValue(int killType, int hitLocation, int effect, int
 
 static void stub_criticalsSetValue(int killType, int hitLocation, int effect, int dataMember, int value)
 {
-    if (killType == SFALL_KILL_TYPE_COUNT) {
+    if (killType == KILL_TYPE_OVERRIDE_COUNT) {
         gPlayerCriticalHitTable[hitLocation][effect].values[dataMember] = value;
     } else {
         gCriticalHitTables[killType][hitLocation][effect].values[dataMember] = value;
@@ -100,7 +100,7 @@ static void stub_criticalsSetValue(int killType, int hitLocation, int effect, in
 
 static void stub_criticalsResetValue(int killType, int hitLocation, int effect, int dataMember)
 {
-    if (killType == SFALL_KILL_TYPE_COUNT) {
+    if (killType == KILL_TYPE_OVERRIDE_COUNT) {
         gPlayerCriticalHitTable[hitLocation][effect].values[dataMember] = gBasePlayerCriticalHitTable[hitLocation][effect].values[dataMember];
     } else {
         gCriticalHitTables[killType][hitLocation][effect].values[dataMember] = gBaseCriticalHitTables[killType][hitLocation][effect].values[dataMember];
@@ -213,19 +213,19 @@ TEST_CASE("HitLocation enum values are correct")
 
 TEST_CASE("CombatState enum values are correct")
 {
-    // The enum was de-anonymized: production uses COMBAT_STATE_0x01 for the
-    // bitmask value 0x01, COMBAT_STATE_0x02 for 0x02, COMBAT_STATE_0x08 for 0x08.
+    // The enum was de-anonymized: production uses COMBAT_STATE_IN_COMBAT for the
+    // bitmask value 0x01, COMBAT_STATE_PLAYER_TURN for 0x02, COMBAT_STATE_EXIT_REQUESTED for 0x08.
     // See combat_defs.h:15-19 and combat_ai.cc:3194 reference.
-    CHECK(static_cast<int>(COMBAT_STATE_0x01) == 0x01);
-    CHECK(static_cast<int>(COMBAT_STATE_0x02) == 0x02);
-    CHECK(static_cast<int>(COMBAT_STATE_0x08) == 0x08);
+    CHECK(static_cast<int>(COMBAT_STATE_IN_COMBAT) == 0x01);
+    CHECK(static_cast<int>(COMBAT_STATE_PLAYER_TURN) == 0x02);
+    CHECK(static_cast<int>(COMBAT_STATE_EXIT_REQUESTED) == 0x08);
 
     // Verify the values are distinct and usable as bit flags
-    int and01_02 = COMBAT_STATE_0x01 & COMBAT_STATE_0x02;
+    int and01_02 = COMBAT_STATE_IN_COMBAT & COMBAT_STATE_PLAYER_TURN;
     CHECK(and01_02 == 0);
-    int and02_08 = COMBAT_STATE_0x02 & COMBAT_STATE_0x08;
+    int and02_08 = COMBAT_STATE_PLAYER_TURN & COMBAT_STATE_EXIT_REQUESTED;
     CHECK(and02_08 == 0);
-    int and01_08 = COMBAT_STATE_0x01 & COMBAT_STATE_0x08;
+    int and01_08 = COMBAT_STATE_IN_COMBAT & COMBAT_STATE_EXIT_REQUESTED;
     CHECK(and01_08 == 0);
 }
 
@@ -402,18 +402,18 @@ TEST_CASE("CriticalHitDescription — all fields independently settable")
     memset(&desc, 0, sizeof(desc));
 
     desc.damageMultiplier = 3;
-    desc.flags = 0xAA;
-    desc.massiveCriticalStat = -1;
+    desc.flags = static_cast<Dam>(0xAA);
+    desc.massiveCriticalStat = STAT_INVALID;
     desc.massiveCriticalStatModifier = 0;
-    desc.massiveCriticalFlags = 0;
+    desc.massiveCriticalFlags = static_cast<Dam>(0);
     desc.messageId = 1000;
     desc.massiveCriticalMessageId = 2000;
 
     CHECK(desc.damageMultiplier == 3);
-    CHECK(desc.flags == 0xAA);
-    CHECK(desc.massiveCriticalStat == -1);
+    CHECK(desc.flags == static_cast<Dam>(0xAA));
+    CHECK(desc.massiveCriticalStat == STAT_INVALID);
     CHECK(desc.massiveCriticalStatModifier == 0);
-    CHECK(desc.massiveCriticalFlags == 0);
+    CHECK(desc.massiveCriticalFlags == static_cast<Dam>(0));
     CHECK(desc.messageId == 1000);
     CHECK(desc.massiveCriticalMessageId == 2000);
 }
@@ -424,10 +424,10 @@ TEST_CASE("CriticalHitDescription — all fields independently settable")
 
 TEST_CASE("Critical hit table dimension constants")
 {
-    CHECK(KILL_TYPE_COUNT == 19);
-    CHECK(SFALL_KILL_TYPE_COUNT == 38); // 2x KILL_TYPE_COUNT
+    CHECK(KILL_TYPE_DEFAULT_COUNT == 19);
+    CHECK(KILL_TYPE_OVERRIDE_COUNT == 38); // 2x KILL_TYPE_DEFAULT_COUNT
     CHECK(HIT_LOCATION_COUNT == 9);
-    CHECK(CRTICIAL_EFFECT_COUNT == 6);
+    CHECK(CRITICAL_EFFECT_COUNT == 6);
     CHECK(CRIT_DATA_MEMBER_COUNT == 7);
 }
 
@@ -444,21 +444,21 @@ TEST_CASE("stub_criticalsSetValue / stub_criticalsGetValue — real types")
             CRIT_DATA_MEMBER_DAMAGE_MULTIPLIER) == 4);
     }
 
-    SUBCASE("set and get for player kill type (SFALL_KILL_TYPE_COUNT sentinel)")
+    SUBCASE("set and get for player kill type (KILL_TYPE_OVERRIDE_COUNT sentinel)")
     {
-        stub_criticalsSetValue(SFALL_KILL_TYPE_COUNT, HIT_LOCATION_TORSO, 3,
+        stub_criticalsSetValue(KILL_TYPE_OVERRIDE_COUNT, HIT_LOCATION_TORSO, 3,
             CRIT_DATA_MEMBER_FLAGS, 0xBEEF);
-        CHECK(stub_criticalsGetValue(SFALL_KILL_TYPE_COUNT, HIT_LOCATION_TORSO, 3,
+        CHECK(stub_criticalsGetValue(KILL_TYPE_OVERRIDE_COUNT, HIT_LOCATION_TORSO, 3,
             CRIT_DATA_MEMBER_FLAGS) == 0xBEEF);
     }
 
     SUBCASE("normal table and player table are independent")
     {
         stub_criticalsSetValue(0, HIT_LOCATION_HEAD, 0, CRIT_DATA_MEMBER_MESSAGE_ID, 100);
-        stub_criticalsSetValue(SFALL_KILL_TYPE_COUNT, HIT_LOCATION_HEAD, 0, CRIT_DATA_MEMBER_MESSAGE_ID, 200);
+        stub_criticalsSetValue(KILL_TYPE_OVERRIDE_COUNT, HIT_LOCATION_HEAD, 0, CRIT_DATA_MEMBER_MESSAGE_ID, 200);
 
         CHECK(stub_criticalsGetValue(0, HIT_LOCATION_HEAD, 0, CRIT_DATA_MEMBER_MESSAGE_ID) == 100);
-        CHECK(stub_criticalsGetValue(SFALL_KILL_TYPE_COUNT, HIT_LOCATION_HEAD, 0, CRIT_DATA_MEMBER_MESSAGE_ID) == 200);
+        CHECK(stub_criticalsGetValue(KILL_TYPE_OVERRIDE_COUNT, HIT_LOCATION_HEAD, 0, CRIT_DATA_MEMBER_MESSAGE_ID) == 200);
     }
 
     SUBCASE("independent kill types do not interfere")
@@ -485,10 +485,10 @@ TEST_CASE("stub_criticalsSetValue / stub_criticalsGetValue — real types")
 
     SUBCASE("independent effects do not interfere")
     {
-        for (int eff = 0; eff < CRTICIAL_EFFECT_COUNT; eff++) {
+        for (int eff = 0; eff < CRITICAL_EFFECT_COUNT; eff++) {
             stub_criticalsSetValue(0, HIT_LOCATION_HEAD, eff, CRIT_DATA_MEMBER_MESSAGE_ID, eff * 100);
         }
-        for (int eff = 0; eff < CRTICIAL_EFFECT_COUNT; eff++) {
+        for (int eff = 0; eff < CRITICAL_EFFECT_COUNT; eff++) {
             CHECK(stub_criticalsGetValue(0, HIT_LOCATION_HEAD, eff, CRIT_DATA_MEMBER_MESSAGE_ID) == eff * 100);
         }
     }
@@ -533,11 +533,11 @@ TEST_CASE("stub_criticalsResetValue — base-value restoration with real types")
         memcpy(&gBasePlayerCriticalHitTable[HIT_LOCATION_TORSO][2].values[CRIT_DATA_MEMBER_FLAGS],
                &baseVal, sizeof(baseVal));
 
-        stub_criticalsSetValue(SFALL_KILL_TYPE_COUNT, HIT_LOCATION_TORSO, 2, CRIT_DATA_MEMBER_FLAGS, 999);
-        CHECK(stub_criticalsGetValue(SFALL_KILL_TYPE_COUNT, HIT_LOCATION_TORSO, 2, CRIT_DATA_MEMBER_FLAGS) == 999);
+        stub_criticalsSetValue(KILL_TYPE_OVERRIDE_COUNT, HIT_LOCATION_TORSO, 2, CRIT_DATA_MEMBER_FLAGS, 999);
+        CHECK(stub_criticalsGetValue(KILL_TYPE_OVERRIDE_COUNT, HIT_LOCATION_TORSO, 2, CRIT_DATA_MEMBER_FLAGS) == 999);
 
-        stub_criticalsResetValue(SFALL_KILL_TYPE_COUNT, HIT_LOCATION_TORSO, 2, CRIT_DATA_MEMBER_FLAGS);
-        CHECK(stub_criticalsGetValue(SFALL_KILL_TYPE_COUNT, HIT_LOCATION_TORSO, 2, CRIT_DATA_MEMBER_FLAGS) == 77);
+        stub_criticalsResetValue(KILL_TYPE_OVERRIDE_COUNT, HIT_LOCATION_TORSO, 2, CRIT_DATA_MEMBER_FLAGS);
+        CHECK(stub_criticalsGetValue(KILL_TYPE_OVERRIDE_COUNT, HIT_LOCATION_TORSO, 2, CRIT_DATA_MEMBER_FLAGS) == 77);
     }
 
     SUBCASE("normal reset does not affect player table")
@@ -548,12 +548,12 @@ TEST_CASE("stub_criticalsResetValue — base-value restoration with real types")
         memcpy(&gBasePlayerCriticalHitTable[HIT_LOCATION_HEAD][0].values[CRIT_DATA_MEMBER_MESSAGE_ID], &basePlay, sizeof(basePlay));
 
         stub_criticalsSetValue(0, HIT_LOCATION_HEAD, 0, CRIT_DATA_MEMBER_MESSAGE_ID, 999);
-        stub_criticalsSetValue(SFALL_KILL_TYPE_COUNT, HIT_LOCATION_HEAD, 0, CRIT_DATA_MEMBER_MESSAGE_ID, 999);
+        stub_criticalsSetValue(KILL_TYPE_OVERRIDE_COUNT, HIT_LOCATION_HEAD, 0, CRIT_DATA_MEMBER_MESSAGE_ID, 999);
 
         stub_criticalsResetValue(0, HIT_LOCATION_HEAD, 0, CRIT_DATA_MEMBER_MESSAGE_ID);
 
         CHECK(stub_criticalsGetValue(0, HIT_LOCATION_HEAD, 0, CRIT_DATA_MEMBER_MESSAGE_ID) == 10);
-        CHECK(stub_criticalsGetValue(SFALL_KILL_TYPE_COUNT, HIT_LOCATION_HEAD, 0, CRIT_DATA_MEMBER_MESSAGE_ID) == 999); // unchanged
+        CHECK(stub_criticalsGetValue(KILL_TYPE_OVERRIDE_COUNT, HIT_LOCATION_HEAD, 0, CRIT_DATA_MEMBER_MESSAGE_ID) == 999); // unchanged
     }
 }
 
@@ -563,9 +563,9 @@ TEST_CASE("Critical hit table: all kill type × hit location × effect traversal
     memset(gPlayerCriticalHitTable, 0, sizeof(gPlayerCriticalHitTable));
 
     // Write unique values to every entry in the normal tables
-    for (int kt = 0; kt < KILL_TYPE_COUNT; kt++) {
+    for (int kt = 0; kt < KILL_TYPE_DEFAULT_COUNT; kt++) {
         for (int hl = 0; hl < HIT_LOCATION_COUNT; hl++) {
-            for (int eff = 0; eff < CRTICIAL_EFFECT_COUNT; eff++) {
+            for (int eff = 0; eff < CRITICAL_EFFECT_COUNT; eff++) {
                 int val = kt * 10000 + hl * 100 + eff;
                 stub_criticalsSetValue(kt, hl, eff, CRIT_DATA_MEMBER_MESSAGE_ID, val);
             }
@@ -741,8 +741,8 @@ TEST_CASE("CombatStartData struct is usable")
     csd.minDamage = 1;
     csd.maxDamage = 50;
     csd.overrideAttackResults = 0;
-    csd.attackerResults = 0;
-    csd.targetResults = 0;
+    csd.attackerResults = static_cast<Dam>(0);
+    csd.targetResults = static_cast<Dam>(0);
 
     CHECK(csd.actionPointsBonus == 5);
     CHECK(csd.accuracyBonus == 10);

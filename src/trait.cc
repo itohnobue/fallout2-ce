@@ -34,7 +34,7 @@ static MessageList gTraitsMessageList;
 // List of selected traits.
 //
 // 0x66BE40 pc_trait
-static int gSelectedTraits[TRAITS_MAX_SELECTED_COUNT];
+static Trait gSelectedTraits[TRAITS_MAX_SELECTED_COUNT];
 
 // 0x51DB84 trait_data
 static TraitDescription gTraitDescriptions[TRAIT_COUNT] = {
@@ -70,7 +70,7 @@ int traitsInit()
         return -1;
     }
 
-    for (int trait = 0; trait < TRAIT_COUNT; trait++) {
+    for (Trait trait = TRAIT_FIRST; trait < TRAIT_COUNT; trait++) {
         MessageListItem messageListItem;
 
         messageListItem.num = 100 + trait;
@@ -89,14 +89,14 @@ int traitsInit()
 
     messageListRepositorySetStandardMessageList(STANDARD_MESSAGE_LIST_TRAIT, &gTraitsMessageList);
 
-    return true;
+    return 0;
 }
 
 // 0x4B3ADC trait_reset
 void traitsReset()
 {
     for (int index = 0; index < TRAITS_MAX_SELECTED_COUNT; index++) {
-        gSelectedTraits[index] = -1;
+        gSelectedTraits[index] = TRAIT_INVALID;
     }
 }
 
@@ -116,7 +116,7 @@ int traitsLoad(File* stream)
     // This ensures save format stays consistent with the runtime behavior.
     // Old saves (written before the 3-trait FO1 feature) always had 2 ints,
     // which matches FO2 mode's traitGetMaxSelectedCount() = 2.
-    return fileReadInt32List(stream, gSelectedTraits, traitGetMaxSelectedCount());
+    return fileReadInt32EnumList<Trait>(stream, gSelectedTraits, traitGetMaxSelectedCount());
 }
 
 // Saves trait system state to save game.
@@ -124,7 +124,7 @@ int traitsLoad(File* stream)
 // 0x4B3B28 trait_save
 int traitsSave(File* stream)
 {
-    return fileWriteInt32List(stream, gSelectedTraits, traitGetMaxSelectedCount());
+    return fileWriteInt32EnumList<Trait>(stream, gSelectedTraits, traitGetMaxSelectedCount());
 }
 
 // Sets selected traits.
@@ -132,7 +132,7 @@ int traitsSave(File* stream)
 // In FO2 mode, only trait1/trait2 are meaningful; trait3 defaults to -1.
 //
 // 0x4B3B48 trait_set
-void traitsSetSelected(int trait1, int trait2, int trait3)
+void traitsSetSelected(Trait trait1, Trait trait2, Trait trait3)
 {
     gSelectedTraits[0] = trait1;
     gSelectedTraits[1] = trait2;
@@ -144,7 +144,7 @@ void traitsSetSelected(int trait1, int trait2, int trait3)
 // When trait3 is nullptr, only the first 2 slots are retrieved.
 //
 // 0x4B3B54 trait_get
-void traitsGetSelected(int* trait1, int* trait2, int* trait3)
+void traitsGetSelected(Trait* trait1, Trait* trait2, Trait* trait3)
 {
     *trait1 = gSelectedTraits[0];
     *trait2 = gSelectedTraits[1];
@@ -158,7 +158,7 @@ void traitsGetSelected(int* trait1, int* trait2, int* trait3)
 // from trait.msg (prevents null dereference at call sites).
 //
 // 0x4B3B68 trait_name
-char* traitGetName(int trait)
+char* traitGetName(Trait trait)
 {
     if (!(trait >= 0 && trait < TRAIT_COUNT)) {
         return nullptr;
@@ -170,7 +170,7 @@ char* traitGetName(int trait)
 // trait is out of range. Returns "" if valid but description was not loaded.
 //
 // 0x4B3B88 trait_description
-char* traitGetDescription(int trait)
+char* traitGetDescription(Trait trait)
 {
     if (!(trait >= 0 && trait < TRAIT_COUNT)) {
         return nullptr;
@@ -182,15 +182,15 @@ char* traitGetDescription(int trait)
 // out of range.
 //
 // 0x4B3BA8 trait_pic
-int traitGetFrmId(int trait)
+int traitGetFrmId(Trait trait)
 {
-    return trait >= 0 && trait < TRAIT_COUNT ? gTraitDescriptions[trait].frmId : 0;
+    return traitIsValid(trait) ? gTraitDescriptions[trait].frmId : 0;
 }
 
 // Returns `true` if the specified trait is selected.
 //
 // 0x4B3BC8 trait_level
-bool traitIsSelected(int trait)
+bool traitIsSelected(Trait trait)
 {
     // F-076: In FO1 mode, check up to 3 selected traits instead of 2.
     for (int i = 0; i < traitGetMaxSelectedCount(); i++) {
@@ -202,7 +202,7 @@ bool traitIsSelected(int trait)
 // Returns stat modifier depending on selected traits.
 //
 // 0x4B3C7C trait_adjust_stat
-int traitGetStatModifier(int stat)
+int traitGetStatModifier(Stat stat)
 {
     int modifier = 0;
 
@@ -298,6 +298,8 @@ int traitGetStatModifier(int stat)
             modifier -= critterGetBaseStat(gDude, STAT_POISON_RESISTANCE);
         }
         break;
+    default:
+        break;
     }
 
     return modifier;
@@ -306,7 +308,7 @@ int traitGetStatModifier(int stat)
 // Returns skill modifier depending on selected traits.
 //
 // 0x4B40FC trait_adjust_skill
-int traitGetSkillModifier(int skill)
+int traitGetSkillModifier(Skill skill)
 {
     int modifier = 0;
 
@@ -329,6 +331,8 @@ int traitGetSkillModifier(int skill)
         case SKILL_SPEECH:
         case SKILL_BARTER:
             modifier += 15;
+            break;
+        default:
             break;
         }
     }

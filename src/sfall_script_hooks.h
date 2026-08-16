@@ -1,9 +1,12 @@
 #ifndef FALLOUT_SFALL_SCRIPT_HOOKS_H_
 #define FALLOUT_SFALL_SCRIPT_HOOKS_H_
 
+#include "animation.h"
 #include "interpreter.h"
 #include "interpreter_extra.h"
+#include "queue.h"
 #include "scripts.h"
+#include "skill_defs.h"
 
 #include <array>
 #include <initializer_list>
@@ -65,10 +68,12 @@ typedef enum {
     HOOK_USEOBJON = 8,
 
     // Removing object from inventory.
-    // NOTE: Deliberately absent — requires RMOBJ_* constants and destination
-    // object tracking not present in CE's itemRemove. Implementing would require
-    // significant refactoring of the item removal code path.
-    // HOOK_REMOVEINVENOBJ = 9,
+    // sync2: upstream enabled this hook with RemoveInventoryObjectHookReason
+    // constants + scriptHooks_RemoveInventoryObject; the fork's item.cc
+    // itemRemoveInternal now fires it (runHook=true path). The old fork
+    // comment ("deliberately absent — not present in CE's itemRemove") is
+    // obsolete after the sync2 merge.
+    HOOK_REMOVEINVENOBJ = 9,
 
     // Barter price calculation.
     HOOK_BARTERPRICE = 10,
@@ -341,6 +346,7 @@ public:
 
     ProgramValue getArgAt(int idx) const;
     ProgramValue getReturnValueAt(int idx) const;
+    HookType hookType() const;
 
     // Returns the Program* that set the return value at the given index.
     // For string return values, this is the program whose string table should
@@ -418,6 +424,34 @@ enum AmmoCostHookType {
     AMMO_COST_HOOK_BURST_SHOT = 3,
 };
 
+enum class RemoveInventoryObjectHookReason {
+    ItemRemovedInventory = 4831349,
+    ItemRemoved = 4548572,
+    ItemRemovedMulti = 4563866,
+    ItemDestroyed = 4543215,
+    ItemDestroyMulti = 4571599,
+    ItemMove = 4683293,
+    ItemReplace = 4686256,
+    ConsumeDrug = 4666772,
+    UseObj = 4666865,
+    EquipArmor = 4658121,
+    EquipWeapon = 4658675,
+    UnloadWeapon = 4667030,
+    UseDrugOn = 4834866,
+    StealView = 4668206,
+    ArmorEquipped = 4651961,
+    LeftHandEquipped = 4651899,
+    RightHandEquipped = 4651934,
+    ReplaceWeapon = 4658526,
+    Throw = 4266040,
+    SubContainer = 4683191,
+    AIUseDrugOn = 4359920,
+    BarterArmor = 4675656,
+    BarterWeapon = 4675722,
+    InventoryDropCaps = 4667295,
+    DropIntoContainer = 4678833,
+};
+
 enum class EncounterHookEventType {
     RandomEncounter = 0,
     // H-03/P-05: LocalMapEnter MUST be 1 to match sfall's HOOK_ENCOUNTER
@@ -460,7 +494,7 @@ enum class EncounterHookResult {
 bool scriptHooksRegister(Program* program, HookType hookType, int procedureIndex, bool atEnd = false);
 void scriptHooksUnregisterProgram(Program* program);
 bool scriptHooks_StdProcedure(int procedureNumber, Object* self, Object* source, Object* target, int fixedParam, bool after);
-void scriptHooks_ItemDamage(Object* weapon, Object* critter, int hitMode, bool isMeleeWeaponAttack, int* minDamagePtr, int* maxDamagePtr);
+void scriptHooks_ItemDamage(Object* weapon, Object* critter, HitMode hitMode, bool isMeleeWeaponAttack, int* minDamagePtr, int* maxDamagePtr);
 int scriptHooks_AmmoCost(Object* weapon, int rounds, int ammoCost, AmmoCostHookType hookType);
 int scriptHooks_Steal(Object* thief, Object* target, Object* item, bool isPlanting, int quantity, int* xpOverride);
 
@@ -491,7 +525,7 @@ void scriptHooks_SlideshowEnd();
 
 bool scriptHooks_RestTimer(unsigned int gameTime, RestEventType eventType, int hours, int minutes);
 void scriptHooks_OnDeath(Object* critter);
-int scriptHooks_ExplosiveTimer(Object* explosive, int delay, int eventType);
+int scriptHooks_ExplosiveTimer(Object* explosive, int delay, EventType eventType);
 EncounterHookResult scriptHooks_Encounter(EncounterHookEventType eventType, int* mapIdPtr, bool isSpecial, int tableId, int entryId);
 
 // M-26: HOOK_ADJUSTRADS fire function. Fires from critterAdjustRadiation()
@@ -503,21 +537,22 @@ bool scriptHooks_CombatTurnStart(Object* critter, bool reloadedDuringCombat);
 bool scriptHooks_CombatTurnEnd(Object* critter, int turnResult, bool reloadedDuringCombat);
 void scriptHooks_CombatTurnCombatEnd(Object* critter);
 PerceptionResult scriptHooks_WithinPerception(Object* watcher, Object* target, PerceptionType type, PerceptionResult result);
-int scriptHooks_CalcApCost(Object* critter, int hitMode, bool aiming, int actionPoints, Object* weapon);
+int scriptHooks_CalcApCost(Object* critter, HitMode hitMode, bool aiming, int actionPoints, Object* weapon);
 int scriptHooks_MoveCost(Object* critter, int distance, int actionPoints);
-int scriptHooks_ToHit(Object* attacker, Object* defender, int tile, int hitMode, int hitLocation, int hitChance, int hitChanceUncapped, bool useDistance);
-int scriptHooks_AfterHitRoll(Object* attacker, Object** defenderPtr, int* hitLocationPtr, int hitChance, int roll);
-void scriptHooks_DeathAnim(Object* attacker, Object* defender, Object* weapon, int damage, int* anim);
-UseSkillOnHookResult scriptHooks_UseSkillOn(Object** userPtr, Object* target, int skill);
-int scriptHooks_UseSkill(Object* user, Object* target, int skill, int skillBonus);
+int scriptHooks_ToHit(Object* attacker, Object* defender, int tile, HitMode hitMode, HitLocation hitLocation, int hitChance, int hitChanceUncapped, bool useDistance);
+int scriptHooks_AfterHitRoll(Object* attacker, Object** defenderPtr, HitLocation* hitLocationPtr, int hitChance, int roll);
+void scriptHooks_DeathAnim(Object* attacker, Object* defender, Object* weapon, int damage, AnimationType* anim);
+UseSkillOnHookResult scriptHooks_UseSkillOn(Object** userPtr, Object* target, Skill skill);
+int scriptHooks_UseSkill(Object* user, Object* target, Skill skill, int skillBonus);
 int scriptHooks_UseItem(Object* user, Object* objUsed);
 int scriptHooks_UseItemOn(Object* user, Object* target, Object* objUsed);
+void scriptHooks_RemoveInventoryObject(Object* owner, Object* item, int quantity, RemoveInventoryObjectHookReason reason, Object* target);
 void scriptHooks_ComputeDamage(Attack* attack, int numRounds, int baseDmgMult);
 void scriptHooks_BarterPrice(BarterPriceContext* ctx);
 
 int scriptHooks_AdjustFid(int vanillaFid, int modifiedFid);
 bool scriptHooks_InvenWield(Object* critter, Object* item, InvenSlot slot, int isWield, int isRemove, bool filterInactiveHand = true);
-bool scriptHooks_CanUseWeapon(bool result, Object* critter, Object* weapon, int hitMode);
+bool scriptHooks_CanUseWeapon(bool result, Object* critter, Object* weapon, HitMode hitMode);
 
 // Hook fire functions for Phase 2
 int scriptHooks_UseAnimObj(Object* object, int animId, int delay);

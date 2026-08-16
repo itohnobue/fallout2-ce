@@ -115,6 +115,7 @@ int _SavePrefs(bool save);
 static int preferencesWindowInit();
 static int preferencesWindowFree();
 static void _DoThing(int eventCode);
+static int preferencesGetRangeOptionLabelX(int optionIndex, int valuesCount, const char* text);
 
 // 0x48FBD0 row1Ytab
 static const int _row1Ytab[PRIMARY_PREF_COUNT] = {
@@ -563,6 +564,46 @@ static void _JustUpdate_()
 }
 
 // 0x491A68 UpdateThing
+static int preferencesGetRangeOptionLabelX(int optionIndex, int valuesCount, const char* text)
+{
+    switch (optionIndex) {
+    case 0:
+        // 0x4926AA
+        // TODO: Incomplete.
+        return 384;
+    case 1:
+        // 0x4926F3
+        switch (valuesCount) {
+        case 2:
+            return 624 - fontGetStringWidth(text);
+        case 3:
+            // This code path does not use floating-point arithmetic.
+            return 504 - fontGetStringWidth(text) / 2 - 2;
+        case 4:
+            // Uses floating-point arithmetic.
+            return 444 + fontGetStringWidth(text) / 2 - 8;
+        default:
+            return 624 - fontGetStringWidth(text);
+        }
+    case 2:
+        // 0x492766
+        switch (valuesCount) {
+        case 3:
+            return 624 - fontGetStringWidth(text);
+        case 4:
+            // Uses floating-point arithmetic.
+            return 564 - fontGetStringWidth(text) - 4;
+        default:
+            return 624 - fontGetStringWidth(text);
+        }
+    case 3:
+        // 0x49279E
+    default:
+        return 624 - fontGetStringWidth(text);
+    }
+}
+
+// 0x491A68 UpdateThing
 static void _UpdateThing(int index)
 {
     fontSetCurrent(101);
@@ -609,14 +650,14 @@ static void _UpdateThing(int index)
             const char* s;
             if (*p != '\0') {
                 *p = '\0';
-                fontDrawText(gPreferencesWindowBuffer + 640 * y + x, copy, 640, 640, _colorTable[18979]);
+                fontDrawText(gPreferencesWindowBuffer + 640 * y + x, copy, 640, 640, COLOR_DARK_YELLOW);
                 s = p + 1;
                 y += fontGetLineHeight();
             } else {
                 s = copy;
             }
 
-            fontDrawText(gPreferencesWindowBuffer + 640 * y + x, s, 640, 640, _colorTable[18979]);
+            fontDrawText(gPreferencesWindowBuffer + 640 * y + x, s, 640, 640, COLOR_DARK_YELLOW);
         }
 
         int value = *(meta->valuePtr);
@@ -641,7 +682,7 @@ static void _UpdateThing(int index)
                 x = meta->knobX + word_48FC06[value] - fontGetStringWidth(text);
                 meta->minX = x;
             }
-            fontDrawText(gPreferencesWindowBuffer + 640 * (meta->knobY - 5) + x, text, 640, 640, _colorTable[18979]);
+            fontDrawText(gPreferencesWindowBuffer + 640 * (meta->knobY - 5) + x, text, 640, 640, COLOR_DARK_YELLOW);
         }
 
         int value = *(meta->valuePtr);
@@ -727,47 +768,8 @@ static void _UpdateThing(int index)
         for (int optionIndex = 0; optionIndex < meta->valuesCount; optionIndex++) {
             const char* str = getmsg(&gPreferencesMessageList, &gPreferencesMessageListItem, meta->labelIds[optionIndex]);
 
-            int x;
-            switch (optionIndex) {
-            case 0:
-                // 0x4926AA
-                x = 384;
-                // TODO: Incomplete.
-                break;
-            case 1:
-                // 0x4926F3
-                switch (meta->valuesCount) {
-                case 2:
-                    x = 624 - fontGetStringWidth(str);
-                    break;
-                case 3:
-                    // This code path does not use floating-point arithmetic
-                    x = 504 - fontGetStringWidth(str) / 2 - 2;
-                    break;
-                case 4:
-                    // Uses floating-point arithmetic
-                    x = 444 + fontGetStringWidth(str) / 2 - 8;
-                    break;
-                }
-                break;
-            case 2:
-                // 0x492766
-                switch (meta->valuesCount) {
-                case 3:
-                    x = 624 - fontGetStringWidth(str);
-                    break;
-                case 4:
-                    // Uses floating-point arithmetic
-                    x = 564 - fontGetStringWidth(str) - 4;
-                    break;
-                }
-                break;
-            case 3:
-                // 0x49279E
-                x = 624 - fontGetStringWidth(str);
-                break;
-            }
-            fontDrawText(gPreferencesWindowBuffer + 640 * (meta->knobY - 12) + x, str, 640, 640, _colorTable[18979]);
+            int x = preferencesGetRangeOptionLabelX(optionIndex, meta->valuesCount, str);
+            fontDrawText(gPreferencesWindowBuffer + 640 * (meta->knobY - 12) + x, str, 640, 640, COLOR_DARK_YELLOW);
         }
     } else {
         // return false;
@@ -996,7 +998,7 @@ static int preferencesWindowInit()
     _SaveSettings();
 
     for (i = 0; i < PREFERENCES_WINDOW_FRM_COUNT; i++) {
-        fid = buildFid(OBJ_TYPE_INTERFACE, gPreferencesWindowFrmIds[i], 0, 0, 0);
+        fid = buildFid(OBJ_TYPE_INTERFACE, gPreferencesWindowFrmIds[i]);
         if (!_preferencesFrmImages[i].lock(fid)) {
             while (--i >= 0) {
                 _preferencesFrmImages[i].unlock();
@@ -1030,7 +1032,7 @@ static int preferencesWindowInit()
     fontSetCurrent(104);
 
     messageItemText = getmsg(&gPreferencesMessageList, &gPreferencesMessageListItem, 100);
-    fontDrawText(gPreferencesWindowBuffer + PREFERENCES_WINDOW_WIDTH * 10 + 74, messageItemText, PREFERENCES_WINDOW_WIDTH, PREFERENCES_WINDOW_WIDTH, _colorTable[18979]);
+    fontDrawText(gPreferencesWindowBuffer + PREFERENCES_WINDOW_WIDTH * 10 + 74, messageItemText, PREFERENCES_WINDOW_WIDTH, PREFERENCES_WINDOW_WIDTH, COLOR_DARK_YELLOW);
 
     fontSetCurrent(103);
 
@@ -1038,35 +1040,35 @@ static int preferencesWindowInit()
     for (i = 0; i < PRIMARY_PREF_COUNT; i++) {
         messageItemText = getmsg(&gPreferencesMessageList, &gPreferencesMessageListItem, messageItemId++);
         x = 99 - fontGetStringWidth(messageItemText) / 2;
-        fontDrawText(gPreferencesWindowBuffer + PREFERENCES_WINDOW_WIDTH * _row1Ytab[i] + x, messageItemText, PREFERENCES_WINDOW_WIDTH, PREFERENCES_WINDOW_WIDTH, _colorTable[18979]);
+        fontDrawText(gPreferencesWindowBuffer + PREFERENCES_WINDOW_WIDTH * _row1Ytab[i] + x, messageItemText, PREFERENCES_WINDOW_WIDTH, PREFERENCES_WINDOW_WIDTH, COLOR_DARK_YELLOW);
     }
 
     for (i = 0; i < SECONDARY_PREF_COUNT; i++) {
         messageItemText = getmsg(&gPreferencesMessageList, &gPreferencesMessageListItem, messageItemId++);
-        fontDrawText(gPreferencesWindowBuffer + PREFERENCES_WINDOW_WIDTH * _row2Ytab[i] + 206, messageItemText, PREFERENCES_WINDOW_WIDTH, PREFERENCES_WINDOW_WIDTH, _colorTable[18979]);
+        fontDrawText(gPreferencesWindowBuffer + PREFERENCES_WINDOW_WIDTH * _row2Ytab[i] + 206, messageItemText, PREFERENCES_WINDOW_WIDTH, PREFERENCES_WINDOW_WIDTH, COLOR_DARK_YELLOW);
     }
 
     for (i = 0; i < RANGE_PREF_COUNT; i++) {
         messageItemText = getmsg(&gPreferencesMessageList, &gPreferencesMessageListItem, messageItemId++);
-        fontDrawText(gPreferencesWindowBuffer + PREFERENCES_WINDOW_WIDTH * _row3Ytab[i] + 384, messageItemText, PREFERENCES_WINDOW_WIDTH, PREFERENCES_WINDOW_WIDTH, _colorTable[18979]);
+        fontDrawText(gPreferencesWindowBuffer + PREFERENCES_WINDOW_WIDTH * _row3Ytab[i] + 384, messageItemText, PREFERENCES_WINDOW_WIDTH, PREFERENCES_WINDOW_WIDTH, COLOR_DARK_YELLOW);
     }
 
     // DEFAULT
     messageItemText = getmsg(&gPreferencesMessageList, &gPreferencesMessageListItem, 120);
-    fontDrawText(gPreferencesWindowBuffer + PREFERENCES_WINDOW_WIDTH * 449 + 43, messageItemText, PREFERENCES_WINDOW_WIDTH, PREFERENCES_WINDOW_WIDTH, _colorTable[18979]);
+    fontDrawText(gPreferencesWindowBuffer + PREFERENCES_WINDOW_WIDTH * 449 + 43, messageItemText, PREFERENCES_WINDOW_WIDTH, PREFERENCES_WINDOW_WIDTH, COLOR_DARK_YELLOW);
 
     // DONE
     messageItemText = getmsg(&gPreferencesMessageList, &gPreferencesMessageListItem, 4);
-    fontDrawText(gPreferencesWindowBuffer + PREFERENCES_WINDOW_WIDTH * 449 + 169, messageItemText, PREFERENCES_WINDOW_WIDTH, PREFERENCES_WINDOW_WIDTH, _colorTable[18979]);
+    fontDrawText(gPreferencesWindowBuffer + PREFERENCES_WINDOW_WIDTH * 449 + 169, messageItemText, PREFERENCES_WINDOW_WIDTH, PREFERENCES_WINDOW_WIDTH, COLOR_DARK_YELLOW);
 
     // CANCEL
     messageItemText = getmsg(&gPreferencesMessageList, &gPreferencesMessageListItem, 121);
-    fontDrawText(gPreferencesWindowBuffer + PREFERENCES_WINDOW_WIDTH * 449 + 283, messageItemText, PREFERENCES_WINDOW_WIDTH, PREFERENCES_WINDOW_WIDTH, _colorTable[18979]);
+    fontDrawText(gPreferencesWindowBuffer + PREFERENCES_WINDOW_WIDTH * 449 + 283, messageItemText, PREFERENCES_WINDOW_WIDTH, PREFERENCES_WINDOW_WIDTH, COLOR_DARK_YELLOW);
 
     // Affect player speed
     fontSetCurrent(101);
     messageItemText = getmsg(&gPreferencesMessageList, &gPreferencesMessageListItem, 122);
-    fontDrawText(gPreferencesWindowBuffer + PREFERENCES_WINDOW_WIDTH * 72 + 405, messageItemText, PREFERENCES_WINDOW_WIDTH, PREFERENCES_WINDOW_WIDTH, _colorTable[18979]);
+    fontDrawText(gPreferencesWindowBuffer + PREFERENCES_WINDOW_WIDTH * 72 + 405, messageItemText, PREFERENCES_WINDOW_WIDTH, PREFERENCES_WINDOW_WIDTH, COLOR_DARK_YELLOW);
 
     for (i = 0; i < PREF_COUNT; i++) {
         _UpdateThing(i);
@@ -1538,47 +1540,8 @@ static void _DoThing(int eventCode)
                 for (int optionIndex = 0; optionIndex < meta->valuesCount; optionIndex++) {
                     const char* str = getmsg(&gPreferencesMessageList, &gPreferencesMessageListItem, meta->labelIds[optionIndex]);
 
-                    int x;
-                    switch (optionIndex) {
-                    case 0:
-                        // 0x4926AA
-                        x = 384;
-                        // TODO: Incomplete.
-                        break;
-                    case 1:
-                        // 0x4926F3
-                        switch (meta->valuesCount) {
-                        case 2:
-                            x = 624 - fontGetStringWidth(str);
-                            break;
-                        case 3:
-                            // This code path does not use floating-point arithmetic
-                            x = 504 - fontGetStringWidth(str) / 2 - 2;
-                            break;
-                        case 4:
-                            // Uses floating-point arithmetic
-                            x = 444 + fontGetStringWidth(str) / 2 - 8;
-                            break;
-                        }
-                        break;
-                    case 2:
-                        // 0x492766
-                        switch (meta->valuesCount) {
-                        case 3:
-                            x = 624 - fontGetStringWidth(str);
-                            break;
-                        case 4:
-                            // Uses floating-point arithmetic
-                            x = 564 - fontGetStringWidth(str) - 4;
-                            break;
-                        }
-                        break;
-                    case 3:
-                        // 0x49279E
-                        x = 624 - fontGetStringWidth(str);
-                        break;
-                    }
-                    fontDrawText(gPreferencesWindowBuffer + PREFERENCES_WINDOW_WIDTH * (meta->knobY - 12) + x, str, PREFERENCES_WINDOW_WIDTH, PREFERENCES_WINDOW_WIDTH, _colorTable[18979]);
+                    int x = preferencesGetRangeOptionLabelX(optionIndex, meta->valuesCount, str);
+                    fontDrawText(gPreferencesWindowBuffer + PREFERENCES_WINDOW_WIDTH * (meta->knobY - 12) + x, str, PREFERENCES_WINDOW_WIDTH, PREFERENCES_WINDOW_WIDTH, COLOR_DARK_YELLOW);
                 }
             } else {
                 int off = PREFERENCES_WINDOW_WIDTH * meta->knobY + 384;

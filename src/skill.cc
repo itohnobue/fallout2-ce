@@ -50,8 +50,8 @@ typedef struct SkillDescription {
     int frmId;
     int defaultValue;
     int statModifier;
-    int stat1;
-    int stat2;
+    Stat stat1;
+    Stat stat2;
     int baseValueMult;
     int experience;
     int gainXpFromSkillPenalty;
@@ -60,10 +60,10 @@ typedef struct SkillDescription {
 static void _show_skill_use_messages(Object* obj, int skill, Object* target, int successCount, int skillBonus);
 static void skillsInitDefaults();
 static void skillsLoadCustomConfig();
-static void skillsLoadCustomCosts(Config* config, int skill, const char* key);
-static void skillsLoadCustomFormula(Config* config, int skill, const char* key);
+static void skillsLoadCustomCosts(Config* config, Skill skill, const char* key);
+static void skillsLoadCustomFormula(Config* config, Skill skill, const char* key);
 static int skillGetCost(int skill, int skillValue);
-static int skillGetFreeUsageSlot(int skill);
+static int skillGetFreeUsageSlot(Skill skill);
 static int skill_use_slot_clear();
 
 // Damage flags which can be repaired using "Repair" skill.
@@ -155,7 +155,11 @@ int _gStealSize = 0;
 static int _timesSkillUsed[SKILL_COUNT][SKILLS_MAX_USES_PER_DAY];
 
 // 0x668070 tag_skill
-static int gTaggedSkills[NUM_TAGGED_SKILLS];
+static Skill gTaggedSkills[NUM_TAGGED_SKILLS];
+
+// sfall's set_skill_max limit. Global scripts restore content-specific values
+// after every game reset.
+static int skillMaximum = 300;
 
 // skill.msg
 //
@@ -176,7 +180,7 @@ static void skillsInitDefaults()
         gSkillDescriptions[skill].description = description;
         gSkillDescriptions[skill].attributes = attributes;
 
-        for (int stat = 0; stat < PRIMARY_STAT_COUNT; stat++) {
+        for (Stat stat = STAT_FIRST; stat < PRIMARY_STAT_COUNT; stat++) {
             skillStatMultipliers[skill][stat] = 0.0;
         }
 
@@ -200,7 +204,7 @@ static void skillsInitDefaults()
     skillCostsBasedOnPoints = false;
 }
 
-static int skillStatFromConfigLetter(char ch)
+static Stat skillStatFromConfigLetter(char ch)
 {
     switch (ch) {
     case 's':
@@ -260,7 +264,7 @@ static void skillsLoadCustomConfig()
     skillCostsBasedOnPoints = basedOnPoints != 0;
 
     char key[32];
-    for (int skill = 0; skill < SKILL_COUNT; skill++) {
+    for (Skill skill = SKILL_FIRST; skill < SKILL_COUNT; skill++) {
         snprintf(key, sizeof(key), "Skill%d", skill);
         skillsLoadCustomFormula(config.get(), skill, key);
 
@@ -286,7 +290,7 @@ static void skillsLoadCustomConfig()
     }
 }
 
-static void skillsLoadCustomCosts(Config* config, int skill, const char* key)
+static void skillsLoadCustomCosts(Config* config, Skill skill, const char* key)
 {
     char* string = nullptr;
     if (!configGetString(config, "Skills", key, &string) || string == nullptr) {
@@ -316,14 +320,14 @@ static void skillsLoadCustomCosts(Config* config, int skill, const char* key)
     }
 }
 
-static void skillsLoadCustomFormula(Config* config, int skill, const char* key)
+static void skillsLoadCustomFormula(Config* config, Skill skill, const char* key)
 {
     char* string = nullptr;
     if (!configGetString(config, "Skills", key, &string) || string == nullptr) {
         return;
     }
 
-    for (int stat = 0; stat < PRIMARY_STAT_COUNT; stat++) {
+    for (Stat stat = STAT_FIRST; stat < PRIMARY_STAT_COUNT; stat++) {
         skillStatMultipliers[skill][stat] = 0.0;
     }
 
@@ -338,7 +342,7 @@ static void skillsLoadCustomFormula(Config* config, int skill, const char* key)
     char* token = strtok(buffer, "|");
     while (token != nullptr) {
         if (strlen(token) >= 2) {
-            int stat = skillStatFromConfigLetter(token[0]);
+            Stat stat = skillStatFromConfigLetter(token[0]);
             if (stat != STAT_INVALID) {
                 skillStatMultipliers[skill][stat] = atof(token + 1);
                 if (gSkillDescriptions[skill].stat1 == STAT_INVALID) {
@@ -370,7 +374,7 @@ int skillsInit()
         return -1;
     }
 
-    for (int skill = 0; skill < SKILL_COUNT; skill++) {
+    for (Skill skill = SKILL_FIRST; skill < SKILL_COUNT; skill++) {
         MessageListItem messageListItem;
 
         messageListItem.num = 100 + skill;
@@ -392,7 +396,7 @@ int skillsInit()
     skillsLoadCustomConfig();
 
     for (int index = 0; index < NUM_TAGGED_SKILLS; index++) {
-        gTaggedSkills[index] = -1;
+        gTaggedSkills[index] = SKILL_INVALID;
     }
 
     // NOTE: Uninline.
@@ -406,8 +410,10 @@ int skillsInit()
 // 0x4AA448
 void skillsReset()
 {
+    skillMaximum = 300;
+
     for (int index = 0; index < NUM_TAGGED_SKILLS; index++) {
-        gTaggedSkills[index] = -1;
+        gTaggedSkills[index] = SKILL_INVALID;
     }
 
     // NOTE: Uninline.
@@ -424,25 +430,25 @@ void skillsExit()
 // 0x4AA488
 int skillsLoad(File* stream)
 {
-    return fileReadInt32List(stream, gTaggedSkills, NUM_TAGGED_SKILLS);
+    return fileReadInt32EnumList<Skill>(stream, gTaggedSkills, NUM_TAGGED_SKILLS);
 }
 
 // 0x4AA4A8
 int skillsSave(File* stream)
 {
-    return fileWriteInt32List(stream, gTaggedSkills, NUM_TAGGED_SKILLS);
+    return fileWriteInt32EnumList<Skill>(stream, gTaggedSkills, NUM_TAGGED_SKILLS);
 }
 
 // 0x4AA4C8
 void protoCritterDataResetSkills(CritterProtoData* data)
 {
-    for (int skill = 0; skill < SKILL_COUNT; skill++) {
+    for (Skill skill = SKILL_FIRST; skill < SKILL_COUNT; skill++) {
         data->skills[skill] = 0;
     }
 }
 
 // 0x4AA4E4
-void skillsSetTagged(int* skills, int count)
+void skillsSetTagged(Skill* skills, int count)
 {
     for (int index = 0; index < count; index++) {
         gTaggedSkills[index] = skills[index];
@@ -450,7 +456,7 @@ void skillsSetTagged(int* skills, int count)
 }
 
 // 0x4AA508
-void skillsGetTagged(int* skills, int count)
+void skillsGetTagged(Skill* skills, int count)
 {
     for (int index = 0; index < count; index++) {
         skills[index] = gTaggedSkills[index];
@@ -458,7 +464,7 @@ void skillsGetTagged(int* skills, int count)
 }
 
 // 0x4AA52C
-bool skillIsTagged(int skill)
+bool skillIsTagged(Skill skill)
 {
     return skill == gTaggedSkills[0]
         || skill == gTaggedSkills[1]
@@ -481,7 +487,7 @@ static int skillGetMaxSkill(Object* critter)
 }
 
 // 0x4AA558
-int skillGetValue(Object* critter, int skill)
+int skillGetValue(Object* critter, Skill skill)
 {
     if (!skillIsValid(skill)) {
         return -5;
@@ -507,7 +513,7 @@ int skillGetValue(Object* critter, int skill)
     // the multipliers from the vanilla stat1/stat2 layout, so the default
     // behavior is unchanged.
     double value = skillDescription->defaultValue + (baseValue + sfallGetBaseSkillMod(skill)) * skillDescription->baseValueMult;
-    for (int stat = 0; stat < PRIMARY_STAT_COUNT; stat++) {
+    for (Stat stat = STAT_FIRST; stat < STAT_FIRST + PRIMARY_STAT_COUNT; stat++) {
         value += critterGetStat(critter, stat) * skillStatMultipliers[skill][stat];
     }
 
@@ -592,7 +598,7 @@ int skillGetValue(Object* critter, int skill)
 }
 
 // 0x4AA654
-int skillGetDefaultValue(int skill)
+int skillGetDefaultValue(Skill skill)
 {
     return skillIsValid(skill) ? gSkillDescriptions[skill].defaultValue : -5;
 }
@@ -615,7 +621,7 @@ int skillGetBaseValue(Object* obj, int skill)
 }
 
 // 0x4AA6BC
-int skillAdd(Object* obj, int skill)
+int skillAdd(Object* obj, Skill skill)
 {
     if (obj != gDude) {
         return -5;
@@ -665,7 +671,7 @@ int skillAdd(Object* obj, int skill)
 }
 
 // 0x4AA7F8
-int skillAddForce(Object* obj, int skill)
+int skillAddForce(Object* obj, Skill skill)
 {
     if (obj != gDude) {
         return -5;
@@ -733,7 +739,7 @@ static int skillGetCost(int skill, int skillValue)
 // unspent skill points.
 //
 // 0x4AA8C4
-int skillSub(Object* critter, int skill)
+int skillSub(Object* critter, Skill skill)
 {
     if (critter != gDude) {
         return -5;
@@ -742,6 +748,8 @@ int skillSub(Object* critter, int skill)
     if (!skillIsValid(skill)) {
         return -5;
     }
+
+    int unspentSp = pcGetStat(PC_STAT_UNSPENT_SKILL_POINTS);
 
     Proto* proto;
     // aa439ef: guard protoGetProto failure before dereferencing the proto.
@@ -752,8 +760,6 @@ int skillSub(Object* critter, int skill)
     if (proto->critter.data.skills[skill] <= 0) {
         return -2;
     }
-
-    int unspentSp = pcGetStat(PC_STAT_UNSPENT_SKILL_POINTS);
 
     // 97fcb9e: with BasedOnPoints=1 the refund is computed from the raw
     // proto points; otherwise from the effective value after decrement
@@ -788,7 +794,7 @@ int skillSub(Object* critter, int skill)
 // Decrements specified skill value by one.
 //
 // 0x4AAA34
-int skillSubForce(Object* obj, int skill)
+int skillSubForce(Object* obj, Skill skill)
 {
     if (obj != gDude) {
         return -5;
@@ -815,7 +821,7 @@ int skillSubForce(Object* obj, int skill)
 }
 
 // 0x4AAAA4
-int skillRoll(Object* critter, int skill, int modifier, int* howMuch)
+int skillRoll(Object* critter, Skill skill, int modifier, int* howMuch)
 {
     if (!skillIsValid(skill)) {
         return ROLL_FAILURE;
@@ -848,7 +854,7 @@ int skillRoll(Object* critter, int skill, int modifier, int* howMuch)
 // Returns the name of the specified skill, or nullptr if the skill index is invalid.
 // Returns "" if the skill is valid but its name was not loaded from skill.msg
 // (prevents null dereference at call sites passing the result to snprintf etc.).
-char* skillGetName(int skill)
+char* skillGetName(Skill skill)
 {
     if (!skillIsValid(skill)) {
         return nullptr;
@@ -859,7 +865,7 @@ char* skillGetName(int skill)
 // 0x4AABC0
 // Returns the description of the specified skill, or nullptr if invalid.
 // Returns "" if valid but description was not loaded.
-char* skillGetDescription(int skill)
+char* skillGetDescription(Skill skill)
 {
     if (!skillIsValid(skill)) {
         return nullptr;
@@ -868,19 +874,19 @@ char* skillGetDescription(int skill)
 }
 
 // 0x4AABE4
-char* skillGetAttributes(int skill)
+char* skillGetAttributes(Skill skill)
 {
     return skillIsValid(skill) ? gSkillDescriptions[skill].attributes : nullptr;
 }
 
 // 0x4AAC08
-int skillGetFrmId(int skill)
+int skillGetFrmId(Skill skill)
 {
     return skillIsValid(skill) ? gSkillDescriptions[skill].frmId : 0;
 }
 
 // 0x4AAC2C
-static void _show_skill_use_messages(Object* obj, int skill, Object* target, int successCount, int skillBonus)
+static void _show_skill_use_messages(Object* obj, Skill skill, Object* target, int successCount, int skillBonus)
 {
     if (obj != gDude) {
         return;
@@ -920,7 +926,7 @@ static void _show_skill_use_messages(Object* obj, int skill, Object* target, int
 
 // skill_use
 // 0x4AAD08
-int skillUse(Object* obj, Object* target, int skill, int skillBonus)
+int skillUse(Object* obj, Object* target, Skill skill, int skillBonus)
 {
     int hookResult = scriptHooks_UseSkill(obj, target, skill, skillBonus);
     if (hookResult != -1) {
@@ -1082,7 +1088,7 @@ int skillUse(Object* obj, Object* target, int skill, int skillBonus)
             paletteFadeTo(gPaletteBlack);
 
             if (critterGetBodyType(target) != BODY_TYPE_ROBOTIC && critterIsCrippled(target)) {
-                int flags[HEALABLE_DAMAGE_FLAGS_LENGTH];
+                Dam flags[HEALABLE_DAMAGE_FLAGS_LENGTH];
                 memcpy(flags, gHealableDamageFlags, sizeof(gHealableDamageFlags));
 
                 for (int index = 0; index < HEALABLE_DAMAGE_FLAGS_LENGTH; index++) {
@@ -1266,7 +1272,7 @@ int skillUse(Object* obj, Object* target, int skill, int skillBonus)
         }
 
         if (currentHp < maximumHp || critterIsCrippled(target)) {
-            int flags[REPAIRABLE_DAMAGE_FLAGS_LENGTH];
+            Dam flags[REPAIRABLE_DAMAGE_FLAGS_LENGTH];
             memcpy(flags, gRepairableDamageFlags, sizeof(gRepairableDamageFlags));
 
             paletteFadeTo(gPaletteBlack);
@@ -1456,7 +1462,7 @@ SkillStealResult skillsPerformStealing(Object* thief, Object* target, Object* it
         // -4% per item size
         stealModifier -= 4 * itemGetSize(item);
 
-        if (FID_TYPE(target->fid) == OBJ_TYPE_CRITTER) {
+        if (objectTypeFromFid(target->fid) == OBJ_TYPE_CRITTER) {
             // check facing: -25% if face to face
             if (_is_hit_from_front(thief, target)) {
                 stealModifier -= 25;
@@ -1514,7 +1520,7 @@ SkillStealResult skillsPerformStealing(Object* thief, Object* target, Object* it
         catchRoll = ROLL_SUCCESS;
     } else {
         int catchChance;
-        if (PID_TYPE(target->pid) == OBJ_TYPE_CRITTER) {
+        if (objectTypeFromPid(target->pid) == OBJ_TYPE_CRITTER) {
             catchChance = skillGetValue(target, SKILL_STEAL) - stealModifier;
         } else {
             catchChance = 30 - stealModifier;
@@ -1560,7 +1566,7 @@ SkillStealResult skillsPerformStealing(Object* thief, Object* target, Object* it
 }
 
 // 0x4ABDEC
-int skillGetGameDifficultyModifier(int skill)
+int skillGetGameDifficultyModifier(Skill skill)
 {
     switch (skill) {
     case SKILL_FIRST_AID:
@@ -1574,24 +1580,22 @@ int skillGetGameDifficultyModifier(int skill)
     case SKILL_SPEECH:
     case SKILL_BARTER:
     case SKILL_GAMBLING:
-    case SKILL_OUTDOORSMAN:
-        if (1) {
-            int gameDifficulty = settings.preferences.game_difficulty;
+    case SKILL_OUTDOORSMAN: {
+        int gameDifficulty = settings.preferences.game_difficulty;
 
-            if (gameDifficulty == GAME_DIFFICULTY_HARD) {
-                return -10;
-            } else if (gameDifficulty == GAME_DIFFICULTY_EASY) {
-                return 20;
-            }
+        if (gameDifficulty == GAME_DIFFICULTY_HARD) {
+            return -10;
+        } else if (gameDifficulty == GAME_DIFFICULTY_EASY) {
+            return 20;
         }
-        break;
     }
-
-    return 0;
+    default:
+        return 0;
+    }
 }
 
 // 0x4ABE44
-static int skillGetFreeUsageSlot(int skill)
+static int skillGetFreeUsageSlot(Skill skill)
 {
     for (int slot = 0; slot < SKILLS_MAX_USES_PER_DAY; slot++) {
         if (_timesSkillUsed[skill][slot] == 0) {
@@ -1609,7 +1613,7 @@ static int skillGetFreeUsageSlot(int skill)
 }
 
 // 0x4ABEB8
-int skillUpdateLastUse(int skill)
+int skillUpdateLastUse(Skill skill)
 {
     int slot = skillGetFreeUsageSlot(skill);
     if (slot == -1) {

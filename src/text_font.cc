@@ -8,6 +8,7 @@
 #include "memory.h"
 #include "platform_compat.h"
 #include "settings.h"
+#include "window_manager.h"
 
 #include <assert.h>
 
@@ -364,13 +365,13 @@ static void textFontDrawImpl(unsigned char* buf, const char* string, int length,
         return;
     }
 
-    if ((color & FONT_SHADOW) != 0) {
-        color &= ~FONT_SHADOW;
-        fontDrawText(buf + pitch + 1, string, length, pitch, _colorTable[0]);
+    if ((color & DRAW_TEXT_FLAG_SHADOWED) != 0) {
+        color &= ~DRAW_TEXT_FLAG_SHADOWED;
+        fontDrawText(buf + pitch + 1, string, length, pitch, COLOR_BLACK);
     }
 
     int monospacedCharacterWidth;
-    if ((color & FONT_MONO) != 0) {
+    if ((color & DRAW_TEXT_FLAG_MONOSPACED) != 0) {
         monospacedCharacterWidth = fontGetMonospacedCharacterWidth();
     }
 
@@ -384,7 +385,7 @@ static void textFontDrawImpl(unsigned char* buf, const char* string, int length,
             TextFontGlyph* glyph = &(gCurrentTextFontDescriptor->glyphs[ch]);
 
             unsigned char* end;
-            if ((color & FONT_MONO) != 0) {
+            if ((color & DRAW_TEXT_FLAG_MONOSPACED) != 0) {
                 end = ptr + monospacedCharacterWidth;
                 ptr += (monospacedCharacterWidth - gCurrentTextFontDescriptor->letterSpacing - glyph->width) / 2;
             } else {
@@ -419,7 +420,7 @@ static void textFontDrawImpl(unsigned char* buf, const char* string, int length,
         }
     }
 
-    if ((color & FONT_UNDERLINE) != 0) {
+    if ((color & DRAW_TEXT_FLAG_UNDERLINED) != 0) {
         // TODO: Probably additional -1 present, check.
         int length = ptr - buf;
         unsigned char* underlinePtr = buf + pitch * (gCurrentTextFontDescriptor->lineHeight - 1);

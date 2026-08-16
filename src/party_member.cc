@@ -38,14 +38,8 @@
 
 namespace fallout {
 
-// SFALL: Enable party members with level 6 protos to reach level 6.
-// CE: There are several party members who have 6 pids, but for unknown reason
-// the original code cap was 5. This fix affects:
-// - Dogmeat
-// - Goris
-// - Sulik
-// - Vik
-#define PARTY_MEMBER_MAX_LEVEL 6
+// SFALL: Increase the maximum party member level from vanilla's 5 to 10.
+#define PARTY_MEMBER_MAX_LEVEL 10
 
 typedef struct PartyMemberDescription {
     bool areaAttackMode[AREA_ATTACK_MODE_COUNT];
@@ -349,31 +343,31 @@ static int partyMemberGetDescription(Object* object, PartyMemberDescription** pa
 // 0x49425C partyMemberAISlotInit
 static void partyMemberDescriptionInit(PartyMemberDescription* partyMemberDescription)
 {
-    for (int index = 0; index < AREA_ATTACK_MODE_COUNT; index++) {
+    for (int index = AREA_ATTACK_MODE_FIRST; index < AREA_ATTACK_MODE_COUNT; index++) {
         partyMemberDescription->areaAttackMode[index] = 0;
     }
 
-    for (int index = 0; index < RUN_AWAY_MODE_COUNT; index++) {
+    for (int index = RUN_AWAY_MODE_FIRST; index < RUN_AWAY_MODE_COUNT; index++) {
         partyMemberDescription->runAwayMode[index] = 0;
     }
 
-    for (int index = 0; index < BEST_WEAPON_COUNT; index++) {
+    for (int index = BEST_WEAPON_FIRST; index < BEST_WEAPON_COUNT; index++) {
         partyMemberDescription->bestWeapon[index] = 0;
     }
 
-    for (int index = 0; index < DISTANCE_COUNT; index++) {
+    for (int index = DISTANCE_FIRST; index < DISTANCE_COUNT; index++) {
         partyMemberDescription->distanceMode[index] = 0;
     }
 
-    for (int index = 0; index < ATTACK_WHO_COUNT; index++) {
+    for (int index = ATTACK_WHO_FIRST; index < ATTACK_WHO_COUNT; index++) {
         partyMemberDescription->attackWho[index] = 0;
     }
 
-    for (int index = 0; index < CHEM_USE_COUNT; index++) {
+    for (int index = CHEM_USE_FIRST; index < CHEM_USE_COUNT; index++) {
         partyMemberDescription->chemUse[index] = 0;
     }
 
-    for (int index = 0; index < DISPOSITION_COUNT; index++) {
+    for (int index = DISPOSITION_FIRST; index < DISPOSITION_COUNT; index++) {
         partyMemberDescription->disposition[index] = 0;
     }
 
@@ -590,7 +584,7 @@ static int _partyMemberPrepLoadInstance(PartyMemberListItem* a1)
         return 0;
     }
 
-    if (PID_TYPE(obj->pid) == OBJ_TYPE_CRITTER) {
+    if (objectTypeFromPid(obj->pid) == OBJ_TYPE_CRITTER) {
         obj->data.critter.combat.whoHitMe = nullptr;
     }
 
@@ -637,7 +631,7 @@ static int _partyMemberPrepLoadInstance(PartyMemberListItem* a1)
 
     scriptRemove(script->sid);
 
-    if (PID_TYPE(obj->pid) == OBJ_TYPE_CRITTER) {
+    if (objectTypeFromPid(obj->pid) == OBJ_TYPE_CRITTER) {
         _dude_stand(obj, obj->rotation, -1);
     }
 
@@ -692,7 +686,7 @@ static int _partyMemberRecoverLoadInstance(PartyMemberListItem* a1)
     }
 
     int scriptType = SCRIPT_TYPE_CRITTER;
-    if (PID_TYPE(a1->object->pid) != OBJ_TYPE_CRITTER) {
+    if (objectTypeFromPid(a1->object->pid) != OBJ_TYPE_CRITTER) {
         scriptType = SCRIPT_TYPE_ITEM;
     }
 
@@ -737,15 +731,10 @@ static int _partyMemberRecoverLoadInstance(PartyMemberListItem* a1)
 // 0x494BBC partyMemberLoad
 int partyMembersLoad(File* stream)
 {
+    int result = -1;
+
     int* partyMemberObjectIds = (int*)internal_malloc(sizeof(*partyMemberObjectIds) * (gPartyMemberDescriptionsLength + 20));
     if (partyMemberObjectIds == nullptr) {
-        return -1;
-    }
-
-    // FIXME: partyMemberObjectIds is never free'd in this function, obviously memory leak.
-
-    if (fileReadInt32(stream, &gPartyMembersLength) == -1) {
-        internal_free(partyMemberObjectIds);
         return -1;
     }
 
@@ -755,26 +744,24 @@ int partyMembersLoad(File* stream)
     // corrupt save (e.g. party.txt shrank between save and load) would write
     // OOB. Clamp to the buffer capacity; reject negative lengths (which would
     // also make the vector reserve() in get_all_party_members_objects throw
-    // std::bad_alloc).
+    // std::bad_alloc). Declared before the first `goto cleanup` so the C++
+    // jump-over-initialization rule is satisfied.
     int partyMembersCapacity = gPartyMemberDescriptionsLength + 20;
+
+    if (fileReadInt32(stream, &gPartyMembersLength) == -1) goto cleanup;
+
     if (gPartyMembersLength < 0 || gPartyMembersLength > partyMembersCapacity) {
         debugPrint("partyMembersLoad: clamping invalid party member count %d to %d\n", gPartyMembersLength, partyMembersCapacity);
         gPartyMembersLength = partyMembersCapacity;
     }
 
-    if (fileReadInt32(stream, &_partyMemberItemCount) == -1) {
-        internal_free(partyMemberObjectIds);
-        return -1;
-    }
+    if (fileReadInt32(stream, &_partyMemberItemCount) == -1) goto cleanup;
 
     gPartyMembers->object = gDude;
 
     if (gPartyMembersLength != 0) {
         for (int index = 1; index < gPartyMembersLength; index++) {
-            if (fileReadInt32(stream, &(partyMemberObjectIds[index])) == -1) {
-                internal_free(partyMemberObjectIds);
-                return -1;
-            }
+            if (fileReadInt32(stream, &(partyMemberObjectIds[index])) == -1) goto cleanup;
         }
 
         for (int index = 1; index < gPartyMembersLength; index++) {
@@ -804,8 +791,7 @@ int partyMembersLoad(File* stream)
         }
 
         if (_partyMemberUnPrepSave() == -1) {
-            internal_free(partyMemberObjectIds);
-            return -1;
+            goto cleanup;
         }
     }
 
@@ -814,22 +800,16 @@ int partyMembersLoad(File* stream)
     for (int index = 1; index < gPartyMemberDescriptionsLength; index++) {
         PartyMemberLevelUpInfo* levelUpInfo = &(_partyMemberLevelUpInfoList[index]);
 
-        if (fileReadInt32(stream, &(levelUpInfo->level)) == -1) {
-            internal_free(partyMemberObjectIds);
-            return -1;
-        }
-        if (fileReadInt32(stream, &(levelUpInfo->numLevelUps)) == -1) {
-            internal_free(partyMemberObjectIds);
-            return -1;
-        }
-        if (fileReadInt32(stream, &(levelUpInfo->isEarly)) == -1) {
-            internal_free(partyMemberObjectIds);
-            return -1;
-        }
+        if (fileReadInt32(stream, &(levelUpInfo->level)) == -1) goto cleanup;
+        if (fileReadInt32(stream, &(levelUpInfo->numLevelUps)) == -1) goto cleanup;
+        if (fileReadInt32(stream, &(levelUpInfo->isEarly)) == -1) goto cleanup;
     }
 
+    result = 0;
+
+cleanup:
     internal_free(partyMemberObjectIds);
-    return 0;
+    return result;
 }
 
 // 0x494D7C partyMemberClear
@@ -854,16 +834,16 @@ void _partyMemberClear()
 // 0x494DD0 partyMemberSyncPosition
 int _partyMemberSyncPosition()
 {
-    int clockwiseRotation = (gDude->rotation + 2) % ROTATION_COUNT;
-    int counterClockwiseRotation = (gDude->rotation + 4) % ROTATION_COUNT;
+    Rotation clockwiseRotation = (gDude->rotation + 2) % ROTATION_COUNT;
+    Rotation counterClockwiseRotation = (gDude->rotation + 4) % ROTATION_COUNT;
 
     int n = 0;
     int distance = 2;
     for (int index = 1; index < gPartyMembersLength; index++) {
         PartyMemberListItem* partyMember = &(gPartyMembers[index]);
         Object* partyMemberObj = partyMember->object;
-        if ((partyMemberObj->flags & OBJECT_HIDDEN) == 0 && PID_TYPE(partyMemberObj->pid) == OBJ_TYPE_CRITTER) {
-            int rotation;
+        if ((partyMemberObj->flags & OBJECT_HIDDEN) == OBJECT_NONE && objectTypeFromPid(partyMemberObj->pid) == OBJ_TYPE_CRITTER) {
+            Rotation rotation;
             if ((n % 2) != 0) {
                 rotation = clockwiseRotation;
             } else {
@@ -898,7 +878,7 @@ int _partyMemberRestingHeal(int hours)
     if (gFallout1Behavior) {
         for (int index = 0; index < gPartyMembersLength; index++) {
             PartyMemberListItem* partyMember = &(gPartyMembers[index]);
-            if (PID_TYPE(partyMember->object->pid) != OBJ_TYPE_CRITTER) continue;
+            if (objectTypeFromPid(partyMember->object->pid) != OBJ_TYPE_CRITTER) continue;
             // I2-044: Skip dead, hidden, and robot party members during
             // rest healing, matching partyIsAnyoneCanBeHealedByRest pattern.
             if (critterIsDead(partyMember->object)) continue;
@@ -922,7 +902,7 @@ int _partyMemberRestingHeal(int hours)
 
     for (int index = 0; index < gPartyMembersLength; index++) {
         PartyMemberListItem* partyMember = &(gPartyMembers[index]);
-        if (PID_TYPE(partyMember->object->pid) != OBJ_TYPE_CRITTER) continue;
+        if (objectTypeFromPid(partyMember->object->pid) != OBJ_TYPE_CRITTER) continue;
         // I2-044: Skip dead, hidden, and robot party members during
         // rest healing, matching partyIsAnyoneCanBeHealedByRest pattern.
         if (critterIsDead(partyMember->object)) continue;
@@ -1021,7 +1001,7 @@ int _getPartyMemberCount()
     for (int index = 1; index < gPartyMembersLength; index++) {
         Object* object = gPartyMembers[index].object;
 
-        if (PID_TYPE(object->pid) != OBJ_TYPE_CRITTER || critterIsDead(object) || (object->flags & OBJECT_HIDDEN) != 0) {
+        if (objectTypeFromPid(object->pid) != OBJ_TYPE_CRITTER || critterIsDead(object) || (object->flags & OBJECT_HIDDEN) != OBJECT_NONE) {
             count--;
         }
     }
@@ -1039,7 +1019,7 @@ int _getPartyMemberCount(int filterFlag)
     for (int index = 1; index < gPartyMembersLength; index++) {
         Object* object = gPartyMembers[index].object;
 
-        if (PID_TYPE(object->pid) != OBJ_TYPE_CRITTER || critterIsDead(object) || (object->flags & OBJECT_HIDDEN) != 0) {
+        if (objectTypeFromPid(object->pid) != OBJ_TYPE_CRITTER || critterIsDead(object) || (object->flags & OBJECT_HIDDEN) != 0) {
             continue;
         }
 
@@ -1289,20 +1269,20 @@ static int _partyMemberClearItemList()
 // Returns best skill of the specified party member.
 //
 // 0x495520 partyMemberSkill
-int partyMemberGetBestSkill(Object* object)
+Skill partyMemberGetBestSkill(Object* object)
 {
-    int bestSkill = SKILL_SMALL_GUNS;
+    Skill bestSkill = SKILL_SMALL_GUNS;
 
     if (object == nullptr) {
         return bestSkill;
     }
 
-    if (PID_TYPE(object->pid) != OBJ_TYPE_CRITTER) {
+    if (objectTypeFromPid(object->pid) != OBJ_TYPE_CRITTER) {
         return bestSkill;
     }
 
     int bestValue = 0;
-    for (int skill = 0; skill < SKILL_COUNT; skill++) {
+    for (Skill skill = SKILL_FIRST; skill < SKILL_COUNT; skill++) {
         int value = skillGetValue(object, skill);
         if (value > bestValue) {
             bestSkill = skill;
@@ -1316,14 +1296,14 @@ int partyMemberGetBestSkill(Object* object)
 // Returns party member with highest skill level.
 //
 // 0x495560 partyMemberWithHighestSkill
-Object* partyMemberGetBestInSkill(int skill)
+Object* partyMemberGetBestInSkill(Skill skill)
 {
     int bestValue = 0;
     Object* bestPartyMember = nullptr;
 
     for (int index = 0; index < gPartyMembersLength; index++) {
         Object* object = gPartyMembers[index].object;
-        if ((object->flags & OBJECT_HIDDEN) == 0 && PID_TYPE(object->pid) == OBJ_TYPE_CRITTER) {
+        if ((object->flags & OBJECT_HIDDEN) == OBJECT_NONE && objectTypeFromPid(object->pid) == OBJ_TYPE_CRITTER) {
             int value = skillGetValue(object, skill);
             if (value > bestValue) {
                 bestValue = value;
@@ -1338,13 +1318,13 @@ Object* partyMemberGetBestInSkill(int skill)
 // Returns highest skill level in party.
 //
 // 0x4955C8 partyMemberHighestSkillLevel
-int partyGetBestSkillValue(int skill)
+int partyGetBestSkillValue(Skill skill)
 {
     int bestValue = 0;
 
     for (int index = 0; index < gPartyMembersLength; index++) {
         Object* object = gPartyMembers[index].object;
-        if ((object->flags & OBJECT_HIDDEN) == 0 && PID_TYPE(object->pid) == OBJ_TYPE_CRITTER) {
+        if ((object->flags & OBJECT_HIDDEN) == OBJECT_NONE && objectTypeFromPid(object->pid) == OBJ_TYPE_CRITTER) {
             int value = skillGetValue(object, skill);
             if (value > bestValue) {
                 bestValue = value;
@@ -1364,6 +1344,10 @@ static int partyFixMultipleMembers()
     int critterCount = 0;
     Object* obj = objectFindFirst();
     while (obj != nullptr) {
+        if (objectTypeFromPid(obj->pid) == OBJ_TYPE_CRITTER) {
+            critterCount++;
+        }
+
         bool isPartyMember = false;
         for (int index = 1; index < gPartyMemberDescriptionsLength; index++) {
             if (obj->pid == gPartyMemberPids[index]) {
@@ -1448,17 +1432,17 @@ void _partyMemberSaveProtos()
 }
 
 // 0x4958B0 partyMemberHasAIDisposition
-bool partyMemberSupportsDisposition(Object* critter, int disposition)
+bool partyMemberSupportsDisposition(Object* critter, Disposition disposition)
 {
     if (critter == nullptr) {
         return false;
     }
 
-    if (PID_TYPE(critter->pid) != OBJ_TYPE_CRITTER) {
+    if (objectTypeFromPid(critter->pid) != OBJ_TYPE_CRITTER) {
         return false;
     }
 
-    if (disposition == -1 || disposition > 5) {
+    if (!dispositionIsValid(disposition)) {
         return false;
     }
 
@@ -1471,17 +1455,17 @@ bool partyMemberSupportsDisposition(Object* critter, int disposition)
 }
 
 // 0x495920 partyMemberHasAIBurstValue
-bool partyMemberSupportsAreaAttackMode(Object* object, int areaAttackMode)
+bool partyMemberSupportsAreaAttackMode(Object* object, AreaAttackMode areaAttackMode)
 {
     if (object == nullptr) {
         return false;
     }
 
-    if (PID_TYPE(object->pid) != OBJ_TYPE_CRITTER) {
+    if (objectTypeFromPid(object->pid) != OBJ_TYPE_CRITTER) {
         return false;
     }
 
-    if (areaAttackMode >= AREA_ATTACK_MODE_COUNT) {
+    if (!areaAttackModeIsValid(areaAttackMode)) {
         return false;
     }
 
@@ -1494,17 +1478,17 @@ bool partyMemberSupportsAreaAttackMode(Object* object, int areaAttackMode)
 }
 
 // 0x495980 partyMemberHasAIRunAwayValue
-bool partyMemberSupportsRunAwayMode(Object* object, int runAwayMode)
+bool partyMemberSupportsRunAwayMode(Object* object, RunAwayMode runAwayMode)
 {
     if (object == nullptr) {
         return false;
     }
 
-    if (PID_TYPE(object->pid) != OBJ_TYPE_CRITTER) {
+    if (objectTypeFromPid(object->pid) != OBJ_TYPE_CRITTER) {
         return false;
     }
 
-    if (runAwayMode >= RUN_AWAY_MODE_COUNT) {
+    if (!runAwayModeIsValid(runAwayMode)) {
         return false;
     }
 
@@ -1517,17 +1501,17 @@ bool partyMemberSupportsRunAwayMode(Object* object, int runAwayMode)
 }
 
 // 0x4959E0 partyMemberHasAIWeaponPrefValue
-bool partyMemberSupportsBestWeapon(Object* object, int bestWeapon)
+bool partyMemberSupportsBestWeapon(Object* object, BestWeapon bestWeapon)
 {
     if (object == nullptr) {
         return false;
     }
 
-    if (PID_TYPE(object->pid) != OBJ_TYPE_CRITTER) {
+    if (objectTypeFromPid(object->pid) != OBJ_TYPE_CRITTER) {
         return false;
     }
 
-    if (bestWeapon >= BEST_WEAPON_COUNT) {
+    if (!bestWeaponIsValid(bestWeapon)) {
         return false;
     }
 
@@ -1540,17 +1524,17 @@ bool partyMemberSupportsBestWeapon(Object* object, int bestWeapon)
 }
 
 // 0x495A40 partyMemberHasAIDistancePrefValue
-bool partyMemberSupportsDistance(Object* object, int distanceMode)
+bool partyMemberSupportsDistance(Object* object, DistanceMode distanceMode)
 {
     if (object == nullptr) {
         return false;
     }
 
-    if (PID_TYPE(object->pid) != OBJ_TYPE_CRITTER) {
+    if (objectTypeFromPid(object->pid) != OBJ_TYPE_CRITTER) {
         return false;
     }
 
-    if (distanceMode >= DISTANCE_COUNT) {
+    if (!distanceModeIsValid(distanceMode)) {
         return false;
     }
 
@@ -1563,17 +1547,17 @@ bool partyMemberSupportsDistance(Object* object, int distanceMode)
 }
 
 // 0x495AA0 partyMemberHasAIAttackWhoValue
-bool partyMemberSupportsAttackWho(Object* object, int attackWho)
+bool partyMemberSupportsAttackWho(Object* object, AttackWho attackWho)
 {
     if (object == nullptr) {
         return false;
     }
 
-    if (PID_TYPE(object->pid) != OBJ_TYPE_CRITTER) {
+    if (objectTypeFromPid(object->pid) != OBJ_TYPE_CRITTER) {
         return false;
     }
 
-    if (attackWho >= ATTACK_WHO_COUNT) {
+    if (!attackWhoIsValid(attackWho)) {
         return false;
     }
 
@@ -1586,17 +1570,17 @@ bool partyMemberSupportsAttackWho(Object* object, int attackWho)
 }
 
 // 0x495B00 partyMemberHasAIChemUseValue
-bool partyMemberSupportsChemUse(Object* object, int chemUse)
+bool partyMemberSupportsChemUse(Object* object, ChemUse chemUse)
 {
     if (object == nullptr) {
         return false;
     }
 
-    if (PID_TYPE(object->pid) != OBJ_TYPE_CRITTER) {
+    if (objectTypeFromPid(object->pid) != OBJ_TYPE_CRITTER) {
         return false;
     }
 
-    if (chemUse >= CHEM_USE_COUNT) {
+    if (!chemUseIsValid(chemUse)) {
         return false;
     }
 
@@ -1645,7 +1629,7 @@ int _partyMemberIncLevels(int pid)
             continue;
         }
 
-        if (PID_TYPE(obj->pid) != OBJ_TYPE_CRITTER) {
+        if (objectTypeFromPid(obj->pid) != OBJ_TYPE_CRITTER) {
             continue;
         }
 
@@ -1718,13 +1702,16 @@ int _partyMemberIncLevels(int pid)
             continue;
         }
 
-        levelUpInfo->level++;
-        if (levelMod != 0) {
-            levelUpInfo->isEarly = 1;
+        int stagePid = memberDescription->level_pids[levelUpInfo->level];
+        int nextLevel = levelUpInfo->level + 1;
+
+        if (_partyMemberCopyLevelInfo(obj, stagePid) == -1) {
+            return -1;
         }
 
-        if (_partyMemberCopyLevelInfo(obj, memberDescription->level_pids[levelUpInfo->level]) == -1) {
-            return -1;
+        levelUpInfo->level = nextLevel;
+        if (levelMod != 0) {
+            levelUpInfo->isEarly = 1;
         }
 
         name = critterGetName(obj);
@@ -1740,7 +1727,7 @@ int _partyMemberIncLevels(int pid)
         if (messageListGetItem(&gMiscMessageList, &msg)) {
             name = critterGetName(obj);
             snprintf(str, sizeof(str), msg.text, name);
-            textObjectAdd(obj, str, 101, _colorTable[0x7FFF], _colorTable[0], &levelUpMessageRect);
+            textObjectAdd(obj, str, 101, COLOR_WHITE, COLOR_BLACK, &levelUpMessageRect);
             tileWindowRefreshRect(&levelUpMessageRect, obj->elevation);
         }
     }
@@ -1759,6 +1746,11 @@ static int _partyMemberCopyLevelInfo(Object* critter, int stagePid)
         return -1;
     }
 
+    if (objectTypeFromPid(stagePid) != OBJ_TYPE_CRITTER) {
+        debugPrint("\npartyMemberCopyLevelInfo: stage pid %d is not a critter", stagePid);
+        return -1;
+    }
+
     Proto* proto;
     if (protoGetProto(critter->pid, &proto) == -1) {
         return -1;
@@ -1770,24 +1762,24 @@ static int _partyMemberCopyLevelInfo(Object* critter, int stagePid)
     }
 
     Object* item2 = critterGetItem2(critter);
-    inventoryUnequipFunc(critter, 1, 0);
+    inventoryUnequipFunc(critter, HAND_RIGHT, 0);
 
     Object* armor = critterGetArmor(critter);
     adjustCritterStatsOnArmorChange(critter, armor, nullptr);
-    itemRemove(critter, armor, 1);
+    itemRemoveQuietly(critter, armor, 1);
 
     int maxHp = critterGetStat(critter, STAT_MAXIMUM_HIT_POINTS);
     critterAdjustHitPoints(critter, maxHp);
 
-    for (int stat = 0; stat < SPECIAL_STAT_COUNT; stat++) {
+    for (Stat stat = STAT_FIRST; stat < SPECIAL_STAT_COUNT; stat++) {
         proto->critter.data.baseStats[stat] = stageProto->critter.data.baseStats[stat];
     }
 
-    for (int stat = 0; stat < SPECIAL_STAT_COUNT; stat++) {
+    for (Stat stat = STAT_FIRST; stat < SPECIAL_STAT_COUNT; stat++) {
         proto->critter.data.bonusStats[stat] = stageProto->critter.data.bonusStats[stat];
     }
 
-    for (int skill = 0; skill < SKILL_COUNT; skill++) {
+    for (Skill skill = SKILL_FIRST; skill < SKILL_COUNT; skill++) {
         proto->critter.data.skills[skill] = stageProto->critter.data.skills[skill];
     }
 
@@ -1797,7 +1789,7 @@ static int _partyMemberCopyLevelInfo(Object* critter, int stagePid)
 
     if (armor != nullptr) {
         itemAdd(critter, armor, 1);
-        inventoryEquip(critter, armor, 0);
+        inventoryEquip(critter, armor, HAND_LEFT);
     }
 
     if (item2 != nullptr) {
@@ -1824,9 +1816,9 @@ bool partyIsAnyoneCanBeHealedByRest()
         PartyMemberListItem* ptr = &(gPartyMembers[index]);
         Object* object = ptr->object;
 
-        if (PID_TYPE(object->pid) != OBJ_TYPE_CRITTER) continue;
+        if (objectTypeFromPid(object->pid) != OBJ_TYPE_CRITTER) continue;
         if (critterIsDead(object)) continue;
-        if ((object->flags & OBJECT_HIDDEN) != 0) continue;
+        if ((object->flags & OBJECT_HIDDEN) != OBJECT_NONE) continue;
         if (critterGetKillType(object) == KILL_TYPE_ROBOT) continue;
 
         int currentHp = critterGetHitPoints(object);
@@ -1851,9 +1843,9 @@ int partyGetMaxWoundToHealByRest()
         PartyMemberListItem* ptr = &(gPartyMembers[index]);
         Object* object = ptr->object;
 
-        if (PID_TYPE(object->pid) != OBJ_TYPE_CRITTER) continue;
+        if (objectTypeFromPid(object->pid) != OBJ_TYPE_CRITTER) continue;
         if (critterIsDead(object)) continue;
-        if ((object->flags & OBJECT_HIDDEN) != 0) continue;
+        if ((object->flags & OBJECT_HIDDEN) != OBJECT_NONE) continue;
         if (critterGetKillType(object) == KILL_TYPE_ROBOT) continue;
 
         int currentHp = critterGetHitPoints(object);
@@ -1876,9 +1868,9 @@ std::vector<Object*> get_all_party_members_objects(bool include_hidden)
     for (int index = 0; index < gPartyMembersLength; index++) {
         auto object = gPartyMembers[index].object;
         if (include_hidden
-            || (PID_TYPE(object->pid) == OBJ_TYPE_CRITTER
+            || (objectTypeFromPid(object->pid) == OBJ_TYPE_CRITTER
                 && !critterIsDead(object)
-                && (object->flags & OBJECT_HIDDEN) == 0)) {
+                && (object->flags & OBJECT_HIDDEN) == OBJECT_NONE)) {
             value.push_back(object);
         }
     }

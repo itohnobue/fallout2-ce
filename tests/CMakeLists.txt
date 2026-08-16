@@ -645,11 +645,13 @@ add_test(NAME test_state_leak_comprehensive COMMAND test_state_leak_comprehensiv
 # ---- Test: hooks comprehensive (H-02: 74 TEST_CASEs) ----
 # Header-level test — validates HookType mechanics, dispatch, handlers.
 # Does not link sfall_script_hooks.cc.
+# SDL2: sfall_script_hooks.h -> interpreter.h -> game.h -> touch.h -> SDL.h
+# (upstream sync2 added game.h to interpreter.h's include chain).
 add_executable(test_hooks_comprehensive
     test_hooks_comprehensive.cc
 )
 target_include_directories(test_hooks_comprehensive PRIVATE "${CMAKE_SOURCE_DIR}/src")
-target_link_libraries(test_hooks_comprehensive PRIVATE doctest)
+target_link_libraries(test_hooks_comprehensive PRIVATE doctest ${SDL2_LIBRARIES})
 add_test(NAME test_hooks_comprehensive COMMAND test_hooks_comprehensive)
 
 # ---- Test: hooks new types (H-02) ----
@@ -659,7 +661,7 @@ add_executable(test_hooks_new_types
     test_hooks_new_types.cc
 )
 target_include_directories(test_hooks_new_types PRIVATE "${CMAKE_SOURCE_DIR}/src")
-target_link_libraries(test_hooks_new_types PRIVATE doctest)
+target_link_libraries(test_hooks_new_types PRIVATE doctest ${SDL2_LIBRARIES})
 add_test(NAME test_hooks_new_types COMMAND test_hooks_new_types)
 
 # ---- Test: hooks return values (H-02) ----
@@ -669,7 +671,7 @@ add_executable(test_hooks_return_values
     test_hooks_return_values.cc
 )
 target_include_directories(test_hooks_return_values PRIVATE "${CMAKE_SOURCE_DIR}/src")
-target_link_libraries(test_hooks_return_values PRIVATE doctest)
+target_link_libraries(test_hooks_return_values PRIVATE doctest ${SDL2_LIBRARIES})
 add_test(NAME test_hooks_return_values COMMAND test_hooks_return_values)
 
 # ---- Test: opcodes ext animation (H-04) ----

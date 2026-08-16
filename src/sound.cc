@@ -1313,7 +1313,7 @@ void soundDeleteInternal(Sound* sound)
 
     if (sound->soundBuffer != -1) {
         // NOTE: Uninline.
-        if (!soundIsPlaying(sound)) {
+        if (soundIsPlaying(sound)) {
             soundStop(sound);
         }
 

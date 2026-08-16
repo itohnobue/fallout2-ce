@@ -20,8 +20,9 @@ void contentConfigInit()
         return;
     }
 
-    // Try to migrate some settings from sfall.
+    // Try to migrate some settings from legacy config files.
     contentConfigTryMigrateFromSfall(kConfigPatchPath);
+    contentConfigTryMigrateFromF2Res(kConfigPatchPath);
 
     if (!configInit(&gContentConfig)) {
         debugPrint("\nCONTENT CONFIG: Failed to initialize content config dictionary!\n");
@@ -113,18 +114,28 @@ static const SfallContentMapping kSfallContentMappings[] = {
     { "Misc", "DisableHorrigan", CONTENT_CONFIG_WORLDMAP_SECTION, "disable_horrigan" },
     { "Misc", "CityRepsList", CONTENT_CONFIG_WORLDMAP_SECTION, "city_reputation_list" },
     { "Interface", "WorldMapTravelMarkers", CONTENT_CONFIG_WORLDMAP_SECTION, "trail_markers" },
-    { "Misc", "StartXPos", CONTENT_CONFIG_WORLDMAP_SECTION, "start_x_pos" },
-    { "Misc", "StartYPos", CONTENT_CONFIG_WORLDMAP_SECTION, "start_y_pos" },
-    // P-19: ViewXPos/ViewYPos/WorldMapSlots migration rows removed — the
-    // targets (worldmap view_x_pos/view_y_pos/encounter_slots) have zero
-    // consumers anywhere in src/ (verified by grep) and the WorldMapSlots
-    // target semantically mismatches sfall's WorldMapSlots (cities-list
-    // scroll height). WorldMapSlots is now served by the gSfallConfig
-    // default (21, H-06) via the op_get_ini_setting fallback tier.
-    { "Misc", "ElevatorsFile", CONTENT_CONFIG_WORLDMAP_SECTION, "elevators_file" },
-    { "Misc", "PremadePaths", CONTENT_CONFIG_CHARACTERS_SECTION, "premade_paths" },
-    { "Misc", "PremadeFIDs", CONTENT_CONFIG_CHARACTERS_SECTION, "premade_fids" },
-    { "Misc", "ExtraGameMsgFileList", CONTENT_CONFIG_TEXT_SECTION, "extra_msg_file_list" },
+     { "Misc", "StartXPos", CONTENT_CONFIG_WORLDMAP_SECTION, "start_x_pos" },
+     { "Misc", "StartYPos", CONTENT_CONFIG_WORLDMAP_SECTION, "start_y_pos" },
+     // P-19: ViewXPos/ViewYPos/WorldMapSlots migration rows removed — the
+     // targets (worldmap view_x_pos/view_y_pos/encounter_slots) have zero
+     // consumers anywhere in src/ (verified by grep) and the WorldMapSlots
+     // target semantically mismatches sfall's WorldMapSlots (cities-list
+     // scroll height). WorldMapSlots is now served by the gSfallConfig
+     // default (21, H-06) via the op_get_ini_setting fallback tier.
+     // Upstream [start] worldmap_view_x/worldmap_view_y targets ARE consumed
+     // (wmSetStartWorldView in worldmap.cc), so those are mapped below.
+     { "Misc", "ViewXPos", CONTENT_CONFIG_START_SECTION, "worldmap_view_x" },
+     { "Misc", "ViewYPos", CONTENT_CONFIG_START_SECTION, "worldmap_view_y" },
+     { "Misc", "ElevatorsFile", CONTENT_CONFIG_WORLDMAP_SECTION, "elevators_file" },
+     { "Misc", "PremadePaths", CONTENT_CONFIG_CHARACTERS_SECTION, "premade_paths" },
+     { "Misc", "PremadeFIDs", CONTENT_CONFIG_CHARACTERS_SECTION, "premade_fids" },
+     { "Misc", "ExtraGameMsgFileList", CONTENT_CONFIG_TEXT_SECTION, "extra_msg_file_list" },
+     // Upstream sync additions (consumers exist in src/).
+     { "Misc", "DisableSpecialMapIDs", CONTENT_CONFIG_MAPS_SECTION, "disable_special_map_ids" },
+     { "Misc", "InventoryApCost", CONTENT_CONFIG_COMBAT_SECTION, "inventory_ap_cost" },
+     { "Misc", "QuickPocketsApCostReduction", CONTENT_CONFIG_COMBAT_SECTION, "quick_pockets_ap_cost_reduction" },
+     { "Interface", "WorldMapTerrainInfo", CONTENT_CONFIG_WORLDMAP_SECTION, "terrain_info" },
+     { "Misc", "XPTable", CONTENT_CONFIG_STATS_SECTION, "xp_table" },
 };
 
 // SYNC WARNING: kSfallContentMappings MUST be kept synchronized with

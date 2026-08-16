@@ -696,7 +696,7 @@ void sfall_kb_clear_synthetic_key_events()
 
 int sfall_kb_handle_key_pressed(int sdlScanCode, bool pressed, SDL_Keycode keysym)
 {
-    if (!gGameLoaded) return SDL_SCANCODE_UNKNOWN;
+    if (!gGameLoaded) return -1;
 
     SDL_Scancode scanCode = static_cast<SDL_Scancode>(sdlScanCode);
     // F-03 (FIXED): HOOK_KEYPRESS argument order per sfall convention:
@@ -717,7 +717,7 @@ int sfall_kb_handle_key_pressed(int sdlScanCode, bool pressed, SDL_Keycode keysy
     hook.call();
 
     if (hook.numReturnValues() <= 0) {
-        return SDL_SCANCODE_UNKNOWN;
+        return -1;
     }
 
     int overrideDxCode = hook.getReturnValueAt(0).asInt();

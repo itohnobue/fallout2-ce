@@ -168,9 +168,8 @@ int lipsStart()
             break;
         }
 
-        v2++;
-
         gLipsCurrentPhoneme = gLipsData.phonemes[v2];
+        v2++;
     }
 
     int speechVolume = speechGetVolume();

@@ -26,15 +26,19 @@ int reactionSetValue(Object* critter, int value)
 }
 
 // 0x4A29E8 reaction_to_level
-int reactionTranslateValue(int value)
+NpcReaction reactionTranslateValue(int value)
 {
+    NpcReaction reaction;
+
+    // Original had several redundant thresholds that all mapped to "BAD"
     if (value > goodReactionThreshold) {
-        return NPC_REACTION_GOOD;
+        reaction = NPC_REACTION_GOOD;
     } else if (value > neutralReactionThreshold) {
-        return NPC_REACTION_NEUTRAL;
+        reaction = NPC_REACTION_NEUTRAL;
     } else {
-        return NPC_REACTION_BAD;
+        reaction = NPC_REACTION_BAD;
     }
+    return reaction;
 }
 
 void reactionSetThresholds(int neutralThreshold, int goodThreshold)

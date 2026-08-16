@@ -1,5 +1,6 @@
 #include "sfall_callbacks.h"
 
+#include "combat.h"
 #include "content_config.h"
 #include "display_monitor.h"
 #include "game_dialog.h"
@@ -25,6 +26,7 @@ void sfallOnBeforeGameInit()
 
 void sfallOnGameInit()
 {
+    inventoryResetInvenApCost();
     return;
 }
 
@@ -42,6 +44,7 @@ void sfallOnGameExit()
 void sfallOnGameReset()
 {
     inventoryResetInvenApCost();
+    combatResetFo1HitChance();
     gameDialogResetPartyMemberCcMsgIds();
     reactionResetThresholds();
     scriptSoundReset();
@@ -109,8 +112,8 @@ void sfallOnAfterGameStarted()
     // Refresh item art after load, which calls the CALCAPCOST hook if present to
     // display the correct AP cost.
     if (gInterfaceBarWindow != -1) {
-        int leftItemAction;
-        int rightItemAction;
+        InterfaceItemAction leftItemAction;
+        InterfaceItemAction rightItemAction;
         interfaceGetItemActions(&leftItemAction, &rightItemAction);
         interfaceUpdateItems(false, leftItemAction, rightItemAction);
     }

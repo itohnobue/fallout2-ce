@@ -17,6 +17,8 @@ void pipboyReset();
 int pipboySave(File* stream);
 int pipboyLoad(File* stream);
 int pipboyGetWindow();
+bool pipboyRestOptionMsgsSetBase(int baseMessageId);
+bool pipboyRestOptionSet(int restOption, int value);
 
 // f7367f4: rest_option customization (rest_option_msgs / set_rest_option metarules).
 bool pipboyRestOptionMsgsSetBase(int baseMessageId);

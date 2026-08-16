@@ -58,8 +58,721 @@
 #include "worldmap.h"
 
 #include <assert.h>
+#include <cstddef>
 
 namespace fallout {
+
+namespace {
+
+    // these were real struct offsets in vanilla; now we use them as an enum of field ids
+    enum class ObjectDataField : int {
+        Id = 0x00,
+        TileNum = 0x04,
+        CurrFrm = 0x18,
+        Rotation = 0x1C,
+        Fid = 0x20,
+        Flags = 0x24,
+        Elevation = 0x28,
+        Inventory = 0x2C,
+        MiscFlags = 0x38,
+        CurCharges = 0x3C,
+        CombatState = 0x3C,
+        CurActionPoint = 0x40,
+        DamageFlags = 0x44,
+        DamageLastTurn = 0x48,
+        WhoHitMe = 0x54,
+        CritterHp = 0x58,
+        Pid = 0x64,
+        Cid = 0x68,
+        LightDistance = 0x6C,
+        LightIntensity = 0x70,
+        Sid = 0x78,
+        ScriptIndex = 0x80,
+    };
+
+    enum class AttackDataField : int {
+        Source = 0x00,
+        HitMode = 0x04,
+        Weapon = 0x08,
+        Unused = 0x0C,
+        DamageSource = 0x10,
+        FlagsSource = 0x14,
+        Rounds = 0x18,
+        Message = 0x1C,
+        Target = 0x20,
+        BodyPart = 0x28,
+        DamageTarget = 0x2C,
+        FlagsTarget = 0x30,
+        KnockbackValue = 0x34,
+        MainTarget = 0x38,
+        AroundNumber = 0x3C,
+        Target1 = 0x40,
+        Target2 = 0x44,
+        Target3 = 0x48,
+        Target4 = 0x4C,
+        Target5 = 0x50,
+        Target6 = 0x54,
+        BodyPart1 = 0x58,
+        BodyPart2 = 0x5C,
+        BodyPart3 = 0x60,
+        BodyPart4 = 0x64,
+        BodyPart5 = 0x68,
+        BodyPart6 = 0x6C,
+        DamageTarget1 = 0x70,
+        DamageTarget2 = 0x74,
+        DamageTarget3 = 0x78,
+        DamageTarget4 = 0x7C,
+        DamageTarget5 = 0x80,
+        DamageTarget6 = 0x84,
+        FlagsTarget1 = 0x88,
+        FlagsTarget2 = 0x8C,
+        FlagsTarget3 = 0x90,
+        FlagsTarget4 = 0x94,
+        FlagsTarget5 = 0x98,
+        FlagsTarget6 = 0x9C,
+        KnockbackValue1 = 0xA0,
+        KnockbackValue2 = 0xA4,
+        KnockbackValue3 = 0xA8,
+        KnockbackValue4 = 0xAC,
+        KnockbackValue5 = 0xB0,
+        KnockbackValue6 = 0xB4,
+    };
+
+    // this applies to Attack* arrays
+    int fieldArrayIndex(int offset, int firstOffset)
+    {
+        const int index = (offset - firstOffset) / 4;
+        assert(index >= 0 && index < EXPLOSION_TARGET_COUNT);
+        return index;
+    }
+
+    bool intDataValue(const ProgramValue& value, int& out)
+    {
+        if (!value.isInt() && !value.isFloat()) {
+            return false;
+        }
+
+        out = value.asInt();
+        return true;
+    }
+
+    bool objectDataValue(const ProgramValue& value, Object*& out)
+    {
+        if (value.isInt() && value.integerValue == 0) {
+            out = nullptr;
+            return true;
+        }
+
+        if (!value.isPointer()) {
+            return false;
+        }
+
+        out = static_cast<Object*>(value.pointerValue);
+        return true;
+    }
+
+    // activeAttackData returns Attack* iff it matches pointer passed in.
+    Attack* activeAttackData(const ProgramValue& value)
+    {
+        if (!value.isPointer() || value.pointerValue == nullptr) {
+            return nullptr;
+        }
+
+        const auto hookCall = ScriptHookCall::current();
+        if (hookCall != nullptr
+            && hookCall->hookType() == HOOK_COMBATDAMAGE
+            && hookCall->numArgs() > 12) {
+            ProgramValue attackArg = hookCall->getArgAt(12);
+            if (attackArg.isPointer() && attackArg.pointerValue == value.pointerValue) {
+                return static_cast<Attack*>(value.pointerValue);
+            }
+        }
+
+        if (value.pointerValue == combat_get_data()) {
+            return combat_get_data();
+        }
+
+        return nullptr;
+    }
+
+    ProgramValue getAttackData(Attack* attack, AttackDataField field, bool& handled)
+    {
+        assert(attack != nullptr);
+
+        handled = true;
+
+        switch (field) {
+        case AttackDataField::Source:
+            return ProgramValue(attack->attacker);
+        case AttackDataField::HitMode:
+            return ProgramValue(attack->hitMode);
+        case AttackDataField::Weapon:
+            return ProgramValue(attack->weapon);
+        case AttackDataField::Unused:
+            return ProgramValue(attack->attackHitLocation);
+        case AttackDataField::DamageSource:
+            return ProgramValue(attack->attackerDamage);
+        case AttackDataField::FlagsSource:
+            return ProgramValue(attack->attackerFlags);
+        case AttackDataField::Rounds:
+            return ProgramValue(attack->ammoQuantity);
+        case AttackDataField::Message:
+            return ProgramValue(attack->criticalMessageId);
+        case AttackDataField::Target:
+            return ProgramValue(attack->defender);
+        case AttackDataField::BodyPart:
+            return ProgramValue(attack->defenderHitLocation);
+        case AttackDataField::DamageTarget:
+            return ProgramValue(attack->defenderDamage);
+        case AttackDataField::FlagsTarget:
+            return ProgramValue(attack->defenderFlags);
+        case AttackDataField::KnockbackValue:
+            return ProgramValue(attack->defenderKnockback);
+        case AttackDataField::MainTarget:
+            return ProgramValue(attack->intendedTarget);
+        case AttackDataField::AroundNumber:
+            return ProgramValue(attack->extrasLength);
+        case AttackDataField::Target1:
+        case AttackDataField::Target2:
+        case AttackDataField::Target3:
+        case AttackDataField::Target4:
+        case AttackDataField::Target5:
+        case AttackDataField::Target6:
+            return ProgramValue(attack->extras[fieldArrayIndex(static_cast<int>(field), static_cast<int>(AttackDataField::Target1))]);
+        case AttackDataField::BodyPart1:
+        case AttackDataField::BodyPart2:
+        case AttackDataField::BodyPart3:
+        case AttackDataField::BodyPart4:
+        case AttackDataField::BodyPart5:
+        case AttackDataField::BodyPart6:
+            return ProgramValue(attack->extrasHitLocation[fieldArrayIndex(static_cast<int>(field), static_cast<int>(AttackDataField::BodyPart1))]);
+        case AttackDataField::DamageTarget1:
+        case AttackDataField::DamageTarget2:
+        case AttackDataField::DamageTarget3:
+        case AttackDataField::DamageTarget4:
+        case AttackDataField::DamageTarget5:
+        case AttackDataField::DamageTarget6:
+            return ProgramValue(attack->extrasDamage[fieldArrayIndex(static_cast<int>(field), static_cast<int>(AttackDataField::DamageTarget1))]);
+        case AttackDataField::FlagsTarget1:
+        case AttackDataField::FlagsTarget2:
+        case AttackDataField::FlagsTarget3:
+        case AttackDataField::FlagsTarget4:
+        case AttackDataField::FlagsTarget5:
+        case AttackDataField::FlagsTarget6:
+            return ProgramValue(attack->extrasFlags[fieldArrayIndex(static_cast<int>(field), static_cast<int>(AttackDataField::FlagsTarget1))]);
+        case AttackDataField::KnockbackValue1:
+        case AttackDataField::KnockbackValue2:
+        case AttackDataField::KnockbackValue3:
+        case AttackDataField::KnockbackValue4:
+        case AttackDataField::KnockbackValue5:
+        case AttackDataField::KnockbackValue6:
+            return ProgramValue(attack->extrasKnockback[fieldArrayIndex(static_cast<int>(field), static_cast<int>(AttackDataField::KnockbackValue1))]);
+        default:
+            handled = false;
+            return ProgramValue(0);
+        }
+    }
+
+    bool setAttackData(Attack* attack, AttackDataField field, const ProgramValue& data)
+    {
+        assert(attack != nullptr);
+
+        int intValue = 0;
+        Object* objectValue = nullptr;
+
+        switch (field) {
+        case AttackDataField::Source:
+            if (!objectDataValue(data, objectValue)) return false;
+            attack->attacker = objectValue;
+            return true;
+        case AttackDataField::HitMode:
+            if (!intDataValue(data, intValue) || !hitModeIsValid(intValue)) {
+                return false;
+            }
+            attack->hitMode = static_cast<HitMode>(intValue);
+            return true;
+        case AttackDataField::Weapon:
+            if (!objectDataValue(data, objectValue)) return false;
+            attack->weapon = objectValue;
+            return true;
+        case AttackDataField::Unused:
+            if (!intDataValue(data, intValue) || !hitLocationIsValid(intValue)) {
+                return false;
+            }
+            attack->attackHitLocation = static_cast<HitLocation>(intValue);
+            return true;
+        case AttackDataField::DamageSource:
+            if (!intDataValue(data, intValue)) return false;
+            attack->attackerDamage = intValue;
+            return true;
+        case AttackDataField::FlagsSource:
+            if (!intDataValue(data, intValue)) return false;
+            attack->attackerFlags = static_cast<Dam>(intValue);
+            return true;
+        case AttackDataField::Rounds:
+            if (!intDataValue(data, intValue)) return false;
+            attack->ammoQuantity = intValue;
+            return true;
+        case AttackDataField::Message:
+            if (!intDataValue(data, intValue)) return false;
+            attack->criticalMessageId = intValue;
+            return true;
+        case AttackDataField::Target:
+            if (!objectDataValue(data, objectValue)) return false;
+            attack->defender = objectValue;
+            return true;
+        case AttackDataField::BodyPart:
+            if (!intDataValue(data, intValue) || !hitLocationIsValid(intValue)) {
+                return false;
+            }
+            attack->defenderHitLocation = static_cast<HitLocation>(intValue);
+            return true;
+        case AttackDataField::DamageTarget:
+            if (!intDataValue(data, intValue)) return false;
+            attack->defenderDamage = intValue;
+            return true;
+        case AttackDataField::FlagsTarget:
+            if (!intDataValue(data, intValue)) return false;
+            attack->defenderFlags = static_cast<Dam>(intValue);
+            return true;
+        case AttackDataField::KnockbackValue:
+            if (!intDataValue(data, intValue)) return false;
+            attack->defenderKnockback = intValue;
+            return true;
+        case AttackDataField::MainTarget:
+            if (!objectDataValue(data, objectValue)) return false;
+            attack->intendedTarget = objectValue;
+            return true;
+        case AttackDataField::AroundNumber:
+            if (!intDataValue(data, intValue)) return false;
+            if (intValue < 0 || intValue > EXPLOSION_TARGET_COUNT) return false;
+            attack->extrasLength = intValue;
+            return true;
+        case AttackDataField::Target1:
+        case AttackDataField::Target2:
+        case AttackDataField::Target3:
+        case AttackDataField::Target4:
+        case AttackDataField::Target5:
+        case AttackDataField::Target6:
+            if (!objectDataValue(data, objectValue)) return false;
+            attack->extras[fieldArrayIndex(static_cast<int>(field), static_cast<int>(AttackDataField::Target1))] = objectValue;
+            return true;
+        case AttackDataField::BodyPart1:
+        case AttackDataField::BodyPart2:
+        case AttackDataField::BodyPart3:
+        case AttackDataField::BodyPart4:
+        case AttackDataField::BodyPart5:
+        case AttackDataField::BodyPart6:
+            if (!intDataValue(data, intValue)) return false;
+            attack->extrasHitLocation[fieldArrayIndex(static_cast<int>(field), static_cast<int>(AttackDataField::BodyPart1))] = intValue;
+            return true;
+        case AttackDataField::DamageTarget1:
+        case AttackDataField::DamageTarget2:
+        case AttackDataField::DamageTarget3:
+        case AttackDataField::DamageTarget4:
+        case AttackDataField::DamageTarget5:
+        case AttackDataField::DamageTarget6:
+            if (!intDataValue(data, intValue)) return false;
+            attack->extrasDamage[fieldArrayIndex(static_cast<int>(field), static_cast<int>(AttackDataField::DamageTarget1))] = intValue;
+            return true;
+        case AttackDataField::FlagsTarget1:
+        case AttackDataField::FlagsTarget2:
+        case AttackDataField::FlagsTarget3:
+        case AttackDataField::FlagsTarget4:
+        case AttackDataField::FlagsTarget5:
+        case AttackDataField::FlagsTarget6:
+            if (!intDataValue(data, intValue)) return false;
+            attack->extrasFlags[fieldArrayIndex(static_cast<int>(field), static_cast<int>(AttackDataField::FlagsTarget1))] = static_cast<Dam>(intValue);
+            return true;
+        case AttackDataField::KnockbackValue1:
+        case AttackDataField::KnockbackValue2:
+        case AttackDataField::KnockbackValue3:
+        case AttackDataField::KnockbackValue4:
+        case AttackDataField::KnockbackValue5:
+        case AttackDataField::KnockbackValue6:
+            if (!intDataValue(data, intValue)) return false;
+            attack->extrasKnockback[fieldArrayIndex(static_cast<int>(field), static_cast<int>(AttackDataField::KnockbackValue1))] = intValue;
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    bool isKnownObjectDataField(ObjectDataField field)
+    {
+        switch (field) {
+        case ObjectDataField::Id:
+        case ObjectDataField::TileNum:
+        case ObjectDataField::CurrFrm:
+        case ObjectDataField::Rotation:
+        case ObjectDataField::Fid:
+        case ObjectDataField::Flags:
+        case ObjectDataField::Elevation:
+        case ObjectDataField::Inventory:
+        case ObjectDataField::MiscFlags:
+        case ObjectDataField::CurCharges:
+        case ObjectDataField::CurActionPoint:
+        case ObjectDataField::DamageFlags:
+        case ObjectDataField::DamageLastTurn:
+        case ObjectDataField::WhoHitMe:
+        case ObjectDataField::CritterHp:
+        case ObjectDataField::Pid:
+        case ObjectDataField::Cid:
+        case ObjectDataField::LightDistance:
+        case ObjectDataField::LightIntensity:
+        case ObjectDataField::Sid:
+        case ObjectDataField::ScriptIndex:
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    ProgramValue getCommonObjectData(Object* object, ObjectDataField field, bool& handled)
+    {
+        assert(object != nullptr);
+
+        handled = true;
+
+        switch (field) {
+        case ObjectDataField::Id:
+            return ProgramValue(object->id);
+        case ObjectDataField::TileNum:
+            return ProgramValue(object->tile);
+        case ObjectDataField::CurrFrm:
+            return ProgramValue(object->frame);
+        case ObjectDataField::Rotation:
+            return ProgramValue(object->rotation);
+        case ObjectDataField::Fid:
+            return ProgramValue(object->fid);
+        case ObjectDataField::Flags:
+            return ProgramValue(object->flags);
+        case ObjectDataField::Elevation:
+            return ProgramValue(object->elevation);
+        case ObjectDataField::Inventory:
+            return ProgramValue(object->data.inventory.length);
+        case ObjectDataField::Pid:
+            return ProgramValue(object->pid);
+        case ObjectDataField::Cid:
+            return ProgramValue(object->cid);
+        case ObjectDataField::LightDistance:
+            return ProgramValue(object->lightDistance);
+        case ObjectDataField::LightIntensity:
+            return ProgramValue(object->lightIntensity);
+        case ObjectDataField::Sid:
+            return ProgramValue(object->sid);
+        case ObjectDataField::ScriptIndex:
+            return ProgramValue(object->scriptIndex);
+        default:
+            handled = false;
+            return ProgramValue(0);
+        }
+    }
+
+    ProgramValue getCritterObjectData(Object* object, ObjectDataField field)
+    {
+        assert(object != nullptr);
+
+        switch (field) {
+        case ObjectDataField::MiscFlags:
+            return ProgramValue(object->data.critter.reaction);
+        case ObjectDataField::CurCharges:
+            return ProgramValue(object->data.critter.combat.maneuver);
+        case ObjectDataField::CurActionPoint:
+            return ProgramValue(object->data.critter.combat.ap);
+        case ObjectDataField::DamageFlags:
+            return ProgramValue(object->data.critter.combat.results);
+        case ObjectDataField::DamageLastTurn:
+            return ProgramValue(object->data.critter.combat.damageLastTurn);
+        case ObjectDataField::WhoHitMe:
+            return ProgramValue(object->data.critter.combat.whoHitMe);
+        case ObjectDataField::CritterHp:
+            return ProgramValue(object->data.critter.hp);
+        default:
+            return ProgramValue(0);
+        }
+    }
+
+    ProgramValue getItemObjectData(Object* object, ObjectDataField field)
+    {
+        assert(object != nullptr);
+
+        switch (field) {
+        case ObjectDataField::MiscFlags:
+            return ProgramValue(object->data.flags);
+        case ObjectDataField::CurCharges:
+            switch (itemGetType(object)) {
+            case ITEM_TYPE_WEAPON:
+                return ProgramValue(object->data.item.weapon.ammoQuantity);
+            case ITEM_TYPE_AMMO:
+                return ProgramValue(object->data.item.ammo.quantity);
+            case ITEM_TYPE_MISC:
+                return ProgramValue(object->data.item.misc.charges);
+            case ITEM_TYPE_KEY:
+                return ProgramValue(object->data.item.key.keyCode);
+            default:
+                return ProgramValue(0);
+            }
+        case ObjectDataField::CurActionPoint:
+            if (itemGetType(object) == ITEM_TYPE_WEAPON) {
+                return ProgramValue(object->data.item.weapon.ammoTypePid);
+            }
+            return ProgramValue(0);
+        default:
+            return ProgramValue(0);
+        }
+    }
+
+    ProgramValue getSceneryObjectData(Object* object, ObjectDataField field)
+    {
+        assert(object != nullptr);
+
+        switch (field) {
+        case ObjectDataField::MiscFlags:
+            return ProgramValue(object->data.flags);
+        case ObjectDataField::CurCharges:
+            return ProgramValue(object->data.scenery.door.openFlags);
+        default:
+            return ProgramValue(0);
+        }
+    }
+
+    ProgramValue getOtherObjectData(Object* object, ObjectDataField field)
+    {
+        assert(object != nullptr);
+
+        switch (field) {
+        case ObjectDataField::MiscFlags:
+            return ProgramValue(object->data.flags);
+        default:
+            return ProgramValue(0);
+        }
+    }
+
+    ProgramValue getObjectData(Object* object, ObjectDataField field, bool& handled)
+    {
+        assert(object != nullptr);
+
+        handled = false;
+        ProgramValue value = getCommonObjectData(object, field, handled);
+        if (handled) {
+            return value;
+        }
+
+        if (!isKnownObjectDataField(field)) {
+            return ProgramValue(0);
+        }
+
+        handled = true;
+
+        switch (objectTypeFromPid(object->pid)) {
+        case OBJ_TYPE_CRITTER:
+            return getCritterObjectData(object, field);
+        case OBJ_TYPE_ITEM:
+            return getItemObjectData(object, field);
+        case OBJ_TYPE_SCENERY:
+            return getSceneryObjectData(object, field);
+        default:
+            return getOtherObjectData(object, field);
+        }
+    }
+
+    bool setCommonObjectData(Object* object, ObjectDataField field, const ProgramValue& data, bool& handled)
+    {
+        assert(object != nullptr);
+
+        int intValue = 0;
+        handled = true;
+
+        switch (field) {
+        case ObjectDataField::Id:
+            if (!intDataValue(data, intValue)) return false;
+            object->id = intValue;
+            scriptsSyncObjectId(object);
+            return true;
+        case ObjectDataField::TileNum:
+            if (!intDataValue(data, intValue)) return false;
+            return objectSetLocation(object, intValue, object->elevation, nullptr) == 0;
+        case ObjectDataField::CurrFrm:
+            if (!intDataValue(data, intValue)) return false;
+            return objectSetFrame(object, intValue, nullptr) == 0;
+        case ObjectDataField::Rotation:
+            if (!intDataValue(data, intValue)) return false;
+            return objectSetRotation(object, static_cast<Rotation>(intValue), nullptr) == 0;
+        case ObjectDataField::Fid:
+            if (!intDataValue(data, intValue)) return false;
+            return objectSetFid(object, intValue, nullptr) == 0;
+        case ObjectDataField::Flags:
+            if (!intDataValue(data, intValue)) return false;
+            object->flags = static_cast<ObjectFlags>(intValue);
+            return true;
+        case ObjectDataField::Elevation:
+            if (!intDataValue(data, intValue)) return false;
+            return objectSetLocation(object, object->tile, intValue, nullptr) == 0;
+        case ObjectDataField::Inventory:
+            return false;
+        case ObjectDataField::Pid:
+            if (!intDataValue(data, intValue)) return false;
+            object->pid = intValue;
+            return true;
+        case ObjectDataField::Cid:
+            if (!intDataValue(data, intValue)) return false;
+            object->cid = intValue;
+            return true;
+        case ObjectDataField::LightDistance:
+            if (!intDataValue(data, intValue)) return false;
+            return objectSetLight(object, intValue, object->lightIntensity, nullptr) == 0;
+        case ObjectDataField::LightIntensity:
+            if (!intDataValue(data, intValue)) return false;
+            return objectSetLight(object, object->lightDistance, intValue, nullptr) == 0;
+        case ObjectDataField::Sid:
+        case ObjectDataField::ScriptIndex:
+            return false;
+        default:
+            handled = false;
+            return false;
+        }
+    }
+
+    bool setCritterObjectData(Object* object, ObjectDataField field, const ProgramValue& data)
+    {
+        assert(object != nullptr);
+
+        int intValue = 0;
+        Object* objectValue = nullptr;
+
+        switch (field) {
+        case ObjectDataField::MiscFlags:
+            if (!intDataValue(data, intValue)) return false;
+            object->data.critter.reaction = intValue;
+            return true;
+        case ObjectDataField::CurCharges:
+            if (!intDataValue(data, intValue)) return false;
+            object->data.critter.combat.maneuver = static_cast<CritterManeuver>(intValue);
+            return true;
+        case ObjectDataField::CurActionPoint:
+            if (!intDataValue(data, intValue)) return false;
+            object->data.critter.combat.ap = intValue;
+            return true;
+        case ObjectDataField::DamageFlags:
+            if (!intDataValue(data, intValue)) return false;
+            object->data.critter.combat.results = static_cast<Dam>(intValue);
+            return true;
+        case ObjectDataField::DamageLastTurn:
+            if (!intDataValue(data, intValue)) return false;
+            object->data.critter.combat.damageLastTurn = intValue;
+            return true;
+        case ObjectDataField::WhoHitMe:
+            if (!objectDataValue(data, objectValue)) return false;
+            object->data.critter.combat.whoHitMe = objectValue;
+            return true;
+        case ObjectDataField::CritterHp:
+            if (!intDataValue(data, intValue)) return false;
+            object->data.critter.hp = intValue;
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    bool setItemObjectData(Object* object, ObjectDataField field, const ProgramValue& data)
+    {
+        assert(object != nullptr);
+
+        int intValue = 0;
+
+        switch (field) {
+        case ObjectDataField::MiscFlags:
+            if (!intDataValue(data, intValue)) return false;
+            object->data.flags = intValue;
+            return true;
+        case ObjectDataField::CurCharges:
+            if (!intDataValue(data, intValue)) return false;
+            switch (itemGetType(object)) {
+            case ITEM_TYPE_WEAPON:
+                object->data.item.weapon.ammoQuantity = intValue;
+                return true;
+            case ITEM_TYPE_AMMO:
+                object->data.item.ammo.quantity = intValue;
+                return true;
+            case ITEM_TYPE_MISC:
+                object->data.item.misc.charges = intValue;
+                return true;
+            case ITEM_TYPE_KEY:
+                object->data.item.key.keyCode = intValue;
+                return true;
+            default:
+                return false;
+            }
+        case ObjectDataField::CurActionPoint:
+            if (!intDataValue(data, intValue)) return false;
+            if (itemGetType(object) != ITEM_TYPE_WEAPON) return false;
+            object->data.item.weapon.ammoTypePid = intValue;
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    bool setSceneryObjectData(Object* object, ObjectDataField field, const ProgramValue& data)
+    {
+        assert(object != nullptr);
+
+        int intValue = 0;
+
+        switch (field) {
+        case ObjectDataField::MiscFlags:
+            if (!intDataValue(data, intValue)) return false;
+            object->data.flags = intValue;
+            return true;
+        case ObjectDataField::CurCharges:
+            if (!intDataValue(data, intValue)) return false;
+            object->data.scenery.door.openFlags = intValue;
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    bool setOtherObjectData(Object* object, ObjectDataField field, const ProgramValue& data)
+    {
+        assert(object != nullptr);
+
+        int intValue = 0;
+
+        switch (field) {
+        case ObjectDataField::MiscFlags:
+            if (!intDataValue(data, intValue)) return false;
+            object->data.flags = intValue;
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    bool setObjectData(Object* object, ObjectDataField field, const ProgramValue& data)
+    {
+        assert(object != nullptr);
+
+        bool handled = false;
+        bool changed = setCommonObjectData(object, field, data, handled);
+        if (handled) {
+            return changed;
+        }
+
+        switch (objectTypeFromPid(object->pid)) {
+        case OBJ_TYPE_CRITTER:
+            return setCritterObjectData(object, field, data);
+        case OBJ_TYPE_ITEM:
+            return setItemObjectData(object, field, data);
+        case OBJ_TYPE_SCENERY:
+            return setSceneryObjectData(object, field, data);
+        default:
+            return setOtherObjectData(object, field, data);
+        }
+    }
+
+} // namespace
 
 static void mf_attack_is_aimed(OpcodeContext& ctx);
 static void mf_car_gas_amount(OpcodeContext& ctx);
@@ -71,13 +784,19 @@ static void mf_dialog_message(OpcodeContext& ctx);
 static void mf_display_stats(OpcodeContext& ctx);
 static void mf_draw_image(OpcodeContext& ctx);
 static void mf_draw_image_scaled(OpcodeContext& ctx);
+static void mf_encounter_detection(OpcodeContext& ctx);
+static void mf_encounter_intros(OpcodeContext& ctx);
 static void mf_get_combat_free_move(OpcodeContext& ctx);
 static void mf_get_cursor_mode(OpcodeContext& ctx);
 static void mf_get_flags(OpcodeContext& ctx);
 static void mf_get_inven_ap_cost(OpcodeContext& ctx);
+static void mf_get_object_ai_data(OpcodeContext& ctx);
 static void mf_get_object_data(OpcodeContext& ctx);
 static void mf_get_outline(OpcodeContext& ctx);
 static void mf_get_sfall_arg_at(OpcodeContext& ctx);
+static void mf_get_stat_max(OpcodeContext& ctx);
+static void mf_get_stat_min(OpcodeContext& ctx);
+static void mf_get_terrain_name(OpcodeContext& ctx);
 static void mf_get_text_width(OpcodeContext& ctx);
 static void mf_get_window_attribute(OpcodeContext& ctx);
 // F-08: FO1 water chip timer metarules.
@@ -100,11 +819,24 @@ static void mf_obj_under_cursor(OpcodeContext& ctx);
 static void mf_objects_in_radius(OpcodeContext& ctx);
 static void mf_opcode_exists(OpcodeContext& ctx);
 static void mf_outlined_object(OpcodeContext& ctx);
+static void mf_real_dude_obj(OpcodeContext& ctx);
+static void mf_remove_wm_town_names(OpcodeContext& ctx);
+static void mf_rest_option_msgs(OpcodeContext& ctx);
+static void mf_set_car_intface_art(OpcodeContext& ctx);
 static void mf_set_combat_free_move(OpcodeContext& ctx);
 static void mf_set_cursor_mode(OpcodeContext& ctx);
+static void mf_set_fo1_hit_chance(OpcodeContext& ctx);
 static void mf_set_flags(OpcodeContext& ctx);
 static void mf_set_iface_tag_text(OpcodeContext& ctx);
+static void mf_set_reaction_thresholds(OpcodeContext& ctx);
+static void mf_set_object_data(OpcodeContext& ctx);
 static void mf_set_outline(OpcodeContext& ctx);
+static void mf_set_party_member_cc_msg_ids(OpcodeContext& ctx);
+static void mf_set_rest_mode(OpcodeContext& ctx);
+static void mf_set_rest_option(OpcodeContext& ctx);
+static void mf_set_scr_name(OpcodeContext& ctx);
+static void mf_set_terrain_name(OpcodeContext& ctx);
+static void mf_set_town_title(OpcodeContext& ctx);
 static void mf_set_window_flag(OpcodeContext& ctx);
 static void mf_set_unique_id(OpcodeContext& ctx);
 static void mf_show_window(OpcodeContext& ctx);
@@ -166,10 +898,6 @@ static void mf_spatial_radius(OpcodeContext& ctx);
 static void mf_intface_hide(OpcodeContext& ctx);
 static void mf_intface_is_hidden(OpcodeContext& ctx);
 static void mf_intface_show(OpcodeContext& ctx);
-// H-04: set_fo1_hit_chance — removes the FO2 (PE-2) player distance penalty
-static void mf_set_fo1_hit_chance(OpcodeContext& ctx);
-// H-05: remove_wm_town_names — hides town labels under worldmap circles
-static void mf_remove_wm_town_names(OpcodeContext& ctx);
 // 8b1efef: encounter_detection — disables random-encounter detection chance
 static void mf_encounter_detection(OpcodeContext& ctx);
 // 9f5a047: encounter_intros — disables the "You encounter: ..." message
@@ -546,7 +1274,7 @@ static InterfaceWindowLookupResult getInterfaceWindowByType(int winType, int& wi
         window = inventoryGetWindow();
         break;
     case 1:
-        window = gameDialogGetWindow();
+        window = gameDialogGetBackgroundWindow();
         break;
     case 2:
         window = pipboyGetWindow();
@@ -575,35 +1303,6 @@ static InterfaceWindowLookupResult getInterfaceWindowByType(int winType, int& wi
     }
 
     return window != -1 ? InterfaceWindowLookupResult::Found : InterfaceWindowLookupResult::Missing;
-}
-
-static int getCurrentInterfaceWindow()
-{
-    int window = -1;
-    if (GameMode::isInGameMode(GameMode::kInventory)
-        || GameMode::isInGameMode(GameMode::kUseOn)
-        || GameMode::isInGameMode(GameMode::kLoot)
-        || GameMode::isInGameMode(GameMode::kBarter)) {
-        window = inventoryGetWindow();
-    } else if (GameMode::isInGameMode(GameMode::kDialog)) {
-        window = gameDialogGetWindow();
-    } else if (GameMode::isInGameMode(GameMode::kPipboy)) {
-        window = pipboyGetWindow();
-    } else if (GameMode::isInGameMode(GameMode::kWorldmap)) {
-        window = worldmapGetWindow();
-    } else if (GameMode::isInGameMode(GameMode::kEditor)) {
-        window = characterEditorGetWindow();
-    } else if (GameMode::isInGameMode(GameMode::kSkilldex)) {
-        window = skilldexGetWindow();
-    } else if (GameMode::isInGameMode(GameMode::kOptions)) {
-        window = optionsGetWindow();
-    } else if (GameMode::isInGameMode(GameMode::kAutomap)) {
-        window = automapGetWindow();
-    } else if (windowGetWindow(gInterfaceBarWindow) != nullptr) {
-        window = gInterfaceBarWindow;
-    }
-
-    return window;
 }
 
 static bool clampWindowFillRect(int windowWidth, int windowHeight, int& x, int& y, int& width, int& height)
@@ -651,7 +1350,7 @@ void mf_art_cache_flush(OpcodeContext& ctx)
 void mf_art_frame_data(OpcodeContext& ctx)
 {
     int frame = ctx.numArgs() > 1 ? ctx.arg(1).asInt() : 0;
-    int direction = ctx.numArgs() > 2 ? ctx.arg(2).asInt() : 0;
+    Rotation rotation = ctx.numArgs() > 2 ? static_cast<Rotation>(ctx.arg(2).asInt()) : ROTATION_NE;
 
     if (ctx.arg(0).isInt() && ctx.arg(0).asInt() == -1) {
         ctx.setReturn(-1);
@@ -661,14 +1360,14 @@ void mf_art_frame_data(OpcodeContext& ctx)
     FrmImage image;
     if (ctx.arg(0).isInt()) {
         int fid = ctx.arg(0).asInt();
-        if (!image.lock(fid, frame, direction)) {
+        if (!image.lock(fid, frame, rotation)) {
             ctx.printError("%s() - cannot load art by FID: %d", ctx.name(), fid);
             ctx.setReturn(-1);
             return;
         }
     } else {
         const char* path = ctx.stringArg(0);
-        if (!image.lock(path, frame, direction)) {
+        if (!image.lock(path, frame, rotation)) {
             ctx.printError("%s() - cannot load art from file: %s", ctx.name(), path);
             ctx.setReturn(-1);
             return;
@@ -697,7 +1396,7 @@ void mf_add_iface_tag(OpcodeContext& ctx)
 
 void mf_attack_is_aimed(OpcodeContext& ctx)
 {
-    int hitMode;
+    HitMode hitMode;
     bool aiming;
 
     if (interfaceGetCurrentHitMode(&hitMode, &aiming) == -1) {
@@ -711,6 +1410,7 @@ void mf_car_gas_amount(OpcodeContext& ctx)
 {
     ctx.setReturn(wmCarGasAmount());
 }
+
 
 void mf_combat_data(OpcodeContext& ctx)
 {
@@ -860,40 +1560,36 @@ void mf_get_sfall_arg_at(OpcodeContext& ctx)
 
 void mf_get_object_data(OpcodeContext& ctx)
 {
-    // TODO: only allow to modify a set of whitelisted object types
-    // TODO: map offsets to fields to avoid potential alignment, 64bit issues!
-    Object* ptr = ctx.arg(0).asObject();
-    int rawOffset = ctx.arg(1).asInt();
+    const ProgramValue& dataPtr = ctx.arg(0);
 
-    // asObject() returns nullptr for integer 0 (the canonical "null"
-    // in Fallout scripts) and for non-pointer types. Guard against
-    // null dereference — peer functions in this file have the same guard.
-    if (ptr == nullptr) {
-        ctx.printError("%s(): object is null (asObject() returned nullptr)", ctx.name());
-        ctx.setReturn(-1);
+    const int offset = ctx.arg(1).asInt();
+    Attack* attack = activeAttackData(dataPtr);
+    if (attack != nullptr) {
+        if (!isInCombat()) {
+            ctx.printError("%s() - attack data is only available in combat.", ctx.name());
+            ctx.setReturn(0);
+        } else {
+            bool handled = false;
+            ProgramValue result = getAttackData(attack, static_cast<AttackDataField>(offset), handled);
+            if (!handled) {
+                ctx.printError("%s() - unsupported offset.", ctx.name());
+            }
+            ctx.setReturn(result);
+        }
         return;
     }
 
-    if (rawOffset < 0 || rawOffset % 4 != 0) {
-        ctx.printError("%s(): bad offset %d", ctx.name(), rawOffset);
-        ctx.setReturn(-1);
-        return;
+    Object* object = dataPtr.asObject();
+
+    bool handled = false;
+    ProgramValue result = getObjectData(object, static_cast<ObjectDataField>(offset), handled);
+    if (!handled) {
+        ctx.printError("%s() - unsupported offset.", ctx.name());
     }
 
-    size_t offset = static_cast<size_t>(rawOffset);
-
-    // Bounds check: refuse reads beyond the Object struct boundary.
-    // This prevents unbounded heap reads when scripts call get_object_data
-    // with an arbitrary pointer (e.g. Attack* from HOOK_COMBATDAMAGE arg12).
-    if (offset + sizeof(int) > sizeof(Object)) {
-        ctx.printError("%s(): offset %d exceeds Object struct bounds (%zu bytes)", ctx.name(), rawOffset, sizeof(Object));
-        ctx.setReturn(-1);
-        return;
-    }
-
-    int value = *reinterpret_cast<int*>(reinterpret_cast<unsigned char*>(ptr) + offset);
-    ctx.setReturn(value);
+    ctx.setReturn(result);
 }
+
 
 void mf_get_text_width(OpcodeContext& ctx)
 {
@@ -1001,7 +1697,7 @@ void mf_get_water_days_left_x(OpcodeContext& ctx)
     ctx.setReturn(remaining < 0 ? 0 : remaining);
 }
 
-static bool loadSfallArtImage(OpcodeContext& ctx, int artArg, int frame, int direction, FrmImage& image, int& fid)
+static bool loadSfallArtImage(OpcodeContext& ctx, int artArg, int frame, Rotation rotation, FrmImage& image, int& fid)
 {
     if (ctx.arg(artArg).isInt() && ctx.arg(artArg).asInt() == -1) {
         return false;
@@ -1009,23 +1705,23 @@ static bool loadSfallArtImage(OpcodeContext& ctx, int artArg, int frame, int dir
 
     if (ctx.arg(artArg).isInt()) {
         fid = ctx.arg(artArg).asInt();
-        int frameDirection = 0;
+        Rotation frameRotation = ROTATION_NE;
         int lockFid = fid;
-        if (FID_TYPE(fid) == OBJ_TYPE_CRITTER) {
-            frameDirection = direction >= 0 ? direction : FID_ROTATION(fid);
-            if (direction >= 0) {
-                lockFid = (direction << 28) | (fid & 0x0FFFFFFF);
+        if (objectTypeFromFid(fid) == OBJ_TYPE_CRITTER) {
+            frameRotation = rotationIsValid(rotation) ? rotation : rotationFromFid(fid);
+            if (rotationIsValid(rotation)) {
+                lockFid = (rotation << 28) | (fid & 0x0FFFFFFF);
             }
         }
 
-        if (!image.lock(lockFid, frame, frameDirection)) {
+        if (!image.lock(lockFid, frame, frameRotation)) {
             ctx.printError("%s() - cannot load art by FID: %d", ctx.name(), fid);
             return false;
         }
     } else {
         const char* path = ctx.stringArg(artArg);
-        int frameDirection = direction >= 0 ? direction : 0;
-        if (!image.lock(path, frame, frameDirection)) {
+        Rotation frameRotation = rotationIsValid(rotation) ? rotation : ROTATION_NE;
+        if (!image.lock(path, frame, frameRotation)) {
             ctx.printError("%s() - cannot load art from file: %s", ctx.name(), path);
             return false;
         }
@@ -1106,7 +1802,7 @@ static int drawSfallImageToScriptWindow(OpcodeContext& ctx, bool scaled)
 
     FrmImage image;
     int fid = -1;
-    if (!loadSfallArtImage(ctx, 0, frame, -1, image, fid)) {
+    if (!loadSfallArtImage(ctx, 0, frame, ROTATION_INVALID, image, fid)) {
         return -1;
     }
 
@@ -1161,13 +1857,13 @@ static void mf_interface_art_draw(OpcodeContext& ctx)
     }
 
     int frame = ctx.numArgs() > 4 ? ctx.arg(4).asInt() : 0;
-    int direction = -1;
+    Rotation rotation = ROTATION_INVALID;
     int scaledWidth = -1;
     int scaledHeight = -1;
     if (ctx.numArgs() > 5) {
         int arrayId = ctx.arg(5).asInt();
         if (ArrayExists(arrayId)) {
-            direction = GetArray(arrayId, ProgramValue(0), ctx.program()).asInt();
+            rotation = static_cast<Rotation>(GetArray(arrayId, ProgramValue(0), ctx.program()).asInt());
 
             int arrayLength = LenArray(arrayId);
             if (arrayLength > 1) {
@@ -1182,14 +1878,14 @@ static void mf_interface_art_draw(OpcodeContext& ctx)
 
     FrmImage image;
     int fid = -1;
-    if (!loadSfallArtImage(ctx, 1, frame, direction, image, fid)) {
+    if (!loadSfallArtImage(ctx, 1, frame, rotation, image, fid)) {
         ctx.setReturn(-1);
         return;
     }
 
     int xOffset = 0;
     int yOffset = 0;
-    if (ctx.arg(1).isInt() && FID_TYPE(fid) == OBJ_TYPE_CRITTER && direction >= 0) {
+    if (ctx.arg(1).isInt() && objectTypeFromFid(fid) == OBJ_TYPE_CRITTER && rotation >= ROTATION_FIRST) {
         xOffset = image.getXOffset();
         yOffset = image.getYOffset();
     }
@@ -1237,7 +1933,7 @@ void mf_item_weight(OpcodeContext& ctx)
         ctx.setReturn(0);
         return;
     }
-    if (PID_TYPE(object->pid) != OBJ_TYPE_ITEM) {
+    if (objectTypeFromPid(object->pid) != OBJ_TYPE_ITEM) {
         ctx.printError("%s() - expected item object.", ctx.name());
         ctx.setReturn(0);
         return;
@@ -1343,8 +2039,9 @@ void mf_add_extra_msg_file(OpcodeContext& ctx)
 
 void mf_opcode_exists(OpcodeContext& ctx)
 {
-    int opcode = ctx.arg(0).asInt();
+    constexpr int kOpcodeStart = RAW_VALUE_TYPE_OPCODE; // 0x8000
 
+    int opcode = ctx.arg(0).asInt();
     // P-04: Exact sfall range check, NOT a mask. sfall's OpcodeExists returns
     // true only for opcodes in [opcodeStart, opcodeStart + opcodeCount) =
     // [0x8000, 0x8300) (opcodeCount == 0x300; Opcodes.cpp:51,439-446). The
@@ -1387,7 +2084,7 @@ void mf_opcode_exists(OpcodeContext& ctx)
         {0x81A7, "get_viewport_y"},
         {0x81A8, "set_viewport_x"},
         {0x81A9, "set_viewport_y"},
-        // Palette override — not supported (CE uses SDL2 hardware rendering)
+        // Palette override — not supported (CE uses SDL2 without custom shaders)
         {0x81F2, "set_palette"},
         // Shader mode — not applicable (CE uses SDL2 without custom shaders)
         {0x81AE, "set_shader_mode"},
@@ -1416,7 +2113,7 @@ void mf_obj_under_cursor(OpcodeContext& ctx)
     int onlyCritter = ctx.arg(0).asInt();
     int includeDude = ctx.arg(1).asInt();
 
-    Object* object = gameMouseGetObjectUnderCursor(onlyCritter ? OBJ_TYPE_CRITTER : -1, includeDude, gElevation);
+    Object* object = gameMouseGetObjectUnderCursor(onlyCritter ? OBJ_TYPE_CRITTER : OBJ_TYPE_INVALID, includeDude, gElevation);
 
     ctx.setReturn(object);
 }
@@ -1452,11 +2149,11 @@ static void mf_objects_in_radius(OpcodeContext& ctx)
     int endTile;
     for (int tile = objectsInRadiusFirstTile(sourceTile, radius, &endTile); tile < endTile; tile++) {
         for (Object* object = objectFindFirstAtLocation(elevation, tile); object != nullptr; object = objectFindNextAtLocation()) {
-            if (type != -1 && (object->pid == -1 || PID_TYPE(object->pid) != type)) {
+            if (type != -1 && (object->pid == -1 || objectTypeFromPid(object->pid) != type)) {
                 continue;
             }
 
-            int extraRange = (object->flags & OBJECT_MULTIHEX) != 0 ? 1 : 0;
+            int extraRange = (object->flags & OBJECT_MULTIHEX) != OBJECT_NONE ? 1 : 0;
             if (tileDistanceBetween(sourceTile, object->tile) > radius + extraRange) {
                 continue;
             }
@@ -1474,6 +2171,7 @@ void mf_outlined_object(OpcodeContext& ctx)
 {
     ctx.setReturn(gmouse_get_outlined_object());
 }
+
 
 void mf_set_combat_free_move(OpcodeContext& ctx)
 {
@@ -1495,6 +2193,38 @@ void mf_set_cursor_mode(OpcodeContext& ctx)
     gameMouseSetMode(mode);
 }
 
+// H-04: set_fo1_hit_chance(bool state) — enables/disables Fallout 1 behavior
+// when calculating the player's hit chance: removes the (PE-2) distance
+// penalty (sfall Combat.cpp:289-295 patches 0x4244ED; function notes.md:1177).
+// The consumer-side gate belongs in combat.cc's to-hit computation.
+static bool gSfallFo1HitChance = false;
+
+bool sfallGetFo1HitChance()
+{
+    return gSfallFo1HitChance;
+}
+
+// H-05: remove_wm_town_names(bool state) — hides town names under the green
+// circles on the world map (sfall Worldmap.cpp:286-295 patches 0x4C3FFE;
+// function notes.md:1183). The consumer-side gate belongs in worldmap.cc's
+// live circle-overlay draw path (wmInterfaceDrawCircleOverlaySafe).
+static bool gSfallRemoveWmTownNames = false;
+
+bool sfallGetRemoveWmTownNames()
+{
+    return gSfallRemoveWmTownNames;
+}
+
+void mf_set_fo1_hit_chance(OpcodeContext& ctx)
+{
+    // sync2: both tracking mechanisms are live — the combat.cc consumer
+    // (fo1HitChance via combatSetFo1HitChance) and the metarule state
+    // (gSfallFo1HitChance via sfallGetFo1HitChance, used by worldmap.cc).
+    combatSetFo1HitChance(ctx.arg(0).asInt() != 0);
+    gSfallFo1HitChance = ctx.arg(0).asInt() != 0;
+    ctx.setReturn(0);
+}
+
 void mf_set_flags(OpcodeContext& ctx)
 {
     Object* object = ctx.arg(0).asObject();
@@ -1503,7 +2233,7 @@ void mf_set_flags(OpcodeContext& ctx)
         ctx.setReturn(-1);
         return;
     }
-    int flags = ctx.arg(1).asInt();
+    ObjectFlags flags = static_cast<ObjectFlags>(ctx.arg(1).asInt());
 
     object->flags = flags;
 }
@@ -1521,6 +2251,7 @@ void mf_set_iface_tag_text(OpcodeContext& ctx)
     }
 }
 
+
 void mf_set_outline(OpcodeContext& ctx)
 {
     Object* object = ctx.arg(0).asObject();
@@ -1529,9 +2260,10 @@ void mf_set_outline(OpcodeContext& ctx)
         ctx.setReturn(-1);
         return;
     }
-    int outline = ctx.arg(1).asInt();
+    OutlineType outline = static_cast<OutlineType>(ctx.arg(1).asInt());
     object->outline = outline;
 }
+
 
 void mf_set_window_flag(OpcodeContext& ctx)
 {
@@ -1562,10 +2294,10 @@ void mf_set_window_flag(OpcodeContext& ctx)
 
     int windowId = ctx.arg(0).asInt();
     if (windowId <= 0) {
-        windowId = getCurrentInterfaceWindow();
+        windowId = inventoryGetWindow();
     }
 
-    if (windowId == -1) {
+    if (windowId == -1 || windowGetWindow(windowId) == nullptr) {
         ctx.setReturn(ctx.metaruleInfo()->errorReturn);
         return;
     }
@@ -1692,7 +2424,7 @@ void mf_unwield_slot(OpcodeContext& ctx)
         return;
     }
 
-    if (PID_TYPE(critter->pid) != OBJ_TYPE_CRITTER) {
+    if (objectTypeFromPid(critter->pid) != OBJ_TYPE_CRITTER) {
         ctx.printError("%s() - the object is not a critter.", ctx.name());
         ctx.setReturn(-1);
         return;
@@ -1702,6 +2434,27 @@ void mf_unwield_slot(OpcodeContext& ctx)
         ctx.setReturn(-1);
     }
 }
+
+static const char* invalidSubtilePos = "%s() - invalid x/y coordinates for the sub-tile.";
+
+
+
+
+static void mf_remove_wm_town_names(OpcodeContext& ctx)
+{
+    // sync2: both state paths are live — wmRemoveTownNames updates
+    // wmTownNamesHidden (consumed by worldmap.cc draw gates) and
+    // gSfallRemoveWmTownNames is exposed via sfallGetRemoveWmTownNames.
+    wmRemoveTownNames(ctx.arg(0).asInt() != 0);
+    gSfallRemoveWmTownNames = ctx.arg(0).asInt() != 0;
+    ctx.setReturn(0);
+}
+
+
+
+
+
+
 
 void mf_tile_by_position(OpcodeContext& ctx)
 {
@@ -2295,11 +3048,13 @@ void mf_explosions_metarule(OpcodeContext& ctx)
         // When param2 is 0 (legacy single-param call), preserve backward compat:
         // param1 != 0 → (2,4), param1 == 0 → (0,6) — matching sfall 4.x defaults.
         if (param2 != 0) {
-            explosionSetPattern(param1, param2);
+            explosionSetPattern(static_cast<Rotation>(param1), static_cast<Rotation>(param2));
         } else if (param1 != 0) {
-            explosionSetPattern(2, 4);
+            // sfall 4.x default: (2, 4) = ROTATION_SE, ROTATION_W
+            explosionSetPattern(ROTATION_SE, ROTATION_W);
         } else {
-            explosionSetPattern(0, 6);
+            // sfall 4.x default: (0, 6) = ROTATION_NE through ROTATION_COUNT
+            explosionSetPattern(ROTATION_NE, ROTATION_COUNT);
         }
         ctx.setReturn(0);
         break;
@@ -2312,7 +3067,7 @@ void mf_explosions_metarule(OpcodeContext& ctx)
         ctx.setReturn(0);
         break;
     case EXPL_MF_FORCE_DMGTYPE:
-        explosionSetDamageType(param1);
+        explosionSetDamageType(static_cast<DamageType>(param1));
         ctx.setReturn(0);
         break;
     case EXPL_MF_STATIC_RADIUS:
@@ -2362,40 +3117,6 @@ void mf_npc_engine_level_up(OpcodeContext& ctx)
 {
     int enable = ctx.arg(0).asInt();
     gNpcEngineLevelUpEnabled = (enable != 0) ? 1 : 0;
-    ctx.setReturn(0);
-}
-
-// H-04: set_fo1_hit_chance(bool state) — enables/disables Fallout 1 behavior
-// when calculating the player's hit chance: removes the (PE-2) distance
-// penalty (sfall Combat.cpp:289-295 patches 0x4244ED; function notes.md:1177).
-// The consumer-side gate belongs in combat.cc's to-hit computation.
-static bool gSfallFo1HitChance = false;
-
-bool sfallGetFo1HitChance()
-{
-    return gSfallFo1HitChance;
-}
-
-void mf_set_fo1_hit_chance(OpcodeContext& ctx)
-{
-    gSfallFo1HitChance = ctx.arg(0).asInt() != 0;
-    ctx.setReturn(0);
-}
-
-// H-05: remove_wm_town_names(bool state) — hides town names under the green
-// circles on the world map (sfall Worldmap.cpp:286-295 patches 0x4C3FFE;
-// function notes.md:1183). The consumer-side gate belongs in worldmap.cc's
-// live circle-overlay draw path (wmInterfaceDrawCircleOverlaySafe).
-static bool gSfallRemoveWmTownNames = false;
-
-bool sfallGetRemoveWmTownNames()
-{
-    return gSfallRemoveWmTownNames;
-}
-
-void mf_remove_wm_town_names(OpcodeContext& ctx)
-{
-    gSfallRemoveWmTownNames = ctx.arg(0).asInt() != 0;
     ctx.setReturn(0);
 }
 
@@ -2454,7 +3175,7 @@ void mf_set_dude_obj(OpcodeContext& ctx)
     // The fork accepted ANY non-null object, so a script passing a door/item set
     // a non-critter as gDude — gDude is dereferenced as data.critter.* throughout
     // the engine → out-of-bounds union reads/crash.
-    if (PID_TYPE(newDude->pid) != OBJ_TYPE_CRITTER) {
+    if (objectTypeFromPid(newDude->pid) != OBJ_TYPE_CRITTER) {
         ctx.printError("%s() - object is not a critter.", ctx.name());
         ctx.setReturn(-1);
         return;
@@ -2727,7 +3448,7 @@ void mf_has_fake_trait_npc(OpcodeContext& ctx)
     if (critter == gDude) {
         for (const auto& entry : gAddedTraits) {
             int traitId = entry.first;
-            char* traitName = traitGetName(traitId);
+            char* traitName = traitGetName(static_cast<Trait>(traitId));
             if (traitName != nullptr && strcmp(traitName, name) == 0) {
                 ctx.setReturn(1);
                 return;
@@ -3042,7 +3763,7 @@ void mf_get_object_ai_data(OpcodeContext& ctx)
         return;
     }
 
-    if (PID_TYPE(obj->pid) != OBJ_TYPE_CRITTER) {
+    if (objectTypeFromPid(obj->pid) != OBJ_TYPE_CRITTER) {
         ctx.setReturn(0);
         return;
     }
@@ -3174,7 +3895,7 @@ void mf_lock_is_jammed(OpcodeContext& ctx)
     }
 
     bool jammed = false;
-    if (PID_TYPE(obj->pid) == OBJ_TYPE_SCENERY) {
+    if (objectTypeFromPid(obj->pid) == OBJ_TYPE_SCENERY) {
         // Doors use data.scenery.door.openFlags
         jammed = (obj->data.scenery.door.openFlags & OBJ_JAMMED) != 0;
     } else {
@@ -3878,8 +4599,8 @@ void mf_message_box(OpcodeContext& ctx)
     }
 
     // note: most of the CE code uses colorTable indices, but this metarule expects palette values.
-    // Default: yellow (145) = _colorTable[32328]
-    int color1 = _colorTable[32328], color2 = _colorTable[32328];
+    // Default: amber/orange (145) = COLOR_AMBER
+    int color1 = COLOR_AMBER, color2 = COLOR_AMBER;
     if (ctx.numArgs() > 2) {
         color1 = ctx.arg(2).asInt();
     }
