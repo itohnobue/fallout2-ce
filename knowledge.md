@@ -1,5 +1,5 @@
 # Knowledge Base
-Last updated: 2026-08-17T00:06:51.364473
+Last updated: 2026-08-17T04:03:34.992278
 
 ## [dis-20260704144725-9b3649]
 Category: discovery
@@ -457,4 +457,25 @@ Tags: vfs, fs_copy, path
 Changed: 2026-08-17T00:06:51.362963
 
 fallout2-ce-extended: compat_stricmp is pure ASCII case-fold — no '/' vs '\' separator normalization; sfallVfsResolvePath doesn't normalize either (only traversal/absolute/drive-letter rejection + root prepend). fs_copy same-path branch compares RESOLVED paths case-insensitively
+
+## [got-20260817040334-6608fe]
+Category: gotcha
+Tags: automap, savegame, format
+Changed: 2026-08-17T04:03:34.840993
+
+fallout2-ce-extended: AUTOMAP.DB is copied into save slots (loadsave.cc _GameMap2Slot/_SlotMap2Game) despite being a per-session cache — format changes need a version bump (AUTOMAP_DB_VERSION 1->2 for the 173-map layout) + automapEnsureCurrent() regeneration on stale/corrupt header. dataSize must be derived from AUTOMAP_MAP_COUNT, never hardcoded
+
+## [got-20260817040334-283c10]
+Category: gotcha
+Tags: sfall, art, cache, config
+Changed: 2026-08-17T04:03:34.917949
+
+fallout2-ce-extended: sfall OverrideArtCacheSize=1 sets a FIXED 261 MB art cache (sfall 4.3.2 changelog: '261 instead of 256'; source SafeWrite32(0x418872, 256) pre-4.3.2). No ArtCacheSize key exists in sfall. CE honors it via [Misc] ArtCacheSize default 261 with 8..512 clamp. Beware: readme LINE numbers (e.g. 'readme:361') get misread as values — verify against changelog/source
+
+## [got-20260817040334-1df53a]
+Category: gotcha
+Tags: sfall, dialog, female, rpu
+Changed: 2026-08-17T04:03:34.990701
+
+fallout2-ce-extended: sfall FemaleDialogMsgs selects text/<lang>/dialog_female (level>=1) and cuts_female (level>=2) for a female player with per-directory fallback to normal dirs when absent (English ships none — byte-identical). Non-English RPU dirs: french/italian/polish/portuguese/russian/spanish/vietnamese ship BOTH; czech/german/hungarian/swedish ship cuts_female ONLY
 
