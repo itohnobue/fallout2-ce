@@ -1,25 +1,50 @@
 # Fallout 2 CE Extended
 
-Fallout 2 CE Extended is a fully working re-implementation of the Fallout 2 engine, optimized for a hassle-free experience on multiple platforms.  It provides high resolution support, quality-of-life improvements, and dozens of bug fixes.
+**A native macOS ARM Fallout 2 engine that runs the big total-conversion mods — Fallout 2 Restoration Project (RPU) and Fallout Et Tu — out of the box.**
 
-## Why you may need this
+Fallout 2 CE Extended is a fork of [fallout2-ce](https://github.com/fallout2-ce/fallout2-ce) (the modern re-implementation of the Fallout 2 engine). On top of the upstream engine we add the sfall scripting layer those mods depend on, deep RPU / Et Tu compatibility work, and production hardening — all kept in sync with upstream as it evolves.
 
-Currently there is no easy way to play both Fallout 1 and Fallout 2 on Mac with Apple Silicon and all the updates installed (like RPU and Et Tu) to get the best gaming experience. This project is aimed to fix that and deliver a native macOS ARM Fallout 1-2 engine which is also compatible with all improvements.
+## Why this fork
 
-## Mod Compatibility
+There was no easy way to play Fallout 1 and Fallout 2 on Mac with Apple Silicon with the modern mod scene installed (RPU, Et Tu). Upstream CE runs on macOS, but the big total conversions require [sfall](https://github.com/sfall-team/sfall) — a Windows-only engine extension. This project reimplements the sfall scripting surface natively inside CE, so the mods run on the fork without any Windows layer.
 
-The following total conversion mods are tested:
+## What you get vs. upstream CE
+
+| Area | Upstream CE | This fork |
+| --- | --- | --- |
+| **sfall scripting** | partial | Full sfall 4.5.1 scripting surface: 121+ opcodes/metarules, 43 of 62 hook types (38 sfall hooks + 5 CE-specific hooks) |
+| **Fallout 2 Restoration Project (RPU)** | not supported | ✅ Supported — all RPU hooks, opcodes, metarules and config keys implemented and verified against the RPU source |
+| **Fallout Et Tu** | not supported | ✅ Supported — 28/33 requirement rows verified; the 5 remaining are optional sfall engine features no Et Tu script depends on |
+| **Mod configuration** | partial | RPU/Et Tu ddraw.ini keys honored (WorldMapSlots, ElevatorsFile, ExtraSaveSlots, KarmaFRMs, SpeedMulti, OverrideArtCacheSize, FemaleDialogMsgs, …), bridged into CE's config system |
+| **Save compatibility** | — | Backward compatible saves; sfall global-vars and override state serialized |
+| **Hardening** | — | 18 production audit passes: ~800+ verified fixes across every subsystem (bounds checks, UAF/null-deref guards, save integrity, VFS sandboxing) |
+| **Upstream sync** | — | Continuously merged (currently synced through upstream 1cce144, 2026-08-16) |
+| **Tests** | — | 90 test executables, all passing |
+
+## Mod compatibility
 
 | Mod | Status | Notes |
 | --- | --- | --- |
-| [Fallout 2 Restoration Project (RPU)](https://github.com/BGforgeNet/Fallout2_Restoration_Project) | Supported | `set_hero_style` (0x8215) and `set_hero_race` (0x8214) hero appearance opcodes. CarTravel, SetGlobalVar, Sneak, OnExplosion, TargetObject hooks. Combat tracking (get_last_target/get_last_attacker). XP mod (set_xp_mod), skill points per level mod. `get_stat_max`/`get_stat_min` return correct per-stat limits (no longer hardcoded 10/0). State variables reset on new game (gSkillMaxCap, gPerkFrequencyOverride, gSkillPointsPerLevelMod, hero model globals). Critter type safety guards on stat setters. Knockback integration complete (combat.cc:4837-4857) for all 3 types with absolute/additive modes. SpeedMulti with `ddraw.ini [Speed]` parsing. |
-| [Fallout Et Tu](https://github.com/rotators/Fo1in2) | Supported | FO1-mode behavior controlled via `gFallout1Behavior` config flag (TRAITS — trait selection and mutation rules, COMBAT — hit-chance and damage calculation, REST — resting and healing mechanics, ENCOUNTER — random encounter handling, WORLD_MAP — world map city labels and travel, DIALOG — dialog interface and reaction thresholds, INTERFACE — UI behavior and overlays modules). VOODOO memory patches implemented as native CE config-driven behavior. FO1 hit-chance and damage modifiers, encounter dialog override (skip "Investigate?"), rest hours/messages (wake-up 6, RESTMODE_NO_HEALING), reaction thresholds (25/-25), worldmap city labels gated to FO1 cities. `set_town_title`, `set_car_intface_art`, `SET_WM_MUSIC` metarule3, `set_rest_mode`, `r_get_ini_string`, `r_message_box`, `metarule_exist("rotators")` metarules. USEANIMOBJ, DESCRIPTIONOBJ, SETLIGHTING, OnExplosion, TargetObject hooks. reg_anim_callback, set_perk_name/desc, set_fake_trait opcodes. Timer event system (`add_g_timer_event`, `remove_timer_event`). Interface overlay rendering via `windowCreate` integration. Lock unjamming metarule. Save/load with backward compat. VFS write-mode enforcement. GlobalScriptPaths config integration. Dogmeat PID in `_Dogs` array. Engine reports sfall 4.5.1. `get_object_ai_data` type 0 returns AI packet; types 1-2 return AI flags and procedure via accessors. |
+| [Fallout 2 Restoration Project (RPU)](https://github.com/BGforgeNet/Fallout2_Restoration_Project) | ✅ Supported | Hooks, opcodes, metarules, config keys all implemented. UPU extras included (Goris de-robing FPS, critter walk speed, extra save slots, hero appearance). |
+| [Fallout Et Tu](https://github.com/rotators/Fo1in2) | ✅ Supported | Full FO1-mode engine behavior (traits, combat, rest, encounters, worldmap, dialog), Et Tu config overlays, and its sfall surface. |
 
-## See Also
+Detailed, requirement-by-requirement status for both mods lives in [SFALL_COMPATIBILITY.md](SFALL_COMPATIBILITY.md).
 
-- [INSTALL.md](INSTALL.md) — Build instructions for all supported platforms
-- [SFALL_COMPATIBILITY.md](SFALL_COMPATIBILITY.md) — Sfall script function and hook compatibility reference
-- [CHANGELOG.md](CHANGELOG.md) — Release history and changes
+## What's left
+
+Everything remaining is polish-level — nothing blocks playing either mod:
+
+- **Et Tu: `PerksFile` (P2)** — Et Tu ships `config/Perks.ini` FO1 perk tuning that the engine currently ignores (FO2 perk defaults apply).
+- **Et Tu: optional sfall engine features (P3)** — NPC combat control, key-driven item highlighting, worldmap tweaks, and a few QoL settings. None of these break Et Tu scripts; they're parity niceties.
+- **Et Tu: rotators-only metarules as safe no-ops (P3)** — for third-party scripts probing `metarule_exist("r_...")`.
+- **Runtime verification (P3)** — a few in-game checks (reaction-threshold persistence, Fast Shot AP edge cases).
+- **Upstream sync (ongoing)** — drift is currently 1 commit.
+
+## Docs
+
+- [INSTALL.md](INSTALL.md) — build and install for all platforms
+- [SFALL_COMPATIBILITY.md](SFALL_COMPATIBILITY.md) — sfall / RPU / Et Tu compatibility reference, with remaining-work checklists
+- [CHANGELOG.md](CHANGELOG.md) — release history
 
 ## License
 
