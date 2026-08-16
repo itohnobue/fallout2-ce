@@ -51,6 +51,7 @@ int screenGetWidth();
 int screenGetHeight();
 int screenGetVisibleHeight();
 void handleWindowSizeChanged();
+void renderFpsCounter();
 void renderPresent();
 // returns true if the game is running in exclusive fullscreen mode, false
 // otherwise (including windowed fullscreen mode)

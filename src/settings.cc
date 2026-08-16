@@ -237,6 +237,7 @@ void initSettingsRegistry(bool isMapper)
 
 #define SECT debug
     SETTING(mode);
+    SETTING(show_fps);
     SETTING(show_tile_num);
     SETTING(show_script_messages);
     SETTING(show_load_info);

@@ -4058,6 +4058,7 @@ static int wmWorldMapFunc(int a1)
                 if (!wmGenData.isWalking && !mousePressed && abs(wmGenData.worldPosX - worldX) < 5 && abs(wmGenData.worldPosY - worldY) < 5) {
                     mousePressed = true;
                     wmInterfaceRefresh();
+                    renderFpsCounter();
                     renderPresent();
                 }
             } else {
@@ -4215,6 +4216,7 @@ static int wmWorldMapFunc(int a1)
             break;
         }
 
+        renderFpsCounter();
         renderPresent();
         sharedFpsLimiter.throttle();
 
@@ -7348,6 +7350,7 @@ static int wmTownMapFunc(int* mapIdxPtr)
             }
         }
 
+        renderFpsCounter();
         renderPresent();
         sharedFpsLimiter.throttle();
     }
