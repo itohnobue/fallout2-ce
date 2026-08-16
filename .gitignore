@@ -78,6 +78,9 @@ TestResult.xml
 # Temporary / working files
 tmp/
 
+# Local planning notes (not part of the repo)
+plans/
+
 # macOS / Xcode build artifacts
 *.dSYM
 *.dSYM.zip
