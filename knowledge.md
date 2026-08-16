@@ -1,5 +1,5 @@
 # Knowledge Base
-Last updated: 2026-08-02T23:38:25.893998
+Last updated: 2026-08-17T00:06:51.364473
 
 ## [dis-20260704144725-9b3649]
 Category: discovery
@@ -443,4 +443,18 @@ Tags: test, regression, fallout2-ce
 Changed: 2026-08-02T23:38:25.892371
 
 fallout2-ce-extended: CODIFYING MIRROR TESTS invert regression detection — test mirrors that duplicate production logic can diverge AND can encode the bug as expected behavior, making CI validate the regression. Examples: M-088/test_map.cc:447 asserted the .edg EOF bug as correct (P-15, PRIOR_FIX 78a8373); F-55/test_fixes_saveload.cc encoded the 0x3FFF opcode-mask bug (R-09: 0xC001 & 0x3FFF = 1 < 768 CHECK fails); UF-H-020/test_misc_ui_config_fixes.cc asserted critterSetBonusStat bonus-0→-2 (the C-05 clamp bug); test_stat blessed the XPTable no-op (R-06); M-99 windowWordWrap test had guards production lacked. Lesson: rewrite the codifying mirror in the SAME pass as the fix (converts it to regression-detecting — a future re-add FAILS CI); mirrors give false confidence — prefer production-linked tests or periodic mirror-vs-production drift checks.
+
+## [got-20260817000651-b24b40]
+Category: gotcha
+Tags: sfall, config, et-tu
+Changed: 2026-08-17T00:06:51.285614
+
+fallout2-ce-extended: contentConfigTryMigrateFromSfall writes gSfallConfig preset '0' defaults into data/config/game#patch.cfg BEFORE contentConfigInit's configRead — any set-if-absent seeding of migrated keys is defeated by migration-written zeros; seed unconditionally (et tu gate keys use this pattern)
+
+## [got-20260817000651-e58a8e]
+Category: gotcha
+Tags: vfs, fs_copy, path
+Changed: 2026-08-17T00:06:51.362963
+
+fallout2-ce-extended: compat_stricmp is pure ASCII case-fold — no '/' vs '\' separator normalization; sfallVfsResolvePath doesn't normalize either (only traversal/absolute/drive-letter rejection + root prepend). fs_copy same-path branch compares RESOLVED paths case-insensitively
 
