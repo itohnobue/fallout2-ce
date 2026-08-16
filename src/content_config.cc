@@ -32,7 +32,65 @@ void contentConfigInit()
     configRead(&gContentConfig, kConfigPath, true);
     // Patch config allows to override only certain fields, without replacing the whole file.
     // TODO: remove this after config patching by mods is implemented inside configRead
-    configRead(&gContentConfig, kConfigPatchPath, true);
+    bool patchLoaded = configRead(&gContentConfig, kConfigPatchPath, true);
+
+    // Et Tu first-run startup gate (SFALL_COMPATIBILITY.md, Et Tu section,
+    // "Remaining work" item 1). et tu's gl_0.ssl (lines 31-45) requires four
+    // ddraw.ini keys to be non-zero via get_ini_setting: AllowUnsafeScripting,
+    // DisableHorrigan, UseFileSystemOverride, Fallout1Behavior. With CE's
+    // shipped config all four resolve to 0, tripping the gate: the script
+    // force-writes the keys to 1, calls signal_close_game and a deliberate
+    // force_crash → one forced restart on first run.
+    //
+    // game#patch.cfg is et tu's signature overlay (RPU does not ship one).
+    // When it is present AND carries the FO1 start map (V13ent.map — et tu's
+    // Vault 13 entrance start, game#patch.cfg [start] map=), seed the gate
+    // keys so the script-visible get_ini_setting values resolve non-zero on
+    // first run. DisableHorrigan is already covered by et tu's own
+    // game#patch.cfg ([worldmap] disable_horrigan=1). The seeds only apply
+    // to the script-visible bridge — AllowUnsafeScripting and
+    // UseFileSystemOverride are intentionally unwired in CE, and
+    // Fallout1Behavior is already driven by gContentConfig [start]
+    // fallout1_behavior.
+    if (patchLoaded) {
+        contentConfigSeedEtTuGateKeys();
+    }
+}
+
+// Seeds the script-visible gate keys used by et tu's gl_0.ssl startup gate
+// when et tu's signature overlay (game#patch.cfg with the FO1 start map
+// V13ent.map) is deployed. See contentConfigInit for the full rationale.
+//
+// The seeds OVERRIDE any existing values: contentConfigTryMigrateFromSfall
+// (runs before this, writing gSfallConfig defaults "0" for Fallout1Behavior /
+// UseFileSystemOverride / AllowUnsafeScripting into game#patch.cfg on disk)
+// would otherwise pre-populate the keys and defeat set-if-absent seeding.
+// Overriding matches et tu's own behavior — its gl_0.ssl gate force-writes
+// these keys to 1 via set_ini_setting on first run anyway, and et tu (FO1
+// content) requires FO1 mechanics to function correctly.
+void contentConfigSeedEtTuGateKeys()
+{
+    if (!gContentConfig.isInitialized()) {
+        return;
+    }
+
+    char* startMap = nullptr;
+    if (!configGetString(&gContentConfig, CONTENT_CONFIG_START_SECTION, "map", &startMap)
+        || startMap == nullptr
+        || compat_stricmp(startMap, "V13ent.map") != 0) {
+        return;
+    }
+
+    // Unconditional: the migration-written "0" defaults (or an absent key)
+    // must both resolve to the et-tu-required value 1. Only the script-visible
+    // bridge values are affected — AllowUnsafeScripting and
+    // UseFileSystemOverride stay intentionally unwired engine-side, and
+    // Fallout1Behavior is driven by [start] fallout1_behavior (scripts.cc).
+    configSetInt(&gContentConfig, CONTENT_CONFIG_START_SECTION, "use_filesystem_override", 1);
+    configSetInt(&gContentConfig, CONTENT_CONFIG_START_SECTION, "allow_unsafe_scripting", 1);
+    configSetInt(&gContentConfig, CONTENT_CONFIG_START_SECTION, "fallout1_behavior", 1);
+    debugPrint("Content config: et tu overlay detected (start map V13ent.map) — "
+               "startup-gate keys seeded for first-run compatibility.\n");
 }
 
 void contentConfigExit()
@@ -65,6 +123,10 @@ static const SfallContentMapping kSfallContentMappings[] = {
     { "Misc", "Fallout1Behavior", CONTENT_CONFIG_START_SECTION, "fallout1_behavior" },
     // F-04: UseFileSystemOverride migration — see game_config_migration.cc for rationale.
     { "Misc", "UseFileSystemOverride", CONTENT_CONFIG_START_SECTION, "use_filesystem_override" },
+    // et tu startup gate: AllowUnsafeScripting (ddraw.ini [Debugging]) resolves
+    // through the bridge so get_ini_setting can see the seeded value without
+    // requiring ddraw.ini keys. The engine-side flag stays unwired.
+    { "Debugging", "AllowUnsafeScripting", CONTENT_CONFIG_START_SECTION, "allow_unsafe_scripting" },
     { "Misc", "KarmaFRMs", CONTENT_CONFIG_KARMA_SECTION, "frms" },
     { "Misc", "KarmaPoints", CONTENT_CONFIG_KARMA_SECTION, "points" },
     { "Misc", "DialogueFix", CONTENT_CONFIG_DIALOG_SECTION, "no_exit_hotkey" },

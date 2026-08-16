@@ -934,13 +934,19 @@ TEST_CASE("P-06: VFS accepts normal relative path")
 }
 
 // =================================================================
-// C-06: fs_copy same-path rejection.
+// C-06 / RPU P1: fs_copy same-path handling (2026-08-16).
 // Mirrors op_fs_copy's resolved-path comparison.
+// The identical-path branch (sfall_opcodes.cc:2595-2627) returns a
+// NON-TRUNCATING "r+b" read-write handle over the original file
+// (deletable=false — original asset never removed at free) instead of
+// rejecting with -1. RPU's UPU scripts (gl_k_goris_derobing.ssl:40,
+// gl_k_walking_speed.ssl:88) depend on same-path fs_copy for in-place
+// FRM FPS patching.
 // =================================================================
 namespace vfs_samepath_mirror {
 
 // Mirror of compat_stricmp (case-insensitive path comparison used by
-// op_fs_copy to reject identical resolved paths).
+// op_fs_copy to detect identical resolved paths).
 bool samePath(const char* a, const char* b)
 {
     if (a == nullptr || b == nullptr) {
@@ -962,7 +968,7 @@ bool samePath(const char* a, const char* b)
 
 } // namespace vfs_samepath_mirror
 
-TEST_CASE("C-06: fs_copy identical resolved paths rejected")
+TEST_CASE("C-06: fs_copy identical resolved paths — same-path branch")
 {
     const char* src = "art\\critters\\mawalka.frm";
     const char* dst = "art\\critters\\mawalka.frm";
@@ -970,10 +976,11 @@ TEST_CASE("C-06: fs_copy identical resolved paths rejected")
     bool samePath = vfs_samepath_mirror::samePath(src, dst);
 
     CHECK(samePath == true);
-    // Production: samePath → push -1, never open dest "w+b"
+    // Production: samePath → "r+b" handle over the original (no truncation,
+    // non-deletable). RPU UPU FRM patching depends on this.
 }
 
-TEST_CASE("C-06: fs_copy case-variant same path rejected")
+TEST_CASE("C-06: fs_copy case-variant same path — same-path branch")
 {
     const char* src = "Art\\Critters\\mawalka.frm";
     const char* dst = "art\\critters\\mawalka.frm";

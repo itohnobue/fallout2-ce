@@ -37,6 +37,14 @@ void contentConfigExit();
 int contentConfigLookupSfallInt(const char* section, const char* key);
 const char* contentConfigLookupSfallString(const char* section, const char* key);
 
+// Seeds the et tu startup-gate keys ([start] use_filesystem_override,
+// allow_unsafe_scripting, fallout1_behavior) into gContentConfig when et tu's
+// signature overlay is detected (game#patch.cfg with the FO1 start map
+// V13ent.map). Called from contentConfigInit after the patch overlay loads;
+// exposed for tests. Idempotent and no-op when the signature is absent or the
+// keys are already explicitly set.
+void contentConfigSeedEtTuGateKeys();
+
 } // namespace fallout
 
 #endif // CONTENT_CONFIG_H

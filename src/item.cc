@@ -864,10 +864,14 @@ int itemGetWeight(Object* item)
         case PROTO_ID_HARDENED_POWER_ARMOR:
         case PROTO_ID_ADVANCED_POWER_ARMOR:
         case PROTO_ID_ADVANCED_POWER_ARMOR_MK_II:
-            // FO2 halves power armor weight; FO1 does not.
-            if (!gFallout1Behavior) {
-                weight /= 2;
-            }
+            // CE halves power armor weight unconditionally (upstream CE
+            // behavior). The fork's previous `!gFallout1Behavior` gate
+            // double-counted with et tu's script-side compensation
+            // (gl_fo1mechanics.ssl adjust_pa_weight doubles the proto weight
+            // assuming the engine always halves): in FO1 mode the gate
+            // disabled halving AND the script doubled → 2× weight. Aligning
+            // with upstream (always halve) makes et tu's compensation exact.
+            weight /= 2;
             break;
         }
     } else if (itemType == ITEM_TYPE_CONTAINER) {

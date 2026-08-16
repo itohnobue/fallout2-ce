@@ -2592,15 +2592,38 @@ static void op_fs_copy(Program* program)
         return;
     }
 
-    // C-06: reject identical source/destination paths. sfall's FScopy is
-    // memory-only; the fork's disk-backed "w+b" destination open would
-    // truncate the source file to 0 bytes before reading it (RPU calls
-    // fs_copy(path, path) in gl_k_goris_derobing.ssl:40 and
-    // gl_k_walking_speed.ssl:88). Compare the RESOLVED paths so different
-    // spellings that normalize to the same file are also rejected.
+    // C-06 / RPU P1: accept identical source/destination paths. sfall's
+    // FScopy is memory-only and accepts same-path copies; RPU's UPU scripts
+    // call fs_copy(path, path) for in-place FRM FPS patching
+    // (gl_k_goris_derobing.ssl:40, gl_k_walking_speed.ssl:88) — without this
+    // both features are inert on CE. The fork's disk-backed copy would
+    // truncate the source with a "w+b" destination open, so identical paths
+    // get a NON-TRUNCATING read-write handle ("r+b") over the original file:
+    // the file content is never destroyed (C-06 safety intent preserved) and
+    // the handle is marked non-deletable so handle-free never removes the
+    // original asset (H-27 family). Compare the RESOLVED paths so different
+    // spellings that normalize to the same file are also handled this way.
     if (compat_stricmp(resolvedSrc, resolvedDst) == 0) {
-        programPrintError("fs_copy: source and destination paths are identical '%s'", resolvedSrc);
-        programStackPushInteger(program, -1);
+        FILE* inPlaceFile = compat_fopen(resolvedSrc, "r+b");
+        if (inPlaceFile == nullptr) {
+            programPrintError("fs_copy: cannot open identical source/dest '%s' for read-write", resolvedSrc);
+            programStackPushInteger(program, -1);
+            return;
+        }
+
+        int handle = sfallVfsAllocHandle();
+        if (handle < 0) {
+            programPrintError("fs_copy: no free VFS handles");
+            fclose(inPlaceFile);
+            programStackPushInteger(program, -1);
+            return;
+        }
+
+        sfallVfsFiles[handle] = inPlaceFile;
+        sfallVfsFileMode[handle] = 2; // read-write ("r+b")
+        sfallVfsFileDeletable[handle] = false; // original game asset — never delete
+        sfallVfsFilePath[handle] = internal_strdup(resolvedSrc);
+        programStackPushInteger(program, handle);
         return;
     }
 

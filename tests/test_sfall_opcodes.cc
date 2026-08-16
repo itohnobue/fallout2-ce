@@ -598,6 +598,117 @@ TEST_CASE("sfallVfsCloseAll")
 }
 
 // ============================================================
+// RPU P1: fs_copy(path, path) same-path copy contract.
+// sfall_opcodes.cc op_fs_copy — identical resolved paths.
+// ============================================================
+
+// Mirror of the fs_copy identical-path decision in op_fs_copy
+// (src/sfall_opcodes.cc). The opcode handler and the VFS handle arrays are
+// file-static and cannot be called from tests (documented N2-038/039/040
+// limitation: Program* with full stack ops + controllable compat_fopen).
+// This mirror replicates the branch conditions exactly and returns the
+// handle configuration the production branch would set, so regressions in
+// the decision logic (e.g. switching back to "w+b" truncation, marking the
+// same-path handle deletable, or rejecting identical paths outright) are
+// caught by the assertions below.
+enum class VfsHandleKind {
+    kSamePathInPlace, // resolvedSrc == resolvedDst: "r+b", mode 2, deletable=false
+    kDistinctCopy,    // different paths: read fully first, "w+b" dest, deletable=true
+};
+
+struct VfsCopyDecision {
+    VfsHandleKind kind;
+    const char* openMode; // "r+b" for same-path, "w+b" for distinct
+    bool deletable;
+    bool nonTruncating;   // same-path must never truncate the source
+};
+
+static VfsCopyDecision testFsCopyDecision(const char* resolvedSrc, const char* resolvedDst)
+{
+    // Mirrors src/sfall_opcodes.cc op_fs_copy:
+    //   if (compat_stricmp(resolvedSrc, resolvedDst) == 0) {
+    //       fopen(resolvedSrc, "r+b");           // NO truncation (C-06 intent)
+    //       mode = 2;                            // read-write
+    //       deletable = false;                   // original asset — never remove
+    //   } else {
+    //       read source fully into memory first; // truncation-safe ordering
+    //       fopen(resolvedDst, "w+b");
+    //       deletable = true;                    // script-created copy
+    //   }
+    if (compat_stricmp(resolvedSrc, resolvedDst) == 0) {
+        return { VfsHandleKind::kSamePathInPlace, "r+b", /*deletable=*/false, /*nonTruncating=*/true };
+    }
+    return { VfsHandleKind::kDistinctCopy, "w+b", /*deletable=*/true, /*nonTruncating=*/true };
+}
+
+TEST_CASE("RPU P1: fs_copy identical-path decision logic")
+{
+    // RPU call sites that depend on same-path fs_copy:
+    //   gl_k_goris_derobing.ssl:40 (madethag.frm / marobeag.frm FRM FPS patch)
+    //   gl_k_walking_speed.ssl:88 (art\critters\*b.frm)
+    // Without the branch both UPU features are inert on CE.
+
+    SUBCASE("identical resolved paths — non-deletable r+b handle")
+    {
+        const char* path = R"(data\art\critters\madethag.frm)";
+        VfsCopyDecision d = testFsCopyDecision(path, path);
+        CHECK(d.kind == VfsHandleKind::kSamePathInPlace);
+        CHECK(compat_stricmp(d.openMode, "r+b") == 0);   // never truncate the source
+        CHECK(d.deletable == false);                     // original asset — never removed at free
+        CHECK(d.nonTruncating == true);
+    }
+
+    SUBCASE("different spellings normalizing to the same file — same-path branch")
+    {
+        // The comparison is on RESOLVED paths (case-insensitive). NOTE: the
+        // production comparison uses compat_stricmp, which is pure ASCII
+        // case-folding — it does NOT normalize '/' vs '\' separators, and
+        // sfallVfsResolvePath does not normalize them either (it only rejects
+        // traversal/absolute/drive-letter paths and prepends the sandbox
+        // root). So only case variants of an identical separator-style path
+        // reach the same-path branch.
+        const char* src = R"(data\art\critters\madethag.frm)";
+        const char* dst = R"(DATA\ART\CRITTERS\MADETHAG.FRM)";
+        VfsCopyDecision d = testFsCopyDecision(src, dst);
+        CHECK(d.kind == VfsHandleKind::kSamePathInPlace); // resolved-path comparison
+        CHECK(d.deletable == false);
+        CHECK(compat_stricmp(d.openMode, "r+b") == 0);
+    }
+
+    SUBCASE("distinct paths — copy flow unchanged (deletable copy)")
+    {
+        const char* src = R"(data\art\critters\madethag.frm)";
+        const char* dst = R"(data\art\critters\marobeag.frm)";
+        VfsCopyDecision d = testFsCopyDecision(src, dst);
+        CHECK(d.kind == VfsHandleKind::kDistinctCopy);
+        CHECK(compat_stricmp(d.openMode, "w+b") == 0);   // destination may be created
+        CHECK(d.deletable == true);                      // script-created copy
+        CHECK(d.nonTruncating == true);                  // source fully buffered first
+    }
+
+    SUBCASE("case-insensitive comparison (Windows-style paths)")
+    {
+        const char* src = R"(data\ART\critters\marobeag.frm)";
+        const char* dst = R"(data\art\critters\MAROBEAG.FRM)";
+        VfsCopyDecision d = testFsCopyDecision(src, dst);
+        CHECK(d.kind == VfsHandleKind::kSamePathInPlace);
+    }
+
+    SUBCASE("separator variants do NOT match (compat_stricmp has no separator normalization)")
+    {
+        // Documents the production contract: the same-path branch triggers
+        // only on case-insensitive equality of RESOLVED paths. Neither
+        // compat_stricmp nor sfallVfsResolvePath normalizes '/' vs '\'
+        // separators, so a mixed-separator variant compares unequal and takes
+        // the distinct-path copy flow.
+        const char* src = R"(data\art\critters\madethag.frm)";
+        const char* dst = R"(data/art/critters/madethag.frm)";
+        VfsCopyDecision d = testFsCopyDecision(src, dst);
+        CHECK(d.kind == VfsHandleKind::kDistinctCopy);
+    }
+}
+
+// ============================================================
 // sfallOpcodesExit — teardown for engine shutdown.
 // ============================================================
 

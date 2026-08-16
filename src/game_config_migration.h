@@ -25,7 +25,10 @@ void contentConfigTryMigrateFromSfall(const char* contentConfigPath);
 // (DisableSpecialMapIDs, InventoryApCost, QuickPocketsApCostReduction,
 // WorldMapTerrainInfo, XPTable, ViewXPos/ViewYPos to [start] worldmap_view_*).
 // StartXPos/StartYPos keep the fork [worldmap] targets (F-072 Et Tu path).
-inline constexpr size_t kSfallMigrationEntryCount = 70;
+// Et tu startup gate (2026-08-16): 70 → 71 — Debugging|AllowUnsafeScripting
+// → [start] allow_unsafe_scripting (seeded when et tu's game#patch.cfg
+// overlay is detected so gl_0.ssl's first-run forced restart is avoided).
+inline constexpr size_t kSfallMigrationEntryCount = 71;
 
 } // namespace fallout
 

@@ -3,7 +3,8 @@
 //
 // Validates behavior of the changed functions since fork point 24199e9:
 //   1. dudeIsAddicted() — loop-termination bug fix (e4656db + 481cb9e)
-//   2. itemGetWeight() — gFallout1Behavior for power armor weight
+//   2. itemGetWeight() — unconditional power-armor weight halving
+//      (upstream CE semantics; et tu compensates script-side)
 //   3. weaponGetActionPointCost() — gFastShotFix refactoring
 //
 // These tests use local mirrored logic rather than linking item.cc,
@@ -181,10 +182,10 @@ static int testGetArmorWeight(int pid, int protoWeight, bool isHidden)
     case TEST_PID_HARDENED_POWER_ARMOR:
     case TEST_PID_ADVANCED_POWER_ARMOR:
     case TEST_PID_ADVANCED_POWER_ARMOR_MK_II:
-        // FO2 halves power armor weight; FO1 does not.
-        if (!gTestFallout1Behavior) {
-            weight /= 2;
-        }
+        // CE halves power armor weight unconditionally (upstream behavior).
+        // et tu compensates script-side (adjust_pa_weight doubles the proto
+        // weight), so the engine must always halve — see src/item.cc.
+        weight /= 2;
         break;
     }
 
@@ -462,7 +463,7 @@ TEST_CASE("testGetArmorWeight — power armor halving")
     const int kAdvancedPowerArmorWeight = 75;
     const int kAdvancedPowerArmorMKIIWeight = 75;
 
-    SUBCASE("gFallout1Behavior=false (FO2 default) — all power armors halved")
+    SUBCASE("all power armors halved regardless of gFallout1Behavior (upstream CE semantics)")
     {
         gTestFallout1Behavior = false;
 
@@ -470,16 +471,16 @@ TEST_CASE("testGetArmorWeight — power armor halving")
         CHECK(testGetArmorWeight(TEST_PID_HARDENED_POWER_ARMOR, kHardenedPowerArmorWeight, false) == 50); // 100/2 = 50
         CHECK(testGetArmorWeight(TEST_PID_ADVANCED_POWER_ARMOR, kAdvancedPowerArmorWeight, false) == 37); // 75/2 = 37
         CHECK(testGetArmorWeight(TEST_PID_ADVANCED_POWER_ARMOR_MK_II, kAdvancedPowerArmorMKIIWeight, false) == 37); // 75/2 = 37
-    }
 
-    SUBCASE("gFallout1Behavior=true (FO1 compatibility) — weight unchanged")
-    {
+        // FO1 mode halving is also unconditional: et tu's adjust_pa_weight
+        // doubles the proto weight to compensate, so the engine must halve
+        // in both modes (otherwise the two combine to 2× weight).
         gTestFallout1Behavior = true;
 
-        CHECK(testGetArmorWeight(TEST_PID_POWER_ARMOR, kPowerArmorWeight, false) == 85);
-        CHECK(testGetArmorWeight(TEST_PID_HARDENED_POWER_ARMOR, kHardenedPowerArmorWeight, false) == 100);
-        CHECK(testGetArmorWeight(TEST_PID_ADVANCED_POWER_ARMOR, kAdvancedPowerArmorWeight, false) == 75);
-        CHECK(testGetArmorWeight(TEST_PID_ADVANCED_POWER_ARMOR_MK_II, kAdvancedPowerArmorMKIIWeight, false) == 75);
+        CHECK(testGetArmorWeight(TEST_PID_POWER_ARMOR, kPowerArmorWeight, false) == 42);
+        CHECK(testGetArmorWeight(TEST_PID_HARDENED_POWER_ARMOR, kHardenedPowerArmorWeight, false) == 50);
+        CHECK(testGetArmorWeight(TEST_PID_ADVANCED_POWER_ARMOR, kAdvancedPowerArmorWeight, false) == 37);
+        CHECK(testGetArmorWeight(TEST_PID_ADVANCED_POWER_ARMOR_MK_II, kAdvancedPowerArmorMKIIWeight, false) == 37);
     }
 
     SUBCASE("non-power-armor armor is never halved")
@@ -523,12 +524,14 @@ TEST_CASE("testGetArmorWeight — gFallout1Behavior toggling")
 {
     const int kPowerArmorWeight = 85;
 
-    // Toggle Fallout1Behavior mid-test to verify dynamic behavior
+    // Toggle Fallout1Behavior mid-test to verify the global does NOT affect
+    // power armor weight (CE halves unconditionally — et tu compensates
+    // script-side with adjust_pa_weight).
     gTestFallout1Behavior = false;
     CHECK(testGetArmorWeight(TEST_PID_POWER_ARMOR, kPowerArmorWeight, false) == 42);
 
     gTestFallout1Behavior = true;
-    CHECK(testGetArmorWeight(TEST_PID_POWER_ARMOR, kPowerArmorWeight, false) == 85);
+    CHECK(testGetArmorWeight(TEST_PID_POWER_ARMOR, kPowerArmorWeight, false) == 42);
 
     gTestFallout1Behavior = false;
     CHECK(testGetArmorWeight(TEST_PID_POWER_ARMOR, kPowerArmorWeight, false) == 42);
@@ -868,14 +871,14 @@ TEST_CASE("Power armor weight — FO1 vs FO2 scenario")
     // Switch to FO1
     gTestFallout1Behavior = true;
 
-    SUBCASE("FO1: Advanced Power Armor is full weight")
+    SUBCASE("FO1: Advanced Power Armor is still halved (unconditional)")
     {
-        CHECK(testGetArmorWeight(TEST_PID_ADVANCED_POWER_ARMOR, 75, false) == 75);
+        CHECK(testGetArmorWeight(TEST_PID_ADVANCED_POWER_ARMOR, 75, false) == 37);
     }
 
-    SUBCASE("FO1: Power Armor (basic) is full weight")
+    SUBCASE("FO1: Power Armor (basic) is still halved (unconditional)")
     {
-        CHECK(testGetArmorWeight(TEST_PID_POWER_ARMOR, 85, false) == 85);
+        CHECK(testGetArmorWeight(TEST_PID_POWER_ARMOR, 85, false) == 42);
     }
 }
 
@@ -984,10 +987,13 @@ TEST_CASE("RPU/Et Tu cross-reference: battle_game engine config")
     // as expected, which is the observable effect for RPU mods that set
     // Fallout1Behavior=1 in ddraw.ini.
 
-    SUBCASE("gFallout1Behavior toggle affects power armor weight")
+    SUBCASE("gFallout1Behavior toggle does NOT affect power armor weight")
     {
+        // CE halves power armor weight unconditionally (upstream semantics);
+        // et tu's adjust_pa_weight doubles protos script-side. The global
+        // toggle must leave the weight unchanged.
         gTestFallout1Behavior = true;
-        CHECK(testGetArmorWeight(TEST_PID_POWER_ARMOR, 85, false) == 85);
+        CHECK(testGetArmorWeight(TEST_PID_POWER_ARMOR, 85, false) == 42);
 
         gTestFallout1Behavior = false;
         CHECK(testGetArmorWeight(TEST_PID_POWER_ARMOR, 85, false) == 42);

@@ -686,8 +686,11 @@ void op_get_ini_setting(Program* program)
             }
         }
 
-        // F-356: AllowUnsafeScripting is not in the static content config
-        // migration table. Fall back to the CE global directly.
+        // F-356: AllowUnsafeScripting falls back to the CE global when the
+        // content bridge has no seeded value. The key now has a bridge entry
+        // (Debugging|AllowUnsafeScripting → [start] allow_unsafe_scripting)
+        // so et tu's startup gate can be seeded (content_config.cc); this
+        // fallback still serves non-et-tu deployments where the key is absent.
         if (compat_stricmp(fileName, "ddraw.ini") == 0
             && compat_stricmp(section, "Debugging") == 0
             && compat_stricmp(keyPtr, "AllowUnsafeScripting") == 0) {

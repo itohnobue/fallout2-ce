@@ -1204,6 +1204,65 @@ TEST_CASE("I2F-035: contentConfig SfallContentMappings count matches migration e
     CHECK(true); // count parity enforced by static_assert in game_config_migration.cc:267
 }
 
+TEST_CASE("et tu startup-gate seeding — contentConfigSeedEtTuGateKeys")
+{
+    // Et Tu remaining-work item 1 (SFALL_COMPATIBILITY.md): et tu's gl_0.ssl
+    // requires four ddraw.ini keys non-zero via get_ini_setting
+    // (AllowUnsafeScripting, DisableHorrigan, UseFileSystemOverride,
+    // Fallout1Behavior). With CE's shipped config all four resolve to 0 and
+    // the gate forces a restart on first run. When et tu's signature overlay
+    // (game#patch.cfg with [start] map=V13ent.map) is present, the seeding
+    // makes the script-visible values resolve non-zero without requiring
+    // ddraw.ini edits. DisableHorrigan is covered by et tu's own patch file.
+
+    contentConfigInit();
+
+    SUBCASE("no et tu signature — seeding is a no-op")
+    {
+        int val = contentConfigLookupSfallInt("Misc", "UseFileSystemOverride");
+        CHECK(val == -1); // not seeded before call
+        contentConfigSeedEtTuGateKeys();
+        val = contentConfigLookupSfallInt("Misc", "UseFileSystemOverride");
+        CHECK(val == -1); // still absent — no et tu start map
+    }
+
+    SUBCASE("et tu start map (V13ent.map) — all three gate keys seeded")
+    {
+        // Simulate et tu's game#patch.cfg [start] map=V13ent.map overlay.
+        configSetString(&gContentConfig, CONTENT_CONFIG_START_SECTION, "map", "V13ent.map");
+
+        contentConfigSeedEtTuGateKeys();
+
+        CHECK(contentConfigLookupSfallInt("Misc", "UseFileSystemOverride") == 1);
+        CHECK(contentConfigLookupSfallInt("Misc", "Fallout1Behavior") == 1);
+        // AllowUnsafeScripting is in the [Debugging] section of ddraw.ini —
+        // the bridge mapping (Debugging|AllowUnsafeScripting → [start]
+        // allow_unsafe_scripting) resolves it.
+        CHECK(contentConfigLookupSfallInt("Debugging", "AllowUnsafeScripting") == 1);
+    }
+
+    SUBCASE("migration-written zeros are overridden (set-if-absent would be defeated)")
+    {
+        // contentConfigTryMigrateFromSfall runs BEFORE contentConfigInit's
+        // configRead and writes gSfallConfig defaults ("0") for the gate keys
+        // into game#patch.cfg on disk. The seed must therefore OVERRIDE
+        // existing values (not set-if-absent) or the migration's zeros would
+        // defeat the seeding and the first-run gate would still trip.
+        configSetString(&gContentConfig, CONTENT_CONFIG_START_SECTION, "map", "V13ent.map");
+        configSetInt(&gContentConfig, CONTENT_CONFIG_START_SECTION, "use_filesystem_override", 0);
+        configSetInt(&gContentConfig, CONTENT_CONFIG_START_SECTION, "fallout1_behavior", 0);
+        configSetInt(&gContentConfig, CONTENT_CONFIG_START_SECTION, "allow_unsafe_scripting", 0);
+
+        contentConfigSeedEtTuGateKeys();
+
+        CHECK(contentConfigLookupSfallInt("Misc", "UseFileSystemOverride") == 1);
+        CHECK(contentConfigLookupSfallInt("Misc", "Fallout1Behavior") == 1);
+        CHECK(contentConfigLookupSfallInt("Debugging", "AllowUnsafeScripting") == 1);
+    }
+
+    contentConfigExit();
+}
+
 // =============================================================
 // F2-T8: sfall_gl_vars_remove — direct production function calls
 // =============================================================

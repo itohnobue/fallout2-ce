@@ -516,16 +516,19 @@ TEST_CASE("Only guard 5 (all pass) enables migration")
 
 TEST_CASE("F-054: kSfallMigrationEntryCount matches production header")
 {
-    // The header declares 70 migration entries. sync2 (upstream 1cce144)
+    // The header declares 71 migration entries. sync2 (upstream 1cce144)
     // grew the table 63 → 70 with upstream additions that have live
     // consumers (DisableSpecialMapIDs, InventoryApCost,
     // QuickPocketsApCostReduction, WorldMapTerrainInfo, XPTable,
     // ViewXPos/ViewYPos to [start] worldmap_view_*) — documented in
     // game_config_migration.h and enforced by the production static_assert
-    // in game_config_migration.cc:343 and content_config.cc:146. Our mirror
-    // tests verify 8 entries (the most commonly used ones). The full table
-    // of 70 entries exists in game_config_migration.cc and content_config.cc.
-    CHECK(kSfallMigrationEntryCount == 70);
+    // in game_config_migration.cc:349 and content_config.cc:208. The
+    // et tu startup gate (2026-08-16) grew the table 70 → 71 with the
+    // Debugging|AllowUnsafeScripting → [start] allow_unsafe_scripting
+    // bridge entry. Our mirror tests verify 8 entries (the most commonly
+    // used ones). The full table of 71 entries exists in
+    // game_config_migration.cc and content_config.cc.
+    CHECK(kSfallMigrationEntryCount == 71);
     CHECK(kSfallMigrationEntryCount > 0);
 }
 

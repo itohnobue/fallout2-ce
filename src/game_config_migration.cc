@@ -218,6 +218,7 @@ namespace {
     constexpr char kSfallMisc[] = "Misc";
     constexpr char kSfallInterface[] = "Interface";
     constexpr char kSfallSound[] = "Sound";
+    constexpr char kSfallDebugging[] = "Debugging";
 
     struct SfallMigrationEntry {
         const char* sfallSection;
@@ -245,6 +246,11 @@ namespace {
         // but the migration entry prevents RPU scripts from incorrectly detecting
         // a missing config (they check != 1, and absence returns 0/false).
         { kSfallMisc, "UseFileSystemOverride", CONTENT_CONFIG_START_SECTION, "use_filesystem_override", "0" },
+        // et tu startup gate: AllowUnsafeScripting (ddraw.ini [Debugging]) —
+        // bridges to [start] allow_unsafe_scripting so the script-visible
+        // get_ini_setting value can be seeded without ddraw.ini keys
+        // (SFALL_COMPATIBILITY.md Et Tu remaining-work item 1).
+        { kSfallDebugging, "AllowUnsafeScripting", CONTENT_CONFIG_START_SECTION, "allow_unsafe_scripting", "0" },
         // [maps]
         { kSfallMisc, "DisableSpecialMapIDs", CONTENT_CONFIG_MAPS_SECTION, "disable_special_map_ids", "0" },
         // [karma]
