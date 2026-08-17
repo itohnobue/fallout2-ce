@@ -1,5 +1,5 @@
 # Knowledge Base
-Last updated: 2026-08-17T23:40:44.052128
+Last updated: 2026-08-18T04:28:18.558949
 
 ## [dis-20260704144725-9b3649]
 Category: discovery
@@ -534,4 +534,46 @@ Tags: et-tu, sfall, opcode, gotcha, fallout2-ce
 Changed: 2026-08-17T23:40:44.050120
 
 et tu ce_enabled macro (fo1.h:62) = metarule_exist('opcode_exists') AND NOT opcode_exists(0x823B). 0x823B is sfall's modified_ini — CE MUST keep it unregistered: implementing it flips ce_enabled=false and disables ALL et tu CE-path script workarounds (gl_apcost.ssl AP handling etc.). Guarded by comment at sfall_opcodes.cc:8903.
+
+## [got-20260818002659-354454]
+Category: gotcha
+Tags: engine, config, smoke, teststand
+Changed: 2026-08-18T00:26:59.283439
+
+CE engine reads fallout2.cfg + ddraw.ini from argv[0] dir (app bundle Contents/MacOS), NOT from cwd/game folder — game folder copies only work when launched with bare argv[0]. Test stand fix: inject per-stand cfg into bundle via smoke/deploy.sh; macos 26 codesign treats every file in Contents/MacOS as code object — sign injected configs individually before re-signing bundle
+
+## [pat-20260818002659-20d078]
+Category: pattern
+Tags: fallout2, ceu, teststand, setup
+Changed: 2026-08-18T00:26:59.362408
+
+CE mac test stand: app bundle goes in game folder (cwd=bundle parent), data paths in cfg resolve against cwd; Et Tu uses '..\master.dat' relative paths; RPU defaults (master.dat, data, mods) match game folder layout so it works even without cfg read
+
+## [got-20260818040918-4a9dc9]
+Category: gotcha
+Tags: fallout2, scripts, interpreter, wait, gotcha
+Changed: 2026-08-18T04:09:18.310205
+
+Fallout2-CE interpreter WAITING branch: upstream has 'if (!checkWaitFunc) continue'; our f40c961 commit inverted it to 'if (checkWaitFunc) continue' — any wait() from an event-proc -1 dispatch busy-spins the main thread (100% CPU, game-time frozen, input starved, right-click taps lost) until real-time wait elapses. Fixed via programYieldIfWaiting() helper (pending->yield break, elapsed->clear+false) at interpreter.cc:3175-3182 + events entry guard 3491-3493. M-46 skip at scripts.cc:1653 is LOAD-BEARING (programSetupCall clears WAITING at interpreter.cc:3223 before proc dispatch — without M-46 the scriptExecProc channel bypasses the wait).
+
+## [pat-20260818040919-744af0]
+Category: pattern
+Tags: fallout2, scripts, pattern, interpreter
+Changed: 2026-08-18T04:09:19.448669
+
+Program-wait handling in FO2 CE: 'a WAITING program yields its dispatch slot' must be expressed at EVERY ungated -1 dispatch channel — interpret loop (WAITING branch), programProcessProcedureEvents entry guard, kGlobalScriptBusyFlags. Choke-point guard at programExecuteProcedure would freeze dialogs (game_dialog.cc:2466 reply site deliberately re-enters dialog-WAITING programs) — guard placement must be per-channel, not global. Residual ungated sites: sfall hooks :232, sfall_animation :116, sfall_opcodes :3883/:6336, sfall_arrays :1314/:1387.
+
+## [dis-20260818040923-55654c]
+Category: discovery
+Tags: fallout2, smoke, deploy, ctest
+Changed: 2026-08-18T04:09:23.238747
+
+Smoke stand ops: deployed binary MD5 differs from tree build EXPECTED after deploy.sh re-signs (codesign rewrites the signature blob) — compare __text segment (offset 25632) instead. ctest on the Xcode multi-config build requires -C RelWithDebInfo. Engine auto-erases data/MAPS/*.SAV at launch (gameInitWithOptions→_InitLoadSave→MapDirErase) — stale snapshot shadowing self-cleans on standard flows.
+
+## [con-20260818042818-3a8433]
+Category: context
+Tags: continuation, smoke-regression, fallout2
+Changed: 2026-08-18T04:28:18.556996
+
+SESSION-CONTINUATION: smoke-test regression (S1-S6 unfixed + crashes A/B) — full handoff doc at plans/smoke-regression-continuation.md. Key: WAITING-branch fix applied (correct, keep) but NOT the root cause; scripts DO execute (crash inside scriptExecProc); bad Program* lifecycle is prime suspect; right-click gate unknown; et tu worldmap-transition crash. All reports in tmp/ (indexed in the doc).
 

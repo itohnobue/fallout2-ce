@@ -216,6 +216,38 @@ static int checkWait(Program* program)
     return getInterpreterTime() <= program->waitEnd;
 }
 
+// A WAITING program yields its dispatch slot.
+//
+// Returns true while the wait is still pending: the caller must return from
+// the dispatch immediately (break the interpreter loop / skip event
+// processing) WITHOUT clearing PROGRAM_IS_WAITING or checkWaitFunc. The
+// per-frame bounded dispatch (_updatePrograms, sfall_gl_scr_update) re-enters
+// this program every frame; the moment the check function reports the wait has
+// elapsed, the wait state is cleared here and the caller resumes the
+// interrupted instruction stream.
+//
+// REC-1 (pre-fix audit): the WAITING branch previously spun on a pending wait
+// (`continue` with checkWaitFunc TRUE, inverted by f40c961) — a -1 dispatch
+// busy-looped at 100% CPU for the wait duration, freezing game time and input.
+// This helper centralizes the yield-and-resume semantic so every dispatch
+// channel (interpreter loop, events channel, proc gates) shares one meaning.
+static bool programYieldIfWaiting(Program* program)
+{
+    if ((program->flags & PROGRAM_IS_WAITING) == 0) {
+        return false;
+    }
+
+    if (program->checkWaitFunc != nullptr && program->checkWaitFunc(program)) {
+        // Wait still pending — yield the dispatch slot, keep the wait state.
+        return true;
+    }
+
+    // Wait elapsed (or no check function) — clear the wait and resume.
+    program->checkWaitFunc = nullptr;
+    program->flags &= ~PROGRAM_IS_WAITING;
+    return false;
+}
+
 // 0x4670FC
 void _interpretOutputFunc(int (*func)(const char*))
 {
@@ -3140,19 +3172,13 @@ void programInterpret(Program* program, int numInstructions)
             break;
         }
 
-        if ((program->flags & PROGRAM_IS_WAITING) != 0) {
-            interpreterBusy = true;
-
-            if (program->checkWaitFunc != nullptr) {
-                if (program->checkWaitFunc(program)) {
-                    interpreterBusy = false;
-                    continue;
-                }
-            }
-
+        if (programYieldIfWaiting(program)) {
+            // Wait still pending — yield the dispatch slot. PROGRAM_IS_WAITING
+            // and checkWaitFunc stay set; the per-frame bounded dispatch
+            // re-enters this program every frame and clears the wait the
+            // moment it elapses (fall-through in the helper).
             interpreterBusy = false;
-            program->checkWaitFunc = nullptr;
-            program->flags &= ~PROGRAM_IS_WAITING;
+            break;
         }
 
         // NOTE: Uninline.
@@ -3455,6 +3481,16 @@ void programProcessProcedureEvents(Program* program)
     int oldInstructionPointer;
     int data;
     jmp_buf env;
+
+    // F-15: A WAITING program yields its dispatch slot — do not process
+    // conditional/timed procs while a wait is pending. Entry placement is
+    // MANDATORY: the CONDITIONAL branch zeroes program->flags (below) before
+    // its -1 dispatch, which would clear the WAITING bit and let the condition
+    // body bypass the wait. Placement here covers both branches and both
+    // callers (doEvents below, sfall_gl_scr_update in sfall_global_scripts.cc).
+    if (programYieldIfWaiting(program)) {
+        return;
+    }
 
     if (interpreterEventsSuspended) {
         return;

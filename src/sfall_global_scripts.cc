@@ -18,9 +18,14 @@
 
 namespace fallout {
 
+// F-03: PROGRAM_IS_WAITING included so a mid-wait global script is treated as
+// busy and its procs are not re-dispatched through the gl_ channel (mirrors
+// the M-46 guard in scriptExecProc, scripts.cc:1653). Without this bit a
+// WAITING gl_ script could be re-dispatched, re-arming the wait each time.
 static constexpr int kGlobalScriptBusyFlags = PROGRAM_FLAG_FATAL_ERROR
     | PROGRAM_FLAG_CHILD_CALL
-    | PROGRAM_FLAG_CHILD_SPAWN;
+    | PROGRAM_FLAG_CHILD_SPAWN
+    | PROGRAM_IS_WAITING;
 
 // sfall runs global script procs directly. CE keeps globals outside the normal
 // program list, so pending callbacks are resumed here; use a large bounded burst

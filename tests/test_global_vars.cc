@@ -1061,15 +1061,19 @@ TEST_CASE("H-016: GlobalScriptsState kGlobalScriptBusyFlags constant (sfall_glob
     //   static constexpr int kGlobalScriptBusyFlags =
     //       PROGRAM_FLAG_FATAL_ERROR | PROGRAM_FLAG_CHILD_CALL | PROGRAM_FLAG_CHILD_SPAWN;
     // These must be non-zero to effectively gate script execution.
+    // F-03: PROGRAM_IS_WAITING was added to the mask so a mid-wait global
+    // script is treated as busy (mirrors the M-46 guard in scriptExecProc).
     // NOTE: Actual PROGRAM_FLAG_* values are defined in interpreter.h;
-    // this test validates only that the mask is non-empty.
+    // this test validates only that the mask is non-empty and includes WAITING.
 
     // The busy flags mask must be non-zero to prevent re-entrant execution.
     constexpr int kGlobalScriptBusyFlags = 0
         | 0x01  // PROGRAM_FLAG_FATAL_ERROR placeholder
         | 0x02  // PROGRAM_FLAG_CHILD_CALL placeholder
-        | 0x04; // PROGRAM_FLAG_CHILD_SPAWN placeholder
+        | 0x04  // PROGRAM_FLAG_CHILD_SPAWN placeholder
+        | 0x10; // PROGRAM_IS_WAITING placeholder (F-03)
     CHECK(kGlobalScriptBusyFlags != 0);
+    CHECK((kGlobalScriptBusyFlags & 0x10) != 0);  // F-03: WAITING bit present
 
     // A script with no busy flags set should be able to run.
     int scriptFlags = 0;
@@ -1080,6 +1084,11 @@ TEST_CASE("H-016: GlobalScriptsState kGlobalScriptBusyFlags constant (sfall_glob
     int busyFlags = 0x01;
     bool blocked = (busyFlags & kGlobalScriptBusyFlags) != 0;
     CHECK(blocked == true);
+
+    // F-03: a WAITING script (PROGRAM_IS_WAITING = 0x10) is blocked.
+    int waitingFlags = 0x10;
+    bool waitingBlocked = (waitingFlags & kGlobalScriptBusyFlags) != 0;
+    CHECK(waitingBlocked == true);
 }
 
 // GAP: sfall_global_scripts.cc is NOT linked into tests.
@@ -1757,6 +1766,74 @@ TEST_CASE("F2-T4: sfall_gl_scr_execute_proc_if_ready — busy flag guard (sfall_
         bool ok = f2t4_mirrorExecuteProcIfReady(scr, 5);
         CHECK(ok == false);
         CHECK(scr.executionCount == 0);
+    }
+}
+
+// =============================================================
+// F-03: WAITING global scripts are skipped by the busy-flags path
+// =============================================================
+// kGlobalScriptBusyFlags (sfall_global_scripts.cc:25-28) now includes
+// PROGRAM_IS_WAITING (0x10), closing the divergence vs the M-46 guard in
+// scriptExecProc (scripts.cc:1653). A WAITING gl_ script must not have its
+// procs re-dispatched through sfall_gl_scr_execute_proc_if_ready
+// (sfall_global_scripts.cc:397-406) — re-dispatch would re-arm the wait.
+
+namespace {
+
+// Real PROGRAM_FLAG_* values from interpreter.h (mirrored locally).
+constexpr int F2T4_PROGRAM_FLAG_FATAL_ERROR = 0x04;
+constexpr int F2T4_PROGRAM_FLAG_CHILD_CALL = 0x20;
+constexpr int F2T4_PROGRAM_FLAG_CHILD_SPAWN = 0x0100;
+constexpr int F2T4_PROGRAM_IS_WAITING = 0x10;
+
+// Mirror of kGlobalScriptBusyFlags after the F-03 fix.
+constexpr int f2t4_kGlobalScriptBusyFlags = F2T4_PROGRAM_FLAG_FATAL_ERROR
+    | F2T4_PROGRAM_FLAG_CHILD_CALL
+    | F2T4_PROGRAM_FLAG_CHILD_SPAWN
+    | F2T4_PROGRAM_IS_WAITING;
+
+// Mirror of sfall_gl_scr_execute_proc_if_ready (sfall_global_scripts.cc:397-406)
+// gated on the real flag bits instead of the abstract procReady bool.
+static bool f2t4_mirrorExecuteProcIfReadyFlags(int programFlags, int proc)
+{
+    // Production: if (proc != -1 && (program->flags & kGlobalScriptBusyFlags) == 0)
+    if (proc != -1 && (programFlags & f2t4_kGlobalScriptBusyFlags) == 0) {
+        return true;
+    }
+    return false;
+}
+
+} // anonymous namespace
+
+TEST_CASE("F-03: WAITING global scripts are skipped by the busy-flags path (sfall_global_scripts.cc:25-28)")
+{
+    SUBCASE("mask contains PROGRAM_IS_WAITING")
+    {
+        CHECK((f2t4_kGlobalScriptBusyFlags & F2T4_PROGRAM_IS_WAITING) != 0);
+    }
+
+    SUBCASE("WAITING program → proc NOT executed")
+    {
+        bool ok = f2t4_mirrorExecuteProcIfReadyFlags(F2T4_PROGRAM_IS_WAITING, 5);
+        CHECK(ok == false);
+    }
+
+    SUBCASE("FATAL_ERROR program → proc NOT executed (pre-existing bits retained)")
+    {
+        bool ok = f2t4_mirrorExecuteProcIfReadyFlags(F2T4_PROGRAM_FLAG_FATAL_ERROR, 5);
+        CHECK(ok == false);
+    }
+
+    SUBCASE("no busy flags → proc executed")
+    {
+        bool ok = f2t4_mirrorExecuteProcIfReadyFlags(0, 5);
+        CHECK(ok == true);
+    }
+
+    SUBCASE("WAITING program with proc == -1 → NOT executed (gate still applies)")
+    {
+        bool ok = f2t4_mirrorExecuteProcIfReadyFlags(F2T4_PROGRAM_IS_WAITING, -1);
+        CHECK(ok == false);
     }
 }
 

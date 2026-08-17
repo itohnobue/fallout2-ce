@@ -573,6 +573,222 @@ TEST_CASE("F2-15: opWait duration clamping")
 }
 
 // ============================================================
+// F-01/F-15: WAITING program yield semantics
+//
+// Pattern: The WAITING branch of programInterpret (interpreter.cc:3143-3156)
+// and the entry of programProcessProcedureEvents (interpreter.cc:3448) share
+// one helper, programYieldIfWaiting():
+//
+//   - WAITING + pending checkWaitFunc → returns true, wait state preserved
+//     (PROGRAM_IS_WAITING + checkWaitFunc stay set) → caller yields
+//     (break the dispatch / return from event processing).
+//   - WAITING + elapsed (or null) checkWaitFunc → clears the wait state and
+//     returns false → caller falls through and resumes the body.
+//   - Not WAITING → returns false, no state change.
+//
+// Before the fix (f40c961 inverted the branch), a pending wait in a -1
+// dispatch looped on `continue` — busy-spinning at 100% CPU until the wait
+// elapsed, freezing game time and input. The helper encodes "yield, don't
+// spin" in one place.
+// ============================================================
+
+#define MIRROR_PROGRAM_IS_WAITING 0x10
+
+struct MirrorWaitProgram {
+    int flags = 0;
+    bool (*checkWaitFunc)(MirrorWaitProgram*) = nullptr;
+    // Number of body instructions the program executes before terminating.
+    // Stands in for the production dispatch-exit conditions (program->exited,
+    // FINISHED/STOPPED break mask at interpreter.cc:3167-3173) that terminate
+    // a real -1 dispatch once the body resumes. 0 = body runs indefinitely
+    // (only the yield or the instruction budget can end the dispatch).
+    int bodyInstructions = 0;
+};
+
+// Mirror of programYieldIfWaiting (interpreter.cc, next to checkWait).
+static bool mirrorProgramYieldIfWaiting(MirrorWaitProgram& program)
+{
+    if ((program.flags & MIRROR_PROGRAM_IS_WAITING) == 0) {
+        return false;
+    }
+
+    if (program.checkWaitFunc != nullptr && program.checkWaitFunc(&program)) {
+        // Wait still pending — yield the dispatch slot, keep the wait state.
+        return true;
+    }
+
+    // Wait elapsed (or no check function) — clear the wait and resume.
+    program.checkWaitFunc = nullptr;
+    program.flags &= ~MIRROR_PROGRAM_IS_WAITING;
+    return false;
+}
+
+// Mirror of the programInterpret dispatch loop's WAITING handling
+// (interpreter.cc:3166-3182). Returns the number of instructions executed
+// before the dispatch returns. numInstructions == -1 mirrors the unbounded
+// event-proc dispatch (programInterpret(program, -1)).
+static int mirrorInterpretDispatch(MirrorWaitProgram& program, int numInstructions)
+{
+    int executed = 0;
+    while (--numInstructions != -1) {
+        if (mirrorProgramYieldIfWaiting(program)) {
+            // Wait still pending — yield the dispatch slot.
+            return executed;
+        }
+        executed++;
+        if (program.bodyInstructions > 0 && executed >= program.bodyInstructions) {
+            break;  // body completed — mirrors the program->exited / break-mask exit
+        }
+    }
+    return executed;
+}
+
+// Mirror of the programProcessProcedureEvents entry guard
+// (interpreter.cc:3485-3497). Returns true if the channel yielded on a
+// pending wait (no proc events processed); false if it proceeded.
+static bool mirrorProcessProcedureEventsEntry(MirrorWaitProgram& program, int& procEventsProcessed)
+{
+    if (mirrorProgramYieldIfWaiting(program)) {
+        return true;  // yielded — wait still pending
+    }
+    procEventsProcessed++;  // simulate the procedure loop
+    return false;
+}
+
+TEST_CASE("F-01: WAITING program yields instead of spinning (programYieldIfWaiting)")
+{
+    SUBCASE("pending wait: helper returns true and preserves wait state")
+    {
+        MirrorWaitProgram program;
+        program.flags = MIRROR_PROGRAM_IS_WAITING;
+        program.checkWaitFunc = [](MirrorWaitProgram*) -> bool { return true; };  // wait still pending
+
+        bool yielded = mirrorProgramYieldIfWaiting(program);
+        CHECK(yielded == true);
+        // State must be preserved for the per-frame bounded dispatch to re-enter.
+        CHECK((program.flags & MIRROR_PROGRAM_IS_WAITING) != 0);
+        CHECK(program.checkWaitFunc != nullptr);
+    }
+
+    SUBCASE("elapsed wait: helper clears the wait state and returns false")
+    {
+        MirrorWaitProgram program;
+        program.flags = MIRROR_PROGRAM_IS_WAITING;
+        program.checkWaitFunc = [](MirrorWaitProgram*) -> bool { return false; };  // wait elapsed
+
+        bool yielded = mirrorProgramYieldIfWaiting(program);
+        CHECK(yielded == false);
+        CHECK((program.flags & MIRROR_PROGRAM_IS_WAITING) == 0);
+        CHECK(program.checkWaitFunc == nullptr);
+    }
+
+    SUBCASE("WAITING with null check function: cleared and resumed")
+    {
+        MirrorWaitProgram program;
+        program.flags = MIRROR_PROGRAM_IS_WAITING;
+        program.checkWaitFunc = nullptr;
+
+        bool yielded = mirrorProgramYieldIfWaiting(program);
+        CHECK(yielded == false);
+        CHECK((program.flags & MIRROR_PROGRAM_IS_WAITING) == 0);
+    }
+
+    SUBCASE("not WAITING: helper returns false with no state change")
+    {
+        MirrorWaitProgram program;
+        program.flags = 0;
+
+        bool yielded = mirrorProgramYieldIfWaiting(program);
+        CHECK(yielded == false);
+        CHECK(program.flags == 0);
+    }
+}
+
+TEST_CASE("F-01: -1 dispatch of a WAITING program returns immediately (anti-spin)")
+{
+    SUBCASE("pending wait in unbounded dispatch: zero instructions, state preserved")
+    {
+        MirrorWaitProgram program;
+        program.flags = MIRROR_PROGRAM_IS_WAITING;
+        program.checkWaitFunc = [](MirrorWaitProgram*) -> bool { return true; };  // long wait
+
+        // Before the fix this looped forever (continue on a pending wait with
+        // numInstructions == -1 never terminating). After the fix it yields on
+        // the first iteration.
+        int executed = mirrorInterpretDispatch(program, -1);
+        CHECK(executed == 0);
+        CHECK((program.flags & MIRROR_PROGRAM_IS_WAITING) != 0);
+        CHECK(program.checkWaitFunc != nullptr);
+    }
+
+    SUBCASE("elapsed wait: cleared, body resumes within the same dispatch")
+    {
+        MirrorWaitProgram program;
+        program.flags = MIRROR_PROGRAM_IS_WAITING;
+        program.checkWaitFunc = [](MirrorWaitProgram*) -> bool { return false; };  // wait elapsed
+        program.bodyInstructions = 1;  // body runs one instruction then exits
+
+        int executed = mirrorInterpretDispatch(program, -1);
+        CHECK(executed == 1);  // one instruction executed after the wait cleared
+        CHECK((program.flags & MIRROR_PROGRAM_IS_WAITING) == 0);
+        CHECK(program.checkWaitFunc == nullptr);
+    }
+
+    SUBCASE("pending wait in bounded dispatch: yields after one iteration, no spin")
+    {
+        MirrorWaitProgram program;
+        program.flags = MIRROR_PROGRAM_IS_WAITING;
+        program.checkWaitFunc = [](MirrorWaitProgram*) -> bool { return true; };
+
+        int executed = mirrorInterpretDispatch(program, 10);
+        CHECK(executed == 0);
+        CHECK((program.flags & MIRROR_PROGRAM_IS_WAITING) != 0);
+    }
+}
+
+TEST_CASE("F-15: programProcessProcedureEvents yields on WAITING programs")
+{
+    SUBCASE("WAITING program: entry guard returns without processing events")
+    {
+        MirrorWaitProgram program;
+        program.flags = MIRROR_PROGRAM_IS_WAITING;
+        program.checkWaitFunc = [](MirrorWaitProgram*) -> bool { return true; };
+        int procEventsProcessed = 0;
+
+        bool yielded = mirrorProcessProcedureEventsEntry(program, procEventsProcessed);
+        CHECK(yielded == true);
+        CHECK(procEventsProcessed == 0);
+        // Wait state preserved for the per-frame re-entry.
+        CHECK((program.flags & MIRROR_PROGRAM_IS_WAITING) != 0);
+        CHECK(program.checkWaitFunc != nullptr);
+    }
+
+    SUBCASE("WAITING with elapsed wait: guard clears state and proceeds")
+    {
+        MirrorWaitProgram program;
+        program.flags = MIRROR_PROGRAM_IS_WAITING;
+        program.checkWaitFunc = [](MirrorWaitProgram*) -> bool { return false; };
+        int procEventsProcessed = 0;
+
+        bool yielded = mirrorProcessProcedureEventsEntry(program, procEventsProcessed);
+        CHECK(yielded == false);
+        CHECK(procEventsProcessed == 1);  // procedure loop proceeds on the elapse frame
+        CHECK((program.flags & MIRROR_PROGRAM_IS_WAITING) == 0);
+    }
+
+    SUBCASE("non-WAITING program: event processing proceeds")
+    {
+        MirrorWaitProgram program;
+        program.flags = 0;
+        int procEventsProcessed = 0;
+
+        bool yielded = mirrorProcessProcedureEventsEntry(program, procEventsProcessed);
+        CHECK(yielded == false);
+        CHECK(procEventsProcessed == 1);
+    }
+}
+
+// ============================================================
 // F-07 completeness: verify all 40 assert sites are replaced
 // (cannot test directly, but verify the fix patterns are consistent)
 // ============================================================
