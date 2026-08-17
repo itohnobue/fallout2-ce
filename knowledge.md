@@ -1,5 +1,5 @@
 # Knowledge Base
-Last updated: 2026-08-17T04:03:34.992278
+Last updated: 2026-08-17T19:50:03.439921
 
 ## [dis-20260704144725-9b3649]
 Category: discovery
@@ -478,4 +478,18 @@ Tags: sfall, dialog, female, rpu
 Changed: 2026-08-17T04:03:34.990701
 
 fallout2-ce-extended: sfall FemaleDialogMsgs selects text/<lang>/dialog_female (level>=1) and cuts_female (level>=2) for a female player with per-directory fallback to normal dirs when absent (English ships none — byte-identical). Non-English RPU dirs: french/italian/polish/portuguese/russian/spanish/vietnamese ship BOTH; czech/german/hungarian/swedish ship cuts_female ONLY
+
+## [got-20260817195002-4bc8cb]
+Category: gotcha
+Tags: sfall, perk, et-tu, config
+Changed: 2026-08-17T19:50:02.002430
+
+sfall PerksTweak semantics (PerksFile): keys are FLAT replacements of the engine's hardcoded perk bonuses — value < minGate is NOT applied (FO2 default stays), value > maxClamp is clamped. Skill bonuses 0..125; NightVision 0..100 (% of max light, per rank, 65536*20/100==65536/5); CautiousNature -12..20; Stonewall 0..100; WeaponHandling 0..10; Demolition/Salesman/Healer 0..999; Educated/Lifegiver 0..125; MasterTrader >=0 no clamp; Comprehension value+100; VaultCityInoculations clamped both sides [-100,100] with NO gate. PerksTweak applies whenever the file exists (no Enable gate); [Perks] section is Enable-gated. Verified from sfall-team/sfall dllmain/Perks.cpp via grep.app.
+
+## [got-20260817195003-0d5b07]
+Category: gotcha
+Tags: sfall, perk, gotcha, init-order
+Changed: 2026-08-17T19:50:03.438292
+
+Perks.ini [Perks] section values must NOT go into the sfallPerk*Overrides arrays (sfall_opcodes.cc) — those reset on game reset (sfallOpcodesReset). Apply file values directly to gPerkDescriptions at init (perksLoadCustomConfig in perk.cc); script set_perk_* opcodes still win because perkCanAdd checks the override arrays first. Ranks=-1 removes a perk via maxRank=-1 (perkCanAdd false) but perkAddForce skips its cap for maxRank==-1 and perkAddEffect's maxRank==-1 stat-loop activates — same as sfall's engine patch behavior (latent hazard, unreachable with shipped et tu scripts).
 
