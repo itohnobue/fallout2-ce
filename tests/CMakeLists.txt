@@ -26,6 +26,7 @@ add_library(test_sources STATIC
     "${CMAKE_SOURCE_DIR}/src/sfall_global_vars.cc"
     "${CMAKE_SOURCE_DIR}/src/game_config_migration.cc"
     "${CMAKE_SOURCE_DIR}/src/sfall_config.cc"
+    "${CMAKE_SOURCE_DIR}/src/perk_tweak.cc"
     "${CMAKE_SOURCE_DIR}/src/sfall_arrays.cc"
     "${CMAKE_SOURCE_DIR}/src/sfall_ini.cc"
     "${CMAKE_SOURCE_DIR}/src/sfall_lists.cc"
@@ -259,6 +260,15 @@ add_executable(test_sfall_config
 )
 target_link_libraries(test_sfall_config PRIVATE test_sources test_stubs doctest)
 add_test(NAME test_sfall_config COMMAND test_sfall_config)
+
+# ---- Test: perk_tweak.cc (PerksTweak parsing) ----
+# Links test_sources (sfall_config.cc + perk_tweak.cc) for PerksFile
+# path resolution and gate+clamp parsing semantics.
+add_executable(test_perk_tweak
+    test_perk_tweak.cc
+)
+target_link_libraries(test_perk_tweak PRIVATE test_sources test_stubs doctest)
+add_test(NAME test_perk_tweak COMMAND test_perk_tweak)
 
 # ---- Test: sfall_opcodes (lifecycle, extern globals) ----
 # Extern globals from sfall_opcodes.cc are defined in test_common_stubs.cc.

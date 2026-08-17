@@ -558,6 +558,13 @@ static const TestMetaruleEntry kTestMetaruleSubset[] = {
     // H-04 / H-05: newly registered metarules (sfall_metarules.cc:461, 472).
     { "set_fo1_hit_chance", 1, 1, -1 },
     { "remove_wm_town_names", 1, 1, -1 },
+    // P2: Rotators fork VOODOO/HRP metarules registered as safe no-ops
+    // (sfall_metarules.cc, mf_r_call_offset* / mf_r_hrp* handlers).
+    { "r_call_offset", 1, 1, 0 },
+    { "r_call_offset_cdecl", 1, 1, 0 },
+    { "r_call_offset_push", 1, 1, 0 },
+    { "r_hrp", 0, 0, 0 },
+    { "r_hrp_offset", 1, 1, 0 },
     { "rotators", 0, 0, 0 }, // sentinel for compatibility check
 };
 static const int kTestMetaruleSubsetCount = sizeof(kTestMetaruleSubset) / sizeof(kTestMetaruleSubset[0]);
@@ -2955,6 +2962,34 @@ TEST_CASE("H-04/H-05: new metarules are discoverable via metarule_exist")
         if (entry != nullptr) {
             CHECK(entry->minArgs == 1);
             CHECK(entry->maxArgs == 1);
+        }
+    }
+}
+
+// =================================================================
+// P2: Rotators fork VOODOO/HRP metarules — probe + arg contract.
+// =================================================================
+TEST_CASE("P2: rotators metarules are discoverable via metarule_exist")
+{
+    // Mirror of mf_metarule_exist lookup over the five no-op registrations.
+    static const char* kRotatorsMetarules[] = {
+        "r_call_offset",
+        "r_call_offset_cdecl",
+        "r_call_offset_push",
+        "r_hrp",
+        "r_hrp_offset",
+    };
+
+    for (const char* name : kRotatorsMetarules) {
+        const TestMetaruleEntry* entry = TestFindMetarule(name);
+        CHECK_MESSAGE(entry != nullptr, name);
+        if (entry != nullptr) {
+            // r_hrp is the only 0-arg probe; the rest take a single int addr/value.
+            bool isHrpProbe = (strcmp(name, "r_hrp") == 0);
+            CHECK(entry->minArgs == (isHrpProbe ? 0 : 1));
+            CHECK(entry->maxArgs == (isHrpProbe ? 0 : 1));
+            // No-op handlers return 0 (safe fallback).
+            CHECK(entry->errorReturn == 0);
         }
     }
 }

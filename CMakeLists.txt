@@ -214,6 +214,8 @@ set(FALLOUT_ENGINE_SOURCES
     "src/perk_defs.h"
     "src/perk.cc"
     "src/perk.h"
+    "src/perk_tweak.cc"
+    "src/perk_tweak.h"
     "src/pipboy.cc"
     "src/pipboy.h"
     "src/proto_instance.cc"

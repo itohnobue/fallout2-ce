@@ -25,6 +25,7 @@
 #include "object.h"
 #include "palette.h"
 #include "perk.h"
+#include "perk_tweak.h"
 #include "proto.h"
 #include "queue.h"
 #include "random.h"
@@ -808,7 +809,7 @@ static UseItemResultCode _obj_use_book(Object* book)
         messageId = 801;
     } else {
         if (perkGetRank(gDude, PERK_COMPREHENSION)) {
-            increase = 150 * increase / 100;
+            increase = (100 + gPerkTweak.comprehensionBonus) * increase / 100;
         }
 
         bool increased = false;

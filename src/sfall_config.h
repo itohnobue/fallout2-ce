@@ -22,6 +22,7 @@ namespace fallout {
 #define SFALL_CONFIG_ELEVATORS_FILE_KEY "ElevatorsFile"
 #define SFALL_CONFIG_SKILLS_FILE_KEY "SkillsFile"
 #define SFALL_CONFIG_UNARMED_FILE_KEY "UnarmedFile"
+#define SFALL_CONFIG_PERKS_FILE_KEY "PerksFile"
 #define SFALL_CONFIG_INI_CONFIG_FOLDER "IniConfigFolder"
 #define SFALL_CONFIG_CONFIG_FILE "ConfigFile"
 #define SFALL_CONFIG_PATCH_FILE "PatchFile"
@@ -39,6 +40,18 @@ namespace fallout {
 // H-06: WorldMapSlots — RPU gl_k_modini.ssl requires this to be 21; CE's
 // default is 21 so the ddraw.ini fallback tier satisfies RPU out of the box.
 #define SFALL_CONFIG_WORLDMAP_SLOTS_KEY "WorldMapSlots"
+// World map travel-time percentage modifier (100 = normal, 0 = time stops).
+// Multiplies the game-time increment per world-map step (sfall Main.cpp:
+// mapMultiMod = WorldMapTimeMod / 100.0, applied in addition to the
+// Pathfinder perk and set_map_time_multi).
+#define SFALL_CONFIG_WORLDMAP_TIME_MOD_KEY "WorldMapTimeMod"
+// WorldMapEncounterFix=1 gates the per-step random-encounter roll to at
+// most once per WorldMapEncounterRate walking frames (rate-based cadence;
+// higher rate = slower encounters; sfall default 5). Fix=0 (sfall and et tu
+// default) keeps the vanilla per-step roll. WorldMapEncounterRate is only
+// consulted when Fix=1, mirroring sfall's code.
+#define SFALL_CONFIG_WORLDMAP_ENCOUNTER_FIX_KEY "WorldMapEncounterFix"
+#define SFALL_CONFIG_WORLDMAP_ENCOUNTER_RATE_KEY "WorldMapEncounterRate"
 
 // Art cache size (MB) used when [Misc] OverrideArtCacheSize=1 and no explicit
 // [Misc] ArtCacheSize key is present. Mirrors sfall's fixed behavior: sfall
@@ -70,6 +83,9 @@ extern bool gProcessorIdle; // PARSED, NO ENGINE CHANGE NEEDED: CE's FPS limiter
 extern int gBoxBarColours; // PARSED, INERT: accepted for ddraw.ini compatibility; CE has no sfall box-bar colour rendering equivalent (cosmetic)
 extern int gSfallArtCacheSize; // WIRED: consumed by art.cc via sfallArtCacheSizeMb() when gOverrideArtCacheSize is set
 extern int gFemaleDialogMsgs; // WIRED: 0=normal, 1=dialog_female for female PC, 2=+cuts_female; consumed by messageListGetLocalizedDir (message.cc) for dialog/cutscene message dir selection
+extern int gWorldMapTimeMod; // WIRED: percent multiplier for world-map game-time increment (worldmap.cc wmGameTimeIncrement); 100 = normal
+extern bool gWorldMapEncounterFix; // WIRED: 1 = rate-gated world-map encounter rolls (worldmap.cc walk loop); 0 = vanilla per-step rolls
+extern int gWorldMapEncounterRate; // WIRED: walking frames between encounter rolls when gWorldMapEncounterFix is set; higher = slower
 
 bool sfallConfigInit(int argc, char** argv);
 void sfallConfigExit();

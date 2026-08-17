@@ -38,6 +38,7 @@
 #include "object.h"
 #include "party_member.h"
 #include "perk.h"
+#include "perk_tweak.h"
 #include "platform_compat.h"
 #include "proto.h"
 #include "proto_instance.h"
@@ -5409,7 +5410,7 @@ static std::pair<int, int> barterComputeTablesValue(Object* dude, Object* npc, b
     double perkBonus = 0.0;
     if (dude == gDude) {
         if (perkHasRank(gDude, PERK_MASTER_TRADER)) {
-            perkBonus = 25.0;
+            perkBonus = gPerkTweak.masterTraderBonus;
         }
     }
 

@@ -36,6 +36,7 @@
 #include "palette.h"
 #include "party_member.h"
 #include "perk.h"
+#include "perk_tweak.h"
 #include "platform_compat.h"
 #include "proto.h"
 #include "scripts.h"
@@ -6052,7 +6053,7 @@ static int characterEditorUpdateLevel()
             int sp = pcGetStat(PC_STAT_UNSPENT_SKILL_POINTS);
             sp += 5;
             sp += critterGetBaseStatWithTraitModifier(gDude, STAT_INTELLIGENCE) * 2;
-            sp += perkGetRank(gDude, PERK_EDUCATED) * 2;
+            sp += perkGetRank(gDude, PERK_EDUCATED) * gPerkTweak.educatedBonus;
             sp += traitIsSelected(TRAIT_SKILLED) * 5;
             sp += gSkillPointsPerLevelMod;
             if (traitIsSelected(TRAIT_GIFTED)) {

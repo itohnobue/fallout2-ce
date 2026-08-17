@@ -1,13 +1,18 @@
 #include "perk.h"
 
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
+#include "config.h"
 #include "debug.h"
+#include "dictionary.h"
 #include "game.h"
 #include "memory.h"
 #include "message.h"
 #include "object.h"
 #include "party_member.h"
+#include "perk_tweak.h"
 #include "platform_compat.h"
 #include "skill.h"
 #include "sfall_opcodes.h"
@@ -192,6 +197,126 @@ static int hereAndNowBonusExperience = 0;
 // 0x6642D4 perk_message_file
 static MessageList gPerksMessageList;
 
+// Name/description strings allocated from the Perks.ini [Perks] section
+// (Name=/Desc= overrides). The perk descriptions' name/description pointers
+// normally reference strings owned by gPerksMessageList (freed at exit);
+// these file-supplied strings are owned here and freed in perksExit().
+static char* gPerksFileNameOverrides[PERK_COUNT] = {};
+static char* gPerksFileDescOverrides[PERK_COUNT] = {};
+
+// Perks.ini [Perks] section: apply per-perk description overrides.
+//
+// Mirrors sfall's PerksFile [Perks] section semantics:
+//   - gated by Enable=1 in the [Perks] section
+//   - each [ID] block overrides fields of that perk's description
+//     (Name, Desc, Image, Ranks, Level, Type, Skill1/Skill1Mag,
+//     Skill2/Skill2Mag, Stat/StatMag, STR..LCK)
+//   - a field value of -99999 means "ignore this field" (keep current)
+//   - Ranks=-1 removes the perk (maxRank=-1 -> perkCanAdd returns false)
+//   - extra perk IDs (119+) exceed CE's PERK_COUNT table and are skipped
+//
+// Script opcodes (set_perk_*) still take precedence: perkCanAdd checks
+// the override arrays before the description fields, and scripts run
+// after init. Values persist across game resets (perkResetRanks only
+// clears rank data, not descriptions).
+//
+// The [Traits] section (NoHardcode/StatMod/SkillMod) is NOT implemented:
+// CE has no trait override infrastructure. FO2 hardcoded trait behavior
+// remains; documented in SFALL_COMPATIBILITY.md.
+static void perksLoadCustomConfig()
+{
+    char* perksFile = perkTweakGetPerksFilePath();
+    if (perksFile == nullptr) {
+        return;
+    }
+
+    ScopedConfig config { perksFile, false };
+    if (!config) {
+        return;
+    }
+
+    int enable = 0;
+    if (!configGetInt(config.get(), "Perks", "Enable", &enable, 0) || enable == 0) {
+        return;
+    }
+
+    Config* perksConfig = config.get();
+    for (int i = 0; i < perksConfig->entriesLength; i++) {
+        DictionaryEntry* entry = &(perksConfig->entries[i]);
+        const char* sectionName = entry->key;
+
+        // Perk ID sections are plain numbers (e.g. "1", "9"). Skip the
+        // named sections (Perks/PerksTweak/Traits/...) and anything that
+        // is not a numeric perk ID.
+        if (sectionName[0] < '0' || sectionName[0] > '9') {
+            continue;
+        }
+
+        int perkID = atoi(sectionName);
+        if (!perkIsValid(static_cast<Perk>(perkID))) {
+            continue;
+        }
+
+        PerkDescription* description = &(gPerkDescriptions[perkID]);
+
+        char* stringValue = nullptr;
+        if (configGetString(perksConfig, sectionName, "Name", &stringValue)) {
+            if (gPerksFileNameOverrides[perkID] != nullptr) {
+                internal_free(gPerksFileNameOverrides[perkID]);
+            }
+            gPerksFileNameOverrides[perkID] = internal_strdup(stringValue);
+            description->name = gPerksFileNameOverrides[perkID];
+        }
+
+        if (configGetString(perksConfig, sectionName, "Desc", &stringValue)) {
+            if (gPerksFileDescOverrides[perkID] != nullptr) {
+                internal_free(gPerksFileDescOverrides[perkID]);
+            }
+            gPerksFileDescOverrides[perkID] = internal_strdup(stringValue);
+            description->description = gPerksFileDescOverrides[perkID];
+        }
+
+        // -99999 sentinel: field is ignored (current value kept).
+        struct PerkFileField {
+            const char* key;
+            int* target;
+        };
+
+        PerkFileField fields[] = {
+            { "Image", &description->frmId },
+            { "Ranks", &description->maxRank },
+            { "Level", &description->minLevel },
+            { "Type", &description->paramMode },
+            { "StatMag", &description->statModifier },
+            { "Skill1", &description->param1 },
+            { "Skill1Mag", &description->value1 },
+            { "Skill2", &description->param2 },
+            { "Skill2Mag", &description->value2 },
+            { "STR", &description->stats[STAT_STRENGTH] },
+            { "PER", &description->stats[STAT_PERCEPTION] },
+            { "END", &description->stats[STAT_ENDURANCE] },
+            { "CHR", &description->stats[STAT_CHARISMA] },
+            { "INT", &description->stats[STAT_INTELLIGENCE] },
+            { "AGL", &description->stats[STAT_AGILITY] },
+            { "LCK", &description->stats[STAT_LUCK] },
+        };
+
+        for (size_t f = 0; f < sizeof(fields) / sizeof(fields[0]); f++) {
+            int value = 0;
+            if (configGetInt(perksConfig, sectionName, fields[f].key, &value) && value != -99999) {
+                *fields[f].target = value;
+            }
+        }
+
+        // Stat is an enum (Stat) — read into a temp int and convert
+        // explicitly instead of aliasing through (int*)&description->stat.
+        int statValue = 0;
+        if (configGetInt(perksConfig, sectionName, "Stat", &statValue) && statValue != -99999) {
+            description->stat = static_cast<Stat>(statValue);
+        }
+    }
+}
+
 // 0x4965A0 perk_init
 int perksInit()
 {
@@ -240,6 +365,13 @@ int perksInit()
 
     messageListRepositorySetStandardMessageList(STANDARD_MESSAGE_LIST_PERK, &gPerksMessageList);
 
+    // PerksFile support (sfall PerksFile config, et tu ships
+    // PerksFile=config\Perks.ini): apply [PerksTweak] bonus values and
+    // the [Perks] section description overrides. Runs after the perk.msg
+    // load so Name/Desc overrides win over message texts.
+    perkTweakLoad();
+    perksLoadCustomConfig();
+
     return 0;
 }
 
@@ -254,6 +386,17 @@ void perksExit()
 {
     messageListRepositorySetStandardMessageList(STANDARD_MESSAGE_LIST_PERK, nullptr);
     messageListFree(&gPerksMessageList);
+
+    for (int perk = 0; perk < PERK_COUNT; perk++) {
+        if (gPerksFileNameOverrides[perk] != nullptr) {
+            internal_free(gPerksFileNameOverrides[perk]);
+            gPerksFileNameOverrides[perk] = nullptr;
+        }
+        if (gPerksFileDescOverrides[perk] != nullptr) {
+            internal_free(gPerksFileDescOverrides[perk]);
+            gPerksFileDescOverrides[perk] = nullptr;
+        }
+    }
 
     if (gPartyMemberPerkRanks != nullptr) {
         internal_free(gPartyMemberPerkRanks);
@@ -777,25 +920,25 @@ int perkGetSkillModifier(Object* critter, Skill skill)
     switch (skill) {
     case SKILL_FIRST_AID:
         if (perkHasRank(critter, PERK_MEDIC)) {
-            modifier += 10;
+            modifier += gPerkTweak.medicFirstAidBonus;
         }
 
         if (perkHasRank(critter, PERK_VAULT_CITY_TRAINING)) {
-            modifier += 5;
+            modifier += gPerkTweak.vaultCityTrainingFirstAidBonus;
         }
 
         break;
     case SKILL_DOCTOR:
         if (perkHasRank(critter, PERK_MEDIC)) {
-            modifier += 10;
+            modifier += gPerkTweak.medicDoctorBonus;
         }
 
         if (perkHasRank(critter, PERK_LIVING_ANATOMY)) {
-            modifier += 10;
+            modifier += gPerkTweak.livingAnatomyDoctorBonus;
         }
 
         if (perkHasRank(critter, PERK_VAULT_CITY_TRAINING)) {
-            modifier += 5;
+            modifier += gPerkTweak.vaultCityTrainingDoctorBonus;
         }
 
         break;
@@ -803,7 +946,7 @@ int perkGetSkillModifier(Object* critter, Skill skill)
         if (perkHasRank(critter, PERK_GHOST)) {
             int lightIntensity = objectGetLightIntensity(gDude);
             if (lightIntensity <= 45875) {
-                modifier += 20;
+                modifier += gPerkTweak.ghostBonus;
             }
         }
         // FALLTHROUGH
@@ -811,18 +954,18 @@ int perkGetSkillModifier(Object* critter, Skill skill)
     case SKILL_STEAL:
     case SKILL_TRAPS:
         if (perkHasRank(critter, PERK_THIEF)) {
-            modifier += 10;
+            modifier += gPerkTweak.thiefBonus;
         }
 
         if (skill == SKILL_LOCKPICK || skill == SKILL_STEAL) {
             if (perkHasRank(critter, PERK_MASTER_THIEF)) {
-                modifier += 15;
+                modifier += gPerkTweak.masterThiefBonus;
             }
         }
 
         if (skill == SKILL_STEAL) {
             if (perkHasRank(critter, PERK_HARMLESS)) {
-                modifier += 20;
+                modifier += gPerkTweak.harmlessBonus;
             }
         }
 
@@ -830,45 +973,45 @@ int perkGetSkillModifier(Object* critter, Skill skill)
     case SKILL_SCIENCE:
     case SKILL_REPAIR:
         if (perkHasRank(critter, PERK_MR_FIXIT)) {
-            modifier += 10;
+            modifier += gPerkTweak.mrFixitBonus;
         }
 
         break;
     case SKILL_SPEECH:
         if (perkHasRank(critter, PERK_SPEAKER)) {
-            modifier += 20;
+            modifier += gPerkTweak.speakerBonus;
         }
 
         if (perkHasRank(critter, PERK_EXPERT_EXCREMENT_EXPEDITOR)) {
-            modifier += 5;
+            modifier += gPerkTweak.expertExcrementExpeditorBonus;
         }
 
         // FALLTHROUGH
     case SKILL_BARTER:
         if (perkHasRank(critter, PERK_NEGOTIATOR)) {
-            modifier += 10;
+            modifier += gPerkTweak.negotiatorBonus;
         }
 
         if (skill == SKILL_BARTER) {
             if (perkHasRank(critter, PERK_SALESMAN)) {
-                modifier += 20;
+                modifier += gPerkTweak.salesmanBonus;
             }
         }
 
         break;
     case SKILL_GAMBLING:
         if (perkHasRank(critter, PERK_GAMBLER)) {
-            modifier += 20;
+            modifier += gPerkTweak.gamblerBonus;
         }
 
         break;
     case SKILL_OUTDOORSMAN:
         if (perkHasRank(critter, PERK_RANGER)) {
-            modifier += 15;
+            modifier += gPerkTweak.rangerOutdoorsmanBonus;
         }
 
         if (perkHasRank(critter, PERK_SURVIVALIST)) {
-            modifier += 25;
+            modifier += gPerkTweak.survivalistBonus;
         }
 
         break;

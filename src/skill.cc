@@ -21,6 +21,7 @@
 #include "palette.h"
 #include "party_member.h"
 #include "perk.h"
+#include "perk_tweak.h"
 #include "pipboy.h"
 #include "platform_compat.h"
 #include "proto.h"
@@ -947,8 +948,8 @@ int skillUse(Object* obj, Object* target, Skill skill, int skillBonus)
     if (obj == gDude) {
         if (skill == SKILL_FIRST_AID || skill == SKILL_DOCTOR) {
             int healerRank = perkGetRank(obj, PERK_HEALER);
-            minimumHpToHeal = 4 * healerRank;
-            maximumHpToHeal = 10 * healerRank;
+            minimumHpToHeal = gPerkTweak.healerMinBonus * healerRank;
+            maximumHpToHeal = gPerkTweak.healerMaxBonus * healerRank;
         }
     }
 

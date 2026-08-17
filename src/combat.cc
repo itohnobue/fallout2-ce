@@ -31,6 +31,7 @@
 #include "object.h"
 #include "party_member.h"
 #include "perk.h"
+#include "perk_tweak.h"
 #include "pipboy.h"
 #include "platform_compat.h"
 #include "proto.h"
@@ -4827,11 +4828,11 @@ static int attackDetermineToHit(Object* attacker, int tile, Object* defender, Hi
             Perk weaponPerk = weaponGetPerk(weapon);
             switch (weaponPerk) {
             case PERK_WEAPON_LONG_RANGE:
-                perceptionBonusMult = 4;
+                perceptionBonusMult = gPerkTweak.weaponLongRangeBonus;
                 break;
             case PERK_WEAPON_SCOPE_RANGE:
-                perceptionBonusMult = 5;
-                minEffectiveDist = 8;
+                perceptionBonusMult = gPerkTweak.weaponScopeRangeBonus;
+                minEffectiveDist = gPerkTweak.weaponScopeRangePenalty;
                 break;
             default:
                 perceptionBonusMult = 2;
@@ -4912,7 +4913,7 @@ static int attackDetermineToHit(Object* attacker, int tile, Object* defender, Hi
         int minStrength = weaponGetMinStrengthRequired(weapon);
         int minStrengthMod = minStrength - critterGetStat(attacker, STAT_STRENGTH);
         if (attacker == gDude && perkGetRank(gDude, PERK_WEAPON_HANDLING) != 0) {
-            minStrengthMod -= 3;
+            minStrengthMod -= gPerkTweak.weaponHandlingBonus;
         }
 
         if (minStrengthMod > 0) {
@@ -4920,7 +4921,7 @@ static int attackDetermineToHit(Object* attacker, int tile, Object* defender, Hi
         }
 
         if (weaponGetPerk(weapon) == PERK_WEAPON_ACCURATE) {
-            toHit += 20;
+            toHit += gPerkTweak.weaponAccurateBonus;
         }
     }
 
@@ -5200,15 +5201,15 @@ static void attackComputeDamage(Attack* attack, int numRounds, int baseDamageMul
         if (perkGetRank(attack->attacker, PERK_LIVING_ANATOMY) != 0) {
             KillType killType = critterGetKillType(attack->defender);
             if (killType != KILL_TYPE_ROBOT && killType != KILL_TYPE_ALIEN) {
-                *damagePtr += 5;
+                *damagePtr += gPerkTweak.livingAnatomyBonus;
             }
         }
 
         if (perkGetRank(attack->attacker, PERK_PYROMANIAC) != 0) {
             if (weaponGetDamageType(attack->attacker, attack->weapon) == DAMAGE_TYPE_FIRE) {
                 // F-030: apply the sfall pyromaniac mod (set via opcode 0x81CB)
-                // on top of the base +5 damage from the pyromaniac perk.
-                *damagePtr += 5 + sfallGetPyromaniacMod();
+                // on top of the base pyromaniac perk bonus.
+                *damagePtr += gPerkTweak.pyromaniacBonus + sfallGetPyromaniacMod();
             }
         }
     }
@@ -5247,7 +5248,7 @@ static void attackComputeDamage(Attack* attack, int numRounds, int baseDamageMul
             if (perkGetRank(critter, PERK_STONEWALL) != 0) {
                 int chance = randomBetween(0, 100);
                 hasStonewall = true;
-                if (chance < 50) {
+                if (chance < gPerkTweak.stonewallPercent) {
                     shouldKnockback = false;
                 }
             }
@@ -5569,7 +5570,7 @@ void _combat_display(Attack* attack)
         int strengthRequired = weaponGetMinStrengthRequired(weapon);
 
         if (perkGetRank(attack->attacker, PERK_WEAPON_HANDLING) != 0) {
-            strengthRequired -= 3;
+            strengthRequired -= gPerkTweak.weaponHandlingBonus;
         }
 
         if (weapon != nullptr) {

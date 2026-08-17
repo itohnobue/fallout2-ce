@@ -21,6 +21,7 @@
 #include "object.h"
 #include "party_member.h"
 #include "perk.h"
+#include "perk_tweak.h"
 #include "platform_compat.h"
 #include "proto.h"
 #include "random.h"
@@ -531,9 +532,13 @@ int critterGetStat(Object* critter, Stat stat)
                 }
                 break;
             case STAT_RADIATION_RESISTANCE:
+                if (perkGetRank(critter, PERK_VAULT_CITY_INOCULATIONS)) {
+                    value += gPerkTweak.vaultCityInoculationsRadBonus;
+                }
+                break;
             case STAT_POISON_RESISTANCE:
                 if (perkGetRank(critter, PERK_VAULT_CITY_INOCULATIONS)) {
-                    value += 10;
+                    value += gPerkTweak.vaultCityInoculationsPoisonBonus;
                 }
                 break;
             default:
@@ -1138,7 +1143,7 @@ int pcAddExperienceWithOptions(int xp, bool doParty, int* xpGained)
             int hpPerLevel = endurance / 2 + 2;
             // F-07: Apply sfall HP-per-level modifier set via opcode 0x81CE.
             hpPerLevel += sfallGetHpPerLevelMod();
-            hpPerLevel += perkGetRank(gDude, PERK_LIFEGIVER) * 4;
+            hpPerLevel += perkGetRank(gDude, PERK_LIFEGIVER) * gPerkTweak.lifegiverBonus;
             if (hpPerLevel < 0) {
                 hpPerLevel = 0;
             }
@@ -1196,7 +1201,7 @@ int pcSetExperience(int xp)
 
     int hpPerLevel = endurance / 2 + 2;
     hpPerLevel += sfallGetHpPerLevelMod();
-    hpPerLevel += perkGetRank(gDude, PERK_LIFEGIVER) * 4;
+    hpPerLevel += perkGetRank(gDude, PERK_LIFEGIVER) * gPerkTweak.lifegiverBonus;
     if (hpPerLevel < 0) {
         hpPerLevel = 0;
     }

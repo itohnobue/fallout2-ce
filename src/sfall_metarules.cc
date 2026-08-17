@@ -910,6 +910,14 @@ static void mf_interface_overlay(OpcodeContext& ctx);
 static void mf_interface_print(OpcodeContext& ctx);
 // F-021: r_write Rotators fork compatibility (runtime memory write)
 static void mf_r_write(OpcodeContext& ctx);
+// P2: Rotators fork VOODOO/HRP metarules — registered as safe no-ops so
+// metarule_exist("r_...") probes and wrapper calls succeed for third-party
+// scripts (VOODOO memory patching itself is not implemented in CE).
+static void mf_r_call_offset(OpcodeContext& ctx);
+static void mf_r_call_offset_cdecl(OpcodeContext& ctx);
+static void mf_r_call_offset_push(OpcodeContext& ctx);
+static void mf_r_hrp(OpcodeContext& ctx);
+static void mf_r_hrp_offset(OpcodeContext& ctx);
 // F-033: MEDIUM-priority metarules — remaining commented-out entries
 static void mf_add_g_timer_event(OpcodeContext& ctx);
 static void mf_add_trait(OpcodeContext& ctx);
@@ -1178,10 +1186,28 @@ const MetaruleInfo kMetarules[] = {
     { "outlined_object", mf_outlined_object, 0, 0 },
     // Rotators fork compatibility wrappers (C-06):
     // r_get_ini_string wraps get_ini_setting/get_ini_string with default-value fallback.
-    // r_call_offset is intentionally NOT registered — it requires VOODOO memory
-    // patching (0x81D2-0x81DB opcodes) which CE does not support.
+    // P2: r_call_offset/r_call_offset_cdecl/r_call_offset_push/r_hrp/r_hrp_offset are
+    // registered as safe no-ops (see mf_r_call_offset below). They do NOT implement
+    // VOODOO call-offset execution or HRP integration — the registration only satisfies
+    // metarule_exist("r_...") probes and keeps wrapper macro calls non-fatal, mirroring
+    // the r_write precedent.
     { "r_get_ini_string", mf_r_get_ini_string, 4, 4, -1, { ARG_STRING, ARG_STRING, ARG_STRING, ARG_INTSTR } },
     { "r_message_box", mf_r_message_box, 1, 4, -1, { ARG_STRING, ARG_INT, ARG_INT, ARG_INT } },
+    // r_call_offset(addr): Rotators fork VOODOO call — executes the engine function at
+    // addr with args previously pushed via r_call_offset_push. CE does not implement
+    // VOODOO; the handler logs and returns 0 (the call's "return value").
+    { "r_call_offset", mf_r_call_offset, 1, 1, 0, { ARG_INT } },
+    // r_call_offset_cdecl(addr): same, cdecl calling convention.
+    { "r_call_offset_cdecl", mf_r_call_offset_cdecl, 1, 1, 0, { ARG_INT } },
+    // r_call_offset_push(val): pushes an argument for a later r_call_offset. No-op
+    // (the pushed args are never consumed since r_call_offset is a no-op).
+    { "r_call_offset_push", mf_r_call_offset_push, 1, 1, 0, { ARG_INT } },
+    // r_hrp: Rotators fork HRP presence probe — returns 1 when HRP is loaded. No-op
+    // returns 0 (HRP absent), so scripts take their fallback paths.
+    { "r_hrp", mf_r_hrp, 0, 0, 0, { ARG_ANY } },
+    // r_hrp_offset(addr): Rotators fork HRP call-offset — returns the HRP-adjusted
+    // address. No-op returns 0.
+    { "r_hrp_offset", mf_r_hrp_offset, 1, 1, 0, { ARG_INT } },
     // r_write(type, addr, val): Rotators fork runtime memory write.
     // type: 0=byte, 1=short, 2=int, 3=string. CE cannot dereference arbitrary
     // engine addresses; the handler logs the call as a no-op.
@@ -1964,8 +1990,10 @@ void mf_metarule_exist(OpcodeContext& ctx)
     // to detect the Rotators engine fork. CE is not a Rotators fork, but
     // returning 1 enables the Rotators-aware fallback code paths in ETu scripts,
     // which use standard sfall opcodes that CE fully implements (get_ini_setting,
-    // message_box, etc.). r_call_offset is NOT registered — scripts that try to
-    // use it will get metarule_exist("r_call_offset")=0.
+    // message_box, etc.). The rotators-only r_* metarules (r_call_offset*,
+    // r_hrp*) ARE registered (as safe no-ops, see mf_r_call_offset) — their
+    // probes return 1 by the normal table lookup below, which is the point of
+    // the registration (satisfy metarule_exist("r_...") probes).
     if (compat_stricmp(metarule, "rotators") == 0) {
         ctx.setReturn(1);
         return;
@@ -3018,6 +3046,55 @@ void mf_r_write(OpcodeContext& ctx)
     int value = ctx.arg(2).asInt();
 
     debugPrint("r_write(type=%d, addr=0x%08X, value=%d) — no-op in CE engine\n", type, addr, value);
+    ctx.setReturn(0);
+}
+
+// P2: Rotators fork VOODOO/HRP metarules — safe no-ops.
+//
+// The Rotators fork (et tu's scripting base) exposes VOODOO call-offset
+// execution (r_call_offset/r_call_offset_cdecl, args pushed via
+// r_call_offset_push) and HRP integration probes (r_hrp, r_hrp_offset).
+// CE implements neither. These handlers are registered so that:
+//   - metarule_exist("r_call_offset") etc. return 1 — third-party scripts
+//     that probe for the rotators fork before use continue their normal
+//     flow instead of taking a "rotators missing" branch
+//   - wrapper macros (sfall.rotators.voodoo.h) call them without erroring
+// All handlers log the call and return 0, mirroring the mf_r_write no-op
+// pattern. Returning 0 from r_call_offset* signals a "return value of 0"
+// (no function was executed); r_hrp returning 0 signals "HRP not loaded",
+// which is the safe fallback path for scripts.
+
+void mf_r_call_offset(OpcodeContext& ctx)
+{
+    int addr = ctx.arg(0).asInt();
+    debugPrint("r_call_offset(addr=0x%08X) — no-op in CE engine (VOODOO not implemented)\n", addr);
+    ctx.setReturn(0);
+}
+
+void mf_r_call_offset_cdecl(OpcodeContext& ctx)
+{
+    int addr = ctx.arg(0).asInt();
+    debugPrint("r_call_offset_cdecl(addr=0x%08X) — no-op in CE engine (VOODOO not implemented)\n", addr);
+    ctx.setReturn(0);
+}
+
+void mf_r_call_offset_push(OpcodeContext& ctx)
+{
+    int value = ctx.arg(0).asInt();
+    debugPrint("r_call_offset_push(value=%d) — no-op in CE engine (VOODOO not implemented)\n", value);
+    ctx.setReturn(0);
+}
+
+void mf_r_hrp(OpcodeContext& ctx)
+{
+    debugPrint("r_hrp — no-op in CE engine (HRP not integrated); returning 0\n");
+    ctx.setReturn(0);
+}
+
+void mf_r_hrp_offset(OpcodeContext& ctx)
+{
+    int addr = ctx.arg(0).asInt();
+    debugPrint("r_hrp_offset(addr=0x%08X) — no-op in CE engine (HRP not integrated); returning 0\n", addr);
     ctx.setReturn(0);
 }
 

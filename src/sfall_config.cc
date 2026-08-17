@@ -62,6 +62,9 @@ bool gProcessorIdle = false;
 int gBoxBarColours = 0;
 int gSfallArtCacheSize = SFALL_CONFIG_ART_CACHE_SIZE_DEFAULT;
 int gFemaleDialogMsgs = 0;
+int gWorldMapTimeMod = 100;
+bool gWorldMapEncounterFix = false;
+int gWorldMapEncounterRate = 5;
 
 bool sfallConfigInit(int argc, char** argv)
 {
@@ -79,6 +82,7 @@ bool sfallConfigInit(int argc, char** argv)
     configSetString(&gSfallConfig, SFALL_CONFIG_MISC_KEY, SFALL_CONFIG_BOOKS_FILE_KEY, "");
     configSetString(&gSfallConfig, SFALL_CONFIG_MISC_KEY, SFALL_CONFIG_ELEVATORS_FILE_KEY, "");
     configSetString(&gSfallConfig, SFALL_CONFIG_MISC_KEY, SFALL_CONFIG_SKILLS_FILE_KEY, "");
+    configSetString(&gSfallConfig, SFALL_CONFIG_MISC_KEY, SFALL_CONFIG_PERKS_FILE_KEY, "");
     configSetString(&gSfallConfig, SFALL_CONFIG_MISC_KEY, SFALL_CONFIG_CONFIG_FILE, "");
     configSetString(&gSfallConfig, SFALL_CONFIG_MISC_KEY, SFALL_CONFIG_PATCH_FILE, "");
     configSetString(&gSfallConfig, SFALL_CONFIG_SCRIPTS_KEY, SFALL_CONFIG_INI_CONFIG_FOLDER, "");
@@ -94,6 +98,10 @@ bool sfallConfigInit(int argc, char** argv)
     // The value only matters for non-English RPU translations that ship
     // dialog_female/cuts_female dirs; English installs are unaffected.
     configSetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, SFALL_CONFIG_FEMALE_DIALOG_MSGS_KEY, 0);
+    // World map travel-time modifier (percent) and encounter-rate gating.
+    configSetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, SFALL_CONFIG_WORLDMAP_TIME_MOD_KEY, 100);
+    configSetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, SFALL_CONFIG_WORLDMAP_ENCOUNTER_FIX_KEY, 0);
+    configSetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, SFALL_CONFIG_WORLDMAP_ENCOUNTER_RATE_KEY, 5);
     // H-06: WorldMapSlots defaults to 21. RPU's gl_k_modini.ssl checks
     // `get_ini_setting("ddraw.ini|Misc|WorldMapSlots") != 21` and calls
     // signal_end_game (ending the session) on any other value. sfall's own
@@ -133,6 +141,18 @@ bool sfallConfigInit(int argc, char** argv)
     gSfallArtCacheSize = tempVal;
     configGetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, SFALL_CONFIG_FEMALE_DIALOG_MSGS_KEY, &tempVal, 0);
     gFemaleDialogMsgs = tempVal;
+    configGetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, SFALL_CONFIG_WORLDMAP_TIME_MOD_KEY, &tempVal, 100);
+    gWorldMapTimeMod = tempVal;
+    if (gWorldMapTimeMod < 0) {
+        gWorldMapTimeMod = 0;
+    }
+    configGetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, SFALL_CONFIG_WORLDMAP_ENCOUNTER_FIX_KEY, &tempVal, 0);
+    gWorldMapEncounterFix = tempVal != 0;
+    configGetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, SFALL_CONFIG_WORLDMAP_ENCOUNTER_RATE_KEY, &tempVal, 5);
+    gWorldMapEncounterRate = tempVal;
+    if (gWorldMapEncounterRate < 1) {
+        gWorldMapEncounterRate = 1;
+    }
 
     // P3 RPU parity: ProcessorIdle and BoxBarColours need no engine behavior —
     // CE already yields the CPU every frame via the FPS limiter (SDL_Delay in

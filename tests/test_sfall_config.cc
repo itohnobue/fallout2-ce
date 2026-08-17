@@ -421,6 +421,42 @@ TEST_CASE("P3 RPU parity — FemaleDialogMsgs parse mapping") {
     sfallConfigExit();
 }
 
+TEST_CASE("P2 — worldmap trio (WorldMapTimeMod/EncounterFix/EncounterRate) parse mapping") {
+    resetConfigState();
+
+    char dummyArg0[] = "fallout2-ce";
+    char* argv[] = { dummyArg0 };
+    REQUIRE(sfallConfigInit(1, argv));
+
+    SUBCASE("globals are populated from the config defaults") {
+        // configRead fails in the test environment (compat_fopen → nullptr),
+        // so the globals reflect the configSetInt defaults — the same path
+        // the production parse loop reads from.
+        CHECK(gWorldMapTimeMod == 100);
+        CHECK_FALSE(gWorldMapEncounterFix);
+        CHECK(gWorldMapEncounterRate == 5);
+    }
+
+    SUBCASE("config keys store the values the production parse loop reads") {
+        configSetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, SFALL_CONFIG_WORLDMAP_TIME_MOD_KEY, 50);
+        configSetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, SFALL_CONFIG_WORLDMAP_ENCOUNTER_FIX_KEY, 1);
+        configSetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, SFALL_CONFIG_WORLDMAP_ENCOUNTER_RATE_KEY, 30);
+
+        int val = -1;
+        CHECK(configGetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY,
+            SFALL_CONFIG_WORLDMAP_TIME_MOD_KEY, &val, -1));
+        CHECK(val == 50);
+        CHECK(configGetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY,
+            SFALL_CONFIG_WORLDMAP_ENCOUNTER_FIX_KEY, &val, -1));
+        CHECK(val == 1);
+        CHECK(configGetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY,
+            SFALL_CONFIG_WORLDMAP_ENCOUNTER_RATE_KEY, &val, -1));
+        CHECK(val == 30);
+    }
+
+    sfallConfigExit();
+}
+
 TEST_CASE("sfallArtCacheSizeMb — art cache override selection") {
     resetConfigState();
 

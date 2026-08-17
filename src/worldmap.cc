@@ -41,6 +41,7 @@
 #include "palette.h"
 #include "party_member.h"
 #include "perk.h"
+#include "perk_tweak.h"
 #include "proto_instance.h"
 #include "queue.h"
 #include "random.h"
@@ -71,6 +72,16 @@ extern int gWorldMapFPSPatch;
 // boolean enable and WorldMapDelay2 (default 66, clamp [1,150]) is the delay.
 // Read from ddraw.ini [Misc] at wmWorldMap_init.
 static int gWorldMapDelay2 = 66;
+
+// P2: Walking-frame counter for the WorldMapEncounterFix rate gate
+// (worldmap.cc wmWorldMapFunc walk loop). Increments once per walking
+// frame; the encounter roll runs when the counter reaches
+// gWorldMapEncounterRate, then the counter resets. Only consulted when
+// gWorldMapEncounterFix is set. Note: the pre-existing 1500 ms
+// wmLastRndTime throttle inside wmRndEncounterOccurred bounds the actual
+// cadence — the rate gate only starts to dominate for
+// gWorldMapEncounterRate >= ~45 (inert in et tu, which ships Fix=0).
+static int wmEncounterCheckFrameCounter = 0;
 
 // M-62: Version gate for the gScriptWorldMapMulti save field. versionMajor
 // stores VERSION_MINOR (2 = upstream/v1.x, 3 = fork 1.3R, 4 = fork 1.4R+);
@@ -4036,8 +4047,27 @@ static int wmWorldMapFunc(int a1)
             }
 
             if (wmGenData.isWalking) {
+                // P2: WorldMapEncounterFix (ddraw.ini [Misc]) — rate-based
+                // encounter cadence. Vanilla (and CE) roll the random
+                // encounter check once per walking frame. With Fix=1 the
+                // roll runs at most once per gWorldMapEncounterRate walking
+                // frames, so the cadence is tied to distance traveled (each
+                // walking frame is one world-map step) instead of raw frame
+                // rate. Higher rates = slower encounters (sfall: "Higher
+                // values of WorldMapEncounterRate cause a slower encounter
+                // rate"). Fix=0 keeps the vanilla per-step roll.
+                bool shouldCheckEncounter = true;
+                if (gWorldMapEncounterFix) {
+                    wmEncounterCheckFrameCounter++;
+                    if (wmEncounterCheckFrameCounter >= gWorldMapEncounterRate) {
+                        wmEncounterCheckFrameCounter = 0;
+                    } else {
+                        shouldCheckEncounter = false;
+                    }
+                }
+
                 int mapToLoad = -1;
-                if (wmRndEncounterOccurred(&mapToLoad)) {
+                if (shouldCheckEncounter && wmRndEncounterOccurred(&mapToLoad)) {
                     if (mapToLoad != -1) {
                         if (wmGenData.isInCar) {
                             int areaIdx;
@@ -5066,7 +5096,7 @@ static int wmSetupRndNextTileNum(Encounter* encounter, EncounterEntry* encounter
                 distance += critterGetStat(gDude, STAT_PERCEPTION);
 
                 if (perkHasRank(gDude, PERK_CAUTIOUS_NATURE)) {
-                    distance += 3;
+                    distance += gPerkTweak.cautiousNatureBonus;
                 }
             }
 
@@ -5269,7 +5299,15 @@ static bool wmGameTimeIncrement(int ticksToAdd)
 
     // SFALL: Fix Pathfinder perk.
     int pathfinderRank = perkGetRank(gDude, PERK_PATHFINDER);
-    double newTicks = static_cast<double>(ticksToAdd) * (1.0 - static_cast<double>(pathfinderRank) * 0.25) * gScriptWorldMapMulti + gameTimeIncRemainder;
+    // P2: WorldMapTimeMod (ddraw.ini [Misc]) — travel-time percentage
+    // modifier, applied in addition to the Pathfinder perk and the
+    // set_map_time_multi script factor (sfall Main.cpp: mapMultiMod =
+    // WorldMapTimeMod / 100.0; sfall docs: set_map_time_multi works in
+    // addition to WorldMapTimeMod, not overriding it). 100 = normal
+    // speed, 0 = time does not pass while traveling. Encounter rate is
+    // unaffected (the encounter roll is per walking frame, independent
+    // of the tick count).
+    double newTicks = static_cast<double>(ticksToAdd) * (1.0 - static_cast<double>(pathfinderRank) * 0.25) * gScriptWorldMapMulti * (static_cast<double>(gWorldMapTimeMod) / 100.0) + gameTimeIncRemainder;
     gameTimeIncRemainder = modf(newTicks, &newTicks);
     ticksToAdd = static_cast<int>(newTicks);
 
