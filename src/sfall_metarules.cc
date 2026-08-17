@@ -1611,6 +1611,14 @@ void mf_get_object_data(OpcodeContext& ctx)
     }
 
     Object* object = dataPtr.asObject();
+    // asObject() returns nullptr for integer 0 and non-pointer types.
+    // Guard against null dereference — peer functions in this file
+    // have the same guard.
+    if (object == nullptr) {
+        ctx.printError("%s(): object is null (asObject() returned nullptr)", ctx.name());
+        ctx.setReturn(-1);
+        return;
+    }
 
     bool handled = false;
     ProgramValue result = getObjectData(object, static_cast<ObjectDataField>(offset), handled);

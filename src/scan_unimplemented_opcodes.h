@@ -198,7 +198,7 @@ static constexpr bool kImplementedHooks[] = {
     true,  // 42: HOOK_TARGETOBJECT
     true,  // 43: HOOK_ENCOUNTER
     false, // 44: HOOK_ADJUSTPOISON (not implemented)
-    false, // 45: HOOK_ADJUSTRADS (not implemented)
+    true,  // 45: HOOK_ADJUSTRADS (fire site at critter.cc:492 — implemented 2026-08-17)
     false, // 46: HOOK_ROLLCHECK (not implemented)
     false, // 47: HOOK_BESTWEAPON (not implemented)
     true,  // 48: HOOK_CANUSEWEAPON

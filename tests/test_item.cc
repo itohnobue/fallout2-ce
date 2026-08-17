@@ -192,28 +192,79 @@ static int testGetArmorWeight(int pid, int protoWeight, bool isHidden)
     return weight;
 }
 
+// Mirror of the AttackType enum values used by the Fast Shot logic (item.h:18-25).
+enum TestAttackType {
+    TEST_ATTACK_TYPE_NONE = 0,
+    TEST_ATTACK_TYPE_UNARMED = 1,
+    TEST_ATTACK_TYPE_MELEE = 2,
+    TEST_ATTACK_TYPE_THROW = 3,
+    TEST_ATTACK_TYPE_RANGED = 4,
+};
+
 // Mirror of the Fast Shot AP reduction logic from weaponGetActionPointCost
-// (src/item.cc:1732-1744). Tests the refactored conditional that was changed
-// from a nested structure to a cleaner two-branch pattern.
+// (src/item.cc:1861-1899) — the M1-refactored sfall per-mode semantics.
+//
+// Parameters mirror the production decision inputs:
+//   attackType   — weaponGetAttackTypeForHitMode result (UNARMED for HtH/null
+//                  weapon, item.cc:1257-1258)
+//   hasWeapon    — weapon != nullptr (HtH attacks pass nullptr)
+//   weaponRange  — weaponGetRange(critter, hitMode)
+//   hookCalcapcostRegistered — scriptHooks_IsHookRegistered(HOOK_CALCAPCOST)
 static int testApplyFastShotAP(int baseAp, bool isDude, bool hasFastShotTrait,
-                               bool isUnarmed, int weaponRange)
+                               TestAttackType attackType, bool hasWeapon,
+                               int weaponRange, bool hookCalcapcostRegistered)
 {
     int actionPoints = baseAp;
 
     // Fast Shot trait AP reduction.
     if (isDude && hasFastShotTrait) {
-        if (gTestFastShotFix >= 1) {
-            // FO1 behavior: -1 AP for ALL weapons including unarmed.
-            actionPoints--;
+        if (gTestFastShotFix >= 2) {
+            // Modes 2/3: -1 AP for all weapon attacks. HtH (no weapon item)
+            // is excluded in every mode (sfall mode 3: item && fastShotTweak > 2).
+            // The melee/unarmed-class reduction (weapon range < 2 — the exact
+            // class et tu's gl_apcost.ssl covers via HOOK_CALCAPCOST) is applied
+            // only when no HOOK_CALCAPCOST handler is registered (item.cc:1884-1889).
+            if (hasWeapon) {
+                bool isMeleeClass = weaponRange < 2;
+                if (!isMeleeClass || !hookCalcapcostRegistered) {
+                    actionPoints--;
+                }
+            }
         } else {
-            // FO2 vanilla: only ranged weapons with range > 2
-            if (!isUnarmed && weaponRange > 2) {
+            // Modes 0/1: ranged-class weapons only (attack type not
+            // melee/unarmed AND range >= 2).
+            if ((attackType == TEST_ATTACK_TYPE_RANGED || attackType == TEST_ATTACK_TYPE_THROW)
+                && weaponRange >= 2) {
                 actionPoints--;
             }
         }
     }
 
     return actionPoints;
+}
+
+// Mirror of the Fast Shot gate in critterCanAim (src/item.cc:2055-2074).
+// In gFastShotFix == 1 (Haenlomal's tweak), aimed attacks are allowed for
+// melee/unarmed/HtH attacks (weapon subtype < THROWING or range < 2) and
+// still blocked for ranged attacks (subtype >= THROWING and range >= 2).
+// Modes 0/2/3 keep vanilla F2 behavior (Fast Shot blocks all called shots).
+// The remaining critterCanAim restrictions (burst/continuous/explosive/
+// fire/EMP/plasma-throw) are not modeled here.
+static bool testCritterCanAimFastShot(bool isDude, bool hasFastShotTrait,
+                                      TestAttackType attackType, int weaponRange)
+{
+    if (isDude && hasFastShotTrait) {
+        if (gTestFastShotFix == 1) {
+            bool isMeleeClass = (attackType == TEST_ATTACK_TYPE_MELEE
+                                 || attackType == TEST_ATTACK_TYPE_UNARMED);
+            if (!isMeleeClass && weaponRange >= 2) {
+                return false;
+            }
+        } else {
+            return false;
+        }
+    }
+    return true;
 }
 
 // Helper: isUnarmedHitMode mirror (combat.h:85-90)
@@ -541,88 +592,167 @@ TEST_CASE("testGetArmorWeight — gFallout1Behavior toggling")
 // SECTION 4: weaponGetActionPointCost — gFastShotFix refactoring
 // ================================================================
 
-TEST_CASE("testApplyFastShotAP — gFastShotFix >= 1 (FO1 behavior)")
+TEST_CASE("testApplyFastShotAP — gFastShotFix = 1 (ranged-class only)")
 {
-    // FO1 behavior: Fast Shot reduces AP by 1 for ALL weapons, including unarmed.
+    // Mode 1 (Haenlomal's tweak): same ranged-class rule as mode 0 — -1 AP
+    // only for ranged-class weapons (attack type RANGED/THROW, range >= 2).
+    // Unarmed/HtH/melee are NOT reduced (item.cc:1890-1898).
     gTestFastShotFix = 1;
 
-    SUBCASE("unarmed attack → -1 AP")
+    SUBCASE("unarmed/HtH attack → no AP reduction")
     {
-        CHECK(testApplyFastShotAP(3, true, true, true, 0) == 2);
-        CHECK(testApplyFastShotAP(4, true, true, true, 0) == 3);
+        CHECK(testApplyFastShotAP(3, true, true, TEST_ATTACK_TYPE_UNARMED, false, 0, false) == 3);
+        CHECK(testApplyFastShotAP(4, true, true, TEST_ATTACK_TYPE_UNARMED, false, 0, false) == 4);
     }
 
     SUBCASE("ranged weapon, range > 2 → -1 AP")
     {
-        CHECK(testApplyFastShotAP(5, true, true, false, 30) == 4);
+        CHECK(testApplyFastShotAP(5, true, true, TEST_ATTACK_TYPE_RANGED, true, 30, false) == 4);
     }
 
-    SUBCASE("ranged weapon, range <= 2 → -1 AP (still reduced in FO1 mode)")
+    SUBCASE("ranged weapon, range exactly 2 → -1 AP (boundary: >= 2)")
     {
-        CHECK(testApplyFastShotAP(5, true, true, false, 2) == 4);
-        CHECK(testApplyFastShotAP(5, true, true, false, 1) == 4);
+        CHECK(testApplyFastShotAP(5, true, true, TEST_ATTACK_TYPE_RANGED, true, 2, false) == 4);
     }
 
-    SUBCASE("melee weapon → -1 AP")
+    SUBCASE("ranged weapon, range exactly 1 → no AP reduction")
     {
-        CHECK(testApplyFastShotAP(4, true, true, false, 1) == 3);
+        CHECK(testApplyFastShotAP(5, true, true, TEST_ATTACK_TYPE_RANGED, true, 1, false) == 5);
     }
 
-    SUBCASE("gFastShotFix=2 behaves same as >= 1")
+    SUBCASE("melee weapon → no AP reduction")
     {
-        gTestFastShotFix = 2;
-        CHECK(testApplyFastShotAP(3, true, true, true, 0) == 2);
-        CHECK(testApplyFastShotAP(5, true, true, false, 2) == 4);
+        CHECK(testApplyFastShotAP(4, true, true, TEST_ATTACK_TYPE_MELEE, true, 1, false) == 4);
+    }
+
+    SUBCASE("melee weapon with range > 2 → no AP reduction (attack-type gate, not range gate)")
+    {
+        CHECK(testApplyFastShotAP(4, true, true, TEST_ATTACK_TYPE_MELEE, true, 3, false) == 4);
+    }
+
+    SUBCASE("thrown weapon with range >= 2 → -1 AP")
+    {
+        CHECK(testApplyFastShotAP(5, true, true, TEST_ATTACK_TYPE_THROW, true, 3, false) == 4);
+        CHECK(testApplyFastShotAP(5, true, true, TEST_ATTACK_TYPE_THROW, true, 2, false) == 4);
+    }
+
+    SUBCASE("thrown weapon with range 1 → no AP reduction")
+    {
+        CHECK(testApplyFastShotAP(5, true, true, TEST_ATTACK_TYPE_THROW, true, 1, false) == 5);
     }
 }
 
 TEST_CASE("testApplyFastShotAP — gFastShotFix = 0 (FO2 vanilla)")
 {
-    // FO2 vanilla: Fast Shot reduces AP by 1 only for ranged weapons with range > 2.
+    // Mode 0 (FO2 original): -1 AP only for ranged-class weapons with
+    // range >= 2. Unarmed/HtH/melee are never reduced (item.cc:1890-1898).
     gTestFastShotFix = 0;
 
-    SUBCASE("unarmed attack → no AP reduction")
+    SUBCASE("unarmed/HtH attack → no AP reduction")
     {
-        CHECK(testApplyFastShotAP(3, true, true, true, 0) == 3);
-        CHECK(testApplyFastShotAP(4, true, true, true, 0) == 4);
+        CHECK(testApplyFastShotAP(3, true, true, TEST_ATTACK_TYPE_UNARMED, false, 0, false) == 3);
+        CHECK(testApplyFastShotAP(4, true, true, TEST_ATTACK_TYPE_UNARMED, false, 0, false) == 4);
     }
 
-    SUBCASE("melee (non-unarmed) weapon with range <= 2 → no AP reduction")
+    SUBCASE("melee weapon with range <= 2 → no AP reduction")
     {
-        CHECK(testApplyFastShotAP(4, true, true, false, 2) == 4);
-        CHECK(testApplyFastShotAP(4, true, true, false, 1) == 4);
+        CHECK(testApplyFastShotAP(4, true, true, TEST_ATTACK_TYPE_MELEE, true, 2, false) == 4);
+        CHECK(testApplyFastShotAP(4, true, true, TEST_ATTACK_TYPE_MELEE, true, 1, false) == 4);
+    }
+
+    SUBCASE("melee weapon with range > 2 → no AP reduction (attack-type gate)")
+    {
+        CHECK(testApplyFastShotAP(4, true, true, TEST_ATTACK_TYPE_MELEE, true, 3, false) == 4);
+        CHECK(testApplyFastShotAP(4, true, true, TEST_ATTACK_TYPE_MELEE, true, 30, false) == 4);
     }
 
     SUBCASE("ranged weapon with range > 2 → -1 AP")
     {
-        CHECK(testApplyFastShotAP(5, true, true, false, 3) == 4);
-        CHECK(testApplyFastShotAP(5, true, true, false, 30) == 4);
-        CHECK(testApplyFastShotAP(5, true, true, false, 50) == 4);
+        CHECK(testApplyFastShotAP(5, true, true, TEST_ATTACK_TYPE_RANGED, true, 3, false) == 4);
+        CHECK(testApplyFastShotAP(5, true, true, TEST_ATTACK_TYPE_RANGED, true, 30, false) == 4);
+        CHECK(testApplyFastShotAP(5, true, true, TEST_ATTACK_TYPE_RANGED, true, 50, false) == 4);
     }
 
     SUBCASE("ranged weapon with range exactly 3 → -1 AP (boundary)")
     {
-        CHECK(testApplyFastShotAP(5, true, true, false, 3) == 4);
+        CHECK(testApplyFastShotAP(5, true, true, TEST_ATTACK_TYPE_RANGED, true, 3, false) == 4);
     }
 
-    SUBCASE("ranged weapon with range exactly 2 → no reduction (boundary)")
+    SUBCASE("ranged weapon with range exactly 2 → -1 AP (boundary: >= 2)")
     {
-        CHECK(testApplyFastShotAP(5, true, true, false, 2) == 5);
+        CHECK(testApplyFastShotAP(5, true, true, TEST_ATTACK_TYPE_RANGED, true, 2, false) == 4);
     }
 
     SUBCASE("ranged weapon with range exactly 1 → no reduction")
     {
-        CHECK(testApplyFastShotAP(5, true, true, false, 1) == 5);
+        CHECK(testApplyFastShotAP(5, true, true, TEST_ATTACK_TYPE_RANGED, true, 1, false) == 5);
     }
 
     SUBCASE("ranged weapon with range 0 → no reduction")
     {
-        CHECK(testApplyFastShotAP(5, true, true, false, 0) == 5);
+        CHECK(testApplyFastShotAP(5, true, true, TEST_ATTACK_TYPE_RANGED, true, 0, false) == 5);
     }
 
     SUBCASE("ranged weapon with range -1 (edge case) → no reduction")
     {
-        CHECK(testApplyFastShotAP(5, true, true, false, -1) == 5);
+        CHECK(testApplyFastShotAP(5, true, true, TEST_ATTACK_TYPE_RANGED, true, -1, false) == 5);
+    }
+
+    SUBCASE("thrown weapon with range >= 2 → -1 AP")
+    {
+        CHECK(testApplyFastShotAP(5, true, true, TEST_ATTACK_TYPE_THROW, true, 3, false) == 4);
+        CHECK(testApplyFastShotAP(5, true, true, TEST_ATTACK_TYPE_THROW, true, 2, false) == 4);
+    }
+
+    SUBCASE("thrown weapon with range 1 → no AP reduction")
+    {
+        CHECK(testApplyFastShotAP(5, true, true, TEST_ATTACK_TYPE_THROW, true, 1, false) == 5);
+    }
+}
+
+TEST_CASE("testApplyFastShotAP — gFastShotFix = 2 and 3 (all weapons, hook-gated melee-class)")
+{
+    // Modes 2/3: -1 AP for all weapon attacks. HtH (no weapon item) is
+    // excluded in every mode. The melee/unarmed-class reduction (weapon
+    // range < 2 — the class et tu's gl_apcost.ssl covers) is applied only
+    // when no HOOK_CALCAPCOST handler is registered (item.cc:1881-1889).
+
+    SUBCASE("mode 2: ranged weapon reduced regardless of hook registration")
+    {
+        gTestFastShotFix = 2;
+        CHECK(testApplyFastShotAP(5, true, true, TEST_ATTACK_TYPE_RANGED, true, 30, false) == 4);
+        CHECK(testApplyFastShotAP(5, true, true, TEST_ATTACK_TYPE_RANGED, true, 30, true) == 4);
+        CHECK(testApplyFastShotAP(5, true, true, TEST_ATTACK_TYPE_RANGED, true, 2, false) == 4);
+    }
+
+    SUBCASE("mode 2: melee-class weapon reduced when no HOOK_CALCAPCOST handler")
+    {
+        gTestFastShotFix = 2;
+        CHECK(testApplyFastShotAP(4, true, true, TEST_ATTACK_TYPE_MELEE, true, 1, false) == 3);
+        CHECK(testApplyFastShotAP(3, true, true, TEST_ATTACK_TYPE_UNARMED, true, 1, false) == 2);
+    }
+
+    SUBCASE("mode 2: melee-class weapon NOT reduced when HOOK_CALCAPCOST is registered")
+    {
+        gTestFastShotFix = 2;
+        CHECK(testApplyFastShotAP(4, true, true, TEST_ATTACK_TYPE_MELEE, true, 1, true) == 4);
+        CHECK(testApplyFastShotAP(3, true, true, TEST_ATTACK_TYPE_UNARMED, true, 1, true) == 3);
+    }
+
+    SUBCASE("mode 2: HtH (no weapon item) never reduced")
+    {
+        gTestFastShotFix = 2;
+        CHECK(testApplyFastShotAP(3, true, true, TEST_ATTACK_TYPE_UNARMED, false, 0, false) == 3);
+        CHECK(testApplyFastShotAP(3, true, true, TEST_ATTACK_TYPE_UNARMED, false, 0, true) == 3);
+    }
+
+    SUBCASE("mode 3: same all-weapon rule as mode 2; HtH still never reduced")
+    {
+        gTestFastShotFix = 3;
+        CHECK(testApplyFastShotAP(5, true, true, TEST_ATTACK_TYPE_RANGED, true, 30, true) == 4);
+        CHECK(testApplyFastShotAP(4, true, true, TEST_ATTACK_TYPE_MELEE, true, 1, false) == 3);
+        CHECK(testApplyFastShotAP(4, true, true, TEST_ATTACK_TYPE_MELEE, true, 1, true) == 4);
+        CHECK(testApplyFastShotAP(3, true, true, TEST_ATTACK_TYPE_UNARMED, false, 0, true) == 3);
     }
 }
 
@@ -633,15 +763,15 @@ TEST_CASE("testApplyFastShotAP — no Fast Shot trait")
     SUBCASE("FO2 vanilla, no trait → no reduction")
     {
         gTestFastShotFix = 0;
-        CHECK(testApplyFastShotAP(5, true, false, false, 30) == 5);
-        CHECK(testApplyFastShotAP(5, true, false, true, 0) == 5);
+        CHECK(testApplyFastShotAP(5, true, false, TEST_ATTACK_TYPE_RANGED, true, 30, false) == 5);
+        CHECK(testApplyFastShotAP(5, true, false, TEST_ATTACK_TYPE_UNARMED, false, 0, false) == 5);
     }
 
     SUBCASE("FO1 behavior, no trait → no reduction")
     {
         gTestFastShotFix = 1;
-        CHECK(testApplyFastShotAP(5, true, false, false, 30) == 5);
-        CHECK(testApplyFastShotAP(5, true, false, true, 0) == 5);
+        CHECK(testApplyFastShotAP(5, true, false, TEST_ATTACK_TYPE_RANGED, true, 30, false) == 5);
+        CHECK(testApplyFastShotAP(5, true, false, TEST_ATTACK_TYPE_UNARMED, false, 0, false) == 5);
     }
 }
 
@@ -652,34 +782,84 @@ TEST_CASE("testApplyFastShotAP — NPC (not gDude)")
     SUBCASE("FO2 vanilla, NPC → no reduction")
     {
         gTestFastShotFix = 0;
-        CHECK(testApplyFastShotAP(5, false, true, false, 30) == 5);
+        CHECK(testApplyFastShotAP(5, false, true, TEST_ATTACK_TYPE_RANGED, true, 30, false) == 5);
     }
 
     SUBCASE("FO1 behavior, NPC → no reduction")
     {
         gTestFastShotFix = 1;
-        CHECK(testApplyFastShotAP(5, false, true, true, 0) == 5);
+        CHECK(testApplyFastShotAP(5, false, true, TEST_ATTACK_TYPE_UNARMED, false, 0, false) == 5);
     }
 }
 
 TEST_CASE("testApplyFastShotAP — does not reduce below 0 in isolation")
 {
     // This test only validates the Fast Shot subtraction.
-    // The production code (item.cc:1766-1768) has a separate floor:
+    // The production code (item.cc:1921-1923) has a separate floor:
     //   if (actionPoints < 1) actionPoints = 1;
     // We test that the subtraction alone can produce 0 or negative,
-    // but the caller's floor guard handles it.
-
+    // but the caller's floor guard handles it. A ranged weapon is used
+    // because HtH/unarmed is never reduced in any mode.
     gTestFastShotFix = 1;
 
-    SUBCASE("AP=1, FastShotFix>=1 → result is 0 (caller floors to 1)")
+    SUBCASE("AP=1, ranged weapon → result is 0 (caller floors to 1)")
     {
-        CHECK(testApplyFastShotAP(1, true, true, true, 0) == 0);
+        CHECK(testApplyFastShotAP(1, true, true, TEST_ATTACK_TYPE_RANGED, true, 30, false) == 0);
     }
 
-    SUBCASE("AP=0, FastShotFix>=1 → result is -1 (caller floors to 1)")
+    SUBCASE("AP=0, ranged weapon → result is -1 (caller floors to 1)")
     {
-        CHECK(testApplyFastShotAP(0, true, true, true, 0) == -1);
+        CHECK(testApplyFastShotAP(0, true, true, TEST_ATTACK_TYPE_RANGED, true, 30, false) == -1);
+    }
+}
+
+TEST_CASE("critterCanAim — mode-1 called-shot exception (item.cc:2055-2074)")
+{
+    SUBCASE("mode 0: Fast Shot blocks called shots for all classes")
+    {
+        gTestFastShotFix = 0;
+        CHECK_FALSE(testCritterCanAimFastShot(true, true, TEST_ATTACK_TYPE_RANGED, 30));
+        CHECK_FALSE(testCritterCanAimFastShot(true, true, TEST_ATTACK_TYPE_MELEE, 1));
+        CHECK_FALSE(testCritterCanAimFastShot(true, true, TEST_ATTACK_TYPE_UNARMED, 0));
+    }
+
+    SUBCASE("mode 1: aimed attacks allowed for melee/unarmed/HtH")
+    {
+        gTestFastShotFix = 1;
+        CHECK(testCritterCanAimFastShot(true, true, TEST_ATTACK_TYPE_MELEE, 1));
+        CHECK(testCritterCanAimFastShot(true, true, TEST_ATTACK_TYPE_MELEE, 30));
+        CHECK(testCritterCanAimFastShot(true, true, TEST_ATTACK_TYPE_UNARMED, 0));
+        CHECK(testCritterCanAimFastShot(true, true, TEST_ATTACK_TYPE_UNARMED, 30));
+    }
+
+    SUBCASE("mode 1: ranged attacks still blocked when range >= 2")
+    {
+        gTestFastShotFix = 1;
+        CHECK_FALSE(testCritterCanAimFastShot(true, true, TEST_ATTACK_TYPE_RANGED, 2));
+        CHECK_FALSE(testCritterCanAimFastShot(true, true, TEST_ATTACK_TYPE_RANGED, 30));
+        CHECK_FALSE(testCritterCanAimFastShot(true, true, TEST_ATTACK_TYPE_THROW, 3));
+    }
+
+    SUBCASE("mode 1: range < 2 allows even a non-melee-class attack (sfall: subtype < THROWING or range < 2)")
+    {
+        gTestFastShotFix = 1;
+        CHECK(testCritterCanAimFastShot(true, true, TEST_ATTACK_TYPE_RANGED, 1));
+    }
+
+    SUBCASE("modes 2/3 keep vanilla blocking")
+    {
+        gTestFastShotFix = 2;
+        CHECK_FALSE(testCritterCanAimFastShot(true, true, TEST_ATTACK_TYPE_MELEE, 1));
+        CHECK_FALSE(testCritterCanAimFastShot(true, true, TEST_ATTACK_TYPE_UNARMED, 0));
+        gTestFastShotFix = 3;
+        CHECK_FALSE(testCritterCanAimFastShot(true, true, TEST_ATTACK_TYPE_MELEE, 1));
+    }
+
+    SUBCASE("non-dude or no trait: Fast Shot gate not triggered → can aim")
+    {
+        gTestFastShotFix = 1;
+        CHECK(testCritterCanAimFastShot(false, true, TEST_ATTACK_TYPE_RANGED, 30));
+        CHECK(testCritterCanAimFastShot(true, false, TEST_ATTACK_TYPE_RANGED, 30));
     }
 }
 
@@ -887,43 +1067,43 @@ TEST_CASE("Fast Shot — FO1 vs FO2 scenarios")
     SUBCASE("FO2 vanilla: unarmed character with Fast Shot gets no AP discount")
     {
         gTestFastShotFix = 0;
-        CHECK(testApplyFastShotAP(3, true, true, true, 0) == 3); // no change
+        CHECK(testApplyFastShotAP(3, true, true, TEST_ATTACK_TYPE_UNARMED, false, 0, false) == 3); // no change
     }
 
-    SUBCASE("FO1 behavior: unarmed character with Fast Shot gets -1 AP")
+    SUBCASE("mode 1: unarmed character with Fast Shot still gets no AP discount")
     {
         gTestFastShotFix = 1;
-        CHECK(testApplyFastShotAP(3, true, true, true, 0) == 2); // -1
+        CHECK(testApplyFastShotAP(3, true, true, TEST_ATTACK_TYPE_UNARMED, false, 0, false) == 3); // no change
     }
 
     SUBCASE("FO2 vanilla: sniper with Fast Shot and range 50 gets -1 AP")
     {
         gTestFastShotFix = 0;
-        CHECK(testApplyFastShotAP(6, true, true, false, 50) == 5); // -1
+        CHECK(testApplyFastShotAP(6, true, true, TEST_ATTACK_TYPE_RANGED, true, 50, false) == 5); // -1
     }
 
-    SUBCASE("FO2 vanilla: pistol user with Fast Shot and range 2 gets no discount")
+    SUBCASE("FO2 vanilla: pistol user with Fast Shot and range 2 gets -1 AP (>= 2 threshold)")
     {
         gTestFastShotFix = 0;
-        CHECK(testApplyFastShotAP(5, true, true, false, 2) == 5); // no change
+        CHECK(testApplyFastShotAP(5, true, true, TEST_ATTACK_TYPE_RANGED, true, 2, false) == 4); // -1
     }
 
-    SUBCASE("FO1 behavior: pistol user with Fast Shot and range 2 gets -1 AP")
+    SUBCASE("mode 1: pistol user with Fast Shot and range 2 gets -1 AP")
     {
         gTestFastShotFix = 1;
-        CHECK(testApplyFastShotAP(5, true, true, false, 2) == 4); // -1
+        CHECK(testApplyFastShotAP(5, true, true, TEST_ATTACK_TYPE_RANGED, true, 2, false) == 4); // -1
     }
 
     SUBCASE("FO2 vanilla: melee (non-unarmed) with range 1 gets no discount")
     {
         gTestFastShotFix = 0;
-        CHECK(testApplyFastShotAP(4, true, true, false, 1) == 4);
+        CHECK(testApplyFastShotAP(4, true, true, TEST_ATTACK_TYPE_MELEE, true, 1, false) == 4);
     }
 
-    SUBCASE("FO1 behavior: melee (non-unarmed) with range 1 gets -1 AP")
+    SUBCASE("mode 1: melee (non-unarmed) with range 1 gets no discount")
     {
         gTestFastShotFix = 1;
-        CHECK(testApplyFastShotAP(4, true, true, false, 1) == 3);
+        CHECK(testApplyFastShotAP(4, true, true, TEST_ATTACK_TYPE_MELEE, true, 1, false) == 4);
     }
 }
 
@@ -999,13 +1179,19 @@ TEST_CASE("RPU/Et Tu cross-reference: battle_game engine config")
         CHECK(testGetArmorWeight(TEST_PID_POWER_ARMOR, 85, false) == 42);
     }
 
-    SUBCASE("gFastShotFix toggle affects unarmed AP reduction")
+    SUBCASE("gFastShotFix toggle affects ranged AP reduction; unarmed is inert")
     {
         gTestFastShotFix = 0;
-        CHECK(testApplyFastShotAP(3, true, true, true, 0) == 3);
+        CHECK(testApplyFastShotAP(5, true, true, TEST_ATTACK_TYPE_RANGED, true, 30, false) == 4);
 
         gTestFastShotFix = 1;
-        CHECK(testApplyFastShotAP(3, true, true, true, 0) == 2);
+        CHECK(testApplyFastShotAP(5, true, true, TEST_ATTACK_TYPE_RANGED, true, 30, false) == 4);
+
+        // Unarmed/HtH is never reduced in any mode — the toggle is inert there.
+        gTestFastShotFix = 0;
+        CHECK(testApplyFastShotAP(3, true, true, TEST_ATTACK_TYPE_UNARMED, false, 0, false) == 3);
+        gTestFastShotFix = 1;
+        CHECK(testApplyFastShotAP(3, true, true, TEST_ATTACK_TYPE_UNARMED, false, 0, false) == 3);
     }
 }
 
@@ -1013,14 +1199,21 @@ TEST_CASE("RPU/Et Tu cross-reference: battle_game engine config")
 // SECTION 9: N2-013 — weaponGetRange called outside weapon-null guard
 // ================================================================
 //
-// Finding N2-013 (MEDIUM): In the refactored Fast Shot path (item.cc:1740),
-// weaponGetRange(critter, hitMode) is called even when weapon == nullptr
-// and !isUnarmedHitMode(hitMode). This call path was never exercised
-// before the fork's refactoring of the Fast Shot logic.
+// Finding N2-013 (MEDIUM, historical): In the pre-M1 Fast Shot path
+// (item.cc:1740), weaponGetRange(critter, hitMode) was called even when
+// weapon == nullptr and !isUnarmedHitMode(hitMode). This call path was
+// never exercised before the fork's refactoring of the Fast Shot logic.
 //
 // The weaponGetRange function (item.cc:1648-1686) is SAFE when weapon
 // is nullptr — it falls through to the CRITTER_LONG_LIMBS / default-1
-// check. But the new call path is a testing gap.
+// check.
+//
+// NOTE (M1 refactor): the new Fast Shot block (item.cc:1861-1899) no
+// longer calls weaponGetRange with a null weapon — modes 0/1 gate on the
+// attack type first (weaponGetAttackTypeForHitMode returns UNARMED for a
+// null weapon, so the range check short-circuits) and modes 2/3 gate on
+// `weapon != nullptr`. The subcases below still pin weaponGetRange's
+// null-safety contract for the helper itself.
 
 // ---- Mirror types for weaponGetRange ----
 static constexpr int TEST_CRITTER_LONG_LIMBS = 1;
@@ -1048,9 +1241,9 @@ static int testWeaponGetRange(int /*critter*/, int hitMode, int critterFlags, in
 TEST_CASE("N2-013: weaponGetRange — called outside weapon-null guard (item.cc:1740)")
 {
     // Finding: N2-013 (MEDIUM), adversarial CONFIRMED
-    // Source: item.cc:1740
+    // Source: item.cc:1740 (pre-M1 code)
     //
-    // Production code (item.cc:1738-1743):
+    // Historical production code (item.cc:1738-1743, pre-M1):
     //   if (critter == gDude && traitIsSelected(TRAIT_FAST_SHOT)) {
     //       if (gFastShotFix >= 1) {
     //           actionPoints--;
@@ -1062,11 +1255,17 @@ TEST_CASE("N2-013: weaponGetRange — called outside weapon-null guard (item.cc:
     //       }
     //   }
     //
-    // In the gFastShotFix==0 branch, weaponGetRange is called even when
+    // In the gFastShotFix==0 branch, weaponGetRange was called even when
     // weapon==nullptr (e.g., unarmed hit mode is checked first, but
     // non-unarmed without a weapon falls through to the range check).
     // Before the refactoring, weaponGetRange was inside the weapon!=nullptr
-    // guard — this call path is new.
+    // guard — that call path was new.
+    //
+    // M1 note: the current Fast Shot block (item.cc:1861-1899) no longer
+    // reaches weaponGetRange with a null weapon — modes 0/1 short-circuit on
+    // the attack type (UNARMED for a null weapon) and modes 2/3 gate on
+    // `weapon != nullptr`. The subcases below still pin the null-safety
+    // contract of the range helper itself.
 
     SUBCASE("weaponGetRange returns 1 for normal critter (no weapon)")
     {
@@ -1092,29 +1291,32 @@ TEST_CASE("N2-013: weaponGetRange — called outside weapon-null guard (item.cc:
         CHECK(range > 2);
     }
 
-    SUBCASE("new call path: weaponGetRange with nullptr weapon in Fast Shot path")
+    SUBCASE("weaponGetRange with nullptr weapon returns the safe fallback (historical N2-013 path)")
     {
-        // The production Fast Shot path calls weaponGetRange when:
+        // Historical Fast Shot path (pre-M1) called weaponGetRange when:
         // - critter == gDude
         // - has Fast Shot trait
         // - gFastShotFix == 0 (FO2 vanilla)
         // - !isUnarmedHitMode (e.g., HIT_MODE_RIGHT_WEAPON_PRIMARY)
         // - weapon == nullptr (no weapon actually equipped)
+        //
+        // The M1 refactor removed this call path, but the helper's
+        // null-safety contract is still worth pinning.
 
         // Simulate the call chain:
         // weaponGetRange(nullptr-returning critter, RIGHT_WEAPON_PRIMARY)
         int range = testWeaponGetRange(0, TEST_HIT_MODE_RIGHT_WEAPON_PRIMARY, 0, 0);
         CHECK(range == 1); // falls through to default
 
-        // With this range (1), the Fast Shot condition is:
+        // With this range (1), the old Fast Shot condition was:
         // !isUnarmed && 1 > 2 → false → no AP reduction
-        // This is correct behavior, but the code path was never exercised.
+        // Correct behavior, but the code path was never exercised.
         CHECK_FALSE(range > 2);
 
         // The function is safe: weaponGetRange always returns 1-2
         // when weapon is nullptr (for normal critters).
         // N2-013 notes: if critterGetWeaponForHitMode had side effects,
-        // this new call path would introduce a bug.
+        // the old call path would have introduced a bug.
     }
 
     SUBCASE("regression: old code called weaponGetRange inside weapon-null guard")

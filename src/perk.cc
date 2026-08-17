@@ -1,5 +1,8 @@
 #include "perk.h"
 
+#include <ctype.h>
+#include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -251,7 +254,22 @@ static void perksLoadCustomConfig()
             continue;
         }
 
-        int perkID = atoi(sectionName);
+        // Strict parse: the whole section name must be consumed by strtol
+        // (a section named "1abc" would otherwise silently retarget perk 1).
+        // Leading whitespace is skipped by strtol; trailing whitespace is
+        // tolerated here to match the config reader's section-name trimming.
+        char* end = nullptr;
+        errno = 0;
+        long perkIdLong = strtol(sectionName, &end, 10);
+        while (end != sectionName && isspace(static_cast<unsigned char>(*end))) {
+            end++;
+        }
+        if (end == sectionName || *end != '\0' || errno == ERANGE || perkIdLong < 0 || perkIdLong > INT_MAX) {
+            debugPrint("Perks config: malformed perk section '[%s]' ignored\n", sectionName);
+            continue;
+        }
+
+        int perkID = static_cast<int>(perkIdLong);
         if (!perkIsValid(static_cast<Perk>(perkID))) {
             continue;
         }

@@ -1348,10 +1348,20 @@ static int wmGenDataInit()
     // Upstream start-position config ([start]/worldmap_x) first, then F-072:
     // fork reads start position from content config, defaulting to FO2
     // Arroyo (173, 122). Et Tu mods set start_x_pos=823, start_y_pos=72 for
-    // FO1 Vault 13 entrance — fork value takes priority.
+    // FO1 Vault 13 entrance — fork value takes priority, but ONLY when the
+    // fork key is present: the default-overload read writes 173/122 on an
+    // absent key and clobbers the upstream [start] value (M2). Present-
+    // semantics read keeps the upstream position when the fork key is absent.
     wmGenDataSetStartWorldPos();
-    configGetInt(&gContentConfig, CONTENT_CONFIG_WORLDMAP_SECTION, "start_x_pos", &wmGenData.worldPosX, 173);
-    configGetInt(&gContentConfig, CONTENT_CONFIG_WORLDMAP_SECTION, "start_y_pos", &wmGenData.worldPosY, 122);
+    {
+        int value;
+        if (configGetInt(&gContentConfig, CONTENT_CONFIG_WORLDMAP_SECTION, "start_x_pos", &value)) {
+            wmGenData.worldPosX = value;
+        }
+        if (configGetInt(&gContentConfig, CONTENT_CONFIG_WORLDMAP_SECTION, "start_y_pos", &value)) {
+            wmGenData.worldPosY = value;
+        }
+    }
     wmGenData.currentSubtile = nullptr;
     wmGenData.dword_672E18 = 0;
     wmGenData.isWalking = false;
@@ -1427,10 +1437,18 @@ static int wmGenDataReset()
     wmGenData.currentAreaId = -1;
     // Upstream start-position config ([start]/worldmap_x) first, then F-072:
     // fork reads start position from content config, defaulting to FO2
-    // Arroyo (173, 122) — fork value takes priority.
+    // Arroyo (173, 122) — fork value takes priority, but ONLY when the fork
+    // key is present (M2: absent-key default write clobbers [start]).
     wmGenDataSetStartWorldPos();
-    configGetInt(&gContentConfig, CONTENT_CONFIG_WORLDMAP_SECTION, "start_x_pos", &wmGenData.worldPosX, 173);
-    configGetInt(&gContentConfig, CONTENT_CONFIG_WORLDMAP_SECTION, "start_y_pos", &wmGenData.worldPosY, 122);
+    {
+        int value;
+        if (configGetInt(&gContentConfig, CONTENT_CONFIG_WORLDMAP_SECTION, "start_x_pos", &value)) {
+            wmGenData.worldPosX = value;
+        }
+        if (configGetInt(&gContentConfig, CONTENT_CONFIG_WORLDMAP_SECTION, "start_y_pos", &value)) {
+            wmGenData.worldPosY = value;
+        }
+    }
     wmGenData.walkDestinationX = -1;
     wmGenData.walkDestinationY = -1;
     wmGenData.encounterMapId = -1;
@@ -3986,6 +4004,11 @@ static int wmWorldMapFunc(int a1)
                     wmGenData.walkDestinationX = 0;
                     wmGenData.walkDestinationY = 0;
                     wmGenData.isWalking = false;
+                    // P2: walking session ends (car out of gas) — reset the
+                    // WorldMapEncounterFix cadence counter so the next session
+                    // starts fresh (this stop leaves walkDistance nonzero, so
+                    // the walk-exit reset below cannot catch it).
+                    wmEncounterCheckFrameCounter = 0;
 
                     wmMatchWorldPosToArea(worldX, worldY, &(wmGenData.currentAreaId));
 
@@ -4035,6 +4058,11 @@ static int wmWorldMapFunc(int a1)
 
             if (wmGenData.walkDistance <= 0) {
                 wmGenData.isWalking = false;
+                // P2: walk loop exited (arrival or abort) — reset the
+                // WorldMapEncounterFix cadence counter so a stopped mid-
+                // cadence walk never fires the encounter roll on the very
+                // first frame of the next walking session.
+                wmEncounterCheckFrameCounter = 0;
                 wmMatchWorldPosToArea(wmGenData.worldPosX, wmGenData.worldPosY, &(wmGenData.currentAreaId));
             }
 
@@ -5434,6 +5462,11 @@ static void wmPartyInitWalking(int x, int y)
     wmGenData.walkDestinationY = y;
     wmGenData.currentAreaId = -1;
     wmGenData.isWalking = true;
+    // P2: a new walking session starts with a clean WorldMapEncounterFix
+    // cadence — "once per Rate walking frames" per walking session. Also
+    // covers stops that never pass through the main-loop walk-exit block
+    // (e.g. wmTeleportToArea / wmClearPartyWalking).
+    wmEncounterCheckFrameCounter = 0;
     wmLastTravelTick = getTicks();
 
     int dx = abs(x - wmGenData.worldPosX);
@@ -5665,6 +5698,10 @@ static int wmInterfaceInit()
     int fid;
 
     wmLastRndTime = getTicks();
+    // P2: worldmap re-entry — reset the WorldMapEncounterFix cadence counter
+    // alongside the rnd-time throttle so a paused mid-cadence counter never
+    // carries stale state into the next visit.
+    wmEncounterCheckFrameCounter = 0;
 
     // SFALL: Fix default worldmap font.
     // CE: This setting affects only city names. In Sfall it's configurable via

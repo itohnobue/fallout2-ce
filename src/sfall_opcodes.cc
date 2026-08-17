@@ -2267,6 +2267,29 @@ static bool sfallVfsFileIsSave[kVfsMaxFiles] = {};
 // on program exit — storing raw pointers would be use-after-free.
 static char* sfallVfsFilePath[kVfsMaxFiles] = {};
 
+// M3 (LOW-MEDIUM, fs_copy same-path write-through): open a VFS file for
+// script use in UNBUFFERED mode. sfall's VFS is memory-only; this fork is
+// disk-backed, and RPU scripts patch FRM files in place via
+// fs_copy(path, path) → fs_seek → fs_read_short → fs_seek → fs_write_short
+// (gl_k_walking_speed.ssl:88-93, gl_k_goris_derobing.ssl:40-46) with no
+// fs_close/fs_delete afterwards. With default buffered stdio (compat_fopen =
+// plain fopen, platform_compat.cc:430-447) the small write sits in the user
+// buffer and the engine's INDEPENDENT fopen (art loader art.cc:1088-1108)
+// sees the ORIGINAL bytes — the script patch silently never takes effect.
+// _IONBF makes every script write hit the OS immediately so independent
+// readers observe the patched content. Read-only handles (fs_find, the
+// fs_copy source temp, the fs_resize "rb" fallback) stay with plain
+// compat_fopen: they cannot carry writes, and unbuffered fgetc loops
+// (fs_read_string/fs_read_bstring) would degrade to per-byte syscalls.
+static FILE* sfallVfsFopen(const char* path, const char* mode)
+{
+    FILE* file = compat_fopen(path, mode);
+    if (file != nullptr) {
+        setvbuf(file, nullptr, _IONBF, 0);
+    }
+    return file;
+}
+
 static int sfallVfsAllocHandle()
 {
     for (int i = 0; i < kVfsMaxFiles; i++) {
@@ -2525,7 +2548,7 @@ static void op_fs_create(Program* program)
         return;
     }
 
-    FILE* file = compat_fopen(resolvedPath, "w+b");
+    FILE* file = sfallVfsFopen(resolvedPath, "w+b");
     if (file == nullptr) {
         programPrintError("fs_create: cannot create file '%s'", resolvedPath);
         sfallVfsFileOpen[handle] = false;
@@ -2604,7 +2627,7 @@ static void op_fs_copy(Program* program)
     // original asset (H-27 family). Compare the RESOLVED paths so different
     // spellings that normalize to the same file are also handled this way.
     if (compat_stricmp(resolvedSrc, resolvedDst) == 0) {
-        FILE* inPlaceFile = compat_fopen(resolvedSrc, "r+b");
+        FILE* inPlaceFile = sfallVfsFopen(resolvedSrc, "r+b");
         if (inPlaceFile == nullptr) {
             programPrintError("fs_copy: cannot open identical source/dest '%s' for read-write", resolvedSrc);
             programStackPushInteger(program, -1);
@@ -2627,7 +2650,8 @@ static void op_fs_copy(Program* program)
         return;
     }
 
-    // Open source file for reading
+    // Open source file for reading (buffered: temporary read-only handle,
+    // closed before the dest is handed to the script — no write-through need).
     FILE* srcFile = compat_fopen(resolvedSrc, "rb");
     if (srcFile == nullptr) {
         programPrintError("fs_copy: cannot open source '%s'", resolvedSrc);
@@ -2689,7 +2713,7 @@ static void op_fs_copy(Program* program)
         return;
     }
 
-    FILE* destFile = compat_fopen(resolvedDst, "w+b");
+    FILE* destFile = sfallVfsFopen(resolvedDst, "w+b");
     if (destFile == nullptr) {
         programPrintError("fs_copy: cannot create dest '%s'", resolvedDst);
         sfallVfsFileOpen[handle] = false;
@@ -2758,6 +2782,7 @@ static void op_fs_find(Program* program)
     }
 
     // If no wildcards in the pattern, use the fast path (direct fopen).
+    // Buffered on purpose: read-only handle (mode 1), no write-through need.
     if (!sfallVfsPathHasGlob(pattern)) {
         FILE* file = compat_fopen(resolvedPath, "rb");
         if (file == nullptr) {
@@ -2848,6 +2873,7 @@ static void op_fs_find(Program* program)
         return;
     }
 
+    // Buffered on purpose: read-only handle (mode 1), no write-through need.
     FILE* file = compat_fopen(foundPath, "rb");
     if (file == nullptr) {
         programStackPushInteger(program, -1);
@@ -3295,7 +3321,9 @@ static void op_fs_resize(Program* program)
             return;
         }
         fclose(sfallVfsFiles[id]);
-        sfallVfsFiles[id] = compat_fopen(path, "r+b");
+        // M3: unbuffered — this handle becomes writable (mode 2) and script
+        // writes must be visible to independent engine reads.
+        sfallVfsFiles[id] = sfallVfsFopen(path, "r+b");
         if (sfallVfsFiles[id] == nullptr) {
             // Fallback: reopen as read-only so the handle remains usable
             // for reads even though resize cannot proceed.
@@ -3685,7 +3713,9 @@ static bool sfallHookHasFireSite(HookType hookId)
     case static_cast<HookType>(15): // HOOK_HEXSIGHTBLOCKING: obsolete
     case static_cast<HookType>(37): // HOOK_SUBCOMBATDAMAGE: per-hit not supported
     case static_cast<HookType>(44): // HOOK_ADJUSTPOISON: requires engine refactor
-    case static_cast<HookType>(45): // HOOK_ADJUSTRADS: requires engine refactor
+    // HOOK_ADJUSTRADS(45) removed from the exclusion list (M-26/F-03): it now
+    // has a real fire site — critterAdjustRadiation() calls
+    // scriptHooks_AdjustRads (critter.cc:492, sfall_script_hooks.cc:718-732).
     case static_cast<HookType>(46): // HOOK_ROLLCHECK: 30+ call sites, lacks context
     case static_cast<HookType>(47): // HOOK_BESTWEAPON: 10+ return points, lifetime issues
     // F-22 (FIXED): Reserved hooks 54-60 have no fire sites (sfall_script_hooks.h:247-249).

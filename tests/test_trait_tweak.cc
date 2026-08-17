@@ -183,6 +183,20 @@ TEST_CASE("[Traits] malformed and out-of-range pair lists") {
         CHECK(gTraitTweak[13].statMods[0].mod == -1);
     }
 
+    SUBCASE("malformed section name (t13x) is rejected — no silent retarget") {
+        // Pre-fix atoi("13x") == 13 would have applied NoHardcode to trait 13
+        // with no diagnostic. The strict strtol parser (trait_tweak.cc:97-110)
+        // must reject the whole section name and leave trait 13 untouched.
+        configSetInt(&config, "t13x", "NoHardcode", 1);
+        configSetInt(&config, "t13abc", "NoHardcode", 1);
+
+        traitTweakLoadFromConfigForTest(&config);
+
+        CHECK_FALSE(gTraitTweak[13].noHardcode);
+        CHECK(gTraitTweak[13].statModCount == 0);
+        CHECK(gTraitTweak[13].skillModCount == 0);
+    }
+
     configFree(&config);
 }
 

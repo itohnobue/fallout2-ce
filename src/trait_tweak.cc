@@ -1,5 +1,6 @@
 #include "trait_tweak.h"
 
+#include <ctype.h>
 #include <errno.h>
 #include <limits.h>
 #include <stdlib.h>
@@ -93,7 +94,22 @@ static void traitTweakLoadFromConfig(Config* config)
             continue;
         }
 
-        int traitId = atoi(sectionName + 1);
+        // Strict parse: the whole section name must be consumed by strtol
+        // (a section named "t13x" would otherwise silently retarget trait 13).
+        // Leading whitespace is skipped by strtol; trailing whitespace is
+        // tolerated here to match the config reader's section-name trimming.
+        char* end = nullptr;
+        errno = 0;
+        long traitIdLong = strtol(sectionName + 1, &end, 10);
+        while (end != sectionName + 1 && isspace(static_cast<unsigned char>(*end))) {
+            end++;
+        }
+        if (end == sectionName + 1 || *end != '\0' || errno == ERANGE || traitIdLong < 0 || traitIdLong > INT_MAX) {
+            debugPrint("Perks config: malformed trait section '[%s]' ignored\n", sectionName);
+            continue;
+        }
+
+        int traitId = static_cast<int>(traitIdLong);
         if (!traitIsValid(traitId)) {
             continue;
         }

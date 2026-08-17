@@ -303,6 +303,14 @@ bool scriptHooksRegister(Program* program, const HookType hookType, const int pr
     return true; // register success
 }
 
+bool scriptHooks_IsHookRegistered(const HookType hookType)
+{
+    if (static_cast<int>(hookType) < 0 || hookType >= HOOK_COUNT) {
+        return false;
+    }
+    return !scriptHooks[hookType].empty();
+}
+
 /*
 Runs before/after Fallout executes a standard procedure (handler) in any script
 of any object. This hook will not be executed for `start`, `critter_p_proc`,

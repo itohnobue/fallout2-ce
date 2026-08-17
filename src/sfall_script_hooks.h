@@ -493,6 +493,13 @@ enum class EncounterHookResult {
 // scripts that registered earlier.
 bool scriptHooksRegister(Program* program, HookType hookType, int procedureIndex, bool atEnd = false);
 void scriptHooksUnregisterProgram(Program* program);
+
+// Returns true when at least one script handler is registered for the given
+// hook type. The engine uses this to decide whether the script layer will
+// handle an adjustment that the engine would otherwise apply itself (e.g. the
+// FastShotFix mode 2/3 melee-class AP reduction, which et tu's gl_apcost.ssl
+// owns when HOOK_CALCAPCOST is registered).
+bool scriptHooks_IsHookRegistered(HookType hookType);
 bool scriptHooks_StdProcedure(int procedureNumber, Object* self, Object* source, Object* target, int fixedParam, bool after);
 void scriptHooks_ItemDamage(Object* weapon, Object* critter, HitMode hitMode, bool isMeleeWeaponAttack, int* minDamagePtr, int* maxDamagePtr);
 int scriptHooks_AmmoCost(Object* weapon, int rounds, int ammoCost, AmmoCostHookType hookType);

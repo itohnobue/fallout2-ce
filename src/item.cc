@@ -1858,15 +1858,41 @@ int weaponGetActionPointCost(Object* critter, HitMode hitMode, bool aiming)
         }
     }
 
-    // Fast Shot trait AP reduction.
-    // FO2 vanilla (FastShotFix=0): -1 AP only for ranged weapons (range > 2).
-    // FO1 behavior (FastShotFix>=1): -1 AP for ALL weapons including unarmed.
+    // Fast Shot trait AP reduction (sfall FastShotFix semantics).
+    // Mode 0 (gFastShotFix == 0) — FO2 original: -1 AP for ranged-class
+    //   weapons only (attack type not melee/unarmed AND range >= 2).
+    // Mode 1 (gFastShotFix == 1) — Haenlomal's tweak: same ranged-class rule
+    //   as mode 0; aimed attacks for melee/unarmed/HtH are enabled there
+    //   (see critterCanAim).
+    // Mode 2 (gFastShotFix == 2): -1 AP for all weapon attacks.
+    // Mode 3 (gFastShotFix > 2) — FO1 original: -1 AP for all weapon attacks;
+    //   HtH attacks have no weapon item and get no reduction (sfall: item &&
+    //   fastShotTweak > 2).
+    // HtH attacks (punch/kick/advanced unarmed) are never reduced in any
+    // mode (sfall parity: item null).
+    //
+    // Et Tu double-reduction fix (M1): in modes 2/3 the melee/unarmed-class
+    // reduction (weapon range < 2 — the exact class et tu's gl_apcost.ssl
+    // covers via HOOK_CALCAPCOST) is applied ONLY when no HOOK_CALCAPCOST
+    // handler is registered. When the script layer is active it owns the
+    // melee-class adjustment, so skipping the engine's reduction there
+    // yields sfall's total (-1 for all weapons) on CE + et tu.
     if (critter == gDude && traitIsSelected(TRAIT_FAST_SHOT)) {
-        if (gFastShotFix >= 1) {
-            actionPoints--;
+        if (gFastShotFix >= 2) {
+            // Modes 2/3: -1 AP for all weapon attacks. HtH (no weapon item)
+            // is excluded in every mode (sfall mode 3: item && fastShotTweak > 2).
+            if (weapon != nullptr) {
+                bool isMeleeClass = weaponGetRange(critter, hitMode) < 2;
+                if (!isMeleeClass || !scriptHooks_IsHookRegistered(HOOK_CALCAPCOST)) {
+                    actionPoints--;
+                }
+            }
         } else {
-            // FO2 vanilla: only ranged weapons with range > 2
-            if (!isUnarmedHitMode(hitMode) && weaponGetRange(critter, hitMode) > 2) {
+            // Modes 0/1: ranged-class weapons only (attack type not
+            // melee/unarmed AND range >= 2).
+            AttackType attackType = weaponGetAttackTypeForHitMode(weapon, hitMode);
+            if ((attackType == ATTACK_TYPE_RANGED || attackType == ATTACK_TYPE_THROW)
+                && weaponGetRange(critter, hitMode) >= 2) {
                 actionPoints--;
             }
         }
@@ -2029,7 +2055,22 @@ char weaponGetSoundId(Object* weapon)
 bool critterCanAim(Object* critter, HitMode hitMode)
 {
     if (critter == gDude && traitIsSelected(TRAIT_FAST_SHOT)) {
-        return false;
+        // Fast Shot blocks called shots, EXCEPT in FastShotFix mode 1
+        // (Haenlomal's tweak): sfall's item_w_called_shot_hack allows aimed
+        // attacks for melee/unarmed/HtH attacks (weapon subtype < THROWING or
+        // range < 2) while still blocking them for ranged attacks (subtype >=
+        // THROWING and range >= 2). Modes 0/2/3 keep vanilla F2 behavior
+        // (Fast Shot blocks called shots).
+        if (gFastShotFix == 1) {
+            Object* weapon = critterGetWeaponForHitMode(critter, hitMode);
+            AttackType attackType = weaponGetAttackTypeForHitMode(weapon, hitMode);
+            bool isMeleeClass = (attackType == ATTACK_TYPE_MELEE || attackType == ATTACK_TYPE_UNARMED);
+            if (!isMeleeClass && weaponGetRange(critter, hitMode) >= 2) {
+                return false;
+            }
+        } else {
+            return false;
+        }
     }
 
     // NOTE: Uninline.

@@ -142,9 +142,16 @@ bool sfallConfigInit(int argc, char** argv)
     configGetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, SFALL_CONFIG_FEMALE_DIALOG_MSGS_KEY, &tempVal, 0);
     gFemaleDialogMsgs = tempVal;
     configGetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, SFALL_CONFIG_WORLDMAP_TIME_MOD_KEY, &tempVal, 100);
+    // P2: clamp WorldMapTimeMod to [0, 1000] (1000 = 10x world-map travel
+    // time). Without the upper bound, a crafted/typo value > ~47.8M pushes
+    // the double->int cast in wmGameTimeIncrement (worldmap.cc:5310-5312)
+    // out of range — UB. With the clamp the max product is
+    // 18000 * 1.0 * 100 (script multi clamp) * 10 << INT_MAX.
     gWorldMapTimeMod = tempVal;
     if (gWorldMapTimeMod < 0) {
         gWorldMapTimeMod = 0;
+    } else if (gWorldMapTimeMod > 1000) {
+        gWorldMapTimeMod = 1000;
     }
     configGetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, SFALL_CONFIG_WORLDMAP_ENCOUNTER_FIX_KEY, &tempVal, 0);
     gWorldMapEncounterFix = tempVal != 0;
