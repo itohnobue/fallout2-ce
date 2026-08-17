@@ -68,7 +68,8 @@ CE reports **sfall 4.5.1** to scripts (`src/sfall_opcodes.cc:73-79`). Version bu
 - `HOOK_CANUSEWEAPON` (48) — allows preventing weapon use by PC or NPC
 - `HOOK_ENCOUNTER` (43) — random encounter override
 - `HOOK_GAMEMODECHANGE` (31), `HOOK_RESTTIMER` (30) — implemented
-- Deliberately absent hooks documented with rationale: `HOOK_DEATHANIM1`, `HOOK_REMOVEINVENOBJ`, `HOOK_SUBCOMBATDAMAGE`, `HOOK_ADJUSTPOISON`, `HOOK_ADJUSTRADS`, `HOOK_ROLLCHECK`, `HOOK_BESTWEAPON`, `HOOK_BUILDSFXWEAPON`, HEX*BLOCKING hooks
+- `HOOK_ADJUSTRADS` (45) — implemented (fire site `critter.cc:492`, used by et tu's rads-2000 failsafe)
+- Deliberately absent hooks documented with rationale: `HOOK_DEATHANIM1`, `HOOK_REMOVEINVENOBJ`, `HOOK_SUBCOMBATDAMAGE`, `HOOK_ADJUSTPOISON`, `HOOK_ROLLCHECK`, `HOOK_BESTWEAPON`, `HOOK_BUILDSFXWEAPON`, HEX*BLOCKING hooks
 
 **Config:**
 - `ddraw.ini` settings migrated to `fallout2.cfg` and `game.cfg`

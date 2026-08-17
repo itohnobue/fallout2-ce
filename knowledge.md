@@ -1,5 +1,5 @@
 # Knowledge Base
-Last updated: 2026-08-17T20:22:41.908808
+Last updated: 2026-08-17T23:40:44.052128
 
 ## [dis-20260704144725-9b3649]
 Category: discovery
@@ -142,13 +142,6 @@ Tags: fallout2, sfall, rpu, etu, compat, research
 Changed: 2026-07-06T15:38:05.760661
 
 fallout2-ce-extended RPU/etu compat: research identified ~50 gaps. CRITICAL: (1) RPU gl_k_modini.ssl BLOCKS on WorldMapSlots=21 + BoostScriptDialogLimit=1 INI validation — CE status unknown, must return expected values; (2) gEnableHeroAppearanceMod/gExtraSaveSlots/gAllowUnsafeScripting/gUseFileSystemOverride are PARSED but UNWIRED in sfall_config.h (et tu needs them); (3) HOOK_COMBATTURN claimed ✅ but must verify it fires (et tu autodoors + destroy_armor depend on it); (4) add_trait engine display integration partial; (5) ~18 storage-only sfall opcodes (knockback, drugs, spray, skill mods, pickpocket mods, hp_per_level, pipboy_available, car_intface_art) values stored but engine never reads them; (6) FO1-specific config (StartingMap, StartXPos/YPos, WorldMapDelay2, XPTable, Movie1-17, DamageFormula, SkillsFile, PerksFile) not parsed by CE; (7) SFALL_COMPATIBILITY.md has 8 outdated entries (set_perk_level done, unjam_lock done, add_g_timer_event/remove_timer_event/create_spatial done, set_quest_failure_value done). RPU uses hooks 5/8/18/30 (all ✅). et tu uses 22 hooks (mostly ✅, 1 needs verify). Full reports: tmp/s1-research-{rpu,etu,sfall}-report.md
-
-## [dis-20260706183420-abf279]
-Category: discovery
-Tags: et-tu, fo1in2, sfall, compatibility, fallout2-ce
-Changed: 2026-07-06T18:34:20.466942
-
-Et Tu mod requires ~100+ sfall opcodes, 90+ metarules (via sfall_func0-9), 40+ hooks (35 register_hook_proc call sites), and 15 gFallout1Behavior engine gates. Key gaps: HOOK_REMOVEINVENOBJ, HOOK_BESTWEAPON, HOOK_ROLLCHECK, get_object_ai_data types 1-2. Rotators fork detection via read_byte(0x410003)==0xF4 currently fails → scripts use fallback paths. Full report: tmp/s1-research-etu-report.md
 
 ## [ref-20260706183422-02b473]
 Category: reference
@@ -506,4 +499,39 @@ Tags: sfall, perk, trait, et-tu, config
 Changed: 2026-08-17T20:22:41.906807
 
 Perks.ini [Traits] section: trait IDs are positional — et tu (FO1) numbering puts Night Person at index 13 where FO2/CE's enum has TRAIT_SEX_APPEAL; the index maps directly, display name comes from the mod's trait.msg. NoHardcode gates ONLY the trait_adjust_stat/skill contributions (trait.cc) — character-editor effects (Skilled +5 sp/level, perk progression) and combat-code effects (FINESSE DR, FAST_SHOT AP, JINXED, ONE_HANDER, BLOODY_MESS, CHEM_*) are outside trait_adjust_* and untouched, mirroring sfall. StatMod/SkillMod apply unconditionally — sfall's format has no day/night condition (et tu's 'at day' comment is descriptive); FO1 Night Person's night +1/+1 swing is NOT replicated (known fidelity note).
+
+## [dis-20260817234034-1e8004]
+Category: discovery
+Tags: et-tu, fo1in2, sfall, compatibility, fallout2-ce
+Changed: 2026-08-17T23:40:34.386785
+
+Et Tu (Fo1in2) engine requirements — UPDATED 2026-08-17: ~100+ sfall opcodes, 90+ metarules, 40+ hooks. Rotators fork detection (read_byte(0x410003)==0xF4 + metarule_exist(rotators)) WORKS since 172c78b/89d82aa (sfall_opcodes.cc:158-162, sfall_metarules.cc:1989-2000). HOOK_ADJUSTRADS implemented (critter.cc:492). Deliberately absent by design: HOOK_REMOVEINVENOBJ, HOOK_BESTWEAPON, HOOK_ROLLCHECK (documented rationale, not gaps).
+
+## [pat-20260817234040-49e5ec]
+Category: pattern
+Tags: sfall, fastshotfix, combat, et-tu, fallout2-ce
+Changed: 2026-08-17T23:40:40.454462
+
+sfall FastShotFix per-mode contract (verified against sfall source 2026-08-17): 0 = FO2 (-1 AP ranged only, aimed disabled); 1 = Haenlomal (same AP, aimed ENABLED for melee/unarmed/HtH); 2 = alt (-1 AP all weapons); 3 = FO1 (-1 AP all weapons, aimed disabled). sfall impl: item_w_mp_cost_sub — mode 3/2 require non-null weapon item (HtH never reduced), modes 0/1 gate type>MELEE && range>=2, floor cost>=1, reduction runs BEFORE HOOK_CALCAPCOST. CE+et tu: mode-2/3 melee-class reduction defers to the hook layer when HOOK_CALCAPCOST registered (gl_apcost.ssl supplies it once).
+
+## [got-20260817234041-5d33ed]
+Category: gotcha
+Tags: config, gotcha, worldmap, fallout2-ce
+Changed: 2026-08-17T23:40:41.927062
+
+configGetInt(&config, section, key, ptr, default) with the 5-arg DEFAULT OVERLOAD WRITES the default into *ptr when the key is absent — using it after a prior value was set silently clobbers it. Use the 4-arg present-semantics overload (returns false, leaves *ptr untouched) when a default should not override. Hit in F-072 worldmap start_pos bug (worldmap.cc:1352-1354) where the fork override wrote 173/122 over the upstream [start] worldmap_x/y value; fixed 2026-08-17.
+
+## [got-20260817234043-3adc8f]
+Category: gotcha
+Tags: fs, stdio, vfs, rpu, sfall, gotcha, fallout2-ce
+Changed: 2026-08-17T23:40:43.109649
+
+FILE* handles handed to scripts (fs_create/fs_copy/fs_resize in sfall_opcodes.cc) are stdio-buffered by default — fs_write_short writes sit in user space and are invisible to the engine's independent fopen reads during the session (RPU fs_copy same-path FRM FPS patching was silently inert). Fix: setvbuf(f, nullptr, _IONBF, 0) at open (sfallVfsFopen helper, 2026-08-17). Also: fs_copy cannot open files inside .dat archives (plain fopen) — DAT-resident patching requires the mod's pre-patched DATs.
+
+## [got-20260817234044-9c74f2]
+Category: gotcha
+Tags: et-tu, sfall, opcode, gotcha, fallout2-ce
+Changed: 2026-08-17T23:40:44.050120
+
+et tu ce_enabled macro (fo1.h:62) = metarule_exist('opcode_exists') AND NOT opcode_exists(0x823B). 0x823B is sfall's modified_ini — CE MUST keep it unregistered: implementing it flips ce_enabled=false and disables ALL et tu CE-path script workarounds (gl_apcost.ssl AP handling etc.). Guarded by comment at sfall_opcodes.cc:8903.
 
