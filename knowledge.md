@@ -1,5 +1,5 @@
 # Knowledge Base
-Last updated: 2026-08-17T20:04:21.024369
+Last updated: 2026-08-17T20:22:41.908808
 
 ## [dis-20260704144725-9b3649]
 Category: discovery
@@ -499,4 +499,11 @@ Tags: scope, decision, rpu, et-tu, sfall
 Changed: 2026-08-17T20:04:21.022304
 
 Project scope (2026-08-17, owner clarification): goal is 100% support of RPU and et tu — NOT 100% sfall support. sfall-parity QoL features are out of scope unless a supported mod depends on them. Verified: no et tu/RPU script reads CombatControl, Highlighting, UseScrollingQuestsList, ItemCounterAutoCaps, DeathScreenFontPatch, EnableMusicInDialogue; et tu's sfall-mods.ini [CombatControl]/[Highlighting] sections are inert (the consuming sfall mod scripts are not shipped). RPU support complete; et tu remaining: [Traits] section (NoHardcode) + runtime verification.
+
+## [got-20260817202241-ffa209]
+Category: gotcha
+Tags: sfall, perk, trait, et-tu, config
+Changed: 2026-08-17T20:22:41.906807
+
+Perks.ini [Traits] section: trait IDs are positional — et tu (FO1) numbering puts Night Person at index 13 where FO2/CE's enum has TRAIT_SEX_APPEAL; the index maps directly, display name comes from the mod's trait.msg. NoHardcode gates ONLY the trait_adjust_stat/skill contributions (trait.cc) — character-editor effects (Skilled +5 sp/level, perk progression) and combat-code effects (FINESSE DR, FAST_SHOT AP, JINXED, ONE_HANDER, BLOODY_MESS, CHEM_*) are outside trait_adjust_* and untouched, mirroring sfall. StatMod/SkillMod apply unconditionally — sfall's format has no day/night condition (et tu's 'at day' comment is descriptive); FO1 Night Person's night +1/+1 swing is NOT replicated (known fidelity note).
 

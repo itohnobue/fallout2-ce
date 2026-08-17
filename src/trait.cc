@@ -10,6 +10,7 @@
 #include "sfall_config.h"
 #include "sfall_metarules.h"
 #include "stat.h"
+#include "trait_tweak.h"
 
 namespace fallout {
 
@@ -89,6 +90,13 @@ int traitsInit()
 
     messageListRepositorySetStandardMessageList(STANDARD_MESSAGE_LIST_TRAIT, &gTraitsMessageList);
 
+    // PerksFile [Traits] section (sfall PerksFile, et tu ships
+    // NoHardcode rows for Night Person/Skilled): apply per-trait
+    // overrides (NoHardcode flag, StatMod/SkillMod lists, Name/Desc/
+    // Image). Runs after the trait.msg load so Name/Desc overrides win
+    // over message texts.
+    traitTweakLoad();
+
     return 0;
 }
 
@@ -105,6 +113,7 @@ void traitsExit()
 {
     messageListRepositorySetStandardMessageList(STANDARD_MESSAGE_LIST_TRAIT, nullptr);
     messageListFree(&gTraitsMessageList);
+    traitTweakFree();
 }
 
 // Loads trait system state from save game.
@@ -163,6 +172,10 @@ char* traitGetName(Trait trait)
     if (!(trait >= 0 && trait < TRAIT_COUNT)) {
         return nullptr;
     }
+    // PerksFile [Traits] Name override (sfall PerksFile support).
+    if (gTraitTweak[trait].name != nullptr) {
+        return gTraitTweak[trait].name;
+    }
     return gTraitDescriptions[trait].name ? gTraitDescriptions[trait].name : (char*)"";
 }
 
@@ -175,6 +188,10 @@ char* traitGetDescription(Trait trait)
     if (!(trait >= 0 && trait < TRAIT_COUNT)) {
         return nullptr;
     }
+    // PerksFile [Traits] Desc override (sfall PerksFile support).
+    if (gTraitTweak[trait].description != nullptr) {
+        return gTraitTweak[trait].description;
+    }
     return gTraitDescriptions[trait].description ? gTraitDescriptions[trait].description : (char*)"";
 }
 
@@ -184,7 +201,14 @@ char* traitGetDescription(Trait trait)
 // 0x4B3BA8 trait_pic
 int traitGetFrmId(Trait trait)
 {
-    return traitIsValid(trait) ? gTraitDescriptions[trait].frmId : 0;
+    if (!traitIsValid(trait)) {
+        return 0;
+    }
+    // PerksFile [Traits] Image override (sfall PerksFile support).
+    if (gTraitTweak[trait].frmId != -1) {
+        return gTraitTweak[trait].frmId;
+    }
+    return gTraitDescriptions[trait].frmId;
 }
 
 // Returns `true` if the specified trait is selected.
@@ -206,100 +230,120 @@ int traitGetStatModifier(Stat stat)
 {
     int modifier = 0;
 
+    // PerksFile [Traits] NoHardcode (sfall PerksFile support): a trait
+    // flagged NoHardcode=1 contributes none of its hardcoded effects
+    // below; its configured StatMod pairs are applied at the end instead.
     switch (stat) {
     case STAT_STRENGTH:
-        if (traitIsSelected(TRAIT_GIFTED) || sfallIsTraitAdded(TRAIT_GIFTED)) {
+        if ((traitIsSelected(TRAIT_GIFTED) || sfallIsTraitAdded(TRAIT_GIFTED)) && !traitTweakHasNoHardcode(TRAIT_GIFTED)) {
             modifier += 1;
         }
-        if (traitIsSelected(TRAIT_BRUISER) || sfallIsTraitAdded(TRAIT_BRUISER)) {
+        if ((traitIsSelected(TRAIT_BRUISER) || sfallIsTraitAdded(TRAIT_BRUISER)) && !traitTweakHasNoHardcode(TRAIT_BRUISER)) {
             modifier += 2;
         }
         break;
     case STAT_PERCEPTION:
-        if (traitIsSelected(TRAIT_GIFTED) || sfallIsTraitAdded(TRAIT_GIFTED)) {
+        if ((traitIsSelected(TRAIT_GIFTED) || sfallIsTraitAdded(TRAIT_GIFTED)) && !traitTweakHasNoHardcode(TRAIT_GIFTED)) {
             modifier += 1;
         }
         break;
     case STAT_ENDURANCE:
-        if (traitIsSelected(TRAIT_GIFTED) || sfallIsTraitAdded(TRAIT_GIFTED)) {
+        if ((traitIsSelected(TRAIT_GIFTED) || sfallIsTraitAdded(TRAIT_GIFTED)) && !traitTweakHasNoHardcode(TRAIT_GIFTED)) {
             modifier += 1;
         }
         break;
     case STAT_CHARISMA:
-        if (traitIsSelected(TRAIT_GIFTED) || sfallIsTraitAdded(TRAIT_GIFTED)) {
+        if ((traitIsSelected(TRAIT_GIFTED) || sfallIsTraitAdded(TRAIT_GIFTED)) && !traitTweakHasNoHardcode(TRAIT_GIFTED)) {
             modifier += 1;
         }
         break;
     case STAT_INTELLIGENCE:
-        if (traitIsSelected(TRAIT_GIFTED) || sfallIsTraitAdded(TRAIT_GIFTED)) {
+        if ((traitIsSelected(TRAIT_GIFTED) || sfallIsTraitAdded(TRAIT_GIFTED)) && !traitTweakHasNoHardcode(TRAIT_GIFTED)) {
             modifier += 1;
         }
         break;
     case STAT_AGILITY:
-        if (traitIsSelected(TRAIT_GIFTED) || sfallIsTraitAdded(TRAIT_GIFTED)) {
+        if ((traitIsSelected(TRAIT_GIFTED) || sfallIsTraitAdded(TRAIT_GIFTED)) && !traitTweakHasNoHardcode(TRAIT_GIFTED)) {
             modifier += 1;
         }
-        if (traitIsSelected(TRAIT_SMALL_FRAME) || sfallIsTraitAdded(TRAIT_SMALL_FRAME)) {
+        if ((traitIsSelected(TRAIT_SMALL_FRAME) || sfallIsTraitAdded(TRAIT_SMALL_FRAME)) && !traitTweakHasNoHardcode(TRAIT_SMALL_FRAME)) {
             modifier += 1;
         }
         break;
     case STAT_LUCK:
-        if (traitIsSelected(TRAIT_GIFTED) || sfallIsTraitAdded(TRAIT_GIFTED)) {
+        if ((traitIsSelected(TRAIT_GIFTED) || sfallIsTraitAdded(TRAIT_GIFTED)) && !traitTweakHasNoHardcode(TRAIT_GIFTED)) {
             modifier += 1;
         }
         break;
     case STAT_MAXIMUM_ACTION_POINTS:
-        if (traitIsSelected(TRAIT_BRUISER) || sfallIsTraitAdded(TRAIT_BRUISER)) {
+        if ((traitIsSelected(TRAIT_BRUISER) || sfallIsTraitAdded(TRAIT_BRUISER)) && !traitTweakHasNoHardcode(TRAIT_BRUISER)) {
             modifier -= 2;
         }
         break;
     case STAT_ARMOR_CLASS:
-        if (traitIsSelected(TRAIT_KAMIKAZE) || sfallIsTraitAdded(TRAIT_KAMIKAZE)) {
+        if ((traitIsSelected(TRAIT_KAMIKAZE) || sfallIsTraitAdded(TRAIT_KAMIKAZE)) && !traitTweakHasNoHardcode(TRAIT_KAMIKAZE)) {
             modifier -= critterGetBaseStat(gDude, STAT_ARMOR_CLASS);
         }
         break;
     case STAT_MELEE_DAMAGE:
-        if (traitIsSelected(TRAIT_HEAVY_HANDED) || sfallIsTraitAdded(TRAIT_HEAVY_HANDED)) {
+        if ((traitIsSelected(TRAIT_HEAVY_HANDED) || sfallIsTraitAdded(TRAIT_HEAVY_HANDED)) && !traitTweakHasNoHardcode(TRAIT_HEAVY_HANDED)) {
             modifier += 4;
         }
         break;
     case STAT_CARRY_WEIGHT:
-        if (traitIsSelected(TRAIT_SMALL_FRAME) || sfallIsTraitAdded(TRAIT_SMALL_FRAME)) {
+        if ((traitIsSelected(TRAIT_SMALL_FRAME) || sfallIsTraitAdded(TRAIT_SMALL_FRAME)) && !traitTweakHasNoHardcode(TRAIT_SMALL_FRAME)) {
             modifier -= 10 * critterGetBaseStat(gDude, STAT_STRENGTH);
         }
         break;
     case STAT_SEQUENCE:
-        if (traitIsSelected(TRAIT_KAMIKAZE) || sfallIsTraitAdded(TRAIT_KAMIKAZE)) {
+        if ((traitIsSelected(TRAIT_KAMIKAZE) || sfallIsTraitAdded(TRAIT_KAMIKAZE)) && !traitTweakHasNoHardcode(TRAIT_KAMIKAZE)) {
             modifier += 5;
         }
         break;
     case STAT_HEALING_RATE:
-        if (traitIsSelected(TRAIT_FAST_METABOLISM) || sfallIsTraitAdded(TRAIT_FAST_METABOLISM)) {
+        if ((traitIsSelected(TRAIT_FAST_METABOLISM) || sfallIsTraitAdded(TRAIT_FAST_METABOLISM)) && !traitTweakHasNoHardcode(TRAIT_FAST_METABOLISM)) {
             modifier += 2;
         }
         break;
     case STAT_CRITICAL_CHANCE:
-        if (traitIsSelected(TRAIT_FINESSE) || sfallIsTraitAdded(TRAIT_FINESSE)) {
+        if ((traitIsSelected(TRAIT_FINESSE) || sfallIsTraitAdded(TRAIT_FINESSE)) && !traitTweakHasNoHardcode(TRAIT_FINESSE)) {
             modifier += 10;
         }
         break;
     case STAT_BETTER_CRITICALS:
-        if (traitIsSelected(TRAIT_HEAVY_HANDED) || sfallIsTraitAdded(TRAIT_HEAVY_HANDED)) {
+        if ((traitIsSelected(TRAIT_HEAVY_HANDED) || sfallIsTraitAdded(TRAIT_HEAVY_HANDED)) && !traitTweakHasNoHardcode(TRAIT_HEAVY_HANDED)) {
             modifier -= 30;
         }
         break;
     case STAT_RADIATION_RESISTANCE:
-        if (traitIsSelected(TRAIT_FAST_METABOLISM) || sfallIsTraitAdded(TRAIT_FAST_METABOLISM)) {
+        if ((traitIsSelected(TRAIT_FAST_METABOLISM) || sfallIsTraitAdded(TRAIT_FAST_METABOLISM)) && !traitTweakHasNoHardcode(TRAIT_FAST_METABOLISM)) {
             modifier -= critterGetBaseStat(gDude, STAT_RADIATION_RESISTANCE);
         }
         break;
     case STAT_POISON_RESISTANCE:
-        if (traitIsSelected(TRAIT_FAST_METABOLISM) || sfallIsTraitAdded(TRAIT_FAST_METABOLISM)) {
+        if ((traitIsSelected(TRAIT_FAST_METABOLISM) || sfallIsTraitAdded(TRAIT_FAST_METABOLISM)) && !traitTweakHasNoHardcode(TRAIT_FAST_METABOLISM)) {
             modifier -= critterGetBaseStat(gDude, STAT_POISON_RESISTANCE);
         }
         break;
     default:
         break;
+    }
+
+    // PerksFile [Traits] StatMod: apply the configured stat pairs for
+    // every selected/added trait (sfall PerksFile support).
+    for (int trait = TRAIT_FIRST; trait < TRAIT_COUNT; trait++) {
+        TraitTweak* tweak = &(gTraitTweak[trait]);
+        if (tweak->statModCount == 0) {
+            continue;
+        }
+        if (!(traitIsSelected(static_cast<Trait>(trait)) || sfallIsTraitAdded(trait))) {
+            continue;
+        }
+        for (int i = 0; i < tweak->statModCount; i++) {
+            if (tweak->statMods[i].stat == stat) {
+                modifier += tweak->statMods[i].mod;
+            }
+        }
     }
 
     return modifier;
@@ -312,11 +356,11 @@ int traitGetSkillModifier(Skill skill)
 {
     int modifier = 0;
 
-    if (traitIsSelected(TRAIT_GIFTED) || sfallIsTraitAdded(TRAIT_GIFTED)) {
+    if ((traitIsSelected(TRAIT_GIFTED) || sfallIsTraitAdded(TRAIT_GIFTED)) && !traitTweakHasNoHardcode(TRAIT_GIFTED)) {
         modifier -= 10;
     }
 
-    if (traitIsSelected(TRAIT_GOOD_NATURED) || sfallIsTraitAdded(TRAIT_GOOD_NATURED)) {
+    if ((traitIsSelected(TRAIT_GOOD_NATURED) || sfallIsTraitAdded(TRAIT_GOOD_NATURED)) && !traitTweakHasNoHardcode(TRAIT_GOOD_NATURED)) {
         switch (skill) {
         case SKILL_SMALL_GUNS:
         case SKILL_BIG_GUNS:
@@ -334,6 +378,23 @@ int traitGetSkillModifier(Skill skill)
             break;
         default:
             break;
+        }
+    }
+
+    // PerksFile [Traits] SkillMod: apply the configured skill pairs for
+    // every selected/added trait (sfall PerksFile support).
+    for (int trait = TRAIT_FIRST; trait < TRAIT_COUNT; trait++) {
+        TraitTweak* tweak = &(gTraitTweak[trait]);
+        if (tweak->skillModCount == 0) {
+            continue;
+        }
+        if (!(traitIsSelected(static_cast<Trait>(trait)) || sfallIsTraitAdded(trait))) {
+            continue;
+        }
+        for (int i = 0; i < tweak->skillModCount; i++) {
+            if (tweak->skillMods[i].skill == skill) {
+                modifier += tweak->skillMods[i].mod;
+            }
         }
     }
 

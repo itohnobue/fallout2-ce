@@ -220,9 +220,8 @@ static char* gPerksFileDescOverrides[PERK_COUNT] = {};
 // after init. Values persist across game resets (perkResetRanks only
 // clears rank data, not descriptions).
 //
-// The [Traits] section (NoHardcode/StatMod/SkillMod) is NOT implemented:
-// CE has no trait override infrastructure. FO2 hardcoded trait behavior
-// remains; documented in SFALL_COMPATIBILITY.md.
+// The [Traits] section (NoHardcode/StatMod/SkillMod) is handled by
+// trait_tweak.cc/trait.cc (see traitTweakLoad).
 static void perksLoadCustomConfig()
 {
     char* perksFile = perkTweakGetPerksFilePath();

@@ -266,6 +266,8 @@ set(FALLOUT_ENGINE_SOURCES
     "src/trait_defs.h"
     "src/trait.cc"
     "src/trait.h"
+    "src/trait_tweak.cc"
+    "src/trait_tweak.h"
     "src/version.cc"
     "src/version.h"
     "src/widget.cc"

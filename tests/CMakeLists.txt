@@ -27,6 +27,7 @@ add_library(test_sources STATIC
     "${CMAKE_SOURCE_DIR}/src/game_config_migration.cc"
     "${CMAKE_SOURCE_DIR}/src/sfall_config.cc"
     "${CMAKE_SOURCE_DIR}/src/perk_tweak.cc"
+    "${CMAKE_SOURCE_DIR}/src/trait_tweak.cc"
     "${CMAKE_SOURCE_DIR}/src/sfall_arrays.cc"
     "${CMAKE_SOURCE_DIR}/src/sfall_ini.cc"
     "${CMAKE_SOURCE_DIR}/src/sfall_lists.cc"
@@ -269,6 +270,15 @@ add_executable(test_perk_tweak
 )
 target_link_libraries(test_perk_tweak PRIVATE test_sources test_stubs doctest)
 add_test(NAME test_perk_tweak COMMAND test_perk_tweak)
+
+# ---- Test: trait_tweak.cc ([Traits] section parsing) ----
+# Links test_sources (sfall_config.cc + perk_tweak.cc + trait_tweak.cc)
+# for [Traits] section parsing (NoHardcode/StatMod/SkillMod/overrides).
+add_executable(test_trait_tweak
+    test_trait_tweak.cc
+)
+target_link_libraries(test_trait_tweak PRIVATE test_sources test_stubs doctest)
+add_test(NAME test_trait_tweak COMMAND test_trait_tweak)
 
 # ---- Test: sfall_opcodes (lifecycle, extern globals) ----
 # Extern globals from sfall_opcodes.cc are defined in test_common_stubs.cc.
