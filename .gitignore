@@ -95,3 +95,9 @@ xcuserdata/
 *.hmap
 compile_commands.json
 *.dmg
+
+# Local test stand (game data + mod installs)
+smoke/
+
+# Local GOG installers
+install/
