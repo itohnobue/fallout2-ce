@@ -1,5 +1,5 @@
 # Knowledge Base
-Last updated: 2026-08-17T19:50:03.439921
+Last updated: 2026-08-17T20:04:21.024369
 
 ## [dis-20260704144725-9b3649]
 Category: discovery
@@ -492,4 +492,11 @@ Tags: sfall, perk, gotcha, init-order
 Changed: 2026-08-17T19:50:03.438292
 
 Perks.ini [Perks] section values must NOT go into the sfallPerk*Overrides arrays (sfall_opcodes.cc) — those reset on game reset (sfallOpcodesReset). Apply file values directly to gPerkDescriptions at init (perksLoadCustomConfig in perk.cc); script set_perk_* opcodes still win because perkCanAdd checks the override arrays first. Ranks=-1 removes a perk via maxRank=-1 (perkCanAdd false) but perkAddForce skips its cap for maxRank==-1 and perkAddEffect's maxRank==-1 stat-loop activates — same as sfall's engine patch behavior (latent hazard, unreachable with shipped et tu scripts).
+
+## [dec-20260817200421-bbcbdf]
+Category: decision
+Tags: scope, decision, rpu, et-tu, sfall
+Changed: 2026-08-17T20:04:21.022304
+
+Project scope (2026-08-17, owner clarification): goal is 100% support of RPU and et tu — NOT 100% sfall support. sfall-parity QoL features are out of scope unless a supported mod depends on them. Verified: no et tu/RPU script reads CombatControl, Highlighting, UseScrollingQuestsList, ItemCounterAutoCaps, DeathScreenFontPatch, EnableMusicInDialogue; et tu's sfall-mods.ini [CombatControl]/[Highlighting] sections are inert (the consuming sfall mod scripts are not shipped). RPU support complete; et tu remaining: [Traits] section (NoHardcode) + runtime verification.
 
