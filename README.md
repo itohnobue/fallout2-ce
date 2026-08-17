@@ -34,13 +34,6 @@ Upstream CE runs on macOS, but the big total conversions (RPU, Et Tu) require [s
 
 Requirement-by-requirement status for both mods, including the known gaps, lives in [SFALL_COMPATIBILITY.md](SFALL_COMPATIBILITY.md).
 
-## What's left
-
-- **In-game verification (the big one):** long-session playtesting of both mods on real installs. The unit-test suite covers the code paths, but it does not prove the mods play correctly end-to-end. This is the main outstanding work.
-- **Et Tu: optional sfall engine features (P3, out of scope)** — NPC combat control, key-driven item highlighting, `UseScrollingQuestsList`, `ItemCounterAutoCaps`, `DeathScreenFontPatch`, `EnableMusicInDialogue`. None of these break Et Tu scripts; they're parity niceties (owner decision 2026-08-17).
-- **Runtime checks (P3)** — a few in-game behavior checks remain (reaction-threshold persistence across game reset). The Fast Shot AP edge cases (double reduction) were fixed and unit-tested 2026-08-17.
-- **Upstream sync (ongoing)** — drift is currently 1 commit.
-
 ## Docs
 
 - [INSTALL.md](INSTALL.md) — build and install for all platforms
