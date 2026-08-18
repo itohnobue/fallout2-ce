@@ -696,7 +696,19 @@ void sfall_kb_clear_synthetic_key_events()
 
 int sfall_kb_handle_key_pressed(int sdlScanCode, bool pressed, SDL_Keycode keysym)
 {
-    if (!gGameLoaded) return -1;
+    // Sentinel contract (see input.cc _GNW95_process_message):
+    //   -1  → BLOCK the key (this fork's F-27 keyBlocked logic).
+    //   0 (SDL_SCANCODE_UNKNOWN) → no override, pass through unchanged.
+    // The Aug 16 upstream sync (16bc1568, via b405e59) flipped these two
+    // no-hook early returns to -1 — upstream input.cc interprets -1 as
+    // "no override" and 0 as swallow, the EXACT OPPOSITE of this fork's
+    // keyBlocked logic.  The collision swallowed every key while the
+    // game was not loaded (main menu, character creation — gGameLoaded is
+    // only set after the char-selector flow at main.cc:160) and on any
+    // screen with no registered HOOK_KEYPRESS handler (e.g. save-name
+    // dialog), making text fields dead except for SDL key-repeat events
+    // (which bypass this hook at input.cc:1034).
+    if (!gGameLoaded) return SDL_SCANCODE_UNKNOWN;
 
     SDL_Scancode scanCode = static_cast<SDL_Scancode>(sdlScanCode);
     // F-03 (FIXED): HOOK_KEYPRESS argument order per sfall convention:
@@ -717,7 +729,9 @@ int sfall_kb_handle_key_pressed(int sdlScanCode, bool pressed, SDL_Keycode keysy
     hook.call();
 
     if (hook.numReturnValues() <= 0) {
-        return -1;
+        // No handler ran for HOOK_KEYPRESS (or none set a return value) —
+        // no script wants to override this key, so it passes through.
+        return SDL_SCANCODE_UNKNOWN;
     }
 
     int overrideDxCode = hook.getReturnValueAt(0).asInt();

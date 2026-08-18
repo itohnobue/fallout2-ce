@@ -1,5 +1,5 @@
 # Knowledge Base
-Last updated: 2026-08-19T02:42:48.359175
+Last updated: 2026-08-19T02:56:41.614923
 
 ## [dis-20260704144725-9b3649]
 Category: discovery
@@ -625,4 +625,11 @@ Tags: fallout2, input, SDL, macos, trackpad, tap
 Changed: 2026-08-19T02:42:48.357036
 
 Fast mouse clicks (trackpad taps) are LOST by the per-frame button-state polling design: mouseDeviceGetData polls SDL_GetMouseState once per frame, so a press+release completing between two polls (macOS two-finger tap / tap-to-click) generates NO right/left button event — the SDL_MOUSEBUTTONDOWN/UP events are queued, drained by _GNW95_process_message, but the engine state comes only from the poll. Physical corner clicks hold long enough to be caught. Fix (dinput.cc): latch SDL_MOUSEBUTTONDOWN buttons in gSyntheticDownButtons via mouseDeviceNoteButtonDown (input.cc drain), OR them into the polled state in mouseDeviceGetData, clear after one poll — burst becomes clean down/up pair; reset on focus loss/gain. TRAP: SDL button-state bits use SDL_BUTTON(X)=1<<(X-1) encoding — right button event value is 3, state bit is 0x04, NOT 0x02.
+
+## [got-20260819025641-fae749]
+Category: gotcha
+Tags: fallout2, input, keyboard, hook, keypress, regression
+Changed: 2026-08-19T02:56:41.612446
+
+HOOK_KEYPRESS sentinel contract (input.cc vs sfall_kb_helpers.cc): this fork's input.cc treats -1 from sfall_kb_handle_key_pressed as BLOCK the key (F-27 keyBlocked), 0/SDL_SCANCODE_UNKNOWN as pass-through. Upstream fallout2-ce treats -1 as 'no override/pass' and 0 as swallow — EXACT OPPOSITE. The Aug 16 sync merge (16bc1568 via b405e59) flipped the two no-hook early returns in sfall_kb_helpers.cc to -1, swallowing EVERY key when !gGameLoaded (main menu, character creation — gGameLoaded only set after char-selector at main.cc:160) or when no script registered HOOK_KEYPRESS (save-name dialog). Symptom: text fields dead, backspace dead, held keys 'occasionally work' (SDL repeat events skip the hook at input.cc:1034). Fixed: those two returns are SDL_SCANCODE_UNKNOWN again; only ret0==255-swallow returns -1. Regression tests: test_sfall_kb_helpers.cpp PRODUCTION: handle_key_pressed sections.
 

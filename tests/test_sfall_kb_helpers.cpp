@@ -25,6 +25,10 @@
 
 using namespace fallout;
 
+// NOTE: gGameLoaded is declared in game.h (pulled in transitively via
+// sfall_script_hooks.h) and defined in test_stubs (test_common_stubs.cc);
+// reference it qualified as fallout::gGameLoaded below to avoid ambiguity.
+
 // ---- Local mirror of kDiks table (sfall_kb_helpers.cc:17-274) ----
 // Non-constexpr so we can fill high-index entries at runtime.
 static SDL_Scancode kTestDiks[256];
@@ -1005,6 +1009,62 @@ TEST_CASE("F-M71: kDiks mirror matches expected production values")
             seen[sc] = 1;
         }
     }
+}
+
+// =================================================================
+// PRODUCTION: sfall_kb_handle_key_pressed sentinel contract
+// =================================================================
+// Regression tests for the Aug 16 sync regression (16bc1568 via b405e59):
+// the no-hook early returns were flipped from SDL_SCANCODE_UNKNOWN to -1,
+// but THIS fork's input.cc interprets -1 as BLOCK (F-27 keyBlocked) —
+// upstream interprets -1 as "no override" and 0 as swallow, the exact
+// opposite. The collision swallowed every key while the game was not
+// loaded (character creation) or when no script registered HOOK_KEYPRESS
+// (save-name dialog). Production sfall_kb_helpers.cc IS linked here
+// (test_sources); the ScriptHookCall stub (test_common_stubs.cc) has a
+// no-op call() and numReturnValues()==0, and gGameLoaded is stubbed.
+
+TEST_CASE("PRODUCTION: handle_key_pressed — game not loaded passes keys through (UNKNOWN, not -1)")
+{
+    bool saved = fallout::gGameLoaded;
+    fallout::gGameLoaded = false;
+
+    // Character creation / main menu path: gGameLoaded is false there
+    // (it only becomes true after the char-selector flow, main.cc:160).
+    // -1 would block the key in input.cc; UNKNOWN (0) passes it through.
+    CHECK(sfall_kb_handle_key_pressed(SDL_SCANCODE_A, true, SDLK_a) == SDL_SCANCODE_UNKNOWN);
+    CHECK(sfall_kb_handle_key_pressed(SDL_SCANCODE_BACKSPACE, true, SDLK_BACKSPACE) == SDL_SCANCODE_UNKNOWN);
+    CHECK(sfall_kb_handle_key_pressed(SDL_SCANCODE_1, true, SDLK_1) == SDL_SCANCODE_UNKNOWN);
+
+    fallout::gGameLoaded = saved;
+}
+
+TEST_CASE("PRODUCTION: handle_key_pressed — no registered KEYPRESS handler passes keys through (UNKNOWN, not -1)")
+{
+    bool saved = fallout::gGameLoaded;
+    fallout::gGameLoaded = true;
+
+    // In-game screen (e.g. save-name dialog) where no script registered
+    // a HOOK_KEYPRESS handler: the stub's ScriptHookCall::call() is a
+    // no-op, so numReturnValues() == 0. Must be pass-through (UNKNOWN),
+    // not the -1 block sentinel — otherwise every typed key dies.
+    CHECK(sfall_kb_handle_key_pressed(SDL_SCANCODE_A, true, SDLK_a) == SDL_SCANCODE_UNKNOWN);
+    CHECK(sfall_kb_handle_key_pressed(SDL_SCANCODE_BACKSPACE, true, SDLK_BACKSPACE) == SDL_SCANCODE_UNKNOWN);
+    CHECK(sfall_kb_handle_key_pressed(SDL_SCANCODE_1, true, SDLK_1) == SDL_SCANCODE_UNKNOWN);
+
+    fallout::gGameLoaded = saved;
+}
+
+TEST_CASE("PRODUCTION: handle_key_pressed — key release also passes through when game not loaded")
+{
+    bool saved = fallout::gGameLoaded;
+    fallout::gGameLoaded = false;
+
+    // KEYUP events travel the same hook path; they must not be blocked
+    // either (blocked KEYUP would desync the repeat timestamps).
+    CHECK(sfall_kb_handle_key_pressed(SDL_SCANCODE_A, false, SDLK_a) == SDL_SCANCODE_UNKNOWN);
+
+    fallout::gGameLoaded = saved;
 }
 
 // =================================================================
