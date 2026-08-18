@@ -1,5 +1,5 @@
 # Knowledge Base
-Last updated: 2026-08-18T19:26:55.106382
+Last updated: 2026-08-19T02:42:48.359175
 
 ## [dis-20260704144725-9b3649]
 Category: discovery
@@ -570,13 +570,6 @@ Changed: 2026-08-18T04:09:23.238747
 
 Smoke stand ops: deployed binary MD5 differs from tree build EXPECTED after deploy.sh re-signs (codesign rewrites the signature blob) — compare __text segment (offset 25632) instead. ctest on the Xcode multi-config build requires -C RelWithDebInfo. Engine auto-erases data/MAPS/*.SAV at launch (gameInitWithOptions→_InitLoadSave→MapDirErase) — stale snapshot shadowing self-cleans on standard flows.
 
-## [con-20260818042818-3a8433]
-Category: context
-Tags: continuation, smoke-regression, fallout2
-Changed: 2026-08-18T04:28:18.556996
-
-SESSION-CONTINUATION: smoke-test regression (S1-S6 unfixed + crashes A/B) — full handoff doc at plans/smoke-regression-continuation.md. Key: WAITING-branch fix applied (correct, keep) but NOT the root cause; scripts DO execute (crash inside scriptExecProc); bad Program* lifecycle is prime suspect; right-click gate unknown; et tu worldmap-transition crash. All reports in tmp/ (indexed in the doc).
-
 ## [got-20260818181617-c2b3de]
 Category: gotcha
 Tags: fallout2, scripts, interpreter, uaf, root-cause
@@ -604,4 +597,32 @@ Tags: fallout2, worldmap, fade, merge, gotcha
 Changed: 2026-08-18T19:26:55.104365
 
 Worldmap black screen (both stands): fork kept stray wmFadeOut() at wmWorldMapFunc entry (worldmap.cc:3905) while upstream 2b43501 'Remove world map transition fades (#672)' removed BOTH fade-out and fade-in — incomplete merge left palette black for the whole worldmap session (music plays, travel works). Fixed: removed the stray wmFadeOut(); entry now matches upstream.
+
+## [ref-20260818203343-2254ed]
+Category: reference
+Tags: fallout2, debug, instrumentation, smoke, dlog
+Changed: 2026-08-18T20:33:43.806821
+
+Debug instrumentation inventory for smoke builds: silent unless [debug] mode=log in fallout2.cfg — writes debug.log to CWD; console_output_path captures in-game console (rpu-boot.log/ettu-boot.log). Markers: [DBGTRACE] programCreate/programFree (interpreter.cc:667/524), UAF-DETECTED (scripts.cc:1651/1756), _scr_remove_all[_force] (scripts.cc:2979/3034), EDG[%p] zone geometry (map_edge.cc:142), MAP LOAD rc=total=ms (map.cc:904), heap-corruption sentinel diagnostics (interpreter.cc:781/845/3733, sentinel AT heapEnd so > not >=), VOODOO write/read NOT SUPPORTED (sfall_opcodes.cc via programPrintError, benign), sfall accepted-but-inert notes (sfall_config.cc:170/173). Build hash in git_version.h. Full table in AGENTS.md 'Debugging instrumentation (smoke builds)' section.
+
+## [dis-20260818235558-8577bc]
+Category: discovery
+Tags: fallout2, map-format, et-tu, parsing
+Changed: 2026-08-18T23:55:58.372942
+
+FO2/et tu MAP file script section format: per type — count(int32), then ceil(count/16) extents; EACH extent = 16 script records + length(int32, validated 0..16) + next(int32, read+discarded) — scriptListExtentRead scripts.cc:2545. Record sizes by SID_TYPE: SYSTEM=16 ints, SPATIAL=18, TIMED=17, ITEM=16, CRITTER=16 (64/72/68/64/64 bytes). et tu SHADYW.MAP: type3 ITEM count=8, type4 CRITTER count=33; object section starts after scripts. Object record = 18 ints (id,tile,x,y,sx,sy,frame,rot,fid,flags,elev,pid,cid,lightDist,lightInt,outline,sid,scriptIdx) + objectDataRead (objectWrite object.cc:704). Map header: 236 bytes + gv*4 + lv*4 + squares (10000 ints per present elevation; flags 0x2/0x4/0x8 = elev present).
+
+## [got-20260819022058-a59ed2]
+Category: gotcha
+Tags: save, loadsave, global-clobber, path-resolution
+Changed: 2026-08-19T02:20:58.288702
+
+loadsave.cc _gmpath is a GLOBAL clobbered by save handlers mid-save: _GameMap2Slot rewrites it to slot-dir/AUTOMAP.DB.SAV paths while copying map files. Never build a rename destination from _gmpath after the handler loop — snapshot the path into a LOCAL first (save game fix 1ef6861; the incomplete b9a290c fix failed exactly this way: garbage dest like data\data\SAVEGAME\SLOT01\AUTOMAP.DB.SAV -> ENOENT -> 'Error renaming temp save file'). Also: fileOpen resolves relative paths through the directory xbase (master_patches), so any compat_rename/compat_remove of a file opened via fileOpen must use _patches-prefixed paths, never bare CWD-relative ones.
+
+## [got-20260819024248-abacc4]
+Category: gotcha
+Tags: fallout2, input, SDL, macos, trackpad, tap
+Changed: 2026-08-19T02:42:48.357036
+
+Fast mouse clicks (trackpad taps) are LOST by the per-frame button-state polling design: mouseDeviceGetData polls SDL_GetMouseState once per frame, so a press+release completing between two polls (macOS two-finger tap / tap-to-click) generates NO right/left button event — the SDL_MOUSEBUTTONDOWN/UP events are queued, drained by _GNW95_process_message, but the engine state comes only from the poll. Physical corner clicks hold long enough to be caught. Fix (dinput.cc): latch SDL_MOUSEBUTTONDOWN buttons in gSyntheticDownButtons via mouseDeviceNoteButtonDown (input.cc drain), OR them into the polled state in mouseDeviceGetData, clear after one poll — burst becomes clean down/up pair; reset on focus loss/gain. TRAP: SDL button-state bits use SDL_BUTTON(X)=1<<(X-1) encoding — right button event value is 3, state bit is 0x04, NOT 0x02.
 

@@ -37,6 +37,8 @@ void keyboardDeviceFree();
 
 void handleMouseEvent(SDL_Event* event);
 void handleTouchEvent(SDL_Event* event);
+void mouseDeviceNoteButtonDown(int sdlButton);
+void mouseDeviceResetSyntheticButtons();
 
 } // namespace fallout
 

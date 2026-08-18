@@ -16,6 +16,33 @@ static int mouseWindowMappingLogicalWidth = 0;
 static int mouseWindowMappingLogicalHeight = 0;
 static bool mouseRelativeMode = false;
 
+// Mouse buttons whose SDL_MOUSEBUTTONDOWN was observed in the event queue
+// but whose press+release may have completed entirely between two
+// mouseDeviceGetData polls (SDL_GetMouseState is instantaneous state — a
+// fast tap, e.g. a macOS trackpad two-finger tap or tap-to-click, can be
+// pressed and released within a single frame and never appear in a poll).
+// The latch re-delivers it as a clean down/up pair to the game.
+static Uint32 gSyntheticDownButtons = 0;
+
+void mouseDeviceNoteButtonDown(int sdlButton)
+{
+    switch (sdlButton) {
+    case SDL_BUTTON_LEFT:
+        gSyntheticDownButtons |= SDL_BUTTON(SDL_BUTTON_LEFT);
+        break;
+    case SDL_BUTTON_RIGHT:
+        gSyntheticDownButtons |= SDL_BUTTON(SDL_BUTTON_RIGHT);
+        break;
+    default:
+        break;
+    }
+}
+
+void mouseDeviceResetSyntheticButtons()
+{
+    gSyntheticDownButtons = 0;
+}
+
 static void mouseDeviceMapWindowToLogicalPosition(int* x, int* y);
 
 // 0x4E0400
@@ -113,6 +140,8 @@ bool mouseDeviceGetData(MouseData* mouseState)
     Uint32 buttons = mouseDeviceUsesRelativeMode()
         ? SDL_GetRelativeMouseState(&(mouseState->x), &(mouseState->y))
         : SDL_GetMouseState(&(mouseState->x), &(mouseState->y));
+    buttons |= gSyntheticDownButtons;
+    gSyntheticDownButtons = 0;
     if (!mouseDeviceUsesRelativeMode()) {
         mouseDeviceMapWindowToLogicalPosition(&(mouseState->x), &(mouseState->y));
     }

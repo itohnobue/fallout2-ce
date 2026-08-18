@@ -1008,6 +1008,9 @@ void _GNW95_process_message()
         case SDL_MOUSEBUTTONUP:
         case SDL_MOUSEWHEEL:
             if (e.type == SDL_MOUSEBUTTONDOWN || e.type == SDL_MOUSEBUTTONUP) {
+                if (e.type == SDL_MOUSEBUTTONDOWN) {
+                    mouseDeviceNoteButtonDown(e.button.button);
+                }
                 inputHandleMouseClickHook(e.button.button, e.type == SDL_MOUSEBUTTONDOWN);
             }
             handleMouseEvent(&e);
@@ -1056,6 +1059,9 @@ void _GNW95_process_message()
                 break;
             case SDL_WINDOWEVENT_FOCUS_GAINED:
                 gProgramIsActive = true;
+                // Drop any button-down latch captured while unfocused so a
+                // stale tap cannot fire a click after refocus.
+                mouseDeviceResetSyntheticButtons();
                 // 4e0b94e: re-apply mouse mode (e.g. re-capture when the
                 // window regains focus with mouse_lock enabled).
                 if (!mouseDeviceInitMode()) {
@@ -1066,6 +1072,7 @@ void _GNW95_process_message()
                 break;
             case SDL_WINDOWEVENT_FOCUS_LOST:
                 gProgramIsActive = false;
+                mouseDeviceResetSyntheticButtons();
                 mouseDeviceInitMode();
                 audioEnginePause();
                 break;
