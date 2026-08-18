@@ -2163,9 +2163,21 @@ static int lsgPerformSaveGame()
     _flptr = nullptr;
 
     // Atomically rename temp file to final SAVE.DAT.
-    if (compat_rename(_saveDatTmp, _gmpath) != 0) {
+    // NOTE: fileOpen above resolves the relative temp path through the
+    // directory xbase registered from _patches (e.g. "data"), so the file
+    // physically lives at "<_patches>\SAVEGAME\SLOTxx\SAVE.DAT.tmp". The
+    // rename must therefore use the _patches-prefixed paths — a bare
+    // CWD-relative rename points at "./SAVEGAME/..." which does not exist,
+    // and the save silently fails with "Error renaming temp save file"
+    // (regression introduced by the F-61 atomic-save rewrite; the sibling
+    // _SaveBackup already builds _patches-prefixed paths for its rename).
+    char saveDatTmpFull[COMPAT_MAX_PATH];
+    char saveDatFull[COMPAT_MAX_PATH];
+    snprintf(saveDatTmpFull, sizeof(saveDatTmpFull), "%s\\%s", _patches, _saveDatTmp);
+    snprintf(saveDatFull, sizeof(saveDatFull), "%s\\%s", _patches, _gmpath);
+    if (compat_rename(saveDatTmpFull, saveDatFull) != 0) {
         debugPrint("\nLOADSAVE: ** Error renaming temp save file to SAVE.DAT! **\n");
-        compat_remove(_saveDatTmp);
+        compat_remove(saveDatTmpFull);
         _RestoreSave();
         snprintf(_gmpath, sizeof(_gmpath), "%s\\%s%.2d\\", "SAVEGAME", "SLOT", _slot_cursor + 1);
         MapDirErase(_gmpath, "BAK");
@@ -2190,11 +2202,18 @@ static int lsgPerformSaveGame()
         if (sfFile != nullptr) {
             bool saved = sfallSaveGameData(sfFile);
             fileClose(sfFile);
-            if (!saved || compat_rename(tmpPath, sfPath) != 0) {
+            // Same _patches-prefix requirement as the SAVE.DAT rename above:
+            // fileOpen resolved tmpPath through the directory xbase, so the
+            // physical file lives under <_patches>\SAVEGAME\...
+            char sfTmpFull[COMPAT_MAX_PATH];
+            char sfFull[COMPAT_MAX_PATH];
+            snprintf(sfTmpFull, sizeof(sfTmpFull), "%s\\%s", _patches, tmpPath);
+            snprintf(sfFull, sizeof(sfFull), "%s\\%s", _patches, sfPath);
+            if (!saved || compat_rename(sfTmpFull, sfFull) != 0) {
                 // sfallgv.sav write or rename failed after SAVE.DAT was
                 // already committed. Clean up the temp file and restore
                 // the previous save state (which will revert SAVE.DAT).
-                compat_remove(tmpPath);
+                compat_remove(sfTmpFull);
                 _RestoreSave();
                 snprintf(_gmpath, sizeof(_gmpath), "%s\\%s%.2d\\", "SAVEGAME", "SLOT", _slot_cursor + 1);
                 MapDirErase(_gmpath, "BAK");
