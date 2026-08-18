@@ -2042,6 +2042,13 @@ static int lsgPerformSaveGame()
     snprintf(_gmpath, sizeof(_gmpath), "%s\\%s%.2d\\", "SAVEGAME", "SLOT", _slot_cursor + 1);
     strcat(_gmpath, "SAVE.DAT");
 
+    // Snapshot the relative save path into a LOCAL before the handler loop.
+    // _gmpath is a global that the save handlers clobber mid-save (e.g.
+    // _GameMap2Slot rewrites it to the slot dir / AUTOMAP.DB.SAV paths) — the
+    // post-loop rename must not re-read it or the destination becomes garbage.
+    char _saveDatRel[COMPAT_MAX_PATH];
+    snprintf(_saveDatRel, sizeof(_saveDatRel), "%s", _gmpath);
+
     // Build temp file path for atomic write (temp-file-then-rename, same pattern
     // used by sfallgv.sav at lines 2050-2086).
     char _saveDatTmp[COMPAT_MAX_PATH];
@@ -2174,7 +2181,10 @@ static int lsgPerformSaveGame()
     char saveDatTmpFull[COMPAT_MAX_PATH];
     char saveDatFull[COMPAT_MAX_PATH];
     snprintf(saveDatTmpFull, sizeof(saveDatTmpFull), "%s\\%s", _patches, _saveDatTmp);
-    snprintf(saveDatFull, sizeof(saveDatFull), "%s\\%s", _patches, _gmpath);
+    // NOTE: use the pre-loop snapshot _saveDatRel, NOT _gmpath — the global was
+    // clobbered by the save handlers above (e.g. _GameMap2Slot leaves it as the
+    // AUTOMAP.DB.SAV path), which would corrupt the rename destination.
+    snprintf(saveDatFull, sizeof(saveDatFull), "%s\\%s", _patches, _saveDatRel);
     if (compat_rename(saveDatTmpFull, saveDatFull) != 0) {
         debugPrint("\nLOADSAVE: ** Error renaming temp save file to SAVE.DAT! **\n");
         compat_remove(saveDatTmpFull);
@@ -2298,7 +2308,15 @@ static int lsgLoadGameInSlot(int slot)
         if (bakFile != nullptr) {
             fileClose(bakFile);
             debugPrint("\nLOADSAVE: SAVE.DAT missing, recovering from SAVE.DAT.BAK...\n");
-            if (compat_rename(_saveDatBak, _gmpath) == 0) {
+            // Same _patches-prefix requirement as the save rename above:
+            // fileOpen resolved the relative path through the directory xbase,
+            // so the physical file lives under <_patches>\SAVEGAME\... — a
+            // bare CWD-relative rename points at "./SAVEGAME/..." (missing).
+            char saveDatBakFull[COMPAT_MAX_PATH];
+            char gmpathFull[COMPAT_MAX_PATH];
+            snprintf(saveDatBakFull, sizeof(saveDatBakFull), "%s\\%s", _patches, _saveDatBak);
+            snprintf(gmpathFull, sizeof(gmpathFull), "%s\\%s", _patches, _gmpath);
+            if (compat_rename(saveDatBakFull, gmpathFull) == 0) {
                 _flptr = fileOpen(_gmpath, "rb");
                 if (_flptr != nullptr) {
                     debugPrint("LOADSAVE: Successfully recovered save from backup.\n");
