@@ -519,6 +519,10 @@ static void _purgeProgram(Program* program)
 // 0x467614
 void programFree(Program* program)
 {
+    // DBGTRACE: program-lifecycle trace — correlates with scriptExecProc
+    // dispatches to detect use-after-free of freed programs.
+    debugPrint("[DBGTRACE] programFree %p %s\n", (void*)program, program->name != nullptr ? program->name : "(null)");
+
     // NOTE: Uninline.
     _detachProgram(program);
 
@@ -659,6 +663,9 @@ Program* programCreateByPath(const char* path)
     program->stackValues = new ProgramStack();
     program->returnStackValues = new ProgramStack();
 
+    // DBGTRACE: program-lifecycle trace.
+    debugPrint("[DBGTRACE] programCreate %p %s\n", (void*)program, path);
+
     return program;
 }
 
@@ -765,7 +772,12 @@ static void programMarkHeap(Program* program)
         }
 
         ptr += len + 4;
-        if (ptr >= heapEnd) {
+        // DBGTRACE-fix: the sentinel (0x8000) sits exactly AT heapEnd (the
+        // block chain ends at dynamicStrings+4+totalLen and the terminator is
+        // written right after the last block). `>=` fired on every well-formed
+        // non-empty heap, spamming "heap corruption" — only past-the-end is
+        // corruption.
+        if (ptr > heapEnd) {
             debugPrint("programMarkHeap: heap corruption detected, sentinel not found\n");
             break;
         }
@@ -828,7 +840,8 @@ int programPushString(Program* program, const char* const string)
                 }
             }
             heap += blockLength + 4;
-            if (heap >= heapEnd) {
+            // DBGTRACE-fix: `>` — the sentinel is exactly at heapEnd.
+            if (heap > heapEnd) {
                 debugPrint("programPushString: heap corruption detected, sentinel not found\n");
                 break;
             }
@@ -2628,15 +2641,6 @@ static void opDtoA(Program* program)
 static void opExitProgram(Program* program)
 {
     program->flags |= PROGRAM_FLAG_EXITED;
-
-    // F-034: Mirror cleanup from opExit — mark program as exited and remove
-    // interpreter library references so _updatePrograms can free it. Without
-    // this, exited programs accumulate as zombie ProgramListNodes until the
-    // next gameReset().
-    if (!program->exited) {
-        intLibRemoveProgramReferences(program);
-        program->exited = true;
-    }
 }
 
 // 0x46BAC8
@@ -3629,6 +3633,10 @@ void _updatePrograms()
             programInterpret(curr->program, interpreterCpuBurstSize);
 
             if (curr->program->exited) {
+                // DBGTRACE: exited-program free — correlates with
+                // script->program dangling detection in scriptExecProc.
+                debugPrint("[DBGTRACE] _updatePrograms freeing exited program %p %s\n", (void*)curr->program, curr->program->name != nullptr ? curr->program->name : "(null)");
+
                 // Unregister any hooks registered by the exiting program
                 // to prevent use-after-free in hook dispatch. Must be done
                 // before programListNodeFree which calls programFree.
@@ -3663,6 +3671,19 @@ void programListFree()
         programListNodeFree(curr);
         curr = next;
     }
+}
+
+// DBGTRACE: returns true if the program is a live member of the global
+// program list (i.e. not freed). Used by scriptExecProc to detect
+// use-after-free of script->program.
+bool programListContains(Program* program)
+{
+    for (ProgramListNode* node = gInterpreterProgramListHead; node != nullptr; node = node->next) {
+        if (node->program == program) {
+            return true;
+        }
+    }
+    return false;
 }
 
 // 0x46E368
@@ -3708,7 +3729,7 @@ static void interpreterPrintStats()
                     // TODO: Not sure about total, probably calculated wrong, check.
                     heap += sizeof(short) + sizeof(short) + size;
                     total += sizeof(short) + sizeof(short) + size;
-                    if (heap >= heapEnd) {
+                    if (heap > heapEnd) {
                         debugPrint("interpreterPrintStats: heap corruption detected, sentinel not found\n");
                         break;
                     }

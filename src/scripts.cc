@@ -1641,6 +1641,18 @@ int scriptExecProc(int sid, int proc)
         return -1;
     }
 
+    // DBGTRACE: dangling-program detector. If script->program is non-null but
+    // NOT a live member of the interpreter program list, the Program was
+    // freed (programFree/programListFree) while the script still references
+    // it — a use-after-free. Log and skip the dispatch instead of crashing.
+    // (Only for previously-loaded scripts: a just-loaded program is created
+    // by scriptsCreateProgramByName and registered by runProgram below.)
+    if (!programLoaded && !programListContains(program)) {
+        debugPrint("[DBGTRACE] UAF-DETECTED sid=%d proc=%d index=0x%X program=%p NOT in program list (freed?)\n",
+            sid, proc, script->index, (void*)program);
+        return -1;
+    }
+
     // M-46: Do not re-dispatch a mid-wait script. scriptExecProc re-dispatches
     // scripts on every event cycle (map update, critter proc, timed proc).
     // For a script left in PROGRAM_IS_WAITING (e.g. a bounded -1 dispatch that
@@ -1733,6 +1745,16 @@ int scriptExecProc(int sid, int proc)
         script = rechecked;
         program = script->program;
         if (program == nullptr) {
+            return -1;
+        }
+
+        // DBGTRACE: dangling-program detector (post-hook revalidation). The
+        // hook above may have freed the program via _scr_remove_all →
+        // programListFree; script->program would then point at freed memory.
+        // Log and skip the dispatch instead of crashing.
+        if (!programListContains(program)) {
+            debugPrint("[DBGTRACE] UAF-DETECTED-after-hook sid=%d proc=%d index=0x%X program=%p NOT in program list (freed?)\n",
+                sid, proc, script->index, (void*)program);
             return -1;
         }
     }
@@ -2050,14 +2072,18 @@ int scriptsInit()
 
     // Read BoostScriptDialogLimit from content_config to adjust dialog message
     // list capacity at runtime. Clamped to the statically-allocated array limit.
+    //
+    // NOTE: sfall semantics — this is a BOOLEAN toggle ("Set to 1 to boost the
+    // maximum number of script names from 1450 to 10000"), not an absolute
+    // capacity value. The pre-2026-08-18 implementation assigned the raw value
+    // as the capacity, so the common `BoostScriptDialogLimit=1` config set the
+    // capacity to 1 and every script message lookup (list ID >= 2) failed,
+    // surfacing the "Error" fallback text in the message log. Treat any
+    // non-zero value as the boosted capacity.
     int boostDialogLimit;
     if (configGetInt(&gContentConfig, CONTENT_CONFIG_DIALOG_SECTION, "boost_dialog_limit", &boostDialogLimit, 0)
         && boostDialogLimit > 0) {
-        if (boostDialogLimit <= SCRIPT_DIALOG_MESSAGE_LIST_MAX_CAPACITY) {
-            gScriptDialogMessageListCapacity = boostDialogLimit;
-        } else {
-            gScriptDialogMessageListCapacity = SCRIPT_DIALOG_MESSAGE_LIST_MAX_CAPACITY;
-        }
+        gScriptDialogMessageListCapacity = SCRIPT_DIALOG_MESSAGE_LIST_MAX_CAPACITY;
     }
 
     checkScriptsOpcodes();
@@ -2949,6 +2975,9 @@ int scriptRemove(int sid)
 // 0x4A63E0
 int _scr_remove_all()
 {
+    // DBGTRACE: map-transition marker — all scripts/programs torn down.
+    debugPrint("[DBGTRACE] _scr_remove_all\n");
+
     queueClearByEventType(EVENT_TYPE_SCRIPT, nullptr);
     _scr_message_free();
 
@@ -3001,6 +3030,9 @@ int _scr_remove_all()
 // 0x4A64A8
 int _scr_remove_all_force()
 {
+    // DBGTRACE: forced teardown marker.
+    debugPrint("[DBGTRACE] _scr_remove_all_force\n");
+
     queueClearByEventType(EVENT_TYPE_SCRIPT, nullptr);
     _scr_message_free();
 

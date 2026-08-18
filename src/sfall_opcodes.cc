@@ -22,6 +22,7 @@
 #include "combat_ai.h"
 #include "critter.h"
 #include "dbox.h"
+#include "db.h"
 #include "debug.h"
 #include "game.h"
 #include "game_dialog.h"
@@ -34,6 +35,7 @@
 #include "light.h"
 #include "map.h"
 #include "memory.h"
+#include "memory_manager.h"
 #include "message.h"
 #include "mouse.h"
 #include "obj_types.h"
@@ -50,6 +52,7 @@
 #include "sfall_config.h"
 #include "sfall_global_scripts.h"
 #include "sfall_global_vars.h"
+#include "settings.h"
 #include "sfall_ini.h"
 #include "sfall_kb_helpers.h"
 #include "sfall_lists.h"
@@ -2290,6 +2293,74 @@ static FILE* sfallVfsFopen(const char* path, const char* mode)
     return file;
 }
 
+// Reads a source file into a heap buffer. Tries the plain OS filesystem
+// first (compat_fopen — loose files under the CWD/sandbox root), then falls
+// back to the engine VFS (fileOpen — directory-based mods like mods/fo1_base
+// and .dat archives like master.dat/critter.dat). fs_copy sources routinely
+// live inside archives or mod directories, which plain fopen cannot see:
+// RPU's gl_k_goris_derobing.int patches art\critters\*.frm from critter.dat,
+// et tu's gl_classic_wm.int copies art\INTRFACE\classicWM\*.frm from the
+// fo1_base directory mod. Returns true and allocates *outData/*outSize on
+// success; caller frees with internal_free.
+static bool sfallVfsReadFile(const char* vfsPath, const char* resolvedPath, unsigned char** outData, int* outSize)
+{
+    // Fast path: plain disk file.
+    FILE* file = compat_fopen(resolvedPath, "rb");
+    if (file == nullptr) {
+        // VFS fallback: engine fileOpen searches directory bases and .dat
+        // archives. Read the whole file through the engine's File API.
+        File* stream = fileOpen(vfsPath, "rb");
+        if (stream == nullptr) {
+            return false;
+        }
+        int size = fileGetSize(stream);
+        if (size <= 0) {
+            fileClose(stream);
+            return false;
+        }
+        if (size > kMaxVfsFileSize) {
+            debugPrint("sfallVfsReadFile: '%s' exceeds sfall MAX_FILE_SIZE (0xA00000)\n", vfsPath);
+            fileClose(stream);
+            return false;
+        }
+        unsigned char* data = (unsigned char*)internal_malloc_safe(size, __FILE__, __LINE__);
+        size_t read = fileRead(data, 1, size, stream);
+        fileClose(stream);
+        if (read != static_cast<size_t>(size)) {
+            internal_free_safe(data, __FILE__, __LINE__);
+            return false;
+        }
+        *outData = data;
+        *outSize = size;
+        return true;
+    }
+
+    // Plain file: read it the same way the rest of fs_copy does.
+    if (fseek(file, 0, SEEK_END) != 0) {
+        fclose(file);
+        return false;
+    }
+    long size = ftell(file);
+    if (size <= 0 || size > kMaxVfsFileSize) {
+        fclose(file);
+        return false;
+    }
+    if (fseek(file, 0, SEEK_SET) != 0) {
+        fclose(file);
+        return false;
+    }
+    unsigned char* data = (unsigned char*)internal_malloc_safe(size, __FILE__, __LINE__);
+    size_t read = fread(data, 1, size, file);
+    fclose(file);
+    if (read != static_cast<size_t>(size)) {
+        internal_free_safe(data, __FILE__, __LINE__);
+        return false;
+    }
+    *outData = data;
+    *outSize = static_cast<int>(size);
+    return true;
+}
+
 static int sfallVfsAllocHandle()
 {
     for (int i = 0; i < kVfsMaxFiles; i++) {
@@ -2627,12 +2698,67 @@ static void op_fs_copy(Program* program)
     // original asset (H-27 family). Compare the RESOLVED paths so different
     // spellings that normalize to the same file are also handled this way.
     if (compat_stricmp(resolvedSrc, resolvedDst) == 0) {
-        FILE* inPlaceFile = sfallVfsFopen(resolvedSrc, "r+b");
-        if (inPlaceFile == nullptr) {
-            programPrintError("fs_copy: cannot open identical source/dest '%s' for read-write", resolvedSrc);
+        // The patched file may live inside a .dat archive or a directory mod
+        // (art\critters\*.frm in critter.dat, art\INTRFACE\*.frm in mods) —
+        // plain fopen cannot open archive members, and r+b on an archive
+        // path would fail even if the source were a loose file. Read the
+        // source through the engine VFS and MATERIALIZE it to disk so the
+        // script's fs_seek/fs_read_short/fs_write_short patch a real file
+        // the engine (art loader, fileOpen) will read back.
+        //
+        // The materialized copy MUST land in the patches directory
+        // (master_patches_path, e.g. "data/"): the engine VFS searches
+        // patches dirs BEFORE .dat archives, so a file written there
+        // shadows the archive copy. Writing to the resolved path itself
+        // (CWD-relative) would be shadowed BY the archive — the patch
+        // would silently never take effect.
+        unsigned char* srcData = nullptr;
+        int srcSize = 0;
+        if (!sfallVfsReadFile(sourcePath, resolvedSrc, &srcData, &srcSize)) {
+            programPrintError("fs_copy: cannot open identical source/dest '%s' for read", resolvedSrc);
             programStackPushInteger(program, -1);
             return;
         }
+
+        char materializedPath[COMPAT_MAX_PATH];
+        const std::string& patchesDir = settings.system.master_patches_path;
+        if (!patchesDir.empty() && compat_is_dir(patchesDir.c_str())) {
+            // Prepend the patches dir to the RESOLVED path. The resolved
+            // path is either sandbox-rooted or CWD-relative; the patches
+            // dir is the VFS-searchable location that precedes archives.
+            snprintf(materializedPath, sizeof(materializedPath), "%s\\%s", patchesDir.c_str(), resolvedSrc);
+        } else {
+            snprintf(materializedPath, sizeof(materializedPath), "%s", resolvedSrc);
+        }
+
+        // Ensure the parent directory exists so the materialized file can be
+        // created at the target path.
+        {
+            char dir[COMPAT_MAX_PATH];
+            compat_splitpath(materializedPath, nullptr, dir, nullptr, nullptr);
+            if (dir[0] != '\0') {
+                compat_mkdir_recursive(dir);
+            }
+        }
+
+        FILE* inPlaceFile = sfallVfsFopen(materializedPath, "w+b");
+        if (inPlaceFile == nullptr) {
+            programPrintError("fs_copy: cannot materialize identical source/dest '%s' for read-write", materializedPath);
+            internal_free_safe(srcData, __FILE__, __LINE__);
+            programStackPushInteger(program, -1);
+            return;
+        }
+
+        size_t written = fwrite(srcData, 1, srcSize, inPlaceFile);
+        internal_free_safe(srcData, __FILE__, __LINE__);
+        if (written != static_cast<size_t>(srcSize)) {
+            programPrintError("fs_copy: fwrite failed materializing '%s'", materializedPath);
+            fclose(inPlaceFile);
+            programStackPushInteger(program, -1);
+            return;
+        }
+
+        rewind(inPlaceFile); // position at start for reading
 
         int handle = sfallVfsAllocHandle();
         if (handle < 0) {
@@ -2643,17 +2769,19 @@ static void op_fs_copy(Program* program)
         }
 
         sfallVfsFiles[handle] = inPlaceFile;
-        sfallVfsFileMode[handle] = 2; // read-write ("r+b")
+        sfallVfsFileMode[handle] = 2; // read-write ("w+b")
         sfallVfsFileDeletable[handle] = false; // original game asset — never delete
-        sfallVfsFilePath[handle] = internal_strdup(resolvedSrc);
+        sfallVfsFilePath[handle] = internal_strdup(materializedPath);
         programStackPushInteger(program, handle);
         return;
     }
 
-    // Open source file for reading (buffered: temporary read-only handle,
-    // closed before the dest is handed to the script — no write-through need).
-    FILE* srcFile = compat_fopen(resolvedSrc, "rb");
-    if (srcFile == nullptr) {
+    // Read the source through the engine VFS (loose files, directory mods,
+    // and .dat archives alike). Buffered read-only temp, closed before the
+    // dest is handed to the script — no write-through need.
+    unsigned char* srcData = nullptr;
+    int srcSize = 0;
+    if (!sfallVfsReadFile(sourcePath, resolvedSrc, &srcData, &srcSize)) {
         programPrintError("fs_copy: cannot open source '%s'", resolvedSrc);
         programStackPushInteger(program, -1);
         return;
@@ -2662,73 +2790,52 @@ static void op_fs_copy(Program* program)
     int handle = sfallVfsAllocHandle();
     if (handle < 0) {
         programPrintError("fs_copy: no free VFS handles");
-        fclose(srcFile);
+        internal_free_safe(srcData, __FILE__, __LINE__);
         programStackPushInteger(program, -1);
         return;
     }
 
-    // C-06 / sfall NEW-E: read the ENTIRE source into memory BEFORE opening
-    // the destination with "w+b". This guarantees the source can never be
-    // truncated by the destination open, even if the two paths alias the
-    // same underlying file through hard links or case-insensitive mounts.
-    long srcSize = 0;
-    if (fseek(srcFile, 0, SEEK_END) != 0) {
-        programPrintError("fs_copy: fseek (source size) failed for '%s'", resolvedSrc);
-        fclose(srcFile);
-        sfallVfsFileOpen[handle] = false;
-        programStackPushInteger(program, -1);
-        return;
-    }
-    srcSize = ftell(srcFile);
-    if (srcSize < 0) {
-        programPrintError("fs_copy: ftell (source size) failed for '%s'", resolvedSrc);
-        fclose(srcFile);
-        sfallVfsFileOpen[handle] = false;
-        programStackPushInteger(program, -1);
-        return;
-    }
-    if (srcSize > kMaxVfsFileSize) {
-        programPrintError("fs_copy: source '%s' exceeds sfall MAX_FILE_SIZE (0xA00000)", resolvedSrc);
-        fclose(srcFile);
-        sfallVfsFileOpen[handle] = false;
-        programStackPushInteger(program, -1);
-        return;
-    }
-    if (fseek(srcFile, 0, SEEK_SET) != 0) {
-        programPrintError("fs_copy: fseek (source rewind) failed for '%s'", resolvedSrc);
-        fclose(srcFile);
-        sfallVfsFileOpen[handle] = false;
-        programStackPushInteger(program, -1);
-        return;
+    // Materialize the destination into the patches directory when one is
+    // configured, so the engine VFS (art loader, fileOpen) finds the copy
+    // BEFORE the .dat archives / mod directory it may shadow (e.g. et tu's
+    // gl_classic_wm.int swapping art\INTRFACE\*.frm). Without this, a
+    // CWD-relative dest would be shadowed by the archive copy and the
+    // swap would silently never take effect.
+    char materializedDst[COMPAT_MAX_PATH];
+    const std::string& patchesDir = settings.system.master_patches_path;
+    if (!patchesDir.empty() && compat_is_dir(patchesDir.c_str())) {
+        snprintf(materializedDst, sizeof(materializedDst), "%s\\%s", patchesDir.c_str(), resolvedDst);
+    } else {
+        snprintf(materializedDst, sizeof(materializedDst), "%s", resolvedDst);
     }
 
-    std::unique_ptr<char[]> srcData(new char[srcSize > 0 ? srcSize : 1]);
-    size_t srcBytesRead = fread(srcData.get(), 1, srcSize > 0 ? static_cast<size_t>(srcSize) : 0, srcFile);
-    fclose(srcFile);
-    if (srcBytesRead != static_cast<size_t>(srcSize)) {
-        programPrintError("fs_copy: short read from source '%s' (%zu of %ld bytes)",
-            resolvedSrc, srcBytesRead, srcSize);
-        sfallVfsFileOpen[handle] = false;
-        programStackPushInteger(program, -1);
-        return;
+    // Ensure the destination's parent directory exists.
+    {
+        char dir[COMPAT_MAX_PATH];
+        compat_splitpath(materializedDst, nullptr, dir, nullptr, nullptr);
+        if (dir[0] != '\0') {
+            compat_mkdir_recursive(dir);
+        }
     }
 
-    FILE* destFile = sfallVfsFopen(resolvedDst, "w+b");
+    FILE* destFile = sfallVfsFopen(materializedDst, "w+b");
     if (destFile == nullptr) {
-        programPrintError("fs_copy: cannot create dest '%s'", resolvedDst);
+        programPrintError("fs_copy: cannot create dest '%s'", materializedDst);
         sfallVfsFileOpen[handle] = false;
+        internal_free_safe(srcData, __FILE__, __LINE__);
         programStackPushInteger(program, -1);
         return;
     }
 
     // Copy the buffered file contents with fwrite error checking (F2-064).
-    size_t written = fwrite(srcData.get(), 1, srcBytesRead, destFile);
-    if (written != srcBytesRead) {
-        programPrintError("fs_copy: fwrite failed (wrote %zu of %zu bytes) for '%s'",
-            written, srcBytesRead, resolvedDst);
+    size_t written = fwrite(srcData, 1, srcSize, destFile);
+    internal_free_safe(srcData, __FILE__, __LINE__);
+    if (written != static_cast<size_t>(srcSize)) {
+        programPrintError("fs_copy: fwrite failed (wrote %zu of %d bytes) for '%s'",
+            written, srcSize, materializedDst);
         fclose(destFile);
         sfallVfsFileOpen[handle] = false;
-        compat_remove(resolvedDst);
+        compat_remove(materializedDst);
         programStackPushInteger(program, -1);
         return;
     }
@@ -2739,7 +2846,7 @@ static void op_fs_copy(Program* program)
     sfallVfsFileDeletable[handle] = true; // script-created copy may be deleted at free
     // F-270: store an owned copy to prevent use-after-free when the
     // program exits and frees its dynamicStrings backing store.
-    sfallVfsFilePath[handle] = internal_strdup(resolvedDst);
+    sfallVfsFilePath[handle] = internal_strdup(materializedDst);
     programStackPushInteger(program, handle);
 }
 
@@ -3408,6 +3515,23 @@ static void op_fs_resize(Program* program)
 // ============================================================
 // NPC/Hero opcodes
 // ============================================================
+
+// eax_available() — 0x81A3 (deprecated in sfall)
+// Returns whether EAX environmental audio is available. The CE engine has no
+// EAX support (no DirectSound EAX hooks), so this always returns 0. Some mod
+// scripts (et tu's GLZFTERM.int, gl_pipboychk.int) still call it; leaving the
+// opcode undefined aborts the calling script with "Undefined opcode 81a3".
+static void op_eax_available(Program* program)
+{
+    programStackPushInteger(program, 0);
+}
+
+// set_eax_environment(environment) — 0x81A4 (deprecated in sfall)
+// No-op: CE has no EAX audio environment to configure.
+static void op_set_eax_environment(Program* program)
+{
+    programStackPopInteger(program);
+}
 
 // inc_npc_level(pid or string name) — 0x81A5
 // Increments the level of the party member NPC matching the given PID.
@@ -8644,8 +8768,10 @@ void sfallOpcodesInit()
     interpreterRegisterOpcode(0x81CA, op_set_base_pickpocket_mod);
 
     // note: these are deprecated; do not implement
-    // 0x81a3 - int  eax_available()
-    // 0x81a4 - void set_eax_environment(int environment)
+    // 0x81a3 - int  eax_available()      (IMPLEMENTED as 0-stub — et tu mods call it)
+    // 0x81a4 - void set_eax_environment(int environment)  (IMPLEMENTED as no-op)
+    interpreterRegisterOpcode(0x81a3, op_eax_available);
+    interpreterRegisterOpcode(0x81a4, op_set_eax_environment);
 
     // 0x81a5 - void inc_npc_level(int pid/string name)
     interpreterRegisterOpcode(0x81a5, op_inc_npc_level);

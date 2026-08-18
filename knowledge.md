@@ -1,5 +1,5 @@
 # Knowledge Base
-Last updated: 2026-08-18T04:28:18.558949
+Last updated: 2026-08-18T19:26:55.106382
 
 ## [dis-20260704144725-9b3649]
 Category: discovery
@@ -576,4 +576,32 @@ Tags: continuation, smoke-regression, fallout2
 Changed: 2026-08-18T04:28:18.556996
 
 SESSION-CONTINUATION: smoke-test regression (S1-S6 unfixed + crashes A/B) — full handoff doc at plans/smoke-regression-continuation.md. Key: WAITING-branch fix applied (correct, keep) but NOT the root cause; scripts DO execute (crash inside scriptExecProc); bad Program* lifecycle is prime suspect; right-click gate unknown; et tu worldmap-transition crash. All reports in tmp/ (indexed in the doc).
+
+## [got-20260818181617-c2b3de]
+Category: gotcha
+Tags: fallout2, scripts, interpreter, uaf, root-cause
+Changed: 2026-08-18T18:16:17.688032
+
+F-034 (fork 36414b6) set program->exited=true in opExitProgram (O_EXIT_PROGRAM 0x8010 — the NORMAL script-termination opcode). _updatePrograms then freed every script's Program right after its start proc ran, leaving script->program dangling (LOADED flag still set) → dead world (M-46 silently skipped freed memory) + UAF SIGSEGV in scriptExecProc→programExecuteProcedure (null/garbage Program*). Upstream only sets the flag, never exited=true. Reverted in opExitProgram; added programListContains() UAF detector + DBGTRACE lifecycle logging. 92/92 tests pass.
+
+## [got-20260818184036-aa3c8a]
+Category: gotcha
+Tags: fallout2, scripts, messages, sfall, config, false-positive
+Changed: 2026-08-18T18:40:36.159557
+
+BoostScriptDialogLimit (ddraw.ini [Misc]) is a BOOLEAN toggle in sfall ('1 = boost script names 1450→10000'), but fork commit 5222087 assigned the raw value as absolute capacity → BoostScriptDialogLimit=1 set capacity to 1 → every script message lookup (list ID>=2) failed → 'Error' fallback text in message log. Fixed 2026-08-18: nonzero → max capacity (10000). Also: interpreter.cc heap-walk diagnostics used ptr>=heapEnd but the 0x8000 sentinel sits exactly AT heapEnd → false 'heap corruption' spam on every well-formed heap; changed to > in programMarkHeap/programPushString/interpreterPrintStats.
+
+## [got-20260818192654-712c3d]
+Category: gotcha
+Tags: fallout2, sfall, vfs, fscopy, opcodes, et-tu
+Changed: 2026-08-18T19:26:54.185188
+
+fs_copy (sfall_opcodes.cc) was disk-only (compat_fopen): sources inside .dat archives (RPU goris-derobing art\critters\*.frm) or directory mods (et tu classicWM art\INTRFACE\classicWM\*.frm from mods/fo1_base) failed with 'cannot open source'. Fixed 2026-08-18: sfallVfsReadFile() helper reads via engine VFS (fileOpen) with plain-fopen fast path; same-path fs_copy materializes to master_patches dir (data/) so the engine art loader sees patched bytes BEFORE the archive; different-path dest also materialized to patches dir. Also: 0x81a3 eax_available/0x81a4 set_eax_environment stubs added (et tu mods call them; were 'undefined opcode').
+
+## [got-20260818192655-46f906]
+Category: gotcha
+Tags: fallout2, worldmap, fade, merge, gotcha
+Changed: 2026-08-18T19:26:55.104365
+
+Worldmap black screen (both stands): fork kept stray wmFadeOut() at wmWorldMapFunc entry (worldmap.cc:3905) while upstream 2b43501 'Remove world map transition fades (#672)' removed BOTH fade-out and fade-in — incomplete merge left palette black for the whole worldmap session (music plays, travel works). Fixed: removed the stray wmFadeOut(); entry now matches upstream.
 

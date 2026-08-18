@@ -3902,7 +3902,6 @@ static int wmWorldMapFunc(int a1)
     ScopedGameMode gm(GameMode::kWorldmap);
 
     wmResetTrailMarkers();
-    wmFadeOut();
 
     if (wmInterfaceInit() == -1) {
         wmInterfaceExit();

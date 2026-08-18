@@ -247,6 +247,7 @@ void runProgram(Program* program);
 Program* runScript(char* name);
 void _updatePrograms();
 void programListFree();
+bool programListContains(Program* program);
 void interpreterRegisterOpcode(int opcode, OpcodeHandler* handler);
 
 void programStackPushValue(Program* program, const ProgramValue& programValue);
