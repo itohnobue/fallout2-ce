@@ -1,5 +1,5 @@
 # Knowledge Base
-Last updated: 2026-08-19T21:36:01.904563
+Last updated: 2026-08-20T00:24:35.108415
 
 ## [dis-20260704144725-9b3649]
 Category: discovery
@@ -660,4 +660,39 @@ Tags: combat, scripts, et-tu, gotcha
 Changed: 2026-08-19T21:36:01.902352
 
 _gcsd lifecycle: only non-null during the FIRST combatant's turn of a script-started combat (_combat() nulls it after each turn). Script-started combat comes ONLY from the attack script opcode (0x80D0/0x80DD) — opAttackComplex sets overrideAttackResults=1 when data[1]==data[0] (the last two attack() args = attacker_results/target_results — FO1 scripts pass (0,0) so override fires constantly). Also: _gcsd damageBonus/minDamage clamp applies on MISSES too (upstream quirk, benign for et tu: rats pass bonus=0,min=0).
+
+## [got-20260819224159-c9dd38]
+Category: gotcha
+Tags: proto, lst, map-format
+Changed: 2026-08-19T22:41:59.331969
+
+FO2 proto lookup: _proto_list_str (proto.cc:205) matches 'pid & 0xFFFFFF' against a 1-BASED line counter in <type>.lst — reading lst[index] 0-based in an offline parser is off by one. Proto .pro files: type field at offset 32, material at 36 (after pid/msgId/fid/lightDistance/lightIntensity/flags/extendedFlags/sid).
+
+## [got-20260819224159-49fb8d]
+Category: gotcha
+Tags: map-format, loadsave
+Changed: 2026-08-19T22:41:59.403049
+
+FO2 MAP object section: objects with inventory->length != 0 carry nested item records after their base record — each item = quantity(int32) + full objectRead (18 ints + objectDataRead, recursively). Critter base record = 72 + inv(3) + reaction/flags(1) + combat(7) + hp/rad/poison(3) ints. omitting inventory recursion desyncs the walk.
+
+## [dis-20260819224159-c93cf1]
+Category: discovery
+Tags: et-tu, rendering, walls, shady-sands
+Changed: 2026-08-19T22:41:59.475548
+
+Et Tu Shady Sands 'striped homes': FO1 adobe walls = 16px/32px-wide FRM pieces at every other tile with 1x1 block.frm markers, two interleaved rows. Engine placement math (identical FO1/FO2) leaves 8px vertical slits every 48px at scale 1 (16px at scale 2) — slits are IN THE DATA, rendered faithfully by any engine. All 94 wall FRMs byte-identical to FO1 MASTER.DAT, size==w*h (no RLE). See KNOWN_ISSUES.md Issue A.
+
+## [got-20260819224159-59695c]
+Category: gotcha
+Tags: dat, dfile
+Changed: 2026-08-19T22:41:59.547812
+
+Fallout DAT files (footer format): entries table ends 8 bytes before EOF (entriesDataSize, dbaseDataSize int32s); per entry: pathLength(int32), path, compressed(1 BYTE), uncompressedSize/dataSize/dataOffset(int32). Entry data base = fileSize - dbaseDataSize. 'compressed' is a single byte, not int32.
+
+## [got-20260820002435-d427db]
+Category: gotcha
+Tags: et-tu, install, walls, offsets
+Changed: 2026-08-20T00:24:35.105623
+
+et tu wall art: FO2's master.dat bundles legacy FO1 wall FRMs with DIFFERENT placement offsets than the FO1 GOG originals (e.g. ADB0989 xOff -12 vs -8, yOff 6 vs 11; deltas vary per file). The et tu map's wall layout needs the FO1 originals — the FO1 extraction MUST land in master_patches (data/), like the official undat tools do (outputPath + '\\data'), or the engine silently uses FO2's copies and walls render striped.
 

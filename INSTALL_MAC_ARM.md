@@ -371,11 +371,12 @@ Fallout 2 data (`master.dat`, `critter.dat`) from the **parent** folder via
 The FO1 extraction adds files to the mod folder, and only the whitelist in
 `undat_files.txt` may stay (ART + SOUND; the mod ships its own scripts/proto/maps/
 text). Snapshot the mod's own files **before** extracting, so you can tell them apart
-later:
+later (paths relative to `data/`, where the extraction goes):
 
 ```bash
-cd ~/Fallout2/Fallout1in2
+cd ~/Fallout2/Fallout1in2/data
 find . -type f | sed 's|^\./||' | tr '[:upper:]' '[:lower:]' | sort -u > /tmp/pristine.txt
+cd ..
 ```
 
 ### 7.4 Extract the Fallout 1 content
@@ -389,21 +390,34 @@ FO1_DAT="/Volumes/Fallout/Fallout.app/Contents/Resources/game/Fallout.app/Conten
 DAT=out/build/macos-arm64-release/RelWithDebInfo/ce-dat-tool
 
 cd ~/Fallout2/Fallout1in2
-"$DAT" "$FO1_DAT" extract .
+# MUST extract into data/ (the master_patches dir the engine searches first) —
+# the official et tu undat tools do exactly this (outputPath + "\data").
+# Extracting to the game root leaves the files invisible to the engine, which
+# then falls back to FO2's master.dat copies of the FO1 art (wrong placement
+# offsets -> striped Shady Sands walls, broken talking heads).
+"$DAT" "$FO1_DAT" extract data
 hdiutil detach /Volumes/Fallout
 ```
 
 ### 7.5 Whitelist cleanup and Windows-file removal
 
 Delete every extracted file that is **not** the mod's own (pristine snapshot) and
-**not** on the `undat_files.txt` whitelist, then remove empty directories:
+**not** on the `undat_files.txt` whitelist (paths relative to `data/`), then remove
+empty directories:
 
 ```bash
 cd ~/Fallout2/Fallout1in2
-find . -type f | sed 's|^\./||' | tr '[:upper:]' '[:lower:]' | sort -u > /tmp/after.txt
+cd data && find . -type f | sed 's|^\./||' | tr '[:upper:]' '[:lower:]' | sort -u > /tmp/after.txt && cd ..
 tr -d '\r' < undat_files.txt | sed 's|\\|/|g' | tr '[:upper:]' '[:lower:]' | sort -u > /tmp/keep.txt
-comm -23 /tmp/after.txt <(cat /tmp/pristine.txt /tmp/keep.txt | sort -u) | while read -r p; do rm -f "./$p"; done
+
+# FO1 speech subtitle .txt files extract under their real (unmangled) names, while
+# the whitelist lists 8.3-mangled variants (BU35B0~5.TXT vs BUTCH01.TXT) — keep all
+# speech .txt explicitly so the cleanup below does not delete them:
+cd data && find sound/speech -type f | sed 's|^\./||' | tr '[:upper:]' '[:lower:]' | sort -u >> /tmp/keep.txt && cd ..
+
+cd data && comm -23 /tmp/after.txt <(cat /tmp/pristine.txt /tmp/keep.txt | sort -u) | while read -r p; do rm -f "./$p"; done
 find . -type d -empty -delete
+cd ..
 ```
 
 Remove the Windows-only files from the mod folder:
@@ -467,6 +481,7 @@ open "Fallout II Community Edition.app"
 | Main menu | Fallout 1 main menu (original FO1 title/music) |
 | New game | Starts in Vault 13 |
 | Deep-run marker | `worldmap.dat` appears inside `Fallout1in2/` after first run |
+| Striped/glitchy buildings or no talking heads in-game | FO1 extraction landed outside `data/` — move `Fallout1in2/ART/*` → `data/art/*` and `SOUND/*` → `data/sound/*`, or redo §7.4 from a fresh `Fallout1in2` copy |
 
 ### 7.9 Et Tu troubleshooting
 
