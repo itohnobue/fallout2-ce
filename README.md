@@ -14,6 +14,12 @@ Heavily upgraded fork of native-source Fallout 2 CE engine which is fully compat
 
 Remaining problems which are currently in progress can be found in [KNOWN_ISSUES.md](KNOWN_ISSUES.md).
 
+## Screenshot
+
+RPU and Et Tu running on Apple Silicon Mac
+
+![RPU and Et Tu](screenshot_rpu_ettu.jpg)
+
 ## Docs
 
 - [INSTALL.md](INSTALL.md) — build and install for all platforms
