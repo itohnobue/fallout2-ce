@@ -898,34 +898,40 @@ TEST_CASE("H-005: All specific hit locations are valid called-shot targets")
 }
 
 // =============================================================
-// H-003: attackerFlags/defenderFlags fix (combat.cc:3608-3611)
-// regression test — CombatStartData override path
+// H-003: CombatStartData override path (combat.cc) regression test
 // =============================================================
 //
-// Old code (buggy): wrote attackerResults to defenderFlags (copy-paste),
-//   then overwrote defenderFlags with targetResults.
-//   Net: attackerFlags NEVER set, defenderFlags = targetResults.
-// Fixed code: attackerFlags = attackerResults, defenderFlags = targetResults.
+// ORIGINAL FO2 BINARY (0x422F3C) behavior — verified by disassembling
+// fallout2.exe: BOTH result fields are written to defenderFlags; the
+// attackerResults write is dead (the second write wins). attackerFlags
+// is NEVER touched — the computed hit/miss outcome (DAM_HIT) survives.
+// Upstream CE renders this faithfully with a FIXME comment.
 //
-// Finding ID: H-003 | Source: combat.cc:3608-3611
+// The fork's earlier split-field interpretation
+// (attackerFlags = attackerResults, defenderFlags = targetResults) was a
+// deviation that broke et tu combat (Issue E): FO1 scripts call attack()
+// with equal result flags (0, 0) — e.g. WanRats.int:
+// attack(dude, 0, 1, 0, 0, 30000, 0, 0) — the override fired with
+// attackerResults=0 and wiped the computed DAM_HIT flag, so hits played
+// the dodge animation ("missed" message) while the damage was still
+// applied. Fixed code restores the original-binary semantics.
 //
-// Stub mirrors the production override path at combat.cc:3608-3611.
+// Finding ID: H-003 | Source: combat.cc (override block)
+//
+// Stub mirrors the production override path in _combat_attack.
 
 static int stub_combat_attackerFlags;
 static int stub_combat_defenderFlags;
 
-static void stub_apply_combat_start_data_old_buggy(
+static void stub_apply_combat_start_data_original_binary(
     int overrideAttackResults, int attackerResults, int targetResults)
 {
-    // Old buggy code (3608-3611 in origin):
-    // attackerFlags assignment was MISSING
-    // defenderFlags got attackerResults (copy-paste bug), then overwritten
+    // Original FO2 binary 0x422F3C: both writes target defenderFlags;
+    // the attackerResults write is dead (second write wins).
     if (overrideAttackResults) {
-        // BUG: wrote to defenderFlags instead of attackerFlags
         stub_combat_defenderFlags = attackerResults;
-        // Second write overwrites — attackerResults is lost
         stub_combat_defenderFlags = targetResults;
-        // attackerFlags NEVER written
+        // attackerFlags NEVER written — computed outcome preserved
     }
 }
 
@@ -933,48 +939,33 @@ static void stub_apply_combat_start_data_fixed(
     int overrideAttackResults, int attackerResults, int targetResults)
 {
     if (overrideAttackResults) {
-        stub_combat_attackerFlags = attackerResults;
+        stub_combat_defenderFlags = attackerResults;
         stub_combat_defenderFlags = targetResults;
     }
 }
 
-TEST_CASE("H-003: attackerFlags/defenderFlags set independently from CombatStartData (fixed)")
+TEST_CASE("H-003: override writes defenderFlags only — attackerFlags preserved (original FO2 semantics)")
 {
-    stub_combat_attackerFlags = -1;
+    stub_combat_attackerFlags = 0x100; // computed DAM_HIT
     stub_combat_defenderFlags = -1;
 
-    // Fixed code: attackerFlags = attackerResults, defenderFlags = targetResults
-    stub_apply_combat_start_data_fixed(1, 0xAA, 0xBB);
-
-    CHECK(stub_combat_attackerFlags == 0xAA);
-    CHECK(stub_combat_defenderFlags == 0xBB);
-}
-
-TEST_CASE("H-003: Old buggy code loses attackerResults entirely")
-{
-    stub_combat_attackerFlags = -1;
-    stub_combat_defenderFlags = -1;
-
-    // Old buggy code
-    stub_apply_combat_start_data_old_buggy(1, 0xAA, 0xBB);
-
-    // attackerFlags NEVER written — stays at -1 (initial value)
-    CHECK(stub_combat_attackerFlags == -1);
-
-    // defenderFlags = targetResults (0xBB) — but attackerResults (0xAA) was LOST
-    CHECK(stub_combat_defenderFlags == 0xBB);
-}
-
-TEST_CASE("H-003: attackerFlags/defenderFlags with zero values")
-{
-    stub_combat_attackerFlags = 999;
-    stub_combat_defenderFlags = 999;
-
-    // Fixed code with zero results
+    // FO1 rat-style call: attack(..., 0, 0) — equal result flags (0, 0)
     stub_apply_combat_start_data_fixed(1, 0, 0);
 
-    CHECK(stub_combat_attackerFlags == 0);
+    // attackerFlags (DAM_HIT) MUST survive — the miss-drains-HP bug
+    CHECK(stub_combat_attackerFlags == 0x100);
     CHECK(stub_combat_defenderFlags == 0);
+}
+
+TEST_CASE("H-003: defenderFlags = targetResults (second write wins)")
+{
+    stub_combat_attackerFlags = 0x100;
+    stub_combat_defenderFlags = -1;
+
+    stub_apply_combat_start_data_fixed(1, 0xAA, 0xBB);
+
+    CHECK(stub_combat_attackerFlags == 0x100);
+    CHECK(stub_combat_defenderFlags == 0xBB);
 }
 
 TEST_CASE("H-003: No override when overrideAttackResults=0")
@@ -982,7 +973,7 @@ TEST_CASE("H-003: No override when overrideAttackResults=0")
     stub_combat_attackerFlags = 42;
     stub_combat_defenderFlags = 24;
 
-    // Fixed code with overrideAttackResults=0 — should be a no-op
+    // overrideAttackResults=0 — should be a no-op
     stub_apply_combat_start_data_fixed(0, 0xAA, 0xBB);
 
     // Values unchanged
@@ -990,17 +981,15 @@ TEST_CASE("H-003: No override when overrideAttackResults=0")
     CHECK(stub_combat_defenderFlags == 24);
 }
 
-TEST_CASE("H-003: Same attackerResults and targetResults — old code still wrong")
+TEST_CASE("H-003: original-binary stub behaves identically (dead attackerResults write)")
 {
-    stub_combat_attackerFlags = -1;
+    stub_combat_attackerFlags = 0x100;
     stub_combat_defenderFlags = -1;
 
-    // Even when both results are the same, old code still misses attackerFlags
-    stub_apply_combat_start_data_old_buggy(1, 0x55, 0x55);
+    stub_apply_combat_start_data_original_binary(1, 0x55, 0x55);
 
-    CHECK(stub_combat_attackerFlags == -1); // NEVER written
-    // defenderFlags = 0x55 (via targetResults), but this coincidentally matches
-    // the attackerResults value — masking the bug if both happen to be equal
+    CHECK(stub_combat_attackerFlags == 0x100); // NEVER written
+    CHECK(stub_combat_defenderFlags == 0x55);  // via targetResults
 }
 
 // =============================================================

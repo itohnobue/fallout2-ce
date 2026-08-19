@@ -1,5 +1,5 @@
 # Knowledge Base
-Last updated: 2026-08-19T02:56:41.614923
+Last updated: 2026-08-19T21:36:01.904563
 
 ## [dis-20260704144725-9b3649]
 Category: discovery
@@ -632,4 +632,32 @@ Tags: fallout2, input, keyboard, hook, keypress, regression
 Changed: 2026-08-19T02:56:41.612446
 
 HOOK_KEYPRESS sentinel contract (input.cc vs sfall_kb_helpers.cc): this fork's input.cc treats -1 from sfall_kb_handle_key_pressed as BLOCK the key (F-27 keyBlocked), 0/SDL_SCANCODE_UNKNOWN as pass-through. Upstream fallout2-ce treats -1 as 'no override/pass' and 0 as swallow — EXACT OPPOSITE. The Aug 16 sync merge (16bc1568 via b405e59) flipped the two no-hook early returns in sfall_kb_helpers.cc to -1, swallowing EVERY key when !gGameLoaded (main menu, character creation — gGameLoaded only set after char-selector at main.cc:160) or when no script registered HOOK_KEYPRESS (save-name dialog). Symptom: text fields dead, backspace dead, held keys 'occasionally work' (SDL repeat events skip the hook at input.cc:1034). Fixed: those two returns are SDL_SCANCODE_UNKNOWN again; only ret0==255-swallow returns -1. Regression tests: test_sfall_kb_helpers.cpp PRODUCTION: handle_key_pressed sections.
+
+## [got-20260819200251-0b9c45]
+Category: gotcha
+Tags: fallout2, smoke, config
+Changed: 2026-08-19T20:02:51.435125
+
+Smoke-stand fallout2.cfg: the bundle copy (Contents/MacOS/fallout2.cfg) is the LIVE config — engine reads/writes next to executable. Stand-root cfg is only the deploy template. deploy.sh overwrites bundle copy, wiping in-game persisted keys (RPU bundle has extra [qol]/[ui]/mouse_lock). Edit bundle copy directly for live changes; keep stand-root in sync for future deploys. et tu bundle copy had CRLF endings.
+
+## [got-20260819213552-410fe1]
+Category: gotcha
+Tags: combat, fallout2, issue-e, gotcha
+Changed: 2026-08-19T21:35:52.328350
+
+Combat overrideAttackResults: ORIGINAL FO2 binary (0x422F3C) writes BOTH CombatStartData result fields to defenderFlags (attackerResults write is dead, second wins); attackerFlags NEVER touched. The fork's split-field version (attackerFlags=attackerResults) wiped DAM_HIT when FO1 scripts call attack() with equal flags (0,0) — WanRats.int attack(dude,0,1,0,0,30000,0,0) — dodge anim + missed message + damage still applied (Issue E). Fixed combat.cc: restore defenderFlags-only writes. Disassembly: tmp/rpu/release/fallout2.exe VA 0x422F3C fileoff 0x1333C.
+
+## [pat-20260819213557-5edaf2]
+Category: pattern
+Tags: scripts, ssl, disassembly, fallout2, tools
+Changed: 2026-08-19T21:35:57.509159
+
+FO1/FO2 .int disassembly: header 42B; proc table at 42 (BE int32 count, 24B entries {nameOffset,flags,time,conditionOffset,bodyOffset,argCount}); identifiers then staticStrings tables; bytecode = 2B big-endian words; PUSH variants (0x9001/0x9801/0xA001/0xC001/0xE001, index &0x3FF==1) consume 4B operands; opcodes 0x8000|index; other ops take operands from the value stack. Tools: tmp/probe/int_disasm.py (walker bounds buggy — prefer raw byte-scan for opcode words), int_dump.py. FO2 opcode docs: fodev.net/files/fo2/opcodes/ (attack=0x80D0 attack_complex(who,called_shot,num_attacks,bonus,min_damage,max_damage,attacker_results,target_results)).
+
+## [got-20260819213601-18e5a4]
+Category: gotcha
+Tags: combat, scripts, et-tu, gotcha
+Changed: 2026-08-19T21:36:01.902352
+
+_gcsd lifecycle: only non-null during the FIRST combatant's turn of a script-started combat (_combat() nulls it after each turn). Script-started combat comes ONLY from the attack script opcode (0x80D0/0x80DD) — opAttackComplex sets overrideAttackResults=1 when data[1]==data[0] (the last two attack() args = attacker_results/target_results — FO1 scripts pass (0,0) so override fires constantly). Also: _gcsd damageBonus/minDamage clamp applies on MISSES too (upstream quirk, benign for et tu: rats pass bonus=0,min=0).
 

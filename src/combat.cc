@@ -3749,6 +3749,10 @@ int _combat_attack(Object* attacker, Object* defender, HitMode hitMode, HitLocat
     }
 
     if (_gcsd != nullptr) {
+        // DBGTRACE (Issue E): script-started combat (CombatStartData active)
+        // — damageBonus/minDamage can turn a miss into damage.
+        debugPrint("[COMBAT] _gcsd ACTIVE: damageBonus=%d minDamage=%d maxDamage=%d override=%d\n",
+            _gcsd->damageBonus, _gcsd->minDamage, _gcsd->maxDamage, _gcsd->overrideAttackResults);
         int preAdjustDamage = main_ctd.defenderDamage;
 
         main_ctd.defenderDamage += _gcsd->damageBonus;
@@ -3807,7 +3811,16 @@ int _combat_attack(Object* attacker, Object* defender, HitMode hitMode, HitLocat
         }
 
         if (_gcsd->overrideAttackResults) {
-            main_ctd.attackerFlags = _gcsd->attackerResults;
+            // Match the original FO2 binary (0x422F3C) exactly: both result
+            // fields are written to defenderFlags — the attackerResults write
+            // is dead (the second write wins). The fork's earlier split-field
+            // interpretation (attackerFlags = attackerResults) wiped the
+            // computed DAM_HIT flag whenever a script passed equal result
+            // flags — the common FO1 `attack()` call passes (0, 0) (e.g.
+            // WanRats.int: attack(dude, 0, 1, 0, 0, 30000, 0, 0)), turning
+            // hits into dodge animations with the damage still applied
+            // (Issue E).
+            main_ctd.defenderFlags = _gcsd->attackerResults;
             main_ctd.defenderFlags = _gcsd->targetResults;
         }
     }
@@ -3834,6 +3847,14 @@ int _combat_attack(Object* attacker, Object* defender, HitMode hitMode, HitLocat
     // callbacks (_combat_anim_begin, _combat_anim_finished) which read
     // _main_ctd after _action_attack returns.
     _main_ctd = main_ctd;
+
+    // DBGTRACE (Issue E): per-attack result snapshot for the miss-vs-damage
+    // investigation. Logged after the copy-back so _main_ctd matches what
+    // the animation callbacks will display/apply.
+    debugPrint("[COMBAT] _combat_attack: %s -> %s type=%d flags=%#x dmg=%d crit=%d\n",
+        attacker->pid == gDude->pid ? "dude" : critterGetName(attacker),
+        defender != nullptr && defender->pid == gDude->pid ? "dude" : (defender != nullptr ? critterGetName(defender) : "null"),
+        (int)main_ctd.attackHitLocation, (int)main_ctd.attackerFlags, main_ctd.defenderDamage, (int)main_ctd.defenderFlags);
 
     if (actionPoints > attacker->data.critter.combat.ap) {
         attacker->data.critter.combat.ap = 0;
@@ -4434,6 +4455,12 @@ static int attackCompute(Attack* attack)
             _compute_explosion_on_extras(attack, 1, isGrenade, 0);
         }
     }
+
+    // DBGTRACE (Issue E): post-switch attack state — roll outcome vs damage.
+    debugPrint("[COMBAT] attackCompute done: %s -> %s type=%d roll=%d flags=%#x dmg=%d defFlags=%#x\n",
+        attack->attacker != nullptr ? (attack->attacker->pid == gDude->pid ? "dude" : critterGetName(attack->attacker)) : "null",
+        attack->defender != nullptr ? (attack->defender->pid == gDude->pid ? "dude" : critterGetName(attack->defender)) : "null",
+        (int)attackType, roll, (int)attack->attackerFlags, attack->defenderDamage, (int)attack->defenderFlags);
 
     attackComputeDeathFlags(attack);
 
@@ -5379,6 +5406,12 @@ void _apply_damage(Attack* attack, bool animated)
     if (defenderIsCritter && (defender->data.critter.combat.results & DAM_DEAD) == DAM_NONE) {
         _set_new_results(defender, attack->defenderFlags);
 
+        // DBGTRACE (Issue E): actual HP application — the miss-vs-damage
+        // mismatch surfaces here (damage > 0 with no DAM_HIT).
+        debugPrint("[COMBAT] _apply_damage: %s takes %d dmg (attack flags=%#x hit=%d)\n",
+            defender->pid == gDude->pid ? "dude" : critterGetName(defender),
+            attack->defenderDamage, (int)attack->attackerFlags, ((attack->attackerFlags & DAM_HIT) != 0) ? 1 : 0);
+
         if ((defender->data.critter.combat.results & (DAM_DEAD | DAM_KNOCKED_OUT)) != 0) {
             if (!hitUnintendedTarget || defender != gDude) {
                 critterSetWhoHitMe(defender, attack->attacker);
@@ -6070,6 +6103,12 @@ void _combat_anim_finished()
         }
 
         if (_combat_call_display) {
+            // DBGTRACE (Issue E): log what is about to be displayed/applied
+            // and from which attack struct (stale _main_ctd check).
+            debugPrint("[COMBAT] anim_finished: turn_running=%d display flags=%#x dmg=%d (%s -> %s)\n",
+                _combat_turn_running, (int)_main_ctd.attackerFlags, _main_ctd.defenderDamage,
+                _main_ctd.attacker != nullptr ? (_main_ctd.attacker->pid == gDude->pid ? "dude" : critterGetName(_main_ctd.attacker)) : "null",
+                _main_ctd.defender != nullptr ? (_main_ctd.defender->pid == gDude->pid ? "dude" : critterGetName(_main_ctd.defender)) : "null");
             _combat_display(&_main_ctd);
             _combat_call_display = false;
         }

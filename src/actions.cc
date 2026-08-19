@@ -644,6 +644,15 @@ int _action_melee(Attack* attack, AnimationType anim)
 
     _combatai_msg(attack->attacker, attack, AI_MESSAGE_TYPE_ATTACK, 0);
 
+    // DBGTRACE (Issue E): which reaction branch is chosen for this melee
+    // attack — 0x0300 = DAM_HIT|DAM_CRITICAL (hit path), 0x03 = defender
+    // KO'd/downed, else DODGE.
+    debugPrint("[COMBAT] _action_melee: %s -> %s anim=%d attackerFlags=%#x defenderResults=%#x -> %s\n",
+        attack->attacker != nullptr ? (attack->attacker->pid == gDude->pid ? "dude" : critterGetName(attack->attacker)) : "null",
+        attack->defender != nullptr ? (attack->defender->pid == gDude->pid ? "dude" : critterGetName(attack->defender)) : "null",
+        (int)anim, (int)attack->attackerFlags, (int)attack->defender->data.critter.combat.results,
+        (attack->attackerFlags & 0x0300) ? "HIT" : ((attack->defender->data.critter.combat.results & 0x03) ? "KO/DOWN" : "DODGE"));
+
     if (attack->attackerFlags & 0x0300) {
         animationRegisterPlaySoundEffect(attack->attacker, sfx_name_temp, 0);
         if (anim != ANIM_THROW_PUNCH && anim != ANIM_KICK_LEG) {
