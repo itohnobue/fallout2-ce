@@ -4,6 +4,19 @@ This document tracks Fallout 2 CE compatibility with sfall.  This is for modders
 
 For now, this covers opcodes/metarules, and hooks.  In the future, it will include other ways of modifying the engine (like ini files), and other Sfall-specific behaviour.
 
+## What we've implemented (vs. upstream CE)
+
+| Area | Upstream CE | This fork |
+| --- | --- | --- |
+| **sfall scripting** | partial | sfall 4.5.1 scripting surface reimplemented: 121+ opcodes/metarules registered, 43 of 62 hook types (38 sfall hooks + 5 CE-specific hooks) |
+| **RPU (Fallout 2 Restoration Project)** | not supported | RPU's hooks, opcodes, metarules and ddraw.ini config keys implemented — all 25 requirement rows and all 6 remaining-work items verified against the RPU source (2026-08-17 audit). Fully working in-game; long-session testing underway. |
+| **Et Tu (Fallout 1 in FO2)** | not supported | Et Tu's config overlays and sfall surface implemented; FO1-mode engine behavior (traits, combat, rest, encounters, worldmap, dialog) built in. Fully working in-game; 30 of 33 requirement rows verified against source (2026-08-17 audit). |
+| **Config keys** | partial | RPU/Et Tu ddraw.ini keys bridged into CE's config system (WorldMapSlots, ElevatorsFile, ExtraSaveSlots, KarmaFRMs, SpeedMulti, OverrideArtCacheSize, FemaleDialogMsgs, …) |
+| **Save compatibility** | — | Backward-compatible saves; sfall global-vars and override state serialized |
+| **Hardening** | — | 18 production audit passes — hundreds of verified fixes (bounds checks, UAF/null-deref guards, save integrity, VFS sandboxing) |
+| **Upstream sync** | — | Continuously merged (currently synced through upstream 1cce144, 2026-08-16) |
+| **Tests** | — | 92 test executables, all passing (unit/mirror tests; not a substitute for in-game testing) |
+
 ## HRP EDG Scroll-Blocker Support
 
 CE supports the `.edg` file format from the HRP (High Resolution Patch), which defines per-map scroll boundaries and square-level render clipping.
