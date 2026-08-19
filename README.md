@@ -4,11 +4,22 @@
 
 Fallout 2 CE Extended is a fork of [fallout2-ce](https://github.com/fallout2-ce/fallout2-ce), the modern re-implementation of the Fallout 2 engine. On top of the upstream engine we are building the sfall scripting layer those mods depend on, RPU / Et Tu compatibility work, and production hardening — kept in sync with upstream as it evolves.
 
-**Status: testing.** Both RPU and Et Tu are fully working on the fork: the complete compatibility surface is implemented, in-game verified, and playable end-to-end. The project is now going through the testing stage — long-session playthroughs and edge-case QA on real mod installs, with any issues found being fixed and tracked.
+**Both RPU and Et Tu are fully working on the fork: the complete compatibility surface is implemented, in-game verified, and playable end-to-end. The project is now going through the testing stage — long-session playthroughs and edge-case QA on real mod installs, with any issues found being fixed and tracked.**
 
 ## Why this fork
 
 Upstream CE runs on macOS, but the big total conversions (RPU, Et Tu) require [sfall](https://github.com/sfall-team/sfall) — a Windows-only engine extension. This project reimplements the sfall scripting surface natively inside CE, so the mods can run on the fork without a Windows layer. The fork point is motivated by the lack of an easy way to play Fallout 1 and 2 on Apple Silicon with the modern mod scene installed.
+
+## Current status
+
+**Both mods work, run and are playable on this fork, and are currently going through testing to catch minor bugs.** Issues found during testing are tracked and fixed as they surface.
+
+| Mod | Status | Notes |
+| --- | --- | --- |
+| [Fallout 2 Restoration Project (RPU)](https://github.com/BGforgeNet/Fallout2_Restoration_Project) | Supported | Works, runs and is playable end-to-end; currently going through testing to catch minor bugs. RPU's 4 hooks, ~25 opcodes/metarules, config keys and UPU extras implemented; all 25 requirement rows + 6 remaining-work items verified against the RPU source (2026-08-17). |
+| [Fallout Et Tu](https://github.com/rotators/Fo1in2) | Supported | Works, runs and is playable end-to-end; currently going through testing to catch minor bugs. FO1-mode engine behavior and Et Tu's sfall surface implemented; 30 of 33 requirement rows verified against source (2026-08-17). The remaining 3 rows are out-of-project-scope optional sfall engine features no mod script depends on (owner decision 2026-08-17). |
+
+Requirement-by-requirement status for both mods, including the known gaps, lives in [SFALL_COMPATIBILITY.md](SFALL_COMPATIBILITY.md).
 
 ## What we've implemented (vs. upstream CE)
 
@@ -22,17 +33,6 @@ Upstream CE runs on macOS, but the big total conversions (RPU, Et Tu) require [s
 | **Hardening** | — | 18 production audit passes — hundreds of verified fixes (bounds checks, UAF/null-deref guards, save integrity, VFS sandboxing) |
 | **Upstream sync** | — | Continuously merged (currently synced through upstream 1cce144, 2026-08-16) |
 | **Tests** | — | 92 test executables, all passing (unit/mirror tests; not a substitute for in-game testing) |
-
-## Mod compatibility status
-
-**Both mods now fully work on this fork and are going through the testing stage** — long-session playthroughs, save/load integrity, and edge cases. Issues found during testing are tracked and fixed as they surface.
-
-| Mod | Status | What's implemented |
-| --- | --- | --- |
-| [Fallout 2 Restoration Project (RPU)](https://github.com/BGforgeNet/Fallout2_Restoration_Project) | Working — in testing | RPU's 4 hooks, ~25 opcodes/metarules, and config keys implemented; UPU extras (Goris de-robing FPS, critter walk speed, extra save slots, hero appearance). All 25 requirement rows + 6 remaining-work items verified against the RPU source (2026-08-17) and confirmed working in-game; long-session testing in progress. |
-| [Fallout Et Tu](https://github.com/rotators/Fo1in2) | Working — in testing | FO1-mode engine behavior and Et Tu's sfall surface implemented and confirmed working in-game; 30 of 33 requirement rows verified against source (2026-08-17). The remaining 3 rows are out-of-project-scope optional sfall engine features no mod script depends on (owner decision 2026-08-17). Long-session testing in progress. |
-
-Requirement-by-requirement status for both mods, including the known gaps, lives in [SFALL_COMPATIBILITY.md](SFALL_COMPATIBILITY.md).
 
 ## Docs
 
