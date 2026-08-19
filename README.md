@@ -1,17 +1,13 @@
 # Fallout 2 CE Extended
 
-**A fork of the Fallout 2 Community Engine, targeting native macOS ARM support for the modern total-conversion mods (RPU, Et Tu) — both fully working and currently in the testing stage.**
-
-Upstream CE runs on macOS, but the big total conversions (RPU, Et Tu) require [sfall](https://github.com/sfall-team/sfall) — a Windows-only engine extension. This project reimplements the sfall scripting surface natively inside CE, so the mods can run on the fork without a Windows layer. The fork point is motivated by the lack of an easy way to play Fallout 1 and 2 on Apple Silicon with the modern mod scene installed.
+Heavily upgraded fork of native-source Fallout 2 CE engine which is fully compatible with **RPU** and **Et Tu** (F2in1) for ultimate modern Fallout 1 & 2 gaming experience. Created specifically for Apple Silicon (ARM) Macs (but can be re-build for any other platform).
 
 ## Current status
 
-**Both mods work, run and are playable on this fork, and are currently going through testing to catch minor bugs.** Issues found during testing are tracked and fixed as they surface.
-
 | Mod | Status | Notes |
 | --- | --- | --- |
-| [Fallout 2 Restoration Project (RPU)](https://github.com/BGforgeNet/Fallout2_Restoration_Project) | Supported | Works, runs and is playable end-to-end; currently going through testing to catch minor bugs. |
-| [Fallout Et Tu](https://github.com/rotators/Fo1in2) | Supported | Works, runs and is playable end-to-end; currently going through testing to catch minor bugs. |
+| [Fallout 2 Restoration Project (RPU)](https://github.com/BGforgeNet/Fallout2_Restoration_Project) | Supported | Works, runs and fully playable. Currently going through testing to catch minor bugs. |
+| [Fallout Et Tu](https://github.com/rotators/Fo1in2) | Supported | Works, runs and fully playable. Currently going through testing to catch minor bugs. |
 
 Requirement-by-requirement status for both mods, including the known gaps, lives in [SFALL_COMPATIBILITY.md](SFALL_COMPATIBILITY.md).
 
