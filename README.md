@@ -8,6 +8,7 @@ Heavily upgraded fork of native-source Fallout 2 CE engine which is fully compat
 | --- | --- | --- |
 | [Fallout 2 Restoration Project (RPU)](https://github.com/BGforgeNet/Fallout2_Restoration_Project) | Supported | Works, runs and fully playable. Currently going through testing to catch minor bugs. |
 | [Fallout Et Tu](https://github.com/rotators/Fo1in2) | Supported | Works, runs and fully playable. Currently going through testing to catch minor bugs. |
+| [sfall](https://github.com/sfall-team/sfall) | Supported | sfall 4.5.1 scripting surface required for RPU and Et Tu reimplemented natively inside CE (121+ opcodes/metarules, 43 hook types) |
 
 Requirement-by-requirement status for both mods, including the known gaps, lives in [SFALL_COMPATIBILITY.md](SFALL_COMPATIBILITY.md).
 
