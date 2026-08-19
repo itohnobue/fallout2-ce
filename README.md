@@ -2,6 +2,8 @@
 
 Heavily upgraded fork of native-source Fallout 2 CE engine which is fully compatible with **RPU** and **Et Tu** (F2in1) for ultimate modern Fallout 1 & 2 gaming experience. Created specifically for Apple Silicon (ARM) Macs (but can be re-build for any other platform).
 
+[INSTALL_MAC_ARM.md](INSTALL_MAC_ARM.md) — How to install on Apple Silicon Macs
+
 ## Current status
 
 | Mod | Status | Notes |
