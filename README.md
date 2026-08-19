@@ -10,8 +10,8 @@ Upstream CE runs on macOS, but the big total conversions (RPU, Et Tu) require [s
 
 | Mod | Status | Notes |
 | --- | --- | --- |
-| [Fallout 2 Restoration Project (RPU)](https://github.com/BGforgeNet/Fallout2_Restoration_Project) | Supported | Works, runs, fully playable; currently going through testing to catch minor bugs. RPU's 4 hooks, ~25 opcodes/metarules, config keys and UPU extras implemented; all 25 requirement rows + 6 remaining-work items verified against the RPU source. |
-| [Fallout Et Tu](https://github.com/rotators/Fo1in2) | Supported | Works, runs, fully playable; currently going through testing to catch minor bugs. FO1-mode engine behavior and Et Tu's sfall surface implemented; 30 of 33 requirement rows verified against source. |
+| [Fallout 2 Restoration Project (RPU)](https://github.com/BGforgeNet/Fallout2_Restoration_Project) | Supported | Works, runs and is playable end-to-end; currently going through testing to catch minor bugs. |
+| [Fallout Et Tu](https://github.com/rotators/Fo1in2) | Supported | Works, runs and is playable end-to-end; currently going through testing to catch minor bugs. |
 
 Requirement-by-requirement status for both mods, including the known gaps, lives in [SFALL_COMPATIBILITY.md](SFALL_COMPATIBILITY.md).
 
