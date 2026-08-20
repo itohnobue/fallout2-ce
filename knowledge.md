@@ -1,5 +1,5 @@
 # Knowledge Base
-Last updated: 2026-08-20T00:24:35.108415
+Last updated: 2026-08-20T16:37:29.389712
 
 ## [dis-20260704144725-9b3649]
 Category: discovery
@@ -695,4 +695,11 @@ Tags: et-tu, install, walls, offsets
 Changed: 2026-08-20T00:24:35.105623
 
 et tu wall art: FO2's master.dat bundles legacy FO1 wall FRMs with DIFFERENT placement offsets than the FO1 GOG originals (e.g. ADB0989 xOff -12 vs -8, yOff 6 vs 11; deltas vary per file). The et tu map's wall layout needs the FO1 originals — the FO1 extraction MUST land in master_patches (data/), like the official undat tools do (outputPath + '\\data'), or the engine silently uses FO2's copies and walls render striped.
+
+## [got-20260820163729-e38e94]
+Category: gotcha
+Tags: pipboy, rest, fo1, ettu
+Changed: 2026-08-20T16:37:29.387310
+
+Pip-Boy rest options in FO1 mode: base msg id is 320 (FO1 pipboy.msg 'Fo1 resting times' block: 320=ten min ... 333=party healed), NOT 321. Label for option N = base+N-1; a base of 321 shifted every label by one ('until noon' label rested until morning 6:00). Et Tu gl_0_settings.ssl calls rest_option_msgs(320) + set_rest_option(MORNING,6) when not fo1in2_0800_resting_enabled; old .int versions lack the call, so the engine default must be right. FO2 base = 302.
 

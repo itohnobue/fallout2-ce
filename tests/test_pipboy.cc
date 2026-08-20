@@ -406,6 +406,89 @@ TEST_CASE("N2-027: realIndex OOB — userInput at boundary with page > 0")
 }
 
 // ============================================================
+// Issue B (2026-08-20): FO1 rest-option base message id off-by-one
+// ============================================================
+// The FO1 pipboy.msg "Fo1 resting times" block numbers its rest options
+// 320-333 (320 = "Rest for ten minutes", 328 = "Rest until morning (0600)",
+// 329 = "Rest until noon (1200)", 332 = "Rest until healed"). The engine
+// rendered option N with message id base+N-1, so the FO1 default base
+// must be 320. A base of 321 (previous fork default) shifted every label
+// by one: "Rest until noon (1200)" was shown for the option that actually
+// rests until morning (wake hour 6), and "Rest for two hours" rested only
+// one hour. Et Tu's own gl_0_settings.ssl calls rest_option_msgs(320),
+// confirming 320 as the FO1 base.
+
+namespace fallout {
+
+// Mirror of PipboyRestDuration from pipboy.cc:135-151
+typedef enum TestPipboyRestDuration {
+    TEST_REST_TEN_MINUTES,
+    TEST_REST_THIRTY_MINUTES,
+    TEST_REST_ONE_HOUR,
+    TEST_REST_TWO_HOURS,
+    TEST_REST_THREE_HOURS,
+    TEST_REST_FOUR_HOURS,
+    TEST_REST_FIVE_HOURS,
+    TEST_REST_SIX_HOURS,
+    TEST_REST_UNTIL_MORNING,
+    TEST_REST_UNTIL_NOON,
+    TEST_REST_UNTIL_EVENING,
+    TEST_REST_UNTIL_MIDNIGHT,
+    TEST_REST_UNTIL_HEALED,
+    TEST_REST_UNTIL_PARTY_HEALED,
+} TestPipboyRestDuration;
+
+// Mirrors pipboy.cc:2674: base message id by game mode.
+// option is 1-based (as in pipboyWindowRenderRestOptions);
+// label id = base + option - 1.
+static int testRestOptionBaseMessageId(bool fallout1Behavior)
+{
+    return fallout1Behavior ? 320 : 302;
+}
+
+} // namespace fallout
+
+using namespace fallout;
+
+TEST_CASE("Issue B: FO1 rest option labels align with durations (base 320)")
+{
+    // FO1 pipboy.msg block: 320=ten minutes ... 332=until healed.
+    // Option N (1-based) ↔ duration N-1 ↔ message id base+N-1.
+    const int base = testRestOptionBaseMessageId(true);
+    CHECK(base == 320);
+
+    // Option 1 rests ten minutes and must show "Rest for ten minutes" (320).
+    CHECK(base + 1 - 1 == 320);
+
+    // Until-morning option (duration 8 → option 9) shows "Rest until
+    // morning (0600)" (328) — the FO1 morning label, not noon.
+    CHECK(base + TEST_REST_UNTIL_MORNING + 1 - 1 == 328);
+
+    // Until-noon option (duration 9 → option 10) shows "Rest until noon
+    // (1200)" (329). With the old base 321 this option displayed 330
+    // ("Rest until evening (1800)") and the option labeled noon (329)
+    // actually rested until morning (wake hour 6) — the reported bug.
+    CHECK(base + TEST_REST_UNTIL_NOON + 1 - 1 == 329);
+
+    // Until-healed option (duration 12 → option 13) shows "Rest until
+    // healed" (332), not midnight.
+    CHECK(base + TEST_REST_UNTIL_HEALED + 1 - 1 == 332);
+
+    // No label may exceed the FO1 block (333 = party healed).
+    CHECK(base + TEST_REST_UNTIL_PARTY_HEALED + 1 - 1 == 333);
+}
+
+TEST_CASE("Issue B: FO2 rest option labels stay at base 302")
+{
+    // FO2 pipboy.msg block: 302=ten minutes ... 315=party healed.
+    const int base = testRestOptionBaseMessageId(false);
+    CHECK(base == 302);
+    CHECK(base + TEST_REST_TEN_MINUTES + 1 - 1 == 302);
+    CHECK(base + TEST_REST_UNTIL_HEALED + 1 - 1 == 314);
+    CHECK(base + TEST_REST_UNTIL_PARTY_HEALED + 1 - 1 == 315);
+}
+
+// ============================================================
 // Cross-finding integration: N2-026 + M-081 combo
 // ============================================================
 

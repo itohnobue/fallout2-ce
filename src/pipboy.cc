@@ -2236,7 +2236,8 @@ static void pipboyWindowRenderRestOptions(int a1)
     // was written like this in the first place.
     for (int option = 1; option < gPipboyRestOptionsCount + 1; option++) {
         // f7367f4: base message id is configurable (rest_option_msgs).
-        // Default resolves to 321 in FO1 mode (F-027) and 302 in FO2.
+        // Default resolves to 320 in FO1 mode (FO1 pipboy.msg "Fo1 resting
+        // times" block: 320 = ten minutes) and 302 in FO2.
         text = getmsg(&gPipboyMessageList, &gPipboyMessageListItem, pipboyRestDurationBaseMessageId + option - 1);
         int color = option == a1 ? _colorTable[32747] : _colorTable[992];
 
@@ -2671,7 +2672,7 @@ static int pipboyRestOptionWakeHour(int restOption)
 // keeps the F-027 per-game default (FO1 6 AM, FO2 8 AM).
 static void pipboyRestOptionsReset()
 {
-    pipboyRestDurationBaseMessageId = gFallout1Behavior ? 321 : kDefaultPipboyRestDurationBaseMessageId;
+    pipboyRestDurationBaseMessageId = gFallout1Behavior ? 320 : kDefaultPipboyRestDurationBaseMessageId;
     pipboyRestDurationWakeHours[PIPBOY_REST_DURATION_UNTIL_MORNING - PIPBOY_REST_DURATION_UNTIL_MORNING] = gFallout1Behavior ? 6 : 8;
     pipboyRestDurationWakeHours[PIPBOY_REST_DURATION_UNTIL_NOON - PIPBOY_REST_DURATION_UNTIL_MORNING] = 12;
     pipboyRestDurationWakeHours[PIPBOY_REST_DURATION_UNTIL_EVENING - PIPBOY_REST_DURATION_UNTIL_MORNING] = 18;
