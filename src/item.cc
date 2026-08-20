@@ -532,7 +532,11 @@ static int _item_move_func(Object* source, Object* target, Object* item, int qua
     }
 
     if (rc != 0) {
+        debugPrint("[BARTER] item_move: add %s x%d to %s failed (rc=%d, force=%d), returning to source\n",
+            itemGetName(item), quantity, objectTypeFromFid(target->fid) == OBJ_TYPE_CRITTER ? "critter" : "container", rc, force ? 1 : 0);
         if (itemAdd(source, item, quantity) != 0) {
+            debugPrint("[BARTER] item_move: CRITICAL re-add to source %s x%d ALSO failed — item may be lost\n",
+                itemGetName(item), quantity);
             Object* owner = objectGetOwner(source);
             if (owner == nullptr) {
                 owner = source;

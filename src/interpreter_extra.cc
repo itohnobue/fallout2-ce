@@ -5010,6 +5010,10 @@ static void opMoveObjectInventoryToObject(Program* program)
         return;
     }
 
+    debugPrint("[BARTER] op_move_obj_inven_to_obj: obj1(%d items, pid=%d) -> obj2(%d items, pid=%d)\n",
+        object1->data.inventory.length, object1->pid,
+        object2->data.inventory.length, object2->pid);
+
     Object* oldArmor = nullptr;
     Object* oldWeapon = nullptr;
     if (object1 == gDude) {

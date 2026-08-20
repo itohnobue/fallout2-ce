@@ -3801,6 +3801,7 @@ void gameDialogBarterCleanupTables()
     if (gGameDialogPlayerTableObj != nullptr) {
         inventory = &(gGameDialogPlayerTableObj->data.inventory);
         length = inventory->length;
+        debugPrint("[BARTER] cleanup: playerTable %d items -> gDude\n", length);
         for (int index = 0; index < length; index++) {
             Object* item = inventory->items->item;
             int quantity = itemGetQuantity(gGameDialogPlayerTableObj, item);
@@ -3811,6 +3812,7 @@ void gameDialogBarterCleanupTables()
     if (gGameDialogBartererTableObj != nullptr) {
         inventory = &(gGameDialogBartererTableObj->data.inventory);
         length = inventory->length;
+        debugPrint("[BARTER] cleanup: bartererTable %d items -> speaker\n", length);
         for (int index = 0; index < length; index++) {
             Object* item = inventory->items->item;
             int quantity = itemGetQuantity(gGameDialogBartererTableObj, item);

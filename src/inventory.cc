@@ -5466,6 +5466,8 @@ static int barterAttemptTransaction(Object* dude, Object* offerTable, Object* np
         int npcWeightAvailable = critterGetStat(npc, STAT_CARRY_WEIGHT) - objectGetInventoryWeight(npc);
         if (objectGetInventoryWeight(offerTable) > npcWeightAvailable) {
             // Sorry, that's too much to carry.
+            debugPrint("[BARTER] refuse: npc overweight (offerTable %d > available %d)\n",
+                objectGetInventoryWeight(offerTable), npcWeightAvailable);
             messageListItem.num = 32;
             if (messageListGetItem(&gInventoryMessageList, &messageListItem)) {
                 gameDialogRenderSupplementaryMessage(messageListItem.text);
@@ -5507,6 +5509,9 @@ static int barterAttemptTransaction(Object* dude, Object* offerTable, Object* np
                 requestValue = static_cast<int>(static_cast<double>(requestValue) * movableBarterCost / totalBarterCost);
             }
 
+            debugPrint("[BARTER] M value check: request=%d offer=%d (barterMod=%d)\n",
+                requestValue, offerValue, gBarterFinalModifier);
+
             if (requestValue > offerValue) {
                 badOffer = true;
             }
@@ -5528,18 +5533,27 @@ static int barterAttemptTransaction(Object* dude, Object* offerTable, Object* np
     // H-22: move the FULL stack quantity per slot (the fork's itemMove(...,1)
     // left N-1 behind). Backward iteration is safe: itemRemove with the full
     // quantity compacts only slots > i, which have already been visited.
+    // M-90: itemMoveForce instead of itemMove — the fork's non-force move
+    // silently fails on weight limits (itemAttemptAdd -6), stranding items in
+    // the tables while the transaction still reports success. Upstream used
+    // itemMoveAll (force). A commit that already passed the weight gates above
+    // must not half-fail; blocked-hook items are the only ones allowed to stay.
     for (int i = barterTable->data.inventory.length - 1; i >= 0; i--) {
         Object* item = barterTable->data.inventory.items[i].item;
         int quantity = barterTable->data.inventory.items[i].quantity;
         if (scriptHooks_InventoryMove(HOOK_INVENTORYMOVE_BARTER, item, barterTable)) {
-            itemMove(barterTable, dude, item, quantity);
+            if (itemMoveForce(barterTable, dude, item, quantity) == -1) {
+                debugPrint("[BARTER] commit: failed to move %s x%d table->dude\n", itemGetName(item), quantity);
+            }
         }
     }
     for (int i = offerTable->data.inventory.length - 1; i >= 0; i--) {
         Object* item = offerTable->data.inventory.items[i].item;
         int quantity = offerTable->data.inventory.items[i].quantity;
         if (scriptHooks_InventoryMove(HOOK_INVENTORYMOVE_BARTER, item, offerTable)) {
-            itemMove(offerTable, npc, item, quantity);
+            if (itemMoveForce(offerTable, npc, item, quantity) == -1) {
+                debugPrint("[BARTER] commit: failed to move %s x%d table->npc\n", itemGetName(item), quantity);
+            }
         }
     }
     return 0;
@@ -6033,6 +6047,8 @@ void barterProcessUI(int win, Object* barterer, Object* playerTable, Object* bar
 
         if (keyCode == KEY_LOWERCASE_T || barterReactionModifier <= -30) {
             // T == return to talk
+            debugPrint("[BARTER] exit via T: bartererTable %d items, playerTable %d items\n",
+                bartererTable->data.inventory.length, playerTable->data.inventory.length);
             itemMoveAll(bartererTable, barterer);
             // M-74: return each offer item to the critter it came from
             // (party-member pane) instead of unconditionally to gDude.
@@ -6052,8 +6068,16 @@ void barterProcessUI(int win, Object* barterer, Object* playerTable, Object* bar
         } else if (keyCode == KEY_LOWERCASE_M) {
             // M == attempt offer
             if (playerTable->data.inventory.length != 0 || gBartererTableObj->data.inventory.length != 0) {
-                // TODO: inven_dude can potentially be a container (bag) which was opened during trade, but code inside barterAttemptTransaction assumes it's a critter; maybe remove this arg and access gDude always?
-                if (barterAttemptTransaction(_inven_dude, playerTable, barterer, bartererTable) == 0) {
+                // M-90: always transact against gDude, never _inven_dude — the
+                // latter can be a container (bag) opened from the player's
+                // inventory during trade, which would route the barterer's
+                // items into the bag (and garbage stats into the weight gates).
+                int transactionResult = barterAttemptTransaction(gDude, playerTable, barterer, bartererTable);
+                debugPrint("[BARTER] M: result=%d playerTable=%d items bartererTable=%d items\n",
+                    transactionResult,
+                    playerTable->data.inventory.length,
+                    gBartererTableObj->data.inventory.length);
+                if (transactionResult == 0) {
                     _display_target_inventory(_target_stack_offset[_target_curr_stack], -1, _target_pud, INVENTORY_WINDOW_TYPE_TRADE);
                     _display_inventory(_stack_offset[_curr_stack], -1, INVENTORY_WINDOW_TYPE_TRADE);
                     barterDisplayTables(win, playerTable, bartererTable, -1);
@@ -6173,6 +6197,9 @@ void barterProcessUI(int win, Object* barterer, Object* playerTable, Object* bar
 
     itemMoveAll(hiddenBox, barterer);
     objectDestroy(hiddenBox, nullptr);
+
+    debugPrint("[BARTER] exit loop: keyCode=%d playerTable=%d items bartererTable=%d items\n",
+        keyCode, playerTable->data.inventory.length, bartererTable->data.inventory.length);
 
     if (armor != nullptr) {
         armor->flags |= OBJECT_WORN;
