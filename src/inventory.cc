@@ -5724,6 +5724,19 @@ static void barterMoveFromTable(Object* item, int quantity, int slotIndex, Objec
     bool immediate = _ctrl_pressed();
     _drag_item_loop(item, immediate);
 
+    // M-101: itemMoveForce (not itemMove) for the drag-back both ways. The
+    // non-force move is gated by itemAttemptAdd, which fails with rc=-6 when
+    // the target critter exceeds STAT_CARRY_WEIGHT. FO1 box traders (et tu
+    // get_barter_inven / move_obj_inven_to_obj) force-load their full stock at
+    // talk start and are overweight by design (FO1 has no carry limit), so any
+    // attempt to return a trader item from the table to the trader failed with
+    // "maximum weight capacity" and the item stayed stranded on the table.
+    // This is an undo of the drag that put the item on the table (both
+    // directions remove the item from the same critter inventory via
+    // itemRemove first), so it cannot put the target over a weight limit it
+    // was not already over. Matches upstream CE (itemMoveForce both branches)
+    // and barterMoveToTable / barterAttemptTransaction (M-90). Blocked-hook
+    // items are still refused above via scriptHooks_InventoryMove.
     if (fromDude) {
         if (immediate || mouseHitTestInWindow(gInventoryWindow, INVENTORY_TRADE_LEFT_SCROLLER_TRACKING_X, INVENTORY_TRADE_LEFT_SCROLLER_TRACKING_Y, INVENTORY_TRADE_LEFT_SCROLLER_TRACKING_MAX_X, INVENTORY_SLOT_HEIGHT * gInventorySlotsCount + INVENTORY_TRADE_LEFT_SCROLLER_TRACKING_Y)) {
             int quantityToMove = barterGetMovedQuantity(item, quantity, true, false, immediate);
@@ -5732,7 +5745,7 @@ static void barterMoveFromTable(Object* item, int quantity, int slotIndex, Objec
                     inventorySetCursor(INVENTORY_WINDOW_CURSOR_HAND);
                     return;
                 }
-                if (itemMove(sourceTable, _inven_dude, item, quantityToMove) == -1) {
+                if (itemMoveForce(sourceTable, _inven_dude, item, quantityToMove) == -1) {
                     inventoryDisplayMessage(26); // There is no space left for that item.
                 } else if (playerTableSources != nullptr && sourceTable != nullptr) {
                     // M-74: item moved back off the offer table — drop the
@@ -5754,7 +5767,7 @@ static void barterMoveFromTable(Object* item, int quantity, int slotIndex, Objec
                     inventorySetCursor(INVENTORY_WINDOW_CURSOR_HAND);
                     return;
                 }
-                if (itemMove(sourceTable, npc, item, quantityToMove) == -1) {
+                if (itemMoveForce(sourceTable, npc, item, quantityToMove) == -1) {
                     inventoryDisplayMessage(25); // You cannot pick that up. You are at your maximum weight capacity.
                 }
             }
