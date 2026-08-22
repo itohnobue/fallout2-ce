@@ -1923,16 +1923,6 @@ int scriptsGetFileName(int scriptIndex, char* name, size_t size)
         return -1;
     }
 
-    // SFALL: set_scr_name metarule override — if a script name override has
-    // been set, use it in place of the original script file name. This allows
-    // scripts to customize their displayed name (e.g., for debug output or
-    // script identification in the game console).
-    const char* override = sfallGetScriptNameOverride();
-    if (override != nullptr && override[0] != '\0') {
-        snprintf(name, size, "%s", override);
-        return 0;
-    }
-
     // f832d78: a blank line in scripts.lst produces an empty entry — fail
     // instead of returning a bare ".int".
     if (gScriptsListEntries[scriptIndex].name[0] == '\0') {

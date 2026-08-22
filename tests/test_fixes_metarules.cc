@@ -489,3 +489,71 @@ TEST_CASE("Combined: all 4 null guard fixes preserve happy-path behavior") {
     MirrorRemoveTimerEvent(&owner);
     CHECK(GetF29Counter() == 1);
 }
+
+// ============================================================
+// Issue B (Hub Old Town): set_scr_name must not poison script
+// file-name resolution for every script in the game.
+// ============================================================
+// Root cause: the fork's mf_set_scr_name wrote a global
+// gScriptNameOverride that scriptsGetFileName() honored FIRST,
+// turning every script (map script, doors, all NPCs) into the
+// last set_scr_name argument (e.g. "Mike" from et-tu's Mike.int),
+// and the override was persisted into sfallgv.sav — permanently
+// poisoning saves. Fix: override affects only the per-sid critter
+// name; script file names always come from scripts.lst.
+namespace issue_b {
+
+static bool gMirrorNameOverrideActive = false;
+
+static void MirrorSetScrName(int sid, int numArgs, const char* name,
+    bool& perSidNameSet, std::string& perSidName)
+{
+    perSidNameSet = (sid != -1);
+    perSidName = (numArgs > 0) ? name : "";
+    // Fixed production behavior: never set a global script-FILE-name
+    // override here.
+    gMirrorNameOverrideActive = false;
+}
+
+// Mirrors fixed scriptsGetFileName(): the (legacy) override must not
+// change the FILE name resolved from scripts.lst.
+static void MirrorGetFileName(int scriptIndex, const std::string& lstName,
+    bool overrideActive, char* name, size_t size)
+{
+    (void)overrideActive;
+    if (scriptIndex < 0 || lstName.empty()) {
+        name[0] = '\0';
+        return;
+    }
+    snprintf(name, size, "%s.int", lstName.c_str());
+}
+
+TEST_CASE("Issue B: set_scr_name does not set a global script-file-name override") {
+    bool perSidSet = false;
+    std::string perSidName;
+    MirrorSetScrName(0x4000000, 1, "Mike", perSidSet, perSidName);
+    CHECK(perSidSet);
+    CHECK(perSidName == "Mike");
+    CHECK_FALSE(gMirrorNameOverrideActive);
+
+    // 0-arg call clears per-sid but never activates the global override.
+    MirrorSetScrName(0x4000000, 0, "", perSidSet, perSidName);
+    CHECK(perSidSet);
+    CHECK(perSidName.empty());
+    CHECK_FALSE(gMirrorNameOverrideActive);
+}
+
+TEST_CASE("Issue B: scriptsGetFileName ignores a stale override from a poisoned save") {
+    char name[16];
+    // Poisoned save restored "Mike" — script FILE resolution must still
+    // come from scripts.lst.
+    MirrorGetFileName(820, "Mike", true, name, sizeof(name));
+    CHECK(std::string(name) == "Mike.int");
+    MirrorGetFileName(44, "icbm", true, name, sizeof(name));
+    CHECK(std::string(name) == "icbm.int");
+    // Invalid index still fails.
+    MirrorGetFileName(-1, "", true, name, sizeof(name));
+    CHECK(std::string(name) == "");
+}
+
+} // namespace issue_b

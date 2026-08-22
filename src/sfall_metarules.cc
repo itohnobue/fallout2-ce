@@ -3493,13 +3493,12 @@ void mf_set_scr_name(OpcodeContext& ctx)
         sfallObjectNameSet(sid, ctx.numArgs() > 0 ? ctx.stringArg(0) : "");
     }
 
-    // Fork behavior: keep the script-file-name override (used by
-    // scriptsGetFileName and serialized in the metarule save format).
-    if (ctx.numArgs() == 0) {
-        gScriptNameOverride.clear();
-    } else {
-        gScriptNameOverride = ctx.stringArg(0);
-    }
+    // Issue B (Hub Old Town): a set_scr_name("...") call MUST NOT change the
+    // script FILE name resolution. The former gScriptNameOverride global was
+    // honored by scriptsGetFileName() for every script, so one call from any
+    // script (e.g. et tu Mike.int) turned every program into Mike.int, and the
+    // override was serialized into sfallgv.sav, permanently poisoning saves
+    // (SLOT01 carried "Mike"). The override is now per-sid only (above).
     ctx.setReturn(0);
 }
 
@@ -5191,7 +5190,9 @@ bool sfall_metarules_save(File* stream)
     if (fileWriteInt32(stream, gMapEnterY) == -1) return false;
     if (fileWriteInt32(stream, gMapEnterElevation) == -1) return false;
 
-    // String
+    // String (format slot kept for save/load compatibility — always "").
+    // The script-name override must no longer affect script resolution
+    // (Issue B); it is written empty and discarded on load.
     if (fileWriteString(gScriptNameOverride.c_str(), stream) == -1) return false;
     if (xfileWriteChar('\n', stream) == -1) return false;
 
@@ -5310,12 +5311,18 @@ bool sfall_metarules_load(File* stream)
     // also see the restored values.
     wmSetMapEnterPosition(gMapEnterX, gMapEnterY, gMapEnterElevation);
 
-    // String
+    // String (legacy script-name override slot — read and DISCARDED).
+    // Issue B: a poisoned save can carry a stale override ("Mike") that was
+    // honored by scriptsGetFileName() for every script. It is no longer
+    // applied; reading keeps the stream layout compatible with older saves.
     char nameBuf[256];
     if (fileReadString(nameBuf, sizeof(nameBuf), stream) != nullptr) {
         size_t nlen = strlen(nameBuf);
         if (nlen > 0 && nameBuf[nlen - 1] == '\n') nameBuf[nlen - 1] = '\0';
-        gScriptNameOverride = nameBuf;
+        if (nameBuf[0] != '\0') {
+            debugPrint("set_scr_name: ignoring stale script-name override '%s' from save (non-functional in CE)\n", nameBuf);
+        }
+        gScriptNameOverride.clear();
     }
 
     // Maps and sets
